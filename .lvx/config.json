@@ -1,0 +1,13 @@
+{
+  "production_branch": "master",
+  "integration_branch": "dev",
+  "prefixes": {
+    "feature": "feature",
+    "release": "release",
+    "hotfix": "hotfix",
+    "support": "support",
+    "improvement": "improvement"
+  },
+  "delete_branch_on_finish": true,
+  "version_hooks": []
+}
