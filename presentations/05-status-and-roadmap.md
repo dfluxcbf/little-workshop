@@ -1,4 +1,4 @@
-← [What Each Old Tool Becomes](04-feature-mapping.md) · deck 5 of 5 · back to [index](README.md)
+← [What Each Old Tool Becomes](04-feature-mapping.md) · deck 5 of 8 · next: [Visual Identity — Decided →](06-visual-identity.md)
 
 # Status & What's Next
 

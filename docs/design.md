@@ -147,6 +147,42 @@ supersede the first round's "Module" concept.
   domain data and makes no domain decisions; the less it does, the less
   often it needs to change, and the less often it needs to change, the more
   reliably everything that depends on it stays up.
+  **Core's own crash recovery is not self-supervision** — a crashed process
+  cannot relaunch itself. It's the identical `systemd --user
+  Restart=on-failure` primitive Core configures for every pillar, now
+  configured on Core's own unit too; Core doesn't get a special, more
+  fragile mechanism for itself. What *is* Core's own responsibility is what
+  happens next: because every pillar is started via `systemctl --user start
+  <pillar>`, each becomes a child of the systemd user session, never of
+  Core — so Core dying, and later restarting, never touches them. On
+  restart, Core does not assume it needs to (re)start everything; it
+  reconstructs its live registry by asking systemd which pillar units are
+  already active and probing each one's own health endpoint, and only
+  starts what's actually missing. Reconnecting to what's already running
+  is the default outcome of a Core restart; relaunching is only what
+  happens to whatever genuinely isn't there.
+- **Pillar configuration** — every pillar's own settings live at
+  `~/.config/little-workshop/<pillar>/`, exclusively that pillar's, never
+  touched by another. This is distinct from a pillar's own database (its
+  *operational* data — jobs, rule definitions, requirement records) under
+  `~/.local/state/little-workshop/pillars/<pillar>.db`; configuration and
+  operational data are different things kept in different places. Core is
+  not a pillar, so it has no `<pillar>/` subdirectory of its own — its
+  bootstrap manifest (the pillar list, enabled flags, crash-backoff
+  settings) lives directly at `~/.config/little-workshop/manifest.toml`,
+  beside the ten pillar directories rather than inside one.
+- **Project files** — the one place pillars actually share a directory:
+  `~/.config/little-workshop/projects/<project>/`, one such directory per
+  project this system manages. Unlike pillar configuration, this directory
+  is not exclusively any one pillar's, so ownership is encoded in the
+  filename itself: `<name>.<owner-tag>.<format>` (e.g.
+  `retention.policy.json`, `manifest.deployment.toml`) — the second-to-last
+  extension names the one pillar allowed to *write* that file; the last
+  extension is just its serialization format, free per file. Any pillar may
+  *read* any project file regardless of owner tag; only the owning pillar
+  may *write* it. A pillar may own as many distinctly-named project files as
+  it needs. See `architecture.md`'s "Configuration & project data" for the
+  full tag table and how this is actually enforced.
 - **Pillar Interface (PI)** — the *only* way one pillar reaches another: a
   small versioned HTTP API bound to a Unix domain socket (not a shared
   Python import, not a database file another pillar also opens). A pillar
@@ -289,3 +325,71 @@ in-flight redeploy job survives the very unit it's replacing dying
 underneath it) — the same "am I inside the unit I'm about to stop" check
 `little-runner`'s own `ServerFlow._inside_unit_cgroup` performs today,
 generalized from one project to every pillar.
+
+### Core's own recovery — reconnect, don't relaunch
+
+```
+little-workshop-core.service exits unexpectedly
+   │
+   ▼
+systemd --user Restart=on-failure  -- the same primitive protecting every
+   pillar, just configured on Core's own unit too. Every pillar keeps
+   running throughout: each is systemd's child, not Core's, so nothing
+   about Core dying or restarting ever reaches them.
+   │
+   ▼
+Core (new process) reads manifest.toml  -- the pillar list and enabled
+   flags, unaffected by the crash because it's a file, not memory
+   │
+   ▼
+for each ENABLED pillar:
+   systemctl --user is-active <pillar>.service ?
+      │ yes → probe the pillar's own health endpoint over its socket
+      │         │ healthy   → register it in the live registry as-is
+      │         │             (RECONNECTED — nothing about it changes)
+      │         └ no reply  → treat as crashed, relaunch it (fast path,
+      │                       no rebuild, same as any pillar crash)
+      └ no  → start it fresh (systemctl --user start <pillar>.service)
+for each DISABLED pillar: confirm its unit is not running; do nothing else
+   │
+   ▼
+Core is caught up. A Core crash-and-restart, and a first boot, run the
+   exact same sequence -- the only difference is how many pillars were
+   already found running when it got there.
+```
+
+This is what "self-recoverable, without losing all the other pillars"
+actually means in practice: Core's recovery is ordinary OS-level process
+supervision, applied to itself with no special case; the part worth
+designing was making sure a restarted Core rejoins the system it left
+rather than resetting it.
+
+### Cross-pillar configuration change
+
+```
+Pillar B needs a setting that lives in a project file owned by Pillar A
+   (e.g. Deployment & Servers needs Policy & Compliance to widen a
+   confirm-timeout exception for one project)
+   │
+   ▼
+Pillar B does NOT write project/<name>/setting.policy.json itself -- its
+   own client library refuses any write whose owner tag isn't its own
+   │
+   ▼
+Pillar B calls Pillar A's Pillar Interface (its normal, versioned API --
+   configuration files are never how pillars talk to each other; PIs are)
+   │
+   ▼
+Pillar A validates the request against its own rules, decides, and -- if
+   it agrees -- performs the write to its own owned file itself
+   │
+   ▼
+Pillar B (and everyone else) reads the updated file directly, as always --
+   read access to any project file is universal regardless of owner tag
+```
+
+A pillar's project files may be *read* by anything; changing one is always
+a request to its owner through that owner's interface, never a direct
+write by the requester — the same "one writer, many readers" discipline
+this ecosystem already applies to `little-requirements`' database, now
+generalized to every pillar's project-scoped files.

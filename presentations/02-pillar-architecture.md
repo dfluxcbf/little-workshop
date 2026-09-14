@@ -1,4 +1,4 @@
-← [Vision & Goals](01-vision-and-goals.md) · deck 2 of 5 · next: [Jobs, Pipelines, Policy & Recovery →](03-execution-model.md)
+← [Vision & Goals](01-vision-and-goals.md) · deck 2 of 8 · next: [Jobs, Pipelines, Policy & Recovery →](03-execution-model.md)
 
 # The Pillar Architecture
 

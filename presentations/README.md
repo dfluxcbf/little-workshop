@@ -30,5 +30,9 @@ restating it.
    little-workshop stopped depending on `little-requirements`/`lreq` and
    `little-versions`/`lvx` for its own governance, and wrote
    [`../docs/governance_policy.md`](../docs/governance_policy.md) instead.
+8. [Core's Recovery & Configuration Ownership](08-core-recovery-and-configuration.md)
+   — how Core recovers from its own crash without losing any other pillar,
+   and the filename-encoded ownership convention for shared project
+   configuration.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

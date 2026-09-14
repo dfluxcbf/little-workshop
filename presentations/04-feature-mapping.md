@@ -1,4 +1,4 @@
-← [Jobs, Pipelines, Policy & Recovery](03-execution-model.md) · deck 4 of 5 · next: [Status & What's Next →](05-status-and-roadmap.md)
+← [Jobs, Pipelines, Policy & Recovery](03-execution-model.md) · deck 4 of 8 · next: [Status & What's Next →](05-status-and-roadmap.md)
 
 # What Each Old Tool Becomes
 

@@ -1,4 +1,4 @@
-← [Status & What's Next](05-status-and-roadmap.md) · deck 6 of 6 · back to [index](README.md)
+← [Status & What's Next](05-status-and-roadmap.md) · deck 6 of 8 · next: [Independence & Self-Governance →](07-self-governance.md)
 
 # Visual Identity — Decided
 

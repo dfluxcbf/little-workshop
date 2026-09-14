@@ -1,4 +1,4 @@
-← [index](README.md) · deck 1 of 5 · next: [The Pillar Architecture →](02-pillar-architecture.md)
+← [index](README.md) · deck 1 of 8 · next: [The Pillar Architecture →](02-pillar-architecture.md)
 
 # Vision & Goals
 

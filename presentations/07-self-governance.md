@@ -1,4 +1,4 @@
-← [Visual Identity — Decided](06-visual-identity.md) · deck 7 of 7 · back to [index](README.md)
+← [Visual Identity — Decided](06-visual-identity.md) · deck 7 of 8 · next: [Core's Recovery & Configuration →](08-core-recovery-and-configuration.md)
 
 # Independence & Self-Governance
 

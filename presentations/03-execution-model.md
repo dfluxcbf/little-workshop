@@ -1,4 +1,4 @@
-← [The Pillar Architecture](02-pillar-architecture.md) · deck 3 of 5 · next: [What Each Old Tool Becomes →](04-feature-mapping.md)
+← [The Pillar Architecture](02-pillar-architecture.md) · deck 3 of 8 · next: [What Each Old Tool Becomes →](04-feature-mapping.md)
 
 # Jobs, Pipelines, Policy & Recovery
 

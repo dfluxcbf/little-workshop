@@ -35,6 +35,15 @@ gate), refuses to start a disabled one, and keeps the pillar registry
 (name → Unix-socket path → interface version) every other pillar and the
 Dashboard/MCP use to find each other. Holds no domain data.
 
+Core's own crash is recovered the same way as any pillar's — `systemd
+--user Restart=on-failure` on its own unit, no special-cased mechanism —
+and because every pillar is systemd's child, not Core's, a Core crash never
+cascades to them. On restart, Core does not relaunch what's already
+running: it reconstructs its live registry from `systemctl --user
+is-active` plus each pillar's own health probe, reconnecting to whatever it
+finds and starting only whatever's actually missing. See `design.md`'s
+"Core's own recovery" data-flow diagram.
+
 Ten pillars, each its own process, its own SQLite file, and its own Pillar
 Interface (a small FastAPI app bound to a Unix domain socket):
 
@@ -79,6 +88,84 @@ follows.
 - **Discovery**: Core's pillar registry is the only place a socket path is
   looked up — a pillar never hardcodes another's path.
 
+## Configuration & project data
+
+Two different things, kept in two different places, neither of which is
+how pillars talk to each other — configuration may be used to *establish*
+a connection (a socket path, a credential), never to carry the conversation
+itself; that's what the Pillar Interface is for.
+
+### Pillar configuration — exclusive, one directory per pillar
+
+`~/.config/little-workshop/<pillar>/` — every pillar's own settings,
+touched by no other pillar, ever. Ownership needs no naming convention here
+because the whole directory is already exclusively scoped by path. This is
+distinct from a pillar's own *operational* database
+(`~/.local/state/little-workshop/pillars/<pillar>.db` — jobs, rule
+definitions, requirement records: data the pillar produces and queries) —
+configuration is what a pillar is told; the database is what a pillar
+knows. Core is not a pillar, so it has no `<pillar>/` directory of its own;
+its bootstrap manifest lives directly at
+`~/.config/little-workshop/manifest.toml`, a sibling of the ten pillar
+directories rather than inside one.
+
+### Project files — shared, ownership encoded in the filename
+
+`~/.config/little-workshop/projects/<project>/` — one directory per project
+this system manages, shared across every pillar that has something to say
+about that project. Because the directory itself isn't exclusive to one
+pillar, ownership is encoded in the filename: `<name>.<owner-tag>.<format>`.
+The second-to-last extension is the *owner tag* — the one pillar allowed to
+write that file; the last extension is only its serialization format
+(`.json`, `.yaml`, `.toml`, ...), free per file. A pillar may own any
+number of distinctly-named files per project.
+
+| Owner tag | Pillar |
+|---|---|
+| `.orchestration` | Orchestration |
+| `.policy` | Policy & Compliance |
+| `.registry` | Registry & Portfolio |
+| `.requirements` | Requirements & Quality |
+| `.version` | Version Control & Release |
+| `.build` | Build & Packages |
+| `.deployment` | Deployment & Servers |
+| `.agent` | Agentic Development |
+| `.dashboard` | Dashboard |
+| `.mcp` | MCP Server |
+
+Examples: `retention.policy.json` (Policy & Compliance's, for one project),
+`manifest.deployment.toml` (Deployment & Servers', for one project's server
+manifest — the direct descendant of little-runner's existing per-project
+`~/.config/little-runner/projects/<owner>-<name>.toml`, now split by owner
+instead of being one shared file). Core owns no project files — it isn't a
+pillar and has no project-scoped concerns of its own.
+
+**Read/write rule**: any pillar may *read* any project file regardless of
+owner tag. Only the owning pillar may *write* its own files. A pillar
+needing a value from a file it doesn't own reads it directly — read access
+is universal — and needing that value *changed* is a request to the
+owner's Pillar Interface, never a direct write: see `design.md`'s
+"Cross-pillar configuration change" data-flow diagram.
+
+**Enforcement**: not filesystem permissions — every pillar runs as the
+same host user, so there is no real UID boundary to enforce this with
+(the same reasoning already behind this project having no multi-tenant
+auth model at all). Enforcement is a shared client library: every pillar
+touches `~/.config/little-workshop/projects/` only through it, and it
+refuses a write whose target file's owner tag isn't the caller's own — a
+structural rule in code, not a convention someone has to remember.
+
+**No repetition of configuration**: two distinct guarantees, not one.
+*One writer per file* is what the tag convention above mechanically
+enforces — a hard guarantee. *No two files encoding the same underlying
+setting* is not mechanically provable in general (nothing can verify two
+differently-named values mean the same thing from the outside) — this is a
+design discipline (a setting is defined once, by its one owning pillar; a
+pillar needing that value reads the owner's file rather than keeping its
+own copy) backed by a best-effort Policy & Compliance check: matching key
+names appearing across two owners' files get flagged for a human to look
+at, not silently allowed or silently merged.
+
 ## Data model
 
 **Revision note**: the first round specified one shared SQLite database for
@@ -90,6 +177,19 @@ its tables). Each pillar now owns one exclusive SQLite file under
 process ever opens it — the same rule this ecosystem already applies to
 `little-requirements`' database ("never edited or queried directly, always
 through `lreq`"), now universal instead of specific to one tool.
+
+**Boundary with project files**: a pillar's SQLite file is for its own
+*operational* data — records it produces and queries at volume (test
+results, job history, policy check history). Small, per-project *settings*
+a pillar exposes for other pillars to read belong in "Configuration &
+project data" above, as project files, not as rows in this database. The
+`projects` table below is the exception worth naming explicitly: it's
+Registry & Portfolio's own index of what exists (name, repo path, GitHub
+remote, cached status), not a per-project setting any other pillar writes
+— the existence of a `~/.config/little-workshop/projects/<project>/`
+directory and a row in this table are expected to stay in sync, but which
+one is authoritative for "does this project exist" is implementation work,
+not decided here.
 
 - **Orchestration** — `jobs`, `job_runs`, `pipelines`, `pipeline_runs`.
 - **Policy & Compliance** — `policy_rules`, `policy_check_results`.
@@ -168,7 +268,21 @@ PI, not a table another pillar could accidentally join against.
   `Restart=on-failure` at the OS level is the first line of defense before
   Core's own crash-counter logic ever runs, and it's the exact primitive
   every project server in this ecosystem already uses — nothing new to
-  operate.
+  operate. This applies to Core's own unit too: Core gets no bespoke,
+  more-fragile recovery mechanism for itself.
+- **Core reconstructs its registry on restart rather than trusting memory
+  it just lost.** The alternative — persisting the live registry somewhere
+  so Core could resume "where it left off" — adds a second source of truth
+  that can drift from systemd's own actual unit states. Asking systemd and
+  each pillar's health probe directly, every time Core starts, is slower
+  by a few round trips and never wrong.
+- **Filename-encoded ownership for project files, not OS permissions.**
+  Every pillar runs as the same host user, so there is no UID boundary to
+  enforce write-ownership with — the same fact already behind this
+  project's "no multi-tenant auth" decision. A shared client library that
+  refuses a mismatched write is weaker than kernel-enforced permissions in
+  the adversarial case, and exactly as strong in the case that actually
+  exists here: one user, ten pillars, no adversary.
 - **No multi-tenant auth/RBAC.** Tailscale network identity plus the
   existing actor-allowlist model (owner + configured `allowed_actors`) is
   the entire access-control story, attached only to the Dashboard and any
