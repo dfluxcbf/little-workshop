@@ -4,140 +4,194 @@ See `docs/design.md` for the concepts behind these components. This document
 is the settled design for this round; nothing below is implemented yet (see
 `docs/milestones.md`).
 
+## Revision note (this round)
+
+The first round described one process with internal modules sharing one
+database. This round replaces that with **Core + ten pillars**, each its own
+process with its own storage, communicating only through a declared Pillar
+Interface (PI). Every section below (Components, Data model, Feature
+mapping, Technical decisions) reflects the pillar model; where it differs
+from what a first reading of the design-round-one commit would suggest, this
+document — not that history — is authoritative.
+
 ## Components
 
-One process (`lws serve`, a `systemd --user` unit — the same primitive
-`little-runner` already uses), organized as modules — code boundaries, not
-separate deployables:
+**Core** — not a pillar, cannot be disabled. A small, rarely-changing
+process-supervision layer: starts every enabled pillar as a `systemd --user`
+unit, tracks liveness via each pillar's health probe, relaunches a crashed
+pillar immediately from its last known-good build (no rebuild, no confirm
+gate), refuses to start a disabled one, and keeps the pillar registry
+(name → Unix-socket path → interface version) every other pillar and the
+Dashboard/MCP use to find each other. Holds no domain data.
 
-| Module | Responsibility | Absorbs |
-|---|---|---|
-| `job_engine` | Job CRUD, the `queue_key` mutex, worker pool (pooled + detached execution modes), the self-pumping queue. The one thing every other module calls into instead of managing its own concurrency. | little-runner's `repo_state.py` queue/slot logic, generalized |
-| `pipeline_engine` | Pipeline definitions (YAML), PipelineRun expansion into Jobs, DAG status derivation. | The ecosystem-milestone pattern in root `docs/milestones.md` |
-| `policy` | `PolicyRule` storage and evaluation at pre-job/pre-merge/scheduled checkpoints; the "doctor"-style report. | The 8 root policy docs' checkable rules; `little-runner`'s `doctor.py`; `branch_audit.py`; `new-project-checklist`'s manual Step 4 table |
-| `requirements` | Project→Suite→Requirement→TestResult hierarchy, draft/published lifecycle, the Use-Case/Milestone axis, Markdown/CSV reporting. | `little-requirements` wholesale, including its own planned-not-built M8 |
-| `testing` | Sandboxed test execution (worktree default, Docker optional), JUnit-XML ingestion beyond pytest, on-demand test runs. | `little-requirements`' pytest plugin (kept); its planned E6/M8-9 (built, this time) |
-| `versioning` | Gitflow primitives: branch taxonomy, precondition checks, stage/version-suffix modeling, version hooks. | `little-versions` wholesale |
-| `build_ci` | `build.run`/`test.run_suite` job types, fork-safety-gated PR testing, on-demand and per-PR triggers. | `little-runner`'s `ci.py`, generalized from "disclaimed non-goal" to a real module |
-| `packages` | PEP 503 index + `.vsix` hosting, always-on (no more 5-minute session compromise — the daemon is already persistent). | `little-pypi` wholesale |
-| `deployment` | Managed Process lifecycle (start/stop/restart/health), worktree-based zero-downtime deploys, confirm-gated rollback, Tailscale mapping. | `little-runner`'s server-lifecycle mechanics, generalized to cover Claude CLI agent instances too, not only project servers |
-| `agentic_dev` | `agent.run_task` Job type: Claude CLI execution, BranchingSpec resolution, result-file → change-report rendering, Remote Control session naming. | `little-runner`'s `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`/`sessions.py` |
-| `project_registry` | The `projects` table (incl. the super-repo container row), `project.bootstrap` pipeline, submodule registration, requirements-DB wiring. | `bootstrap-little-project` wholesale; `little-projects`' informal registry role; `configure_submodules.sh`; the requirements-DB wiring step `bootstrap-little-project`'s own docs list as a deliberate non-goal |
-| `tickets` | Ticket records, optional project/milestone/requirement linkage, optional GitHub-issue mirroring. | `little-tickets`' undefined purpose; `docs/milestones.md`'s ecosystem table; ad hoc GitHub issues as today's de facto tracker |
-| `adapters/github` | `gh`-backed issue/PR sync, per-project, optional. | `little-runner`'s `github.py` + poller, unchanged mechanism |
-| `adapters/tailscale` | `tailscale serve` mapping for the dashboard and any Managed Process. | `little-runner`'s existing pattern, unchanged mechanism, now implemented once |
-| `web` | Dashboard (FastAPI/uvicorn), extending `little-runner`'s dark "mission control" design system with new panels (Requirements, Pipelines, Job history, Policy compliance, Project registry, Tickets). | `little-runner`'s `web/` |
-| `mcp` | One MCP server process, registered at user scope, namespaced tools per module (`lws_requirement_*`, `lws_version_*`, `lws_test_*`, `lws_job_*`, `lws_pipeline_*`, `lws_policy_*`, `lws_project_*`, `lws_ticket_*`, `lws_package_*`, `lws_server_*`, `lws_agent_*`). | `little-requirements`' and `little-versions`' MCP tool surfaces; closes `little-versions`' own documented gap where its MCP module doesn't actually live in its source tree |
-| `cli` | `lws` — argparse front-end, one function per subcommand, no logic of its own (mirrors `little-runner/cli.py`'s own stated pattern). Talks to the daemon over a local socket for anything needing shared state; reads state files/DB directly for pure reads when the daemon isn't running (mirrors `lrun status`'s existing fallback). | `lreq`/`lvx`/`lrun`/`little-pypi`/`bootstrap-little-project` CLIs |
+Ten pillars, each its own process, its own SQLite file, and its own Pillar
+Interface (a small FastAPI app bound to a Unix domain socket):
+
+| Pillar | Goal | Absorbs | Enabled by default |
+|---|---|---|---|
+| **Orchestration** | Every unit of work happens once, in the right order, and its outcome is recorded — regardless of which pillar performs it. | little-runner's per-repo queue/slot logic, generalized to every job type and every pillar | Yes — required |
+| **Policy & Compliance** | Nothing drifts from the rules this ecosystem has already agreed to, without someone finding out. | The 8 root policy docs' checkable rules; `doctor.py`; `branch_audit.py`; the checklist skill's manual verification table | Yes — required |
+| **Registry & Portfolio** | There is always one true answer to "what projects exist, and what's the state of the work tracked against them." | bootstrap-little-project wholesale; little-projects' informal registry role; `configure_submodules.sh`; little-tickets' undefined purpose; the ecosystem-milestone table | Yes |
+| **Requirements & Quality** | Every behavior that matters has an auditable answer to "is this actually tested," and every delivery checkpoint has an auditable answer to "is it done." | little-requirements wholesale, plus its own never-built M8 (Use Cases & Milestones) | Yes |
+| **Version Control & Release** | Branches and versions are always in a known-safe, consistent state — never by hand, never inconsistently. | little-versions wholesale | Yes |
+| **Build & Packages** | A build artifact exists, is reproducible, and is reachable by anything that needs to install it. | little-runner's disclaimed CI non-goal (now real, including its own never-built E6: on-demand testing, JUnit-XML beyond pytest) + little-pypi wholesale | Optional — a project with no build/publish step never starts it |
+| **Deployment & Servers** | A running process — a project's server, a Claude CLI instance, or a pillar of this system itself — stays running, and can be safely replaced with a newer version without anything else noticing. | little-runner's server-lifecycle mechanics (worktree deploys, confirm-gated rollback, cgroup-aware self-restart), generalized to every Managed Process | Yes |
+| **Agentic Development** | Claude does real implementation work on a real branch, safely, and the human stays in control of when it's finished. | little-runner's `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`/`sessions.py`, generalized from GitHub-issue-only triggers | Optional — a project not using agentic dev never starts it |
+| **Dashboard** | A human can see and act on everything above, without a terminal. | little-runner's `web/`, extended with panels for every other pillar | Optional — a headless/automation-only setup can disable it |
+| **MCP Server** | An agent (Claude, or another tool) can see and act on everything above, without a terminal. | little-requirements' and little-versions' MCP tool surfaces, unified and namespaced | Optional — but the common case, since Claude is this ecosystem's primary caller |
+
+Dashboard and MCP Server hold no domain data of their own — both are thin,
+stateless proxies translating their caller's request (an HTTP request, an
+MCP tool call) into a Pillar Interface call against whichever pillar
+actually owns the answer, exactly the same discipline every other pillar
+follows.
+
+## Pillar Interface (PI)
+
+- **Transport**: HTTP bound to a Unix domain socket, one per pillar
+  (`~/.local/state/little-workshop/sockets/<pillar>.sock`) — never a network
+  port, so pillar-to-pillar traffic never needs a firewall rule and is
+  invisible outside the host by construction. FastAPI/uvicorn, matching this
+  ecosystem's existing preference (`little-requirements`' server,
+  `little-runner`'s dashboard).
+- **Contract**: each pillar publishes its own OpenAPI schema (FastAPI
+  provides this for free); every caller depends on that schema, never on the
+  serving pillar's source. This is the same inter-project independence rule
+  the [project structure policy](../../docs/policies/project_structure_policy.md)
+  already enforces *between* `little-*` projects, now enforced *between
+  pillars inside one of them* — structurally, not just by convention: there
+  is no shared Python import path between two pillars' `src/` trees, and no
+  pillar ever opens another pillar's SQLite file.
+- **Versioning**: paths carry a version prefix (`/v1/...`); a pillar may
+  serve two versions at once during a migration window, so upgrading one
+  pillar's interface never forces every caller to upgrade in lockstep.
+- **Discovery**: Core's pillar registry is the only place a socket path is
+  looked up — a pillar never hardcodes another's path.
 
 ## Data model
 
-One SQLite database, `~/.local/state/little-workshop/workshop.db`, WAL mode.
-Table groups (illustrative, not final DDL — schema design is implementation
-work, out of scope this round):
+**Revision note**: the first round specified one shared SQLite database for
+the whole system. That is superseded — a shared database is exactly the
+kind of direct, un-mediated coupling the pillar model exists to prevent (a
+schema change in one pillar could silently break another that also reads
+its tables). Each pillar now owns one exclusive SQLite file under
+`~/.local/state/little-workshop/pillars/<pillar>.db`, WAL mode, and no other
+process ever opens it — the same rule this ecosystem already applies to
+`little-requirements`' database ("never edited or queried directly, always
+through `lreq`"), now universal instead of specific to one tool.
 
-- `projects` — registry entry per submodule + the super-repo container row.
-- `requirements`, `test_suites`, `test_results`, `use_cases`, `milestones` —
-  scoped by `project_id`; supersedes N separate
-  `bundle-littles/req_db/<project>_reqs.db` files.
-- `jobs`, `job_runs` — the unified job model; supersedes little-runner's
-  several state-file directories (`issues/`, `restarts/`, `repos/`,
-  `deploys/`, `deploy_confirm/`) as one queryable table set.
-- `pipelines`, `pipeline_runs` — DAG templates and their expansions.
-- `policy_rules`, `policy_check_results` — seeded from the 8 root policy
-  docs; evaluation history.
-- `servers`, `deployments`, `deploy_confirmations` — Managed Process state.
-- `packages` — metadata for `little-pypi`'s filesystem-backed blob storage
-  (the blobs themselves stay on disk; only metadata + session state move
-  into the DB).
-- `tickets` — project-scoped or ecosystem-wide, with optional GitHub mirror
-  state.
-- `events` — append-only audit log: every state change, what triggered it.
+- **Orchestration** — `jobs`, `job_runs`, `pipelines`, `pipeline_runs`.
+- **Policy & Compliance** — `policy_rules`, `policy_check_results`.
+- **Registry & Portfolio** — `projects` (incl. the super-repo container
+  row), `tickets`.
+- **Requirements & Quality** — `requirements`, `test_suites`,
+  `test_results`, `use_cases`, `milestones`.
+- **Version Control & Release** — no persistent DB beyond a small cache;
+  git itself (branches, tags, the committed `VERSION` file) remains the
+  actual source of truth, exactly as `little-versions` treats it today.
+- **Build & Packages** — `packages` (metadata; blobs stay on disk),
+  `build_runs`.
+- **Deployment & Servers** — `servers`, `deployments`,
+  `deploy_confirmations`.
+- **Agentic Development** — `agent_runs`, `remote_control_sessions`.
+- **Dashboard**, **MCP Server** — no persistent storage of their own.
 
-What stays outside the database, deliberately: git repositories and worktrees
-themselves (git remains the actual VCS — nothing here reimplements it),
-package blobs, run logs (large text; kept as files under
-`~/.local/state/little-workshop/logs/`, exactly little-runner's existing
-pattern, referenced from `jobs.log_ref` rather than stored inline), and
-screenshots. The git-committed `VERSION` file in each project remains the
-single source of truth for that project's version; the `projects` table's
-version column is a cached read, never the authority — a fresh clone or a
-hand-edited `VERSION` is never contradicted by stale DB state.
+What stays outside every pillar's database, deliberately: git repositories
+and worktrees themselves (git remains the actual VCS), package blobs, run
+logs (large text, kept as files under
+`~/.local/state/little-workshop/logs/<pillar>/`, referenced by ID rather
+than stored inline), and screenshots. The git-committed `VERSION` file in
+each project remains the single source of truth for that project's version;
+any pillar's cached copy of it is a cached read, never the authority.
+
+An `events` append-only log — every state change, what triggered it — is
+kept per-pillar (each pillar logs its own events) rather than as one
+cross-cutting table, for the same reason every other table is: a pillar's
+audit trail is that pillar's own data, readable by any caller through its
+PI, not a table another pillar could accidentally join against.
 
 ## Feature mapping
 
 | Absorbed tool | Becomes | What changes |
 |---|---|---|
-| `little-requirements` | `requirements` + `testing` modules | Same model (Project→Suite→Requirement→TestResult, draft/published), plus its own planned M8 (Use Cases & Milestones) and E6 (on-demand testing, JUnit-XML beyond pytest) actually built. Data moves from N per-project SQLite files into one DB, `project_id`-scoped. |
-| `little-versions` | `versioning` module | Same Gitflow primitives and precondition checks (`LittleVersionsAPI`'s role), called in-process instead of via a subprocess to a sibling CLI. Fixes the documented gap where its MCP surface doesn't live in its own source tree — one MCP server, one source of truth. |
-| `little-runner` | `job_engine`, `pipeline_engine`, `agentic_dev`, `deployment`, `build_ci`, `adapters/github`, `adapters/tailscale`, `web` | Its stated non-goals ("not a general CI system," "not an interactive UI [beyond GitHub]") are lifted — testing and the dashboard become real, first-class capabilities instead of disclaimed scope. Its trigger source generalizes from GitHub-issue-only to any Job source. Every safety property (branching control, one-flow-per-project, confirm-gated self-restart, cgroup-aware dispatch) is carried over unchanged. |
-| `little-pypi` | `packages` module | Same PEP 503 + `.vsix` model; the 5-minute-session compromise is dropped since the daemon is already persistent — this was only ever a workaround for `little-pypi` being a separate lightweight tool without one. |
-| `bootstrap-little-project` | `project_registry` module (`project.bootstrap` pipeline) | Its own two deliberate non-goals — registering the submodule, wiring the requirements DB — stop being non-goals, because both now touch one shared table instead of shared files a single-project-scoped tool couldn't reach. |
-| `little-projects` (informal role) | `project_registry` + `policy` modules | `configure_submodules.sh`, `stabilize_branches.py`/`branch_audit.py`, and the hand-maintained `docs/milestones.md` ecosystem table become scheduled/on-demand Jobs and registry rows with full history, instead of scripts whose output lives only in a terminal. The super-repo itself keeps existing as the physical git container — this is not a claim that the container repository goes away, only that its *active* tooling role migrates in. |
-| `little-tickets` | `tickets` module | Its own docs currently say "purpose not yet defined" — this is that purpose: the source of record for portfolio/ecosystem tracking that `docs/milestones.md` and ad hoc GitHub issues currently perform by hand, including for projects with no GitHub remote (`little-mapgen`), which can't participate in the issue-driven workflow today. |
+| `little-requirements` | Requirements & Quality pillar | Same model (Project→Suite→Requirement→TestResult, draft/published), plus its own planned M8 (Use Cases & Milestones) and E6 (on-demand testing, JUnit-XML beyond pytest) actually built. Data moves from N per-project SQLite files into one pillar-owned database, `project_id`-scoped, reachable only through this pillar's own interface — never a shared file. |
+| `little-versions` | Version Control & Release pillar | Same Gitflow primitives and precondition checks, called over its Pillar Interface instead of via a subprocess to a sibling CLI. Fixes the documented gap where its MCP surface doesn't live in its own source tree — the pillar's PI *is* the one surface every caller (CLI, MCP, other pillars) goes through. |
+| `little-runner` | Orchestration, Policy & Compliance, Registry & Portfolio (audit half), Requirements & Quality (testing half), Build & Packages (CI half), Deployment & Servers, Agentic Development, Dashboard pillars | Its stated non-goals ("not a general CI system," "not an interactive UI [beyond GitHub]") are lifted. Its trigger source generalizes from GitHub-issue-only to any Job source. Every safety property (branching control, one-flow-per-project, confirm-gated self-restart, cgroup-aware dispatch) is carried over unchanged, and the *mechanism itself* — worktree-based build-before-stop, confirm-gated rollback — becomes the general-purpose way every pillar (including Core and Deployment & Servers themselves) gets safely redeployed. |
+| `little-pypi` | Build & Packages pillar | Same PEP 503 + `.vsix` model; the 5-minute-session compromise is dropped since this pillar is already a persistent process — that compromise only ever existed because `little-pypi` had no persistent process to live inside. |
+| `bootstrap-little-project` | Registry & Portfolio pillar (`project.bootstrap` pipeline) | Its own two deliberate non-goals — registering the submodule, wiring the requirements database — stop being non-goals: both now touch one pillar's own table instead of shared files a single-project-scoped tool couldn't reach. |
+| `little-projects` (informal role) | Registry & Portfolio + Policy & Compliance pillars | `configure_submodules.sh`, `stabilize_branches.py`/`branch_audit.py`, and the hand-maintained `docs/milestones.md` ecosystem table become scheduled/on-demand Jobs and registry rows with full history. The super-repo itself keeps existing as the physical git container — its *active* tooling role migrates in, the container repository does not go away. |
+| `little-tickets` | Registry & Portfolio pillar | Its own docs currently say "purpose not yet defined" — this is that purpose: the source of record for portfolio/ecosystem tracking, including for projects with no GitHub remote (`little-mapgen`), which can't participate in the issue-driven workflow today. |
 
 ## Technical decisions
 
-- **Single SQLite database, no Postgres/Redis/message broker.** At one PC
-  and up to two developers, SQLite's WAL mode handles concurrent readers
-  fine, and there is no concurrent-write load this system will ever see that
-  a single-writer lock can't absorb. One file is also one thing to back up,
-  inspect, and move — a real win over today's N separate
-  `bundle-littles/req_db/*.db` files, which can't be joined for an
-  ecosystem-wide query without custom scripting. This explicitly rejects the
-  heavier candidates the standalone FOSS survey turned up (Celery+Redis,
-  Postgres-backed ALM platforms) as solving a scale problem this system
-  doesn't have.
-- **In-process async worker pool, not an external job queue.** The "unified
-  job model" the design calls for is an abstraction (one `Job` type per
-  operation, one queue-key mutex scheme), not a requirement for a broker.
-  RQ/Huey/Celery were genuinely considered (see the prior FOSS research) and
-  rejected for the same reason as above: they solve distribution and
-  durability-under-broker-crash problems that don't exist when the queue and
-  its one consumer live in the same process on the same PC.
-- **No multi-tenant auth/RBAC.** Tailscale network identity plus the existing
-  actor-allowlist model (owner + configured `allowed_actors`) is the entire
-  access-control story — unchanged from what `little-runner` already does,
-  now the whole system's model instead of one module's. Two developers means
-  "is this one of us," not "what can this role see."
-- **Worktree-based deployment, not container-first.** Every existing project
-  already deploys as a bare process via `systemd --user`; adopting a
-  Docker-first model (the pattern the FOSS survey's Coolify/CapRover
-  candidates use) would be a regression for the sole benefit of matching an
-  unneeded PaaS convention. Docker stays available as an *opt-in* sandbox
-  backend for test isolation, not the default deploy model.
-- **One daemon, not microservices.** Modules are code boundaries, not
-  separate deployables — appropriate because there is no scaling or
-  fault-isolation need at this scale, and a single process is what makes
-  "restart itself with a newer implementation of itself" a already-solved
-  problem (`little-runner`'s own mechanism, inherited) rather than a
-  distributed-coordination problem across N services.
-- **CLI as a thin client, not reimplemented logic per surface.** Directly
-  carries forward `little-versions`' own stated principle — CLI and MCP sit
-  on top of one API layer, never duplicating logic per surface — from one
-  module to the whole system.
-- **GitHub and Tailscale stay optional, per-project adapters, not assumed
-  universal.** This fixes today's actual asymmetry: `little-mapgen` has no
-  GitHub remote and is explicitly exempted from `little-runner`'s automation
-  as a result. Making the adapter attachment explicit (rather than implicit
-  in "every project has a GitHub remote") means a project without one loses
-  exactly one feature, not silent breakage.
+- **Process-per-pillar, not modules in one process.** This is the central
+  revision of this round: a shared process cannot give independent crash
+  isolation, independent live updates, or a genuinely lightweight
+  "disabled costs nothing" story — see `design.md`'s Revision note above.
+  Ten small processes plus Core cost more in raw process count than one
+  process would, and that cost is accepted deliberately because the
+  properties it buys (see design.md's Goals) were explicitly required, not
+  assumed.
+- **Unix-domain-socket HTTP, not shared memory or raw sockets.** HTTP is
+  debuggable with `curl`, versionable by URL path, and consistent with this
+  ecosystem's existing FastAPI preference; a Unix socket (not a TCP port)
+  keeps every pillar-to-pillar call invisible outside the host and avoids
+  port-allocation bookkeeping across ten-plus processes.
+- **One SQLite file per pillar, not one shared database.** Superseded from
+  round one specifically because a shared file is direct coupling by
+  another name — any pillar could theoretically open it and reach into
+  another pillar's tables. Per-pillar files make "the only way to this
+  pillar's data is its own interface" a structural fact, not a rule someone
+  has to remember to follow — the same upgrade this ecosystem's requirements
+  policy already made for one tool ("never query `lreq`'s database
+  directly"), now load-bearing for every pillar.
+- **Two distinct recovery mechanisms, not one.** A crash needs the fastest
+  possible relaunch of what already worked (Core's job: no rebuild, no
+  confirm gate). A planned upgrade needs to never disturb a sibling pillar
+  and to be reversible if it's wrong (Deployment & Servers' job:
+  build-before-stop, confirm-gated). Conflating these into one mechanism
+  would either make crash recovery too slow (rebuilding on every crash) or
+  make planned upgrades too risky (no confirm gate) — keeping them separate
+  lets each be no more careful than it needs to be.
+- **`systemd --user` per pillar, not a custom process supervisor.** Free
+  `Restart=on-failure` at the OS level is the first line of defense before
+  Core's own crash-counter logic ever runs, and it's the exact primitive
+  every project server in this ecosystem already uses — nothing new to
+  operate.
+- **No multi-tenant auth/RBAC.** Tailscale network identity plus the
+  existing actor-allowlist model (owner + configured `allowed_actors`) is
+  the entire access-control story, attached only to the Dashboard and any
+  pillar that talks to GitHub — unchanged from what `little-runner` already
+  does.
+- **Worktree-based deployment, not container-first.** Every existing
+  project already deploys as a bare process via `systemd --user`; adopting
+  a Docker-first model would be a regression for the sole benefit of
+  matching an unneeded PaaS convention. Docker stays available as an
+  opt-in sandbox backend for test isolation inside the Requirements &
+  Quality pillar, not the default deploy model.
 - **A small number of safety rules are hard-coded, not `PolicyRule`s.**
   "Automation never merges/deletes/finishes on its own initiative" and "the
-  agent never touches branches when a job specifies them" are invariants in
-  the `job_engine`/`agentic_dev` modules' own code, not entries in the
-  user-editable policy table — these are safety properties this ecosystem's
-  production use already depends on, not conventions a future edit to the
-  policy table should be able to loosen by accident.
+  agent never touches branches when a Job specifies them" are invariants in
+  the Orchestration and Agentic Development pillars' own code, not entries
+  in Policy & Compliance's editable rule table — these are safety properties
+  this ecosystem's production use already depends on, not conventions a
+  future policy edit should be able to loosen by accident.
+- **A new feature maps to exactly one pillar's interface, or becomes a new
+  pillar.** If a proposed feature clearly serves an existing pillar's one
+  stated goal, it's a new endpoint on that pillar's interface. If it doesn't
+  fit any existing pillar's goal statement, it becomes a new pillar — with
+  its own goal, its own storage, its own manifest entry — rather than being
+  bolted onto an existing pillar for convenience, which is exactly the
+  entanglement path this whole model exists to avoid.
 
 ## Dependencies
 
 Not finalized — implementation work. Expected to mirror the absorbed tools'
 existing choices where they already fit the constraints here: Python ≥3.11
-stdlib-first (matching `little-runner`'s and `bootstrap-little-project`'s
-existing "no third-party runtime dependency" preference), FastAPI/uvicorn for
-the dashboard and MCP-adjacent HTTP surface (matching `little-requirements`'
-and `little-runner`'s existing choice), `git`/`gh`/`claude`/`systemctl`/
+stdlib-first per pillar (matching `little-runner`'s and
+`bootstrap-little-project`'s existing "no third-party runtime dependency"
+preference beyond what a pillar genuinely needs), FastAPI/uvicorn for every
+Pillar Interface and the Dashboard, `git`/`gh`/`claude`/`systemctl`/
 `systemd-run`/`bazel`/`tailscale` as external, already-required host tools
 (unchanged from today).
 
@@ -146,12 +200,17 @@ and `little-runner`'s existing choice), `git`/`gh`/`claude`/`systemctl`/
 Not applicable yet — no `src/` beyond the standard scaffold this round (see
 `docs/design.md`'s non-goals). Once implementation begins, this project
 follows the root [build policy](../../docs/policies/build_policy.md) like
-every other submodule: Bazel, `//:wheel` for the Python package, `//:install`
-via `pipx`, `//:test` for the test suite. No `//:vsix`/`//:exe` are
-anticipated (no VS Code extension or native binary planned).
+every other submodule. Expect one Bazel package per pillar under `src/`
+(each pillar is independently buildable/installable, matching its
+independently-deployable nature) plus `//:all`/`//:test` aggregating across
+all of them; exact target shape is implementation work, not decided here.
 
 ## Additional folders
 
-None beyond the standard layout, planned so far. If a dashboard frontend ends
-up needing its own build step distinct from the Python package, that would
-be called out here when it's actually added — not speculated on now.
+`presentations/` — a set of cross-linked, presentation-style documents
+covering the goals and decisions behind this design, for review and
+onboarding; see `presentations/README.md`. This is additional to the
+standard layout per the
+[project structure policy](../../docs/policies/project_structure_policy.md)'s
+"projects may have additional top-level folders where their nature requires
+it" allowance.
