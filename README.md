@@ -12,5 +12,11 @@ concepts, and `docs/architecture.md` for the pillar breakdown, data model,
 and feature mapping from the tools it absorbs. No implementation exists yet
 — see `docs/milestones.md`.
 
-For the narrative version of the same decisions — five short, cross-linked
+For the narrative version of the same decisions — cross-linked
 presentations — start at `presentations/README.md`.
+
+**Independent by design.** Unlike every other submodule in this ecosystem,
+little-workshop is exempt from the super-repo's root policies — it is not
+wired into `little-requirements`/`lreq` or `little-versions`/`lvx`. See
+`docs/governance_policy.md` for why and `docs/README.md`'s "Exemption:
+little-workshop" for where the super-repo itself sanctions it.

@@ -26,5 +26,9 @@ restating it.
    [`assets/identity-tokens.css`](assets/identity-tokens.css); a static,
    dependency-free preview is at
    [`assets/identity-reference.html`](assets/identity-reference.html).
+7. [Independence & Self-Governance](07-self-governance.md) — why
+   little-workshop stopped depending on `little-requirements`/`lreq` and
+   `little-versions`/`lvx` for its own governance, and wrote
+   [`../docs/governance_policy.md`](../docs/governance_policy.md) instead.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

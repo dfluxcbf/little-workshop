@@ -4,6 +4,17 @@ See `docs/design.md` for the concepts behind these components. This document
 is the settled design for this round; nothing below is implemented yet (see
 `docs/milestones.md`).
 
+## Governance note
+
+little-workshop is exempt from the super-repo's root policies — it is not
+wired into `little-runner`/`lreq`'s or `little-versions`/`lvx`'s tooling for
+its own governance, and defines its own requirements/version policy
+instead. See `docs/governance_policy.md` for the full charter and
+`docs/README.md`'s "Exemption: little-workshop" for the root-level
+acknowledgment. Nothing about this section's technical content below
+changes as a result — it's a statement about which policies this project
+answers to, not about the architecture itself.
+
 ## Revision note (this round)
 
 The first round described one process with internal modules sharing one
