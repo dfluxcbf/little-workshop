@@ -1,0 +1,12 @@
+package(default_visibility = ["//visibility:public"])
+
+# No build artifacts defined yet. Add wheel/vsix/exe/install/test targets here
+# as the project grows — see little-projects/docs/policies/build_policy.md for
+# the standard target names every project should expose, and its "Portability"
+# / "Dependency isolation" / "Missing system dependencies" sections: no
+# hardcoded paths/usernames, install CLI tools via `pipx` (not `pip install
+# --user`), and any `sh_binary`/genrule that needs a system tool that can't be
+# isolated must run tools/check_system_deps.sh as a preflight step first (see
+# that script — install targets should wire it in as a `data` dependency and
+# invoke it before doing real work, the way bootstrap-little-project's own
+# BUILD.bazel does for its `//:install` target).

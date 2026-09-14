@@ -1,0 +1,11 @@
+# Requirements policy
+
+This project follows the super-repo's
+[requirements policy](../../docs/policies/requirements_policy.md): requirements and
+test coverage are managed exclusively through `little-requirements` (`lreq`),
+against a shared database at `bundle-littles/req_db/<project>_reqs.db`. The
+database is never edited or queried directly.
+
+## Project-specific notes
+
+TBD — no requirements registered yet.
