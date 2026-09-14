@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>little-workshop — visual identity reference</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="identity-tokens.css">
+<style>
+  *{box-sizing:border-box;}
+  html{background:var(--bg);}
+  body{background:var(--bg);color:var(--ink);font-family:var(--font-body);margin:0;padding:28px 20px 60px;}
+  .wrap{max-width:960px;margin:0 auto;display:flex;flex-direction:column;gap:34px;}
+  header{display:flex;flex-direction:column;gap:6px;padding-bottom:20px;border-bottom:1px solid var(--border);}
+  header .eyebrow{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);}
+  header h1{font-family:var(--font-display);text-transform:uppercase;letter-spacing:.02em;font-size:1.6rem;margin:0;}
+  header p{color:var(--ink-soft);font-size:.9rem;max-width:64ch;margin:0;}
+  header a{color:var(--accent);}
+
+  .screen-label{font-family:var(--font-mono);font-size:.72rem;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:8px;}
+  .frame{border:1px solid var(--border);border-radius:12px;padding:20px;background:var(--bg);}
+
+  .topbar{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;border-bottom:1.5px solid var(--ink);padding-bottom:10px;}
+  .brand{font-family:var(--font-display);font-weight:700;font-size:1.1rem;text-transform:uppercase;letter-spacing:.02em;}
+  .titleblock{font-family:var(--font-mono);font-size:.6rem;color:var(--ink-soft);text-align:right;line-height:1.5;}
+
+  .pillstrip{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+  .pill{font-family:var(--font-mono);font-size:.62rem;padding:2px 8px;border:1px solid var(--border);border-radius:3px;display:flex;align-items:center;gap:5px;background:var(--surface);color:var(--ink-soft);}
+  .dot{width:6px;height:6px;border-radius:50%;display:inline-block;}
+  .dot.ok{background:var(--ok);} .dot.warn{background:var(--warn);} .dot.off{background:var(--ink-faint);}
+
+  table{width:100%;border-collapse:collapse;font-size:.8rem;margin-top:10px;}
+  th{text-align:left;font-family:var(--font-mono);font-size:.62rem;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);}
+  td{padding:9px 10px;border:1px solid var(--border);}
+  .proj{color:var(--accent);font-family:var(--font-mono);font-weight:500;}
+  .statuspill{font-family:var(--font-mono);font-size:.64rem;padding:2px 7px;border-radius:3px;display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);}
+  .statuspill.ok{background:var(--ok-bg);color:var(--ok);}
+  .statuspill.warn{background:var(--warn-bg);color:var(--warn);}
+
+  .sheetgrid{display:flex;flex-direction:column;border:1px solid var(--border);}
+  .sheetrow{display:grid;grid-template-columns:42px 1fr 2fr 100px;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);}
+  .sheetrow:last-child{border-bottom:none;}
+  .sheetrow.off{opacity:.5;}
+  .sheetnum{font-family:var(--font-mono);font-size:.68rem;color:var(--ink-faint);}
+  .sheetname{font-weight:600;font-size:.8rem;}
+  .sheetgoal{font-size:.72rem;color:var(--ink-soft);}
+
+  footer{font-family:var(--font-mono);font-size:.76rem;color:var(--ink-faint);border-top:1px solid var(--border);padding-top:16px;}
+  footer a{color:var(--accent);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">little-workshop · Dashboard pillar</span>
+    <h1>Visual identity — reference</h1>
+    <p>The decided identity, rendered — not just described. Ledger's layout with Mission Control's exact color tokens (violet omitted). Full decision record: <a href="../06-visual-identity.md">06-visual-identity.md</a>. Token source: <a href="identity-tokens.css">identity-tokens.css</a>.</p>
+  </header>
+
+  <div>
+    <div class="screen-label">Screen — Home / Portfolio</div>
+    <div class="frame">
+      <div class="topbar">
+        <span class="brand">little-workshop</span>
+        <span class="titleblock">SHEET 01 — PORTFOLIO<br>REV 2026-09-14</span>
+      </div>
+      <div class="pillstrip">
+        <span class="pill"><span class="dot ok"></span>core</span>
+        <span class="pill"><span class="dot ok"></span>orch</span>
+        <span class="pill"><span class="dot ok"></span>policy</span>
+        <span class="pill"><span class="dot warn"></span>reqs</span>
+        <span class="pill"><span class="dot off"></span>build</span>
+        <span class="pill"><span class="dot off"></span>agent</span>
+      </div>
+      <table>
+        <tr><th>project</th><th>version</th><th>branch</th><th>coverage</th><th>status</th></tr>
+        <tr><td class="proj">little-meals</td><td>2.3.1</td><td>dev</td><td>92%</td><td><span class="statuspill ok">OK</span></td></tr>
+        <tr><td class="proj">little-mindcheck</td><td>1.4.0</td><td>dev</td><td>88%</td><td><span class="statuspill ok">OK</span></td></tr>
+        <tr><td class="proj">little-runner</td><td>0.9.2</td><td>feature/dashboard-v2</td><td>74%</td><td><span class="statuspill warn">WARN</span></td></tr>
+        <tr><td class="proj">little-versions</td><td>0.4.7</td><td>dev</td><td>95%</td><td><span class="statuspill ok">OK</span></td></tr>
+        <tr><td class="proj">little-workshop</td><td>0.1.0</td><td>dev</td><td>—</td><td><span class="statuspill ok">DESIGN ONLY</span></td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div>
+    <div class="screen-label">Screen — Pillars (spec sheet)</div>
+    <div class="frame">
+      <div class="topbar">
+        <span class="brand">little-workshop</span>
+        <span class="titleblock">SHEET 02 — PILLARS<br>SCALE 1:1</span>
+      </div>
+      <div class="sheetgrid">
+        <div class="sheetrow"><span class="sheetnum">00</span><span class="sheetname">Core</span><span class="sheetgoal">Supervises every pillar.</span><span class="statuspill ok">RUNNING</span></div>
+        <div class="sheetrow"><span class="sheetnum">01</span><span class="sheetname">Orchestration</span><span class="sheetgoal">One job, one order, every time.</span><span class="statuspill ok">RUNNING</span></div>
+        <div class="sheetrow"><span class="sheetnum">02</span><span class="sheetname">Policy &amp; Compliance</span><span class="sheetgoal">Nothing drifts unnoticed.</span><span class="statuspill ok">RUNNING</span></div>
+        <div class="sheetrow"><span class="sheetnum">03</span><span class="sheetname">Registry &amp; Portfolio</span><span class="sheetgoal">One true project list.</span><span class="statuspill ok">RUNNING</span></div>
+        <div class="sheetrow"><span class="sheetnum">04</span><span class="sheetname">Requirements &amp; Quality</span><span class="sheetgoal">Is it tested, is it done.</span><span class="statuspill warn">1 FAILING</span></div>
+        <div class="sheetrow"><span class="sheetnum">05</span><span class="sheetname">Version Control &amp; Release</span><span class="sheetgoal">Branches always safe.</span><span class="statuspill ok">RUNNING</span></div>
+        <div class="sheetrow off"><span class="sheetnum">06</span><span class="sheetname">Build &amp; Packages</span><span class="sheetgoal">Artifacts, reproducible.</span><span class="statuspill">DISABLED</span></div>
+        <div class="sheetrow"><span class="sheetnum">07</span><span class="sheetname">Deployment &amp; Servers</span><span class="sheetgoal">Keep it running, safely.</span><span class="statuspill ok">RUNNING</span></div>
+        <div class="sheetrow off"><span class="sheetnum">08</span><span class="sheetname">Agentic Development</span><span class="sheetgoal">Claude, on a real branch.</span><span class="statuspill">DISABLED</span></div>
+        <div class="sheetrow"><span class="sheetnum">09</span><span class="sheetname">Dashboard</span><span class="sheetgoal">You're looking at it.</span><span class="statuspill ok">RUNNING</span></div>
+        <div class="sheetrow"><span class="sheetnum">10</span><span class="sheetname">MCP Server</span><span class="sheetgoal">Claude's way in.</span><span class="statuspill ok">RUNNING</span></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Static reference, no interactivity — open directly in a browser. Not the implementation; the implementation should consume <code>identity-tokens.css</code> directly rather than this file's markup.
+  </footer>
+
+</div>
+</body>
+</html>

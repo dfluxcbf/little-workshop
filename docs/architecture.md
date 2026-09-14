@@ -37,7 +37,7 @@ Interface (a small FastAPI app bound to a Unix domain socket):
 | **Build & Packages** | A build artifact exists, is reproducible, and is reachable by anything that needs to install it. | little-runner's disclaimed CI non-goal (now real, including its own never-built E6: on-demand testing, JUnit-XML beyond pytest) + little-pypi wholesale | Optional — a project with no build/publish step never starts it |
 | **Deployment & Servers** | A running process — a project's server, a Claude CLI instance, or a pillar of this system itself — stays running, and can be safely replaced with a newer version without anything else noticing. | little-runner's server-lifecycle mechanics (worktree deploys, confirm-gated rollback, cgroup-aware self-restart), generalized to every Managed Process | Yes |
 | **Agentic Development** | Claude does real implementation work on a real branch, safely, and the human stays in control of when it's finished. | little-runner's `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`/`sessions.py`, generalized from GitHub-issue-only triggers | Optional — a project not using agentic dev never starts it |
-| **Dashboard** | A human can see and act on everything above, without a terminal. | little-runner's `web/`, extended with panels for every other pillar | Optional — a headless/automation-only setup can disable it |
+| **Dashboard** | A human can see and act on everything above, without a terminal. | little-runner's `web/`, extended with panels for every other pillar | Optional — a headless/automation-only setup can disable it. Visual identity decided: see `presentations/06-visual-identity.md`. |
 | **MCP Server** | An agent (Claude, or another tool) can see and act on everything above, without a terminal. | little-requirements' and little-versions' MCP tool surfaces, unified and namespaced | Optional — but the common case, since Claude is this ecosystem's primary caller |
 
 Dashboard and MCP Server hold no domain data of their own — both are thin,
@@ -209,8 +209,12 @@ all of them; exact target shape is implementation work, not decided here.
 
 `presentations/` — a set of cross-linked, presentation-style documents
 covering the goals and decisions behind this design, for review and
-onboarding; see `presentations/README.md`. This is additional to the
-standard layout per the
+onboarding; see `presentations/README.md`. Includes `presentations/assets/`:
+`identity-tokens.css` (the decided Dashboard visual identity's design
+tokens, ready for implementation to consume directly) and
+`identity-reference.html` (a static, dependency-free preview of that
+identity applied to two real screens). This is additional to the standard
+layout per the
 [project structure policy](../../docs/policies/project_structure_policy.md)'s
 "projects may have additional top-level folders where their nature requires
 it" allowance.

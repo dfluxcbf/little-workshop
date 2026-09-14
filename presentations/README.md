@@ -20,5 +20,11 @@ restating it.
    `little-runner`/`bootstrap-little-project`/`little-projects` onto pillars.
 5. [Status & What's Next](05-status-and-roadmap.md) — what's actually built
    today, what's deliberately not, and what the next round is.
+6. [Visual Identity — Decided](06-visual-identity.md) — the Dashboard
+   pillar's chosen look: Ledger's layout, Mission Control's exact color
+   tokens, violet excluded. Design tokens ready for implementation live in
+   [`assets/identity-tokens.css`](assets/identity-tokens.css); a static,
+   dependency-free preview is at
+   [`assets/identity-reference.html`](assets/identity-reference.html).
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).
