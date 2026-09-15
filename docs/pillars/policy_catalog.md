@@ -1,13 +1,19 @@
-# Policy catalog — draft, pending review
+# Policy catalog — tier decided, individually unauthored
 
-**Status: none of this is active.** Every entry below is a *candidate*
-mined from this ecosystem's existing projects and documented decisions, not
-yet run through the actual authoring pipeline in
-`policy_compliance.md` (EARS-compliance check → Claude CLI refinement →
-human review → test-script generation). Treat this document the way that
-pipeline treats a freshly-submitted policy: a draft awaiting a decision,
-not a record of one. See "Open questions for you" at the bottom before
-anything here gets promoted to a real `policies` row.
+**Status.** Tier is decided: every entry below is a **framework** policy
+candidate, not a strong default users could override — confirmed 2026-09-15.
+None is an *active* policy yet — each still has to individually clear all
+three gates in `policy_compliance.md`'s authoring pipeline (EARS-compliant,
+mechanically enforceable, non-conflicting) before its test script gets
+written and it becomes a real `policies` row. This document is the input
+to that pipeline, not a record of having run it.
+
+**Enforceability was applied retroactively to this whole catalog**, not
+just the one entry it was first caught on (see "Considered and rejected"
+below) — Gate 2 didn't exist when this catalog was first drafted, so every
+entry has been re-read against it. A few needed narrowing to their
+actually-checkable core rather than outright rejection; those are marked
+inline.
 
 **Sources investigated**: the 8 root policy documents
 (`../../../docs/policies/*.md`); the design/architecture docs of
@@ -46,6 +52,29 @@ missed:
 - The branch/policy audit itself never merges, deletes, or pushes — it only
   reads and reports.
 
+## Considered and rejected: not mechanically enforceable
+
+Gate 2 of the authoring pipeline (`policy_compliance.md`) didn't exist
+when this catalog was first drafted. Re-reading it against "if we cannot
+enforce a policy, we shall not define it" removed these entirely, rather
+than narrowing them the way a few others were:
+
+- **Data-at-rest encryption posture** (`little-mindcheck` architecture.md's
+  "rely on host full-disk encryption rather than database-level
+  encryption"). Nothing running on the host can meaningfully verify disk
+  encryption state as a property *of the project*, and the choice not to
+  implement database-level encryption is an absence, not a behavior — there
+  is no artifact a test script can point at. Stays exactly what it already
+  is: a documented, reasoned decision in one project's own
+  `docs/architecture.md`, never a policy.
+- **"Documentation shall not contain fabricated content"**
+  (`documentation_policy.md`'s "when content doesn't exist yet" clause;
+  independently stated in `bootstrap-little-project`'s own design.md).
+  Judging whether prose is fabricated is exactly the kind of call a test
+  script cannot make. What *is* enforceable from this same source survives
+  as `doc-no-verbatim-duplication` below — the honesty requirement itself
+  stays a review-time convention, not a policy.
+
 ## A. Project structure &amp; inter-project independence
 
 | Topic | EARS requirement | Source |
@@ -61,9 +90,8 @@ missed:
 | Topic | EARS requirement | Source |
 |---|---|---|
 | `standard-doc-set` | The project shall contain `docs/design.md`, `docs/architecture.md`, `docs/requirements_policy.md`, `docs/version_policy.md`, and `docs/milestones.md`. | `documentation_policy.md` |
-| `doc-no-duplication` | IF the same content appears in two documentation files, THEN the project's documentation shall be corrected to state it once and link to that one authoritative source. | `documentation_policy.md` |
-| `undefined-purpose-honesty` | WHERE a project's purpose or design is not yet defined, the project's documentation shall state that plainly rather than contain fabricated content. | `documentation_policy.md`; `bootstrap-little-project` design.md (same principle, independently stated) |
-| `milestone-definition-of-done` | WHEN a milestone is marked done, the milestone shall have updated documentation, created/updated requirements, complete implementation, and passing automated tests. | `documentation_policy.md`; `requirements_policy.md` |
+| `doc-no-verbatim-duplication` | IF an identical text block appears in two documentation files, THEN it shall be flagged for correction to one authoritative source with a link from the other. | `documentation_policy.md` — narrowed from "the same content" (semantic, unenforceable — judging two differently-worded passages as "the same idea" is a human call) to verbatim/near-verbatim text matching, which a diff can actually verify. |
+| `milestone-requirements-linked-and-passing` | WHEN a milestone is marked done, the requirements it implements shall be linked and their tests shall pass. | `documentation_policy.md`; `requirements_policy.md` — narrowed from the original's full definition-of-done (which also named "documentation updated" and "implementation complete," neither independently machine-checkable) to the two sub-clauses a test script can actually verify. |
 | `milestone-own-branch` | Each milestone shall be worked on its own short-lived branch. | `documentation_policy.md` |
 
 ## C. Version control &amp; branching
@@ -123,7 +151,7 @@ missed:
 | `pr-tested-before-finish` | IF a pull request's last recorded test run failed, THEN the system shall refuse to finish that branch unless a human explicitly forces it. | `automation_policy.md` rule 8 |
 | `fork-safety-gate` | IF a pull request's head repository is not the project's own, THEN the system shall refuse to test or act on it. | `little-runner` architecture.md |
 | `claude-cli-budget-and-timeout` | WHEN Claude CLI runs unattended, the system shall enforce a maximum budget and a maximum timeout. | `little-runner` architecture.md |
-| `no-secrets-anywhere` | The system shall not store or log a credential; external service calls shall reuse the host's already-authenticated session rather than an embedded token. | `automation_policy.md` rule 11 |
+| `no-secret-pattern-in-commit` | IF a file staged for commit matches a known credential/token pattern, THEN the commit shall be refused. | `automation_policy.md` rule 11 — narrowed from "shall not store or log a credential" (unbounded, unenforceable — nothing can verify the *absence* of every possible secret) to a bounded pattern-scan, the same shape real secret-scanning tools use, and checkable in principle. |
 
 ## H. Server &amp; deployment
 
@@ -140,9 +168,8 @@ missed:
 | Topic | EARS requirement | Source |
 |---|---|---|
 | `tailscale-only-exposure` | The system's dashboards and servers shall be reachable only via a private-mesh "serve" mechanism, never a public-internet "funnel" or equivalent. | Independently established in `little-runner`, `little-meals`, and `little-home` architecture.md — three-for-three is a strong signal this belongs at framework tier. |
-| `no-redundant-app-auth` | WHERE a project is reachable only via the system's private network, the project shall not additionally require an app-level username/password. | `little-meals` architecture.md |
+| `no-redundant-app-auth` | WHERE a project declares no app-level login route, the project shall not gain one without also declaring itself reachable outside the system's private network. | `little-meals` architecture.md — reframed as a checkable structural pair (login route presence vs. declared exposure) rather than the original's "shall not require," which can't be verified without deciding what "requires" means for arbitrary code. |
 | `no-third-party-cdn` | WHERE a project serves a web frontend, the project shall vendor its JS/CSS/font dependencies rather than loading them from a third-party CDN at runtime. | `little-meals` architecture.md (htmx, fonts) |
-| `disk-encryption-not-db-encryption` | WHERE a project stores data at rest under this system's single-host, private-network model, the project shall rely on host full-disk encryption rather than implementing database-level encryption. | `little-mindcheck` architecture.md — narrower justification than the others in this section; flagged for confirmation before promoting, see "Open questions." |
 
 ## J. Dashboard / UX conventions
 
@@ -193,26 +220,38 @@ before they're approved:
   are designed; nothing states how long an old version must keep working
   before it can be dropped.
 
+## Resolved 2026-09-15
+
+1. **Tier**: framework, for everything in this catalog — no
+   strong-default/user-tier split. Settled, not revisited per-entry.
+2. **Data-at-rest encryption**: dropped entirely, not promoted — see
+   "Considered and rejected" above. Generalized into Gate 2
+   (mechanical enforceability) as a standing admissibility rule for every
+   future policy, not just this one.
+3. **User-policy lifecycle and scope**: users may create, edit, or remove
+   a user-level policy at any time; edits re-run all three gates rather
+   than being a lighter-weight path; a user policy may never target or
+   gate Policy & Compliance itself (framework policies may, and are
+   expected to). See `policy_compliance.md`'s "Authoring a policy," now
+   restructured around three gates instead of the original single
+   EARS-check step.
+
 ## Open questions for you
 
-1. **Framework tier, or a strong all-projects user-policy default?** Every
-   entry above is drafted as a framework-tier candidate (immutable,
-   authored via the "little-workshop itself" tab). Some of these — Bazel
-   as the canonical build system is the clearest example — are ecosystem
-   convention today but not obviously something that should be
-   *permanently un-overridable* the way "no secrets stored" should be.
-   Should this catalog distinguish "genuinely non-negotiable" from "strong
-   default, override if a real project needs to," or does everything
-   mined from an existing root policy document stay framework-tier by
-   default?
-2. **`disk-encryption-not-db-encryption`** is the one entry drawn from a
-   single project's specific reasoning (`little-mindcheck`) rather than
-   repeated convention. Worth promoting alongside the others, or holding
-   back until it's actually been chosen twice independently, the way
-   `tailscale-only-exposure` was?
-3. **The generated-test-script sandboxing gap** — worth treating as its
+1. **The generated-test-script sandboxing gap** — still open. Worth its
    own dedicated design round before any policy authoring happens for
    real, given it's a safety question, not just a missing document?
+2. **Framework-policy lifecycle** — resolved for user policies (above);
+   not addressed for framework ones. Can little-workshop's own
+   maintainers edit or retire a framework policy the same way, or does
+   "never overridable" also mean "never revised"?
+3. The handful of entries narrowed this round to their enforceable core
+   (`doc-no-verbatim-duplication`, `milestone-requirements-linked-and-passing`,
+   `no-secret-pattern-in-commit`, `no-redundant-app-auth`) are weaker
+   claims than the source material's original intent, by construction —
+   worth confirming the narrower version is still worth having as a
+   policy, rather than also dropping some of these the way the
+   encryption and fabricated-content entries were.
 4. Anything in this catalog that's **flat-out wrong** for where this
    ecosystem is heading rather than just unranked — easiest to catch now,
    before any of it goes through EARS refinement.

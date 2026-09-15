@@ -99,30 +99,47 @@ script.
 
 ## Authoring a policy
 
+Three gates stand between a natural-language submission and a saved
+policy. All three must pass — in order, each blocking the next — before
+Claude CLI is ever asked to write the enforcement artifact:
+
 ```
 user writes a policy in natural language
    (Dashboard: "your projects" tab, or the separate "little-workshop
    itself" tab -- see below -- for a framework policy)
    │
    ▼
-structural check: does this already match an EARS pattern?
-   │  yes → skip to test-script generation
-   ▼  no
-Policy & Compliance calls Agentic Development's Pillar Interface:
-   "rewrite this into EARS form" -- narrowly scoped, no file writes,
-   no branch, no side effect of any kind
-   │
-   ▼
-Claude CLI returns ONLY the refined EARS text -- never applies it, never
-   writes anything on its own initiative, the same non-negotiable rule
-   this project already applies to branching ("the agent is forbidden
-   from touching branches when a job specifies them") applied here to
-   policy text instead: refine and hand back, never decide unilaterally
-   │
-   ▼
-user reviews the refined text -- approves, edits, or asks for another pass
-   │  approved
-   ▼
+GATE 1 -- EARS-compliant?
+   │  no → Policy & Compliance calls Agentic Development's Pillar
+   │        Interface: "rewrite this into EARS form" -- narrowly scoped,
+   │        no file writes, no branch, no side effect of any kind.
+   │        Claude CLI returns ONLY the refined text -- never applies it,
+   │        never decides unilaterally, the same non-negotiable rule this
+   │        project already applies to branching, applied here to policy
+   │        text instead. User reviews -- approves, edits, or asks again.
+   ▼  yes / approved
+GATE 2 -- mechanically enforceable? Can an automated test script verify
+   this with no human judgment call inside the check itself?
+   │  no  → REJECTED. Not saved anywhere, in any form. Told to the user
+   │        as: this belongs in prose documentation, not the policy
+   │        system -- "if it can't be enforced, it isn't defined here."
+   ▼  yes
+GATE 3 -- non-conflicting? Two checks, one mechanical and exact, one
+   best-effort:
+   │  a) structural: does a policy already exist at this exact scope
+   │     level + scope target + topic? Mechanically checked, no
+   │     ambiguity possible -- two policies can never govern the same
+   │     project on the same topic at the same level.
+   │  b) semantic: Policy & Compliance calls Agentic Development's
+   │     Pillar Interface -- Claude CLI checks the proposed EARS text
+   │     against every existing policy's EARS text for contradiction.
+   │     Best-effort, not provable in general (nothing can prove two
+   │     natural-language requirements do or don't contradict with
+   │     certainty) -- anything flagged is surfaced to the user to
+   │     resolve, never silently allowed and never silently merged.
+   │  either check fails → REJECTED, not saved, user told which existing
+   │     policy it conflicts with
+   ▼  passes both
 Policy & Compliance calls Agentic Development's Pillar Interface again:
    "write the one test script that enforces this EARS requirement"
    │
@@ -132,19 +149,44 @@ policy record saved: EARS text + a 1:1 reference to its one test script +
    created_by (user | framework)
 ```
 
-Two separate Claude CLI calls, two different scopes of trust: the first is
-text-in, text-out, reviewed by a human before anything is built from it;
-the second produces the actual enforcement artifact. Whether the generated
-test script itself should also go through explicit human review before a
-policy goes active (mirroring Agentic Development's normal PR-review flow)
-isn't settled by anything said so far — flagged as an open question this
-pillar's design should answer before implementation, not decided
-unilaterally here.
+Two separate Claude CLI calls across this flow, two different scopes of
+trust: the EARS-refinement call (Gate 1) is text-in, text-out, reviewed by
+a human before anything is built from it; the conflict check (Gate 3b) is
+read-only judgment, never a write; the final call produces the actual
+enforcement artifact, only after both gates ahead of it have passed.
+Whether the generated test script itself should also go through explicit
+human review before a policy goes active (mirroring Agentic Development's
+normal PR-review flow) isn't settled by anything said so far — still
+flagged as open.
 
-Neither Claude CLI call is this pillar reimplementing agentic execution —
-both go through Agentic Development's Pillar Interface, the same "a new
-capability maps to an existing pillar's interface, never duplicated" rule
-`docs/architecture.md` already states.
+Every Claude CLI call in this flow goes through Agentic Development's
+Pillar Interface — this pillar never reimplements agentic execution
+locally, the same "a new capability maps to an existing pillar's
+interface, never duplicated" rule `docs/architecture.md` already states.
+
+### Policy & Compliance is out of user reach
+
+A user policy's scope target and gating topic shall never resolve to the
+Policy & Compliance pillar itself — checked at Gate 3 alongside the
+conflict check, rejected outright if violated. The referee cannot be
+altered by the rules anyone using it can write. Framework policies are
+exempt from this restriction and are in fact expected to eventually govern
+Policy & Compliance's own conformance — see "the little-workshop itself
+tab" below and `docs/pillars/policy_catalog.md`'s tier K, which already
+includes candidates like `policy-one-to-one-test-script` checking this
+pillar against its own rule.
+
+### User-policy lifecycle
+
+A user may create, edit, or remove a user-level policy at any time — no
+restriction on timing. Editing or removing is not a distinct, lighter-
+weight path: an edit is "replace this policy's EARS text," so it goes
+through all three gates again, exactly as a new policy would, including
+being re-checked for conflict against every *other* policy (its own prior
+version doesn't count against itself). Whether little-workshop's own
+maintainers can edit or retire a framework policy the same way isn't
+decided here — left open, alongside the rest of framework-policy
+lifecycle.
 
 ## Enforcement
 

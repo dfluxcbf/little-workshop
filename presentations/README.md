@@ -43,5 +43,11 @@ restating it.
     — when a policy check actually runs relative to the action it governs:
     fail closed, human override within ten minutes, or the action never
     happens at all.
+11. [Authoring Gates & Boundaries](11-authoring-gates-and-boundaries.md) —
+    the ~50-entry draft catalog's open questions, resolved: framework tier
+    across the board, a mechanical-enforceability gate ("if it can't be
+    enforced, it isn't defined"), conflict elevated from a periodic audit
+    to a pre-save gate, Policy & Compliance placed out of user policies'
+    reach, and user-policy lifecycle defined.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

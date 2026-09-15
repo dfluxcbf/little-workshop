@@ -111,6 +111,13 @@ maintainers.
 - Whether a generated test script needs explicit human review before its
   policy goes active (mirroring Agentic Development's normal PR flow) —
   not decided here.
+- **Updated in [11 — Authoring Gates & Boundaries](11-authoring-gates-and-boundaries.md)**:
+  tier defaulted to framework across the board; a mechanical-enforceability
+  gate and a two-part conflict gate were added to the authoring flow
+  described above (which only had the single EARS check at the time this
+  deck was written); Policy & Compliance itself was placed out of user
+  policies' reach; user-policy lifecycle (create/edit/remove, any time)
+  was defined.
 - The exact "informed immediately" channel beyond the Dashboard and a
   reused per-project GitHub-issue pattern — neither is universal (Dashboard
   can be off; not every project has a GitHub remote).

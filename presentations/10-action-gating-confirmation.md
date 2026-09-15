@@ -1,4 +1,4 @@
-← [Policy & Compliance: Rules for the Rules](09-policy-and-compliance.md) · deck 10 of 10 · back to [index](README.md)
+← [Policy & Compliance: Rules for the Rules](09-policy-and-compliance.md) · deck 10 of 11 · next: [Authoring Gates & Boundaries →](11-authoring-gates-and-boundaries.md)
 
 # Action-Gating: Policy Confirmation
 
