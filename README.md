@@ -32,12 +32,24 @@ mapping from the tools it absorbs. Implementation is underway against the
   deploys, defence-in-depth stop, Tailscale exposure, confirm-gated
   deploys with an independent watchdog timer, and worktree provisioning
   exposed as a shared capability for later pillars (M9, M11) to call
-  into. Reflexive self-redeploy is explicitly out of scope — see M5.
+  into.
+- **M5 — Self-redeploy (reflexive)**: `deployment.redeploy_pillar`
+  generalizes M4's build-before-stop sequence to little-workshop's own
+  pillars, including Core and Deployment & Servers itself — a real
+  `/proc/self/cgroup` check detects a pillar redeploying *itself* and
+  dispatches to an independent, detached `systemd-run` unit rather than
+  stopping the very process handling the request, the same cgroup-aware
+  escape `little-runner` already proved for its own self-restart.
+  Confirm-gating defaults on for `core`/`deployment`; the dispatched
+  worker reports completion back to Orchestration.
 
 `bazel build //:wheel`, `bazel run //:install`, and `bazel test //:test`
-all work today (206 tests: unit plus real `systemd --user` end-to-end
-proofs in `tests/integration`, including a genuinely deployed and
-stopped listening process).
+all work today (227 tests: unit plus real `systemd --user` end-to-end
+proofs in `tests/integration`, including a genuine self-redeploy that
+stops and relaunches Deployment & Servers' own unit from a freshly
+checked-out commit of this repo). The self-redeploy integration test
+skips cleanly — it doesn't fail the suite — when `lws` isn't
+pipx-installed yet (`bazel run //:install`).
 
 For the narrative version of the same decisions — cross-linked
 presentations — start at `presentations/README.md`.

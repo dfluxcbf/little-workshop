@@ -15,11 +15,28 @@ scattered across two directories.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from common.shell import CommandRunner, CommandResult, DEFAULT_RUNNER
 
 
 def unit_name(pillar: str) -> str:
     return f"little-workshop-{pillar}.service"
+
+
+def user_path_env() -> str:
+    """PATH with `~/.local/bin` guaranteed present — pipx shims (`lws`
+    itself, `git`, `claude`, ...) live there, but a bare `systemd-run
+    --user` doesn't necessarily inherit the interactive shell's PATH that
+    has it (ported from `little-runner`'s identical helper, needed here
+    for the exact same reason: M5's dispatched self-redeploy worker calls
+    `lws` from inside a freshly `systemd-run`-launched unit)."""
+    path_env = os.environ.get("PATH", "")
+    home_bin = str(Path.home() / ".local" / "bin")
+    if home_bin not in path_env.split(":"):
+        path_env = f"{home_bin}:{path_env}"
+    return path_env
 
 
 def start(
@@ -41,6 +58,7 @@ def start(
     ]
     if working_directory:
         argv.append(f"--working-directory={working_directory}")
+    argv.append(f"--setenv=PATH={user_path_env()}")
     for key, value in (environment or {}).items():
         argv.append(f"--setenv={key}={value}")
     argv.append("--")

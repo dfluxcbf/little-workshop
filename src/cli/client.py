@@ -191,6 +191,30 @@ def release_worktree(paths: Paths, project_id: str, worktree_id: str, *, timeout
         raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc
 
 
+def complete_orchestration_job(
+    paths: Paths, job_id: str, *, succeeded: bool, result: dict | None = None, error: str | None = None,
+    timeout: float = 10.0,
+) -> bool:
+    """Reports a long-running ("accepted") Job's outcome back to
+    Orchestration — used by M5's dispatched self-redeploy worker, which
+    runs entirely outside the normal request/response of the Job that
+    triggered it. Best-effort: a failure here is logged by the caller,
+    never raised, since the redeploy itself already happened either way."""
+    from common.pillar_socket import resolve_pillar_socket
+
+    socket_path = resolve_pillar_socket(paths, "orchestration", timeout=timeout)
+    if socket_path is None:
+        return False
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.post(
+                f"/v1/jobs/{job_id}/complete", json={"succeeded": succeeded, "result": result, "error": error}
+            )
+        return response.status_code == 200
+    except (httpx.ConnectError, httpx.TimeoutException, OSError):
+        return False
+
+
 def deployment_rollback_timeout(paths: Paths, project_id: str, deploy_id: str, *, timeout: float = 3600.0) -> dict:
     """Calls Deployment & Servers' PI directly — never through Orchestration
     — so the confirm-gate watchdog's rollback fires even if Orchestration

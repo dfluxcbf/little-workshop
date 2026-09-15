@@ -22,9 +22,10 @@ from common.projectfiles import ProjectFilesClient
 from common.registry_client import ProjectResolutionError, resolve_project_path
 from deployment import db, worktrees
 from deployment.confirm import rollback_guard
-from deployment.flow import DeploymentError, DeploymentFlow
+from deployment.flow import DeploymentError, DeploymentFlow, SelfRedeployRequiresDispatch
 from deployment.gitutil import list_branches
 from deployment.manifest import ManifestError, ServerManifest, parse_manifest
+from deployment.workshop_repo import workshop_repo_dir
 
 MANIFEST_FILENAME = "manifest.deployment.toml"
 
@@ -119,6 +120,29 @@ def build_app(
                 return {"outcome": "failed", "error": str(exc)}
         return {"outcome": "succeeded", "result": {"seeded": True}}
 
+    @app.post("/v1/jobs/deployment.redeploy_pillar")
+    def job_redeploy_pillar(request: JobRequest) -> dict:
+        pillar = request.params.get("pillar")
+        if not pillar:
+            return {"outcome": "failed", "error": "missing params.pillar"}
+        commit = request.params.get("commit", "HEAD")
+        confirm_timeout = request.params.get("confirm_timeout_seconds")
+        with lock:
+            try:
+                result = flow.redeploy_pillar(conn, pillar, workshop_repo_dir(), commit, confirm_timeout_seconds=confirm_timeout)
+            except SelfRedeployRequiresDispatch:
+                dispatched = flow.dispatch_self_redeploy(
+                    pillar, commit, confirm_timeout_seconds=confirm_timeout, job_id=request.job_id
+                )
+                return {"outcome": "accepted", "result": {"dispatched": dispatched}}
+            except DeploymentError as exc:
+                db.record_deployment(conn, pillar, commit, "?", "?", "failed", str(exc))
+                return {"outcome": "failed", "error": str(exc)}
+        payload = {"branch": result.branch, "version": result.version, "commit": result.commit, "how": result.how}
+        if result.confirm_message:
+            payload["confirm_message"] = result.confirm_message
+        return {"outcome": "succeeded", "result": payload}
+
     @app.post("/v1/jobs/deployment.confirm")
     def job_confirm(request: JobRequest) -> dict:
         if not request.project_id:
@@ -135,10 +159,20 @@ def build_app(
             state, reason = rollback_guard(conn, project_id, request.deploy_id)
             if reason is not None:
                 return {"rolled_back": False, "message": reason}
+            is_pillar = db.get_pillar_deployment(conn, project_id) is not None
             try:
-                manifest = _load_manifest(paths, project_id)
-                project_dir = resolve(paths, project_id)
-                summary = flow.rollback_if_unconfirmed(conn, project_id, manifest, project_dir, request.deploy_id)
+                if is_pillar:
+                    try:
+                        summary = flow.rollback_pillar_if_unconfirmed(
+                            conn, project_id, workshop_repo_dir(), request.deploy_id
+                        )
+                    except SelfRedeployRequiresDispatch:
+                        dispatched = flow.dispatch_self_rollback(project_id, request.deploy_id)
+                        return {"rolled_back": False, "message": f"dispatched: {dispatched}"}
+                else:
+                    manifest = _load_manifest(paths, project_id)
+                    project_dir = resolve(paths, project_id)
+                    summary = flow.rollback_if_unconfirmed(conn, project_id, manifest, project_dir, request.deploy_id)
             except (DeploymentError, ProjectResolutionError) as exc:
                 raise HTTPException(status_code=500, detail=str(exc))
         return {"rolled_back": True, "message": summary}

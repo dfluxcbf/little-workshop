@@ -223,3 +223,76 @@ def test_deployments_history_endpoint(paths, conn, tmp_path):
     history = client.get("/v1/deployments/little-meals").json()
     assert len(history) == 1
     assert history[0]["outcome"] == "succeeded"
+
+
+def _init_workshop_repo(tmp_path, pillar="orchestration"):
+    repo = tmp_path / "workshop-repo"
+    (repo / "src" / pillar).mkdir(parents=True)
+    (repo / "src" / pillar / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (repo / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+    _git(["init", "-b", "main"], repo)
+    _git(["config", "user.email", "t@example.com"], repo)
+    _git(["config", "user.name", "T"], repo)
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "first"], repo)
+    return repo
+
+
+class PassthroughFakeRunner(FakeRunner):
+    """Extends the module's FakeRunner with real git/python passthrough,
+    needed for a genuine self-redeploy smoke-check."""
+
+    def run(self, argv, timeout=None, cwd=None):
+        if argv and argv[0] in ("git", "python3"):
+            result = subprocess.run(argv, cwd=str(cwd) if cwd else None, capture_output=True, text=True, timeout=timeout)
+            from common.shell import CommandResult
+
+            return CommandResult(result.returncode, result.stdout, result.stderr)
+        return super().run(argv, timeout=timeout, cwd=cwd)
+
+
+def test_redeploy_pillar_job_succeeds_inline_for_a_non_self_target(paths, conn, tmp_path, monkeypatch):
+    from deployment.app import build_app
+    from deployment.flow import DeploymentFlow
+
+    workshop_repo = _init_workshop_repo(tmp_path, pillar="orchestration")
+    monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(workshop_repo))
+
+    runner = PassthroughFakeRunner()
+    flow = DeploymentFlow(paths=paths, runner=runner, sleep=lambda s: None, health_probe=lambda *a, **k: __import__("core.health", fromlist=["HealthResult"]).HealthResult(ok=True, attempts=1))
+    app = build_app(paths, conn, flow=flow)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/jobs/deployment.redeploy_pillar",
+        json={"job_id": "j1", "params": {"pillar": "orchestration", "commit": "main"}},
+    )
+    body = response.json()
+    assert body["outcome"] == "succeeded", body
+    assert body["result"]["version"] == "1.0.0"
+
+
+def test_redeploy_pillar_job_dispatches_when_self_targeting(paths, conn, tmp_path, monkeypatch):
+    from deployment.app import build_app
+    from deployment.flow import DeploymentFlow
+
+    workshop_repo = _init_workshop_repo(tmp_path, pillar="deployment")
+    monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(workshop_repo))
+
+    runner = PassthroughFakeRunner()
+    flow = DeploymentFlow(
+        paths=paths, runner=runner, sleep=lambda s: None,
+        own_cgroup=lambda: "0::/user.slice/little-workshop-deployment.service",
+    )
+    app = build_app(paths, conn, flow=flow)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/jobs/deployment.redeploy_pillar",
+        json={"job_id": "j1", "params": {"pillar": "deployment", "commit": "main"}},
+    )
+    body = response.json()
+    assert body["outcome"] == "accepted", body
+    assert "dispatched" in body["result"]["dispatched"]
+    dispatch_calls = [c for c in runner.calls if c and c[0] == "systemd-run"]
+    assert any("redeploy-pillar-worker" in c for c in dispatch_calls)

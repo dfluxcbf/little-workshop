@@ -32,6 +32,13 @@ CREATE TABLE IF NOT EXISTS deployments (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS pillar_deployments (
+    pillar TEXT PRIMARY KEY,
+    install_dir TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS deploy_confirmations (
     project_id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
@@ -85,6 +92,24 @@ def get_server_state(conn: sqlite3.Connection, project_id: str) -> dict | None:
 def list_server_states(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute("SELECT * FROM servers ORDER BY project_id").fetchall()
     return [dict(row) for row in rows]
+
+
+# -- pillar_deployments (M5: a pillar's own stable code location) -------
+
+
+def save_pillar_deployment(conn: sqlite3.Connection, pillar: str, install_dir: str, commit: str) -> None:
+    conn.execute(
+        """INSERT INTO pillar_deployments (pillar, install_dir, commit_sha, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(pillar) DO UPDATE SET install_dir=excluded.install_dir, commit_sha=excluded.commit_sha,
+           updated_at=excluded.updated_at""",
+        (pillar, install_dir, commit, _now()),
+    )
+    conn.commit()
+
+
+def get_pillar_deployment(conn: sqlite3.Connection, pillar: str) -> dict | None:
+    row = conn.execute("SELECT * FROM pillar_deployments WHERE pillar = ?", (pillar,)).fetchone()
+    return dict(row) if row else None
 
 
 # -- deployments (audit trail) -------------------------------------------
