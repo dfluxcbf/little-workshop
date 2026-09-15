@@ -3,10 +3,12 @@
 **Status.** Tier is decided: every entry below is a **framework** policy
 candidate, not a strong default users could override — confirmed 2026-09-15.
 None is an *active* policy yet — each still has to individually clear all
-three gates in `policy_compliance.md`'s authoring pipeline (EARS-compliant,
-mechanically enforceable, non-conflicting) before its test script gets
-written and it becomes a real `policies` row. This document is the input
-to that pipeline, not a record of having run it.
+four gates in `policy_compliance.md`'s authoring pipeline (EARS-compliant,
+mechanically enforceable, non-conflicting, and full human approval of both
+the EARS text and the generated script) before it becomes a real
+`policies` row. This document is the input to that pipeline, not a record
+of having run it. This catalog's own open items are tracked centrally in
+[`../open_questions.md`](../open_questions.md), not inline.
 
 **Enforceability was applied retroactively to this whole catalog**, not
 just the one entry it was first caught on (see "Considered and rejected"
@@ -93,6 +95,7 @@ than narrowing them the way a few others were:
 | `doc-no-verbatim-duplication` | IF an identical text block appears in two documentation files, THEN it shall be flagged for correction to one authoritative source with a link from the other. | `documentation_policy.md` — narrowed from "the same content" (semantic, unenforceable — judging two differently-worded passages as "the same idea" is a human call) to verbatim/near-verbatim text matching, which a diff can actually verify. |
 | `milestone-requirements-linked-and-passing` | WHEN a milestone is marked done, the requirements it implements shall be linked and their tests shall pass. | `documentation_policy.md`; `requirements_policy.md` — narrowed from the original's full definition-of-done (which also named "documentation updated" and "implementation complete," neither independently machine-checkable) to the two sub-clauses a test script can actually verify. |
 | `milestone-own-branch` | Each milestone shall be worked on its own short-lived branch. | `documentation_policy.md` |
+| `open-questions-document-exists` | The project shall contain a `docs/open_questions.md` file with an Open table and a Resolved table. | `docs/open_questions.md`'s own "As a policy" section — the enforceable half of that document's tracking convention; the other half ("Claude CLI documented every question it surfaced") isn't independently machine-checkable and stays a convention, not a policy, for the same reason `undefined-purpose-honesty` was dropped rather than narrowed. |
 
 ## C. Version control &amp; branching
 
@@ -194,32 +197,14 @@ borrowed from elsewhere:
 
 ## Gaps — no existing source covers these
 
-Identified by their absence, not mined from a document. Draft form only;
-these need more thought before they're even EARS candidates, not just
-before they're approved:
-
-- **Log retention.** Every tool that writes run logs (`little-runner`'s
-  `~/.local/state/little-runner/logs/`, and little-workshop's own planned
-  `~/.local/state/little-workshop/logs/<pillar>/`) has no stated retention
-  or rotation policy anywhere in this ecosystem.
-- ~~**Generated-artifact sandboxing.**~~ Resolved 2026-09-15 — see
-  `policy_compliance.md`'s "Test-script execution sandbox": PI-only
-  network access restricted to safe/read endpoints, a read-only allowlist
-  scoped to project-bound or framework-bound, writes limited to the
-  verdict and this pillar's own `.policy`-tagged files, a 30-minute async
-  Job ceiling. Two sub-questions from that resolution are still open —
-  see this document's own "Open questions" below.
-- **Crash-loop bounds.** Core's design mentions a crash counter and
-  backoff conceptually; no policy states a maximum retry count or backoff
-  shape.
-- **Health-probe timeout.** Nothing states how long Core waits for a
-  pillar's health response before treating it as unhealthy.
-- **Project/data retention on removal.** No stated policy for what happens
-  to a project's requirements, jobs, and project files when it's removed
-  from the registry.
-- **Pillar Interface deprecation window.** Versioned paths (`/v1`, `/v2`)
-  are designed; nothing states how long an old version must keep working
-  before it can be dropped.
+Identified by their absence, not mined from a document — originally
+tracked inline here; now tracked as `OQ-4` through `OQ-8` in
+[`../open_questions.md`](../open_questions.md), this project's single
+open-item tracker, so a gap has exactly one place to be marked resolved
+rather than two that can drift apart. Generated-artifact sandboxing, the
+one gap this section used to list, was resolved 2026-09-15 — see
+`policy_compliance.md`'s "Test-script execution sandbox" and
+`open_questions.md`'s Resolved log.
 
 ## Resolved 2026-09-15
 
@@ -261,13 +246,6 @@ before they're approved:
 
 ## Open questions for you
 
-1. The handful of entries narrowed this round to their enforceable core
-   (`doc-no-verbatim-duplication`, `milestone-requirements-linked-and-passing`,
-   `no-secret-pattern-in-commit`, `no-redundant-app-auth`) are weaker
-   claims than the source material's original intent, by construction —
-   worth confirming the narrower version is still worth having as a
-   policy, rather than also dropping some of these the way the
-   encryption and fabricated-content entries were.
-2. Anything in this catalog that's **flat-out wrong** for where this
-   ecosystem is heading rather than just unranked — easiest to catch now,
-   before any of it goes through EARS refinement.
+Tracked as `OQ-1` and `OQ-2` in [`../open_questions.md`](../open_questions.md)
+— this catalog's own open items now live there rather than in a
+second list here.

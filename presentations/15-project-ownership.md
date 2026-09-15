@@ -1,4 +1,4 @@
-← [Verdicts vs. Faults](14-verdicts-vs-faults.md) · deck 15 of 15 · back to [index](README.md)
+← [Verdicts vs. Faults](14-verdicts-vs-faults.md) · deck 15 of 16 · next: [Tracking Open Questions →](16-tracking-open-questions.md)
 
 # Who Owns a Project?
 
@@ -65,4 +65,4 @@ policy's targets — it no longer stores that membership itself.
 
 ---
 
-Back to [index](README.md) · or revisit [2 — The Pillar Architecture](02-pillar-architecture.md)
+Next: [16 — Tracking Open Questions →](16-tracking-open-questions.md) · or back to [index](README.md)

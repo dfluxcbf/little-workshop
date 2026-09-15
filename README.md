@@ -20,3 +20,7 @@ little-workshop is exempt from the super-repo's root policies — it is not
 wired into `little-requirements`/`lreq` or `little-versions`/`lvx`. See
 `docs/governance_policy.md` for why and `docs/README.md`'s "Exemption:
 little-workshop" for where the super-repo itself sanctions it.
+
+**What's still unresolved**: `docs/open_questions.md` is the single
+tracker for every open design question and gap — check there before
+assuming something is decided.

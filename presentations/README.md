@@ -70,5 +70,11 @@ restating it.
     (not everything about it); two creation paths, bootstrap and
     Claude-CLI-driven import through its MCP entry point, reach the same
     registration; project sets move there from Policy & Compliance.
+16. [Tracking Open Questions](16-tracking-open-questions.md) — introduces
+    [`docs/open_questions.md`](../docs/open_questions.md), the single
+    tracker every scattered "Left open" section now points to instead of
+    duplicating; catches a gap that had quietly gone unresolved for seven
+    decks; splits into an enforceable "the file exists" policy and an
+    unenforceable "Claude CLI documented what it surfaced" convention.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

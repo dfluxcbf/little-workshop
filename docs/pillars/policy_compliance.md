@@ -339,9 +339,9 @@ inventing new ones:
   auto-assigned into the agentic pipeline).
 
 Neither channel is universal on its own (Dashboard can be disabled;
-GitHub isn't attached to every project), which is an open gap worth
-revisiting once this pillar is actually built, not a claim that "immediate"
-is fully solved by the two channels above.
+GitHub isn't attached to every project) — tracked as `OQ-9` in
+[`../open_questions.md`](../open_questions.md), not a claim that
+"immediate" is fully solved by the two channels above.
 
 ## The "little-workshop itself" tab
 
@@ -470,17 +470,13 @@ each is a separate question about a separate moment in the same Job.
 
 ### Left open
 
-- **Resolved**: check execution runs as an async Job with a 30-minute
-  ceiling (not an inline synchronous call); a timeout is a framework
-  fault, never routed through the ten-minute override — see "Test-script
-  execution sandbox" and the resolved outcome tree above.
-- **Resolved**: the file-read allowlist doesn't need a separate
-  declaration step — Gate 4 already requires the human to review the
-  generated script directly, and the allowlist is read off that same
-  script. See "Authoring a policy," Gate 4.
-- Which Job types declare which gating topics isn't enumerated here —
-  that mapping is each pillar's own implementation work as its Job types
-  get defined.
+Tracked as `OQ-3` in [`../open_questions.md`](../open_questions.md): which
+Job types declare which gating topics isn't enumerated here — that
+mapping is each pillar's own implementation work as its Job types get
+defined. (The two items this section used to list alongside it — check
+execution as an async Job with a 30-minute ceiling, and Gate 4 making a
+separate allowlist-declaration step unnecessary — are resolved; see
+"Test-script execution sandbox" and "Authoring a policy" above.)
 
 ## Data model (this pillar's own database)
 

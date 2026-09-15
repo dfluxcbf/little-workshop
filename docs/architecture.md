@@ -332,7 +332,8 @@ stdlib-first per pillar (matching `little-runner`'s and
 preference beyond what a pillar genuinely needs), FastAPI/uvicorn for every
 Pillar Interface and the Dashboard, `git`/`gh`/`claude`/`systemctl`/
 `systemd-run`/`bazel`/`tailscale` as external, already-required host tools
-(unchanged from today).
+(unchanged from today). Tracked as `OQ-10` in
+[`open_questions.md`](open_questions.md).
 
 ## Build
 
@@ -342,7 +343,8 @@ follows the root [build policy](../../docs/policies/build_policy.md) like
 every other submodule. Expect one Bazel package per pillar under `src/`
 (each pillar is independently buildable/installable, matching its
 independently-deployable nature) plus `//:all`/`//:test` aggregating across
-all of them; exact target shape is implementation work, not decided here.
+all of them; exact target shape is implementation work, tracked as
+`OQ-11` in [`open_questions.md`](open_questions.md).
 
 ## Additional folders
 
