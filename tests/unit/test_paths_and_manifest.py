@@ -16,6 +16,7 @@ def test_ensure_layout_creates_every_directory(tmp_path):
     assert paths.sockets_dir.is_dir()
     assert paths.pillars_db_dir.is_dir()
     assert paths.logs_dir.is_dir()
+    assert paths.worktrees_dir.is_dir()
     for pillar in PILLARS:
         assert paths.pillar_config_dir(pillar).is_dir()
 

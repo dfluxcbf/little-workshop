@@ -135,3 +135,36 @@ def test_version_config_list_reports_error_when_daemon_unavailable(tmp_path, cap
     exit_code = main.main(["version", "config-list", "--project-id", "little-widget"])
     assert exit_code == 1
     assert "error" in capsys.readouterr().err
+
+
+def test_deployment_deploy_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["deployment", "deploy", "--project-id", "little-meals"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_deployment_status_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["deployment", "status", "--project-id", "little-meals"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_worktree_provision_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["worktree", "provision", "--project-id", "little-meals"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err

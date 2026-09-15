@@ -26,10 +26,18 @@ mapping from the tools it absorbs. Implementation is underway against the
   with the tool it replaces. No database of its own — git remains the
   store. The first pillar to call *another* pillar (Registry &
   Portfolio) over a real Pillar Interface, discovered through Core.
+- **M4 — Deployment & Servers**: `src/deployment` — Managed Process
+  lifecycle for *other* projects' servers, absorbing `little-runner`'s
+  server-management mechanics: worktree-based build-before-stop
+  deploys, defence-in-depth stop, Tailscale exposure, confirm-gated
+  deploys with an independent watchdog timer, and worktree provisioning
+  exposed as a shared capability for later pillars (M9, M11) to call
+  into. Reflexive self-redeploy is explicitly out of scope — see M5.
 
 `bazel build //:wheel`, `bazel run //:install`, and `bazel test //:test`
-all work today (154 tests: unit plus real `systemd --user` end-to-end
-proofs in `tests/integration`).
+all work today (206 tests: unit plus real `systemd --user` end-to-end
+proofs in `tests/integration`, including a genuinely deployed and
+stopped listening process).
 
 For the narrative version of the same decisions — cross-linked
 presentations — start at `presentations/README.md`.

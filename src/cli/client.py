@@ -139,3 +139,66 @@ def version_release_candidates(paths: Paths, project_id: str, *, timeout: float 
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
         raise VersionPillarUnavailable("Version Control & Release daemon unreachable") from exc
+
+
+class DeploymentPillarUnavailable(Exception):
+    pass
+
+
+def _deployment_get(paths: Paths, path: str, *, params: dict | None = None, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("deployment"), timeout=timeout) as client:
+            response = client.get(path, params=params or {})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc
+
+
+def deployment_status(paths: Paths, project_id: str) -> dict:
+    return _deployment_get(paths, f"/v1/status/{project_id}")
+
+
+def deployment_history(paths: Paths, project_id: str) -> dict:
+    return _deployment_get(paths, f"/v1/deployments/{project_id}")
+
+
+def deployment_confirmation(paths: Paths, project_id: str) -> dict:
+    return _deployment_get(paths, f"/v1/confirmations/{project_id}")
+
+
+def deployment_branches(paths: Paths, project_id: str) -> dict:
+    return _deployment_get(paths, f"/v1/branches/{project_id}")
+
+
+def provision_worktree(paths: Paths, project_id: str, commitish: str, *, timeout: float = 30.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("deployment"), timeout=timeout) as client:
+            response = client.post("/v1/worktrees", json={"project_id": project_id, "commitish": commitish})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc
+
+
+def release_worktree(paths: Paths, project_id: str, worktree_id: str, *, timeout: float = 30.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("deployment"), timeout=timeout) as client:
+            response = client.delete(f"/v1/worktrees/{worktree_id}", params={"project_id": project_id})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc
+
+
+def deployment_rollback_timeout(paths: Paths, project_id: str, deploy_id: str, *, timeout: float = 3600.0) -> dict:
+    """Calls Deployment & Servers' PI directly — never through Orchestration
+    — so the confirm-gate watchdog's rollback fires even if Orchestration
+    itself is down."""
+    try:
+        with client_for_socket(paths.socket_path("deployment"), timeout=timeout) as client:
+            response = client.post(f"/v1/rollback-timeout/{project_id}", json={"deploy_id": deploy_id})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc

@@ -99,6 +99,18 @@ class Paths:
     def pillar_log_path(self, pillar: str) -> Path:
         return self.pillar_log_dir(pillar) / f"{pillar}.log"
 
+    @property
+    def worktrees_dir(self) -> Path:
+        """Isolated git worktrees, provisioned by Deployment & Servers as a
+        shared capability — docs/milestones.md M4: the thing Policy &
+        Compliance's test-script sandbox (M11) and Requirements & Quality's
+        sandboxed test execution (M9) both call into rather than each
+        provisioning their own."""
+        return self.state_home / "worktrees"
+
+    def worktree_path(self, worktree_id: str) -> Path:
+        return self.worktrees_dir / worktree_id
+
     def ensure_layout(self) -> None:
         """Create every directory this system needs before anything writes to it."""
         self.config_home.mkdir(parents=True, exist_ok=True)
@@ -106,5 +118,6 @@ class Paths:
         self.sockets_dir.mkdir(parents=True, exist_ok=True)
         self.pillars_db_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.worktrees_dir.mkdir(parents=True, exist_ok=True)
         for pillar in PILLARS:
             self.pillar_config_dir(pillar).mkdir(parents=True, exist_ok=True)

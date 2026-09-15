@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -28,13 +29,14 @@ class CommandResult:
 class CommandRunner:
     """Runs real subprocesses. Swap for a fake in tests."""
 
-    def run(self, argv: list[str], timeout: float | None = None) -> CommandResult:
+    def run(self, argv: list[str], timeout: float | None = None, cwd: Path | str | None = None) -> CommandResult:
         try:
             proc = subprocess.run(
                 argv,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                cwd=cwd,
             )
         except subprocess.TimeoutExpired as exc:
             return CommandResult(
