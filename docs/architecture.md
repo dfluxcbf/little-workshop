@@ -29,11 +29,14 @@ document — not that history — is authoritative.
 
 **Core** — not a pillar, cannot be disabled. A small, rarely-changing
 process-supervision layer: starts every enabled pillar as a `systemd --user`
-unit, tracks liveness via each pillar's health probe, relaunches a crashed
-pillar immediately from its last known-good build (no rebuild, no confirm
-gate), refuses to start a disabled one, and keeps the pillar registry
-(name → Unix-socket path → interface version) every other pillar and the
-Dashboard/MCP use to find each other. Holds no domain data.
+unit, tracks liveness via each pillar's own health report (5-second probe
+timeout, up to 10 retries), relaunches a crashed pillar immediately from
+its last known-good build (no rebuild, no confirm gate) for up to 10
+consecutive tries a minute apart before marking it **faulted** and
+surfacing that to the user, refuses to start a disabled one, and keeps
+the pillar registry (name → Unix-socket path → interface version) every
+other pillar and the Dashboard/MCP use to find each other. Holds no
+domain data. Full detail: `docs/design.md`'s "Core's own recovery."
 
 Core's own crash is recovered the same way as any pillar's — `systemd
 --user Restart=on-failure` on its own unit, no special-cased mechanism —
@@ -51,7 +54,7 @@ Interface (a small FastAPI app bound to a Unix domain socket):
 |---|---|---|---|
 | **Orchestration** | Every unit of work happens once, in the right order, and its outcome is recorded — regardless of which pillar performs it. | little-runner's per-repo queue/slot logic, generalized to every job type and every pillar | Yes — required |
 | **Policy & Compliance** | Nothing drifts from the rules this ecosystem has already agreed to, without someone finding out. | The 8 root policy docs' checkable rules; `doctor.py`; `branch_audit.py`; the checklist skill's manual verification table | Yes — required. Fully specified: `docs/pillars/policy_compliance.md`. A candidate policy set, mined from every project in this ecosystem: `docs/pillars/policy_catalog.md` — framework tier decided, individual entries still pending the authoring pipeline. |
-| **Registry & Portfolio** | There is always one true answer to "what projects exist, and what's the state of the work tracked against them." | bootstrap-little-project wholesale; little-projects' informal registry role; `configure_submodules.sh`; little-tickets' undefined purpose; the ecosystem-milestone table | Yes. The main responsible pillar for a project's lifecycle and identity (creation, import, removal) — not owner of everything about a project, which stays deliberately distributed across pillars, but owner of the registration itself. Two creation paths: `project.bootstrap` (deterministic, for a new project) and import (an existing project, driven by a Claude CLI session — human-interactive or Agentic Development's own internal dispatch, the same mechanism either way — through this pillar's MCP-exposed entry point, since bringing an arbitrary existing project into conformance needs judgment a fixed pipeline can't provide). Also owns `project_sets`, moved here from Policy & Compliance — grouping projects is a registry concern even though Policy & Compliance remains its only consumer today. |
+| **Registry & Portfolio** | There is always one true answer to "what projects exist, and what's the state of the work tracked against them." | bootstrap-little-project wholesale; little-projects' informal registry role; `configure_submodules.sh`; little-tickets' undefined purpose; the ecosystem-milestone table | Yes. The main responsible pillar for a project's lifecycle and identity (creation, import, removal) — not owner of everything about a project, which stays deliberately distributed across pillars, but owner of the registration itself. Two creation paths: `project.bootstrap` (deterministic, for a new project) and import (an existing project, driven by a Claude CLI session — human-interactive or Agentic Development's own internal dispatch, the same mechanism either way — through this pillar's MCP-exposed entry point, since bringing an arbitrary existing project into conformance needs judgment a fixed pipeline can't provide). Also owns `project_sets`, moved here from Policy & Compliance — grouping projects is a registry concern even though Policy & Compliance remains its only consumer today. **Removal, resolved 2026-09-15**: hard delete, immediate, cascading — removing a project's registry row triggers every other pillar to purge that project's data through its own Pillar Interface (each pillar deletes its own rows for that `project_id`; Registry & Portfolio doesn't reach into another pillar's database directly). No soft-delete, no undo. |
 | **Requirements & Quality** | Every behavior that matters has an auditable answer to "is this actually tested," and every delivery checkpoint has an auditable answer to "is it done." | little-requirements wholesale, plus its own never-built M8 (Use Cases & Milestones) | Yes |
 | **Version Control & Release** | Branches and versions are always in a known-safe, consistent state — never by hand, never inconsistently. | little-versions wholesale | Yes |
 | **Build & Packages** | A build artifact exists, is reproducible, and is reachable by anything that needs to install it. | little-runner's disclaimed CI non-goal (now real, including its own never-built E6: on-demand testing, JUnit-XML beyond pytest) + little-pypi wholesale | Optional — a project with no build/publish step never starts it |
@@ -85,6 +88,12 @@ follows.
 - **Versioning**: paths carry a version prefix (`/v1/...`); a pillar may
   serve two versions at once during a migration window, so upgrading one
   pillar's interface never forces every caller to upgrade in lockstep.
+  How long an old version has to stay alive before it can be dropped is,
+  resolved 2026-09-15, deliberately **not a policy** — "how long is
+  reasonable" isn't something a test script can verify, the same
+  reasoning that already dropped other unenforceable candidates from
+  `docs/pillars/policy_catalog.md`. It stays a judgment call for whoever
+  owns the pillar, each time.
 - **Discovery**: Core's pillar registry is the only place a socket path is
   looked up — a pillar never hardcodes another's path.
 
@@ -225,6 +234,13 @@ than stored inline), and screenshots. The git-committed `VERSION` file in
 each project remains the single source of truth for that project's version;
 any pillar's cached copy of it is a cached read, never the authority.
 
+**Log retention, resolved 2026-09-15**: size-based, not age-based —
+appropriate for a system hosted on one personal machine, where "how much
+disk" is the actual constraint, not "how old." When a pillar's log file
+grows past its size threshold, the oldest lines are trimmed first (a
+rolling window, not periodic full-file rotation). The exact threshold is
+implementation-time detail, not decided here.
+
 An `events` append-only log — every state change, what triggered it — is
 kept per-pillar (each pillar logs its own events) rather than as one
 cross-cutting table, for the same reason every other table is: a pillar's
@@ -332,19 +348,30 @@ stdlib-first per pillar (matching `little-runner`'s and
 preference beyond what a pillar genuinely needs), FastAPI/uvicorn for every
 Pillar Interface and the Dashboard, `git`/`gh`/`claude`/`systemctl`/
 `systemd-run`/`bazel`/`tailscale` as external, already-required host tools
-(unchanged from today). Tracked as `OQ-10` in
-[`open_questions.md`](open_questions.md).
+(unchanged from today). Confirmed 2026-09-15 as deferred to
+implementation — no pillar was flagged as needing anything unusual.
 
 ## Build
 
 Not applicable yet — no `src/` beyond the standard scaffold this round (see
 `docs/design.md`'s non-goals). Once implementation begins, this project
 follows the root [build policy](../../docs/policies/build_policy.md) like
-every other submodule. Expect one Bazel package per pillar under `src/`
-(each pillar is independently buildable/installable, matching its
-independently-deployable nature) plus `//:all`/`//:test` aggregating across
-all of them; exact target shape is implementation work, tracked as
-`OQ-11` in [`open_questions.md`](open_questions.md).
+every other submodule. One Bazel package per pillar under `src/` (each
+pillar is independently buildable/installable, matching its
+independently-deployable nature), plus `//:all`/`//:test` aggregating
+across all of them.
+
+**Per-pillar targets, resolved 2026-09-15**: `//:build`, `//:install`
+(runs `//:build` first), `//:test`, and `//:server` — the last one new to
+this ecosystem's standard vocabulary, specific to pillars: every other
+`little-*` project builds a wheel/CLI/extension, but a pillar's own
+artifact type is a long-running service, so it gets a target that runs
+it directly (local dev/testing) the same way `//:wheel`/`//:vsix` exist
+for the artifact types that need them. This fits the root build policy's
+own extensibility rule — "only implement the targets that make sense for
+that project's outputs, under these exact names" already anticipates a
+new artifact type earning a new standard name. Anything beyond these four
+defers to implementation.
 
 ## Additional folders
 

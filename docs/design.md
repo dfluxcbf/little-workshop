@@ -377,6 +377,24 @@ supervision, applied to itself with no special case; the part worth
 designing was making sure a restarted Core rejoins the system it left
 rather than resetting it.
 
+**Health probes are a real report, not a bare ping** (resolved
+2026-09-15): each pillar is responsible for its own internal health
+analysis — checking its own subsystems, not just "am I still a process" —
+and returns the full result when Core probes it, over the same live
+connection every other pillar-to-pillar call uses. Core waits up to
+**5 seconds** per probe, retrying up to **10 times** before treating a
+nominally-running pillar as unhealthy.
+
+**Crash-loop bounds** (resolved 2026-09-15): Core relaunches a crashed
+pillar immediately, up to **10 consecutive tries, 1 minute apart**. If
+the 10th attempt still fails, Core stops trying automatically and marks
+that pillar **faulted** — a state distinct from disabled (chosen) or
+merely crashed (recovering) — and surfaces this to the user through the
+same channel a failing policy check uses (see
+`docs/pillars/policy_compliance.md`'s "Informing the user immediately"),
+since a faulted pillar is exactly the kind of thing nothing should
+quietly stop trying to fix without someone finding out.
+
 ### Cross-pillar configuration change
 
 ```

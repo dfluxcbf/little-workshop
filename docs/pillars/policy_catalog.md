@@ -154,7 +154,8 @@ than narrowing them the way a few others were:
 | `pr-tested-before-finish` | IF a pull request's last recorded test run failed, THEN the system shall refuse to finish that branch unless a human explicitly forces it. | `automation_policy.md` rule 8 |
 | `fork-safety-gate` | IF a pull request's head repository is not the project's own, THEN the system shall refuse to test or act on it. | `little-runner` architecture.md |
 | `claude-cli-budget-and-timeout` | WHEN Claude CLI runs unattended, the system shall enforce a maximum budget and a maximum timeout. | `little-runner` architecture.md |
-| `no-secret-pattern-in-commit` | IF a file staged for commit matches a known credential/token pattern, THEN the commit shall be refused. | `automation_policy.md` rule 11 — narrowed from "shall not store or log a credential" (unbounded, unenforceable — nothing can verify the *absence* of every possible secret) to a bounded pattern-scan, the same shape real secret-scanning tools use, and checkable in principle. |
+| `secret-entry-point-tagged` | IF a file references a secret value, THEN that reference shall be tagged at its entry point and the actual secret shall live outside the repository. | `automation_policy.md` rule 11 — resolved 2026-09-15 as the primary mechanism, replacing pattern-matching: structural (does a tagged entry point actually resolve outside the repo?) rather than guessing at what a secret looks like, and more precisely enforceable than a regex scan. |
+| `secret-scan-best-effort` | IF a file staged for commit is flagged by a Claude CLI review as likely containing a credential, THEN the commit shall be held for confirmation. | Supplementary to `secret-entry-point-tagged` — broader coverage (catches a secret that was never tagged at all), explicitly best-effort in the same sense as Gate 3b's semantic conflict check: nothing proves a string is or isn't a secret with certainty, so this holds for confirmation rather than refusing outright, and is never the only line of defense. |
 
 ## H. Server &amp; deployment
 
@@ -171,8 +172,13 @@ than narrowing them the way a few others were:
 | Topic | EARS requirement | Source |
 |---|---|---|
 | `tailscale-only-exposure` | The system's dashboards and servers shall be reachable only via a private-mesh "serve" mechanism, never a public-internet "funnel" or equivalent. | Independently established in `little-runner`, `little-meals`, and `little-home` architecture.md — three-for-three is a strong signal this belongs at framework tier. |
-| `no-redundant-app-auth` | WHERE a project declares no app-level login route, the project shall not gain one without also declaring itself reachable outside the system's private network. | `little-meals` architecture.md — reframed as a checkable structural pair (login route presence vs. declared exposure) rather than the original's "shall not require," which can't be verified without deciding what "requires" means for arbitrary code. |
 | `no-third-party-cdn` | WHERE a project serves a web frontend, the project shall vendor its JS/CSS/font dependencies rather than loading them from a third-party CDN at runtime. | `little-meals` architecture.md (htmx, fonts) |
+
+~~`no-redundant-app-auth`~~ **withdrawn 2026-09-15** — not a policy at
+all. Little-workshop doesn't build its own login/auth mechanism for
+itself, full stop; that's a design decision (consistent with
+`docs/architecture.md`'s existing "no multi-tenant auth" call), not
+something any project's compliance is being checked against.
 
 ## J. Dashboard / UX conventions
 

@@ -77,6 +77,71 @@ framework policy ever exists on `version-file-presence`, it would govern
 every project including `little-mapgen`, and neither user policy could
 touch it.
 
+## Policy ownership: every topic belongs to one pillar
+
+Resolved 2026-09-15, clarifying what "no duplication of policy" actually
+means — the earlier "no duplicate configuration" language
+(`docs/architecture.md`'s Configuration & project data) was about project
+*files*, not policies, and had never been given its own precise statement
+for policies until now.
+
+Every policy has a **`target_pillar`** — the one pillar whose behavior it
+governs, the pillar that has to *follow* it, distinct from Policy &
+Compliance, which *guards* every policy regardless of whose behavior it's
+about. A topic (`server-manifest-shape`, `branch-naming`, ...) always
+maps to exactly one `target_pillar`, consistently, everywhere it's used:
+
+- Two policies can't declare the same topic with two different
+  `target_pillar`s — that's not a scope-level conflict (Gate 3a already
+  catches those), it's an ownership conflict, and it's just as
+  mechanically checkable: does this topic already exist anywhere,
+  targeting a different pillar? Reject if so.
+- This is what "two or more pillars should not have the same policy"
+  and "pillars should not have conflicting policies" actually cash out
+  to: not that no two policies may ever resemble each other, but that a
+  given concern has exactly one pillar accountable for it, never two
+  pillars each holding their own version of what should be one rule.
+  It's the same "one owner per capability" discipline already applied to
+  Pillar Interfaces and project files, now applied to policy topics.
+
+Gate 3's structural check (below) is extended to check this alongside the
+existing scope-level+target+topic check — both are exact, mechanical, and
+never guess.
+
+## Definition-of-done is multi-pillar, and can conflict with a request
+
+Resolved 2026-09-15. A milestone or task's definition-of-done isn't one
+thing owned by one pillar — each pillar a task actually touches has its
+own done-criteria (Requirements & Quality's is
+`milestone-requirements-linked-and-passing`: requirements linked, tests
+passing; Deployment & Servers' might be "the declared version is actually
+running"; and so on), and a task's overall done-criteria is the
+composition of whichever of those it touches.
+
+A user may specify their own definition-of-done for a task, but it always
+implicitly includes policy compliance — it's never a way to opt out of
+one. If what the user asks for would violate a policy, the system does
+neither of the two easy things: it doesn't silently execute it (violating
+the policy) and it doesn't silently refuse it (leaving the user with no
+path forward). It asks the user to **refine the request**, through the
+same Claude-CLI-mediated, human-reviewed pattern this document already
+uses for EARS refinement — explain the conflict, then help find an
+alternative that satisfies what the user actually wants without violating
+the policy.
+
+**Worked example**: a user's stated definition-of-done is "the server
+keeps restarting even if it keeps crashing." A policy says a broken
+server shall be replaced with its latest known-working version, not left
+running. These conflict. Refinement surfaces the conflict and proposes:
+run the crashing version separately, on a different port, alongside the
+policy-compliant server — the user may have their own reasons to keep
+watching the crashing behavior, and this satisfies that without the
+policy-compliant server ever being affected by it.
+
+This reuses Agentic Development's Pillar Interface exactly the way EARS
+refinement does — refine and hand back for review, never decide
+unilaterally which one wins.
+
 ## Optionality is EARS' job, not a separate mechanism
 
 "A policy is optional because a project doesn't need a server" is not a
@@ -129,12 +194,15 @@ GATE 2 -- mechanically enforceable? Can an automated test script verify
    │        as: this belongs in prose documentation, not the policy
    │        system -- "if it can't be enforced, it isn't defined here."
    ▼  yes
-GATE 3 -- non-conflicting? Two checks, one mechanical and exact, one
+GATE 3 -- non-conflicting? Three checks, two mechanical and exact, one
    best-effort:
    │  a) structural: does a policy already exist at this exact scope
    │     level + scope target + topic? Mechanically checked, no
    │     ambiguity possible -- two policies can never govern the same
    │     project on the same topic at the same level.
+   │  a2) ownership: does this topic already exist anywhere, targeting a
+   │     different target_pillar? Also mechanical and exact -- a topic
+   │     belongs to one pillar, always (see "Policy ownership" above).
    │  b) semantic: Policy & Compliance calls Agentic Development's
    │     Pillar Interface -- Claude CLI checks the proposed EARS text
    │     against every existing policy's EARS text for contradiction.
@@ -326,9 +394,9 @@ see that section for the full distinction.
 
 ## Informing the user immediately
 
-A failing check is recorded the moment its Job completes, not batched. Two
-channels, reusing patterns already proven in this ecosystem rather than
-inventing new ones:
+A failing check is recorded the moment its Job completes, not batched.
+Three channels, reusing patterns already proven in this ecosystem rather
+than inventing new ones:
 
 - **The Dashboard**, when running, surfaces it immediately — the same
   "warn" pill treatment already designed for the Home/Portfolio and
@@ -337,11 +405,25 @@ inventing new ones:
   attached — opened or updated exactly the way little-runner's existing
   branch audit already does (one persistent, diffed issue per repo, never
   auto-assigned into the agentic pipeline).
+- **Remote Control**, resolved 2026-09-15 as the actually-universal
+  channel: the same mechanism Agentic Development already uses to expose
+  a live Claude Code session to the user's own Claude app, and the same
+  one `little-runner`'s design already proved for exactly this shape of
+  problem — its `--brief` mode "adds the user-messaging tool so the agent
+  can ask a question mid-run instead of guessing." Policy & Compliance
+  asks Agentic Development's Pillar Interface to open a named,
+  Remote-Control-visible session whose only job is delivering the warning
+  and awaiting a response — a new *use* of an existing capability, not a
+  new mechanism, and unlike the other two channels it doesn't depend on
+  Dashboard being enabled or GitHub being attached to the specific
+  project, because it's tied to the user's own Claude account rather than
+  per-project configuration.
 
-Neither channel is universal on its own (Dashboard can be disabled;
-GitHub isn't attached to every project) — tracked as `OQ-9` in
-[`../open_questions.md`](../open_questions.md), not a claim that
-"immediate" is fully solved by the two channels above.
+Dashboard and GitHub issue remain useful — the Dashboard for anyone
+already looking at it, the GitHub issue as a persistent record on the
+project itself — but Remote Control is what actually closes the gap
+`OQ-9` raised: the one channel guaranteed to exist regardless of a
+project's own configuration.
 
 ## The "little-workshop itself" tab
 
@@ -373,6 +455,90 @@ with no policy involvement whatsoever, sparse and opt-in rather than a
 blanket check on everything. `server.launch` and `server.deploy`, for
 example, are gated by whichever policy currently wins (the usual
 precedence resolution) on a server-related topic, for the target project.
+
+### Deciding whether a Job type is gated
+
+Resolved 2026-09-15. Rather than a single rule, a checklist to apply when
+a pillar defines a new Job type — use whichever categories are relevant;
+none of these are individually decisive, and silence should never
+default to ungated:
+
+**Reversibility** — gate if undoing the effect needs another Job of
+equal or greater consequence, a restore from backup, replaying history,
+or manual reconstruction. Leans ungated if the effect expires or resets
+on its own in a short, bounded window, or only ever touches a draft/
+staging/scratch area with no promotion step taken yet.
+
+**External visibility** — gate if the effect becomes visible to users,
+customers, or the public before a human could plausibly review it, or if
+it changes what other services/Jobs treat as ground truth. Leans ungated
+if the effect stays internal to the same actor who triggered it, or is
+purely observational (a report, a log entry, a computed value) with no
+side effects.
+
+**Cost and resource consumption** — gate if the Job spends real money
+above a trivial threshold, or provisions/de-provisions billed
+infrastructure. Leans ungated if it consumes only negligible, capped
+internal compute/storage.
+
+**Blast radius / scope** — gate if the effect can cascade into other
+Jobs/pipelines, or operates on a bulk/wildcard selection rather than one
+named target. Leans ungated if it's scoped to the actor's own resources,
+or to a single isolated object nothing else references.
+
+**Data sensitivity** — gate if the Job deletes or overwrites data with no
+independent backup, or exposes/exports/transmits sensitive or regulated
+data (PII, credentials, financial). Leans ungated if it only reads data
+already fully visible to the requesting actor, or reads without
+persisting or forwarding it anywhere.
+
+**Access and permissions** — gate if the Job revokes access in a way that
+could lock out a legitimate user or break a running system.
+
+**Release / deployment lifecycle** — gate if the Job causes new code,
+config, or content to start serving live traffic, or promotes an
+artifact from non-production to production. Leans ungated if it only
+builds, compiles, or tests without deploying or publishing (default open
+for rollback to a previously known-good state, unless the rollback itself
+has side effects).
+
+**Policy interaction** — gate if a relevant policy exists that could
+plausibly forbid the action if violated, or if the Job's inputs are
+attacker- or user-controllable in a way that could steer it outside
+intended bounds regardless of how mild the nominal action seems. If no
+policy topic currently governs anything the Job type touches, flag it for
+review rather than silently deciding either way. Leans ungated if the
+Job's behavior is fully deterministic and enumerable at review time, with
+no runtime branching into riskier paths.
+
+**Frequency and batching** — leans ungated if the Job runs at high
+frequency as part of normal automated workflows and per-invocation risk
+is genuinely low; leans gated if it's rare, deliberate, and typically
+invoked by a human directly. If gating would break an automated pipeline
+that must run unattended, scope the policy so the legitimate automated
+case passes without a human in the loop — never remove gating just for
+convenience.
+
+**Actor and context** — gate if the Job can be triggered by a lower-trust
+or external actor, not just trusted internal operators — and gate
+regardless of who can trigger it if effect severity is high, even for a
+small, pre-vetted set of privileged operators. Gate if the Job's effect
+depends on ambient context (time, environment, current system state)
+that could make an otherwise-safe action unsafe.
+
+**Detectability after the fact** — leans ungated if a periodic audit
+would catch a bad outcome in time to matter, and the effect is
+self-documenting and easy to diff against expected state. Gate if a
+periodic audit would only catch the outcome after damage has already
+propagated or become irreversible, or if the effect is silent, hard to
+detect, or easily masked by later activity.
+
+**Category defaults** — as a first pass by name: a destructive verb
+(delete, purge, revoke, terminate, deprovision) or a promotion/publish
+verb (deploy, release, publish, launch, merge-to-prod) defaults gated; a
+read/inspect verb (get, list, describe, preview, diff) defaults ungated.
+Any Job type that doesn't clearly match an existing pattern is itself a
+signal — silence should never resolve to ungated.
 
 ```
 Orchestration is about to dispatch a Job of a gated type
@@ -483,10 +649,12 @@ separate allowlist-declaration step unnecessary — are resolved; see
 Supersedes the placeholder `policy_rules`, `policy_check_results` pair in
 `docs/architecture.md`'s Data model section with the actual shape:
 
-- `policies` — id, topic, ears_text, test_script_ref (1:1), scope_level
-  (`project` | `project_set` | `all_projects`), scope_target (a project id,
-  a project-set id, or null for all-projects), created_by (`user` |
-  `framework`), status, created_at, amended_at.
+- `policies` — id, topic, **target_pillar** (the one pillar this policy's
+  subject governs — see "Policy ownership" above), ears_text,
+  test_script_ref (1:1), scope_level (`project` | `project_set` |
+  `all_projects`), scope_target (a project id, a project-set id, or null
+  for all-projects), created_by (`user` | `framework`), status,
+  created_at, amended_at.
 - `policy_check_results` — policy id, project id, outcome (`pass` | `fail`
   | `not_applicable`), checked_at, job id.
 

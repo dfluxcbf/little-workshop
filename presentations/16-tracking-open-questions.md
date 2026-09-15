@@ -1,4 +1,4 @@
-← [Who Owns a Project?](15-project-ownership.md) · deck 16 of 16 · back to [index](README.md)
+← [Who Owns a Project?](15-project-ownership.md) · deck 16 of 17 · next: [Answering the First Round →](17-answering-the-first-round.md)
 
 # Tracking Open Questions
 
@@ -53,4 +53,4 @@ enforced by a person, not a script.
 
 ---
 
-Back to [index](README.md) · or revisit [9 — Policy & Compliance](09-policy-and-compliance.md)
+Next: [17 — Answering the First Round →](17-answering-the-first-round.md) · or back to [index](README.md)

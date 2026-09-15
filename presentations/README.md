@@ -76,5 +76,13 @@ restating it.
     duplicating; catches a gap that had quietly gone unresolved for seven
     decks; splits into an enforceable "the file exists" policy and an
     unenforceable "Claude CLI documented what it surfaced" convention.
+17. [Answering the First Round](17-answering-the-first-round.md) — nine of
+    eleven open items resolved: policy ownership by `target_pillar`, a
+    definition-of-done refinement flow for policy-conflicting requests, a
+    two-part secret-detection mechanism, an eleven-category Job-gating
+    checklist, Core's concrete crash-loop/health-probe numbers, cascading
+    project removal, Remote Control as the actually-universal
+    notification channel, and per-pillar build targets including a new
+    `//:server`.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).
