@@ -1,4 +1,4 @@
-← [Action-Gating: Policy Confirmation](10-action-gating-confirmation.md) · deck 11 of 11 · back to [index](README.md)
+← [Action-Gating: Policy Confirmation](10-action-gating-confirmation.md) · deck 11 of 12 · next: [Framework-Policy Lifecycle →](12-framework-policy-lifecycle.md)
 
 # Authoring Gates & Boundaries
 
@@ -73,9 +73,8 @@ restriction on timing. An edit isn't a lighter-weight path: it re-runs all
 three gates, including the conflict check against every *other* policy
 (a policy's prior version doesn't count against its own edit). Whether
 little-workshop's own maintainers can edit or retire a *framework* policy
-the same way is still open — "never overridable" was defined; "never
-revised" wasn't.
+the same way is answered next.
 
 ---
 
-Back to [index](README.md) · or revisit [9 — Policy & Compliance](09-policy-and-compliance.md)
+Next: [12 — Framework-Policy Lifecycle →](12-framework-policy-lifecycle.md) · or back to [index](README.md)

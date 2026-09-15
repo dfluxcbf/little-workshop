@@ -49,5 +49,9 @@ restating it.
     enforced, it isn't defined"), conflict elevated from a periodic audit
     to a pre-save gate, Policy & Compliance placed out of user policies'
     reach, and user-policy lifecycle defined.
+12. [Framework-Policy Lifecycle](12-framework-policy-lifecycle.md) — hard
+    while in force, but revisable: little-workshop's own maintainers can
+    edit or remove a framework policy, treated as continuous development
+    of little-workshop itself rather than a runtime toggle.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

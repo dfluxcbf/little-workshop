@@ -235,23 +235,27 @@ before they're approved:
    expected to). See `policy_compliance.md`'s "Authoring a policy," now
    restructured around three gates instead of the original single
    EARS-check step.
+4. **Framework-policy lifecycle**: "never overridable" and "never
+   revised" are different claims — only the first is true. Framework
+   policies are hard rules while in force, but little-workshop's own
+   maintainers can edit or remove one, treated as continuous development
+   of little-workshop itself (deliberate, documented, dated — the same
+   discipline `docs/governance_policy.md` already requires generally) and
+   not a casual runtime toggle. See `policy_compliance.md`'s new
+   "Framework-policy lifecycle" section.
 
 ## Open questions for you
 
 1. **The generated-test-script sandboxing gap** — still open. Worth its
    own dedicated design round before any policy authoring happens for
    real, given it's a safety question, not just a missing document?
-2. **Framework-policy lifecycle** — resolved for user policies (above);
-   not addressed for framework ones. Can little-workshop's own
-   maintainers edit or retire a framework policy the same way, or does
-   "never overridable" also mean "never revised"?
-3. The handful of entries narrowed this round to their enforceable core
+2. The handful of entries narrowed this round to their enforceable core
    (`doc-no-verbatim-duplication`, `milestone-requirements-linked-and-passing`,
    `no-secret-pattern-in-commit`, `no-redundant-app-auth`) are weaker
    claims than the source material's original intent, by construction —
    worth confirming the narrower version is still worth having as a
    policy, rather than also dropping some of these the way the
    encryption and fabricated-content entries were.
-4. Anything in this catalog that's **flat-out wrong** for where this
+3. Anything in this catalog that's **flat-out wrong** for where this
    ecosystem is heading rather than just unranked — easiest to catch now,
    before any of it goes through EARS refinement.

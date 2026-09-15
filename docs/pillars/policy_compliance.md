@@ -183,10 +183,33 @@ restriction on timing. Editing or removing is not a distinct, lighter-
 weight path: an edit is "replace this policy's EARS text," so it goes
 through all three gates again, exactly as a new policy would, including
 being re-checked for conflict against every *other* policy (its own prior
-version doesn't count against itself). Whether little-workshop's own
-maintainers can edit or retire a framework policy the same way isn't
-decided here — left open, alongside the rest of framework-policy
-lifecycle.
+version doesn't count against itself).
+
+### Framework-policy lifecycle
+
+"Never overridden by a user policy" and "never revised" are different
+claims — only the first is true. A framework policy is a hard rule while
+it's in force (nothing overrides it, no exception, no timeout, no
+confirmation dialog gets around it), but little-workshop is itself still
+under active development, and a framework policy can turn out to be wrong,
+incomplete, or superseded by better project design the same way any other
+part of this system can. Little-workshop's own maintainers can edit or
+remove a framework policy — through the same "little-workshop itself" tab,
+the same three gates as authoring one fresh.
+
+What's different from a user edit is what the change is *part of*: a
+framework-policy edit is treated as ordinary, continuous development of
+little-workshop itself — the same discipline `docs/governance_policy.md`'s
+evolution principle already states for this project's rules in general
+("deliberate... documented in the file itself... dated"), not a casual
+runtime toggle. In practice this means a framework-policy change belongs
+in the same place any other design decision does — a milestone, a
+documented reason, a date — rather than being indistinguishable in the
+audit trail from a user tweaking their own project's policy on a whim.
+The three-gate pipeline still enforces the mechanics (EARS-compliant,
+enforceable, non-conflicting); this is the additional expectation on top,
+specific to changing a rule everything else in the ecosystem is required
+to obey unconditionally.
 
 ## Enforcement
 

@@ -53,6 +53,15 @@ changes to the governance policy itself; `requirements_policy.md` and
 `version_policy.md` keep their own project-specific notes sections for
 changes scoped to them.
 
+This applies directly to Policy & Compliance's own framework policies
+(`docs/pillars/policy_compliance.md`): they are hard rules while in
+force — nothing overrides them — but little-workshop is still under
+active development, and little-workshop's own maintainers can edit or
+retire one. What makes that not a loophole is this principle: a
+framework-policy change is continuous development of little-workshop
+itself, not a runtime toggle — deliberate, documented, dated, the same as
+any change to this document.
+
 ## The self-application principle
 
 Whatever little-workshop eventually enforces ecosystem-wide — through the
