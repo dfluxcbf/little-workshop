@@ -19,9 +19,12 @@ back to the root document, because it is not bound by it.
 
 ## What's tracked, and how, until the Requirements & Quality pillar exists
 
-Right now, "requirements" for little-workshop *are* its design documents:
-`docs/design.md`'s Goals section, `docs/architecture.md`'s Feature mapping
-table, and the milestones defined in `docs/milestones.md` once any exist.
+Right now, "requirements" for little-workshop live in **`docs/requirements.md`**
+— resolved 2026-09-15, correcting this document's own earlier wording,
+which said they'd be "recorded directly in `docs/milestones.md`." That
+undersold what implementation-scale requirements actually need: dozens of
+them across ten pillars, each wanting its own row, with `milestones.md`'s
+"Requirements" column holding references to them rather than their text.
 This is deliberately less structured than `lreq`'s
 Project→Suite→Requirement→TestResult model — that's an accepted, temporary
 cost, not an oversight. Adopting `lreq` now to avoid that cost would recreate
@@ -29,11 +32,10 @@ the exact dependency `docs/governance_policy.md` explains this project can't
 carry while it's designing that dependency's eventual replacement.
 
 The `REQ-#########` identifier concept is kept as a *pattern*, not a
-mandate: if and when little-workshop needs to reference a specific,
-individually-tracked requirement before its own tooling exists, it uses a
-sequential, unambiguous ID in that same shape, recorded directly in
-`docs/milestones.md` — never invented loosely, never reused, but also never
-requiring `lreq` to mint it.
+mandate: sequential, unambiguous, assigned in creation order, recorded in
+`docs/requirements.md` — never invented loosely, never reused, but also
+never requiring `lreq` to mint it. See that file's own "Conventions"
+section for the full shape.
 
 ## Project-specific notes
 
