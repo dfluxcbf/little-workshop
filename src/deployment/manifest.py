@@ -25,6 +25,21 @@ class TailscaleManifest:
 
 
 @dataclass
+class ScreenshotManifest:
+    """`[server.screenshot]` — deferred from M4 to M6, since it exists only
+    to back Agentic Development's change report, not the deploy flow
+    itself. Inherited from `little-runner`'s identical config."""
+
+    enabled: bool = True
+    command: list[str] = field(default_factory=list)  # `{port}` is substituted
+    paths: list[str] = field(default_factory=lambda: ["/"])
+    port: int | None = None  # default: server port + 1000
+    ready_timeout_seconds: int = 180
+    wait_ms: int = 2000
+    viewport: str = "1280,900"
+
+
+@dataclass
 class ServerManifest:
     name: str
     command: str
@@ -39,6 +54,7 @@ class ServerManifest:
     # unconfirmed bad deploy would be costly to recover from by hand.
     confirm_timeout_seconds: int | None = None
     tailscale: TailscaleManifest | None = None
+    screenshot: ScreenshotManifest | None = None
     env: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -81,6 +97,21 @@ def parse_manifest(text: str) -> ServerManifest:
             service_https_port=int(ts.get("service_https_port", 443)),
         )
 
+    screenshot = None
+    if "screenshot" in server:
+        sst = server["screenshot"]
+        if not isinstance(sst, dict):
+            raise ManifestError("[server.screenshot] must be a table")
+        screenshot = ScreenshotManifest(
+            enabled=bool(sst.get("enabled", True)),
+            command=[str(x) for x in sst.get("command", [])],
+            paths=[str(x) for x in sst.get("paths", ["/"])],
+            port=sst.get("port"),
+            ready_timeout_seconds=int(sst.get("ready_timeout_seconds", 180)),
+            wait_ms=int(sst.get("wait_ms", 2000)),
+            viewport=str(sst.get("viewport", "1280,900")),
+        )
+
     return ServerManifest(
         name=name,
         command=command,
@@ -91,6 +122,7 @@ def parse_manifest(text: str) -> ServerManifest:
         stop_timeout_seconds=int(server.get("stop_timeout_seconds", 30)),
         confirm_timeout_seconds=confirm_timeout,
         tailscale=tailscale,
+        screenshot=screenshot,
         env={str(k): str(v) for k, v in server.get("env", {}).items()},
     )
 
@@ -124,4 +156,15 @@ def render_manifest(manifest: ServerManifest) -> str:
         if manifest.tailscale.service:
             lines.append(f"service = {_toml_str(manifest.tailscale.service)}")
             lines.append(f"service_https_port = {manifest.tailscale.service_https_port}")
+    if manifest.screenshot is not None:
+        lines.append("")
+        lines.append("[server.screenshot]")
+        lines.append(f"enabled = {'true' if manifest.screenshot.enabled else 'false'}")
+        lines.append("command = [" + ", ".join(_toml_str(x) for x in manifest.screenshot.command) + "]")
+        lines.append("paths = [" + ", ".join(_toml_str(x) for x in manifest.screenshot.paths) + "]")
+        if manifest.screenshot.port is not None:
+            lines.append(f"port = {manifest.screenshot.port}")
+        lines.append(f"ready_timeout_seconds = {manifest.screenshot.ready_timeout_seconds}")
+        lines.append(f"wait_ms = {manifest.screenshot.wait_ms}")
+        lines.append(f"viewport = {_toml_str(manifest.screenshot.viewport)}")
     return "\n".join(lines) + "\n"

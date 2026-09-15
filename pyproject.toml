@@ -27,7 +27,10 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["common*", "core*", "orchestration*", "registry*", "version*", "deployment*", "cli*"]
+include = ["common*", "core*", "orchestration*", "registry*", "version*", "deployment*", "agent*", "cli*"]
+
+[tool.setuptools.package-data]
+agent = ["templates/prompts/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

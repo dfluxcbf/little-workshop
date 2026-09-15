@@ -9,6 +9,7 @@ build --color=yes
 # docs/milestones.md M1's "proven end-to-end" requirement), which needs
 # XDG_RUNTIME_DIR and the D-Bus session address to reach that session.
 test --test_env=HOME
+test --test_env=PATH
 test --test_env=XDG_RUNTIME_DIR
 test --test_env=DBUS_SESSION_BUS_ADDRESS
 test --test_output=errors

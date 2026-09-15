@@ -81,3 +81,26 @@ service = "meals"
     rendered = render_manifest(manifest)
     reparsed = parse_manifest(rendered)
     assert reparsed == manifest
+
+
+def test_parse_and_render_screenshot_config_round_trips():
+    manifest = parse_manifest(
+        """
+[server]
+name = "little-meals"
+command = "lmeals serve"
+port = 8765
+
+[server.screenshot]
+enabled = true
+command = ["pipx", "run", "--spec", "little-meals=={version}", "lmeals", "serve", "--port", "{port}"]
+paths = ["/", "/recipes"]
+wait_ms = 3000
+"""
+    )
+    assert manifest.screenshot.enabled is True
+    assert manifest.screenshot.paths == ["/", "/recipes"]
+    assert manifest.screenshot.wait_ms == 3000
+
+    reparsed = parse_manifest(render_manifest(manifest))
+    assert reparsed == manifest

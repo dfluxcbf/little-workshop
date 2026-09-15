@@ -215,6 +215,30 @@ def complete_orchestration_job(
         return False
 
 
+class AgentPillarUnavailable(Exception):
+    pass
+
+
+def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("agent"), timeout=timeout) as client:
+            response = client.get(f"/v1/runs/{project_id}", params={"status": status} if status else {})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
+
+
+def agent_run_status(paths: Paths, project_id: str, run_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("agent"), timeout=timeout) as client:
+            response = client.get(f"/v1/runs/{project_id}/{run_id}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
+
+
 def deployment_rollback_timeout(paths: Paths, project_id: str, deploy_id: str, *, timeout: float = 3600.0) -> dict:
     """Calls Deployment & Servers' PI directly — never through Orchestration
     — so the confirm-gate watchdog's rollback fires even if Orchestration

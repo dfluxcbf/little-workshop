@@ -42,12 +42,25 @@ mapping from the tools it absorbs. Implementation is underway against the
   escape `little-runner` already proved for its own self-restart.
   Confirm-gating defaults on for `core`/`deployment`; the dispatched
   worker reports completion back to Orchestration.
+- **M6 — Agentic Development**: `src/agent` — Claude CLI as a
+  first-class execution target, absorbing `little-runner`'s
+  `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`: a
+  `BranchingSpec` validated against Version Control & Release's own
+  branch-type policy over a real Pillar Interface call, the
+  `AGENT_STATUS: done|partial|failed` completion marker, the
+  seven-section change report, two review modes (manual, auto-approve),
+  and the GitHub adapter's two proven techniques (actor lookup via the
+  issue timeline, cursor-based edge detection from polling). Runs for up
+  to an hour, so its Job dispatches to a background thread and reports
+  back asynchronously — the reason that path existed in the Job model
+  since M1.
 
 `bazel build //:wheel`, `bazel run //:install`, and `bazel test //:test`
-all work today (227 tests: unit plus real `systemd --user` end-to-end
+all work today (316 tests: unit plus real `systemd --user` end-to-end
 proofs in `tests/integration`, including a genuine self-redeploy that
 stops and relaunches Deployment & Servers' own unit from a freshly
-checked-out commit of this repo). The self-redeploy integration test
+checked-out commit of this repo, and a full agent-task run with only
+the agent session itself stubbed). The self-redeploy integration test
 skips cleanly — it doesn't fail the suite — when `lws` isn't
 pipx-installed yet (`bazel run //:install`).
 
