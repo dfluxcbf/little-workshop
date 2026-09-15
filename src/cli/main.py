@@ -191,6 +191,148 @@ def cmd_version_config_remove_hook(args: argparse.Namespace) -> int:
     return _version_job(args, "version.config_remove_hook", {"hook_path": args.hook_path})
 
 
+def cmd_deployment_deploy(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths,
+            type="deployment.deploy",
+            target_pillar="deployment",
+            project_id=args.project_id,
+            params={"branch": args.branch},
+            queue_key=args.project_id,
+            depends_on=[],
+            created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_deployment_stop(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths, type="deployment.stop", target_pillar="deployment", project_id=args.project_id,
+            params={}, queue_key=args.project_id, depends_on=[], created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_deployment_confirm(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths, type="deployment.confirm", target_pillar="deployment", project_id=args.project_id,
+            params={}, queue_key=args.project_id, depends_on=[], created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_deployment_seed_confirmation(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths, type="deployment.seed_confirmation", target_pillar="deployment", project_id=args.project_id,
+            params={}, queue_key=args.project_id, depends_on=[], created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_deployment_rollback_timeout(args: argparse.Namespace) -> int:
+    """The confirm-gate watchdog's entry point — dispatched via
+    `systemd-run --on-active` at deploy time. Calls Deployment & Servers'
+    PI directly, never through Orchestration."""
+    paths = Paths.from_env()
+    try:
+        result = client.deployment_rollback_timeout(paths, args.project_id, args.deploy_id)
+    except client.DeploymentPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_deployment_status(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.deployment_status(paths, args.project_id)
+    except client.DeploymentPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_deployment_history(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.deployment_history(paths, args.project_id)
+    except client.DeploymentPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_deployment_confirmation(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.deployment_confirmation(paths, args.project_id)
+    except client.DeploymentPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_deployment_branches(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.deployment_branches(paths, args.project_id)
+    except client.DeploymentPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_worktree_provision(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.provision_worktree(paths, args.project_id, args.commitish)
+    except client.DeploymentPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_worktree_release(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.release_worktree(paths, args.project_id, args.worktree_id)
+    except client.DeploymentPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
 def cmd_project_remove(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -358,6 +500,60 @@ def build_parser() -> argparse.ArgumentParser:
     config_remove_hook.add_argument("--project-id", required=True)
     config_remove_hook.add_argument("hook_path")
     config_remove_hook.set_defaults(func=cmd_version_config_remove_hook)
+
+    deployment = subparsers.add_parser("deployment", help="Deployment & Servers commands")
+    deployment_sub = deployment.add_subparsers(dest="deployment_command", required=True)
+
+    d_deploy = deployment_sub.add_parser("deploy", help="Stop if running, install+launch from a throwaway worktree of the branch")
+    d_deploy.add_argument("--project-id", required=True)
+    d_deploy.add_argument("--branch", default="dev")
+    d_deploy.set_defaults(func=cmd_deployment_deploy)
+
+    d_stop = deployment_sub.add_parser("stop", help="Stop a server (defence-in-depth)")
+    d_stop.add_argument("--project-id", required=True)
+    d_stop.set_defaults(func=cmd_deployment_stop)
+
+    d_confirm = deployment_sub.add_parser("confirm", help="Keep the currently pending deploy")
+    d_confirm.add_argument("--project-id", required=True)
+    d_confirm.set_defaults(func=cmd_deployment_confirm)
+
+    d_seed = deployment_sub.add_parser("seed-confirmation", help="Establish the confirmed baseline from what's currently deployed")
+    d_seed.add_argument("--project-id", required=True)
+    d_seed.set_defaults(func=cmd_deployment_seed_confirmation)
+
+    d_timeout = deployment_sub.add_parser("rollback-timeout", help="Watchdog entry point: rolls back if still pending")
+    d_timeout.add_argument("project_id")
+    d_timeout.add_argument("--deploy-id", required=True)
+    d_timeout.set_defaults(func=cmd_deployment_rollback_timeout)
+
+    d_status = deployment_sub.add_parser("status", help="Show unit state, pids, port, version, tailscale mapping")
+    d_status.add_argument("--project-id", required=True)
+    d_status.set_defaults(func=cmd_deployment_status)
+
+    d_history = deployment_sub.add_parser("history", help="Show deploy history")
+    d_history.add_argument("--project-id", required=True)
+    d_history.set_defaults(func=cmd_deployment_history)
+
+    d_confirmation = deployment_sub.add_parser("confirmation", help="Show the confirm-gate state")
+    d_confirmation.add_argument("--project-id", required=True)
+    d_confirmation.set_defaults(func=cmd_deployment_confirmation)
+
+    d_branches = deployment_sub.add_parser("branches", help="List a project's branches")
+    d_branches.add_argument("--project-id", required=True)
+    d_branches.set_defaults(func=cmd_deployment_branches)
+
+    worktree = subparsers.add_parser("worktree", help="Shared worktree-provisioning capability")
+    worktree_sub = worktree.add_subparsers(dest="worktree_command", required=True)
+
+    w_provision = worktree_sub.add_parser("provision", help="Provision an isolated worktree for a project at a commitish")
+    w_provision.add_argument("--project-id", required=True)
+    w_provision.add_argument("--commitish", default="HEAD")
+    w_provision.set_defaults(func=cmd_worktree_provision)
+
+    w_release = worktree_sub.add_parser("release", help="Release a provisioned worktree")
+    w_release.add_argument("--project-id", required=True)
+    w_release.add_argument("worktree_id")
+    w_release.set_defaults(func=cmd_worktree_release)
 
     return parser
 
