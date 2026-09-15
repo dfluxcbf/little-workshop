@@ -54,3 +54,18 @@ user of that pillar (the self-application principle,
 | REQ-000000019 | The project-files shared access library enforces filename-encoded write-ownership (`<name>.<owner-tag>.<format>`): any pillar may read, only the owning pillar may write. | done |
 | REQ-000000020 | Log files are trimmed by a size-based rolling window (oldest lines dropped first), never a full-file rotation. | done |
 | REQ-000000021 | The whole path — Core launching a real `systemd --user` unit, health-probing it over a real socket, and Orchestration dispatching a real Job to it over its Pillar Interface — is proven against a minimal reference pillar, not mocked. | done |
+
+## M2 — Registry & Portfolio (bootstrap path)
+
+| ID | Requirement | Status |
+|---|---|---|
+| REQ-000000022 | `project.bootstrap` scaffolds the standard docs/src/tests layout, `git init`s on `master`, commits it, and creates a `dev` branch — without depending on `lreq`/`lvx`/`.lvx` (a bootstrapped project is little-workshop's own from birth). | done |
+| REQ-000000023 | `project.bootstrap` optionally creates a GitHub repository (via the `gh` CLI or a token-based REST call) and pushes `master`/`dev`, mirroring `bootstrap-little-project`'s two backends — never exercised against the real GitHub API in this repo's own tests. | done |
+| REQ-000000024 | A successful bootstrap registers the project in the `projects` table (the authoritative registry) and creates its project-files directory as a consequence of that registration, never the other way around. | done |
+| REQ-000000025 | Bootstrapping a name that's already registered fails cleanly (Job outcome `failed`, no partial registry row) rather than corrupting the existing entry. | done |
+| REQ-000000026 | `project.remove` hard-deletes the project's `projects` row and its own dependent rows (`project_set_members`, `tickets`) and its project-files directory, immediately, with no soft-delete or undo — leaving the actual git repository on disk untouched. | done |
+| REQ-000000027 | `project_sets` supports creating a set, listing sets, and adding/removing project membership. | done |
+| REQ-000000028 | `tickets` supports creating a ticket against a project, listing by project, and updating status — the source of record for portfolio tracking even for a project with no GitHub remote. | done |
+| REQ-000000029 | Registry & Portfolio's Pillar Interface follows the Job-dispatch convention (`POST /v1/jobs/<type>`) for `project.bootstrap`/`project.remove`, and exposes direct read endpoints for `projects`/`project_sets`/`tickets` that don't need a Job's audit trail. | done |
+| REQ-000000030 | The `lws` CLI supports `project bootstrap`/`list`/`remove`; `project list` falls back to a direct database read when the daemon is down, matching the established CLI fallback convention. | done |
+| REQ-000000031 | Orchestration dispatching a real `project.bootstrap` Job to Registry & Portfolio running as a genuine `systemd --user` unit produces an actual git repository on disk — proven end-to-end, not mocked. | done |

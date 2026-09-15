@@ -10,12 +10,19 @@ replacing them with separate third-party peers.
 See `docs/design.md` for the purpose, goals, and core concepts, and
 `docs/architecture.md` for the pillar breakdown, data model, and feature
 mapping from the tools it absorbs. Implementation is underway against the
-17-milestone sequence in `docs/milestones.md` — M1 (Core + Orchestration,
-the substrate every pillar depends on) is done: `src/common`, `src/core`,
-`src/orchestration`, and a minimal `lws` CLI (`src/cli`), proven
-end-to-end against a real `systemd --user` session in
-`tests/integration`. `bazel build //:wheel`, `bazel run //:install`, and
-`bazel test //:test` all work today.
+17-milestone sequence in `docs/milestones.md`. Done so far:
+
+- **M1 — Core + Orchestration**, the substrate every pillar depends on:
+  `src/common`, `src/core`, `src/orchestration`, and a minimal `lws` CLI
+  (`src/cli`), proven end-to-end against a real `systemd --user` session.
+- **M2 — Registry & Portfolio (bootstrap path)**: `src/registry` —
+  `project.bootstrap` (scaffold, `git init`, `dev` branch, optional
+  GitHub repo/push), `project.remove` (cascading hard delete),
+  `project_sets`, `tickets`, and `lws project bootstrap/list/remove`.
+
+`bazel build //:wheel`, `bazel run //:install`, and `bazel test //:test`
+all work today (107 tests: unit plus real `systemd --user` end-to-end
+proofs in `tests/integration`).
 
 For the narrative version of the same decisions — cross-linked
 presentations — start at `presentations/README.md`.

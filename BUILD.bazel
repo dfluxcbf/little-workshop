@@ -14,14 +14,15 @@ package(default_visibility = ["//visibility:public"])
 #                                          `systemd --user` end-to-end proof
 #   bazel run   //:core_server          → run Core directly from source
 #   bazel run   //:orchestration_server → run Orchestration directly from source
+#   bazel run   //:registry_server      → run Registry & Portfolio directly from source
 #
 # docs/architecture.md's Build section calls for one Bazel package per
-# pillar with its own :build/:install/:test/:server targets. M1 (Core +
-# Orchestration) ships both from one wheel for now — there's no
+# pillar with its own :build/:install/:test/:server targets. Every
+# pillar built so far ships from one wheel for now — there's no
 # independent-redeploy story yet to make splitting them worthwhile (that
 # lands with Deployment & Servers' worktree-per-pillar mechanism, M4/M5).
-# `:core_server`/`:orchestration_server` below are this milestone's stand-in
-# for each pillar's own future `:server` target.
+# `:core_server`/`:orchestration_server`/`:registry_server` below are each
+# pillar's stand-in for its own future `:server` target.
 # ---------------------------------------------------------------------------
 
 exports_files(["VERSION", "pyproject.toml"])
@@ -90,4 +91,11 @@ sh_binary(
     srcs = ["scripts/bazel/run_server.sh"],
     data = glob(["src/**"]) + ["pyproject.toml"],
     args = ["orchestration", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "registry_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["registry", "$(location pyproject.toml)"],
 )
