@@ -462,6 +462,15 @@ def cmd_agent_run_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp_serve(args: argparse.Namespace) -> int:
+    """The command `claude mcp add` registers at user scope (docs/policies/
+    mcp_policy.md): a stdio MCP server proxying every pillar's Pillar
+    Interface, per docs/milestones.md's M7."""
+    from mcp_server.server import serve
+
+    return serve(Paths.from_env())
+
+
 def cmd_worktree_provision(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -762,6 +771,12 @@ def build_parser() -> argparse.ArgumentParser:
     w_release.add_argument("--project-id", required=True)
     w_release.add_argument("worktree_id")
     w_release.set_defaults(func=cmd_worktree_release)
+
+    mcp = subparsers.add_parser("mcp", help="MCP Server commands")
+    mcp_sub = mcp.add_subparsers(dest="mcp_command", required=True)
+
+    mcp_serve = mcp_sub.add_parser("serve", help="Run the MCP server over stdio (what `claude mcp add` registers)")
+    mcp_serve.set_defaults(func=cmd_mcp_serve)
 
     return parser
 
