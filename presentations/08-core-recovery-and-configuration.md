@@ -1,4 +1,4 @@
-← [Independence & Self-Governance](07-self-governance.md) · deck 8 of 8 · back to [index](README.md)
+← [Independence & Self-Governance](07-self-governance.md) · deck 8 of 9 · next: [Policy & Compliance: Rules for the Rules →](09-policy-and-compliance.md)
 
 # Core's Recovery, and Who Owns What Configuration
 

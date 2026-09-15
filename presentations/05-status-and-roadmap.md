@@ -63,14 +63,21 @@ in order:
 
 1. The pillar manifest schema (name, socket path, health-probe endpoint,
    enabled flag, interface version) — Core's actual contract.
-2. One pillar's Pillar Interface fully specified end-to-end (Version
-   Control & Release is the narrowest, and the least likely to need
-   revision, so it's the natural first pillar to fully specify) as the
+2. One pillar's Pillar Interface fully specified end-to-end, as the
    template every other pillar's interface follows.
 3. Core's crash-relaunch logic, built and tested before any pillar depends
    on it being right.
 4. Milestones, defined in `../docs/milestones.md` — currently, correctly,
    empty.
+
+**Updated**: item 2 originally proposed Version Control & Release as the
+narrowest starting point. Policy & Compliance was fully specified first
+instead — see
+[9 — Policy & Compliance: Rules for the Rules](09-policy-and-compliance.md)
+and `../docs/pillars/policy_compliance.md` — because it needed its own
+rules for what a rule *is* before anything else could lean on it. Version
+Control & Release remains the next narrow, low-revision-risk candidate for
+the same treatment.
 
 ---
 

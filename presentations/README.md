@@ -34,5 +34,10 @@ restating it.
    — how Core recovers from its own crash without losing any other pillar,
    and the filename-encoded ownership convention for shared project
    configuration.
+9. [Policy & Compliance: Rules for the Rules](09-policy-and-compliance.md)
+   — the first pillar specified end-to-end: three tiers of rules,
+   scope/precedence, EARS, the two-Claude-CLI-call authoring pipeline, and
+   enforcement. Full spec:
+   [`../docs/pillars/policy_compliance.md`](../docs/pillars/policy_compliance.md).
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

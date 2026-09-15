@@ -50,12 +50,12 @@ Interface (a small FastAPI app bound to a Unix domain socket):
 | Pillar | Goal | Absorbs | Enabled by default |
 |---|---|---|---|
 | **Orchestration** | Every unit of work happens once, in the right order, and its outcome is recorded — regardless of which pillar performs it. | little-runner's per-repo queue/slot logic, generalized to every job type and every pillar | Yes — required |
-| **Policy & Compliance** | Nothing drifts from the rules this ecosystem has already agreed to, without someone finding out. | The 8 root policy docs' checkable rules; `doctor.py`; `branch_audit.py`; the checklist skill's manual verification table | Yes — required |
+| **Policy & Compliance** | Nothing drifts from the rules this ecosystem has already agreed to, without someone finding out. | The 8 root policy docs' checkable rules; `doctor.py`; `branch_audit.py`; the checklist skill's manual verification table | Yes — required. Fully specified: see `docs/pillars/policy_compliance.md`. |
 | **Registry & Portfolio** | There is always one true answer to "what projects exist, and what's the state of the work tracked against them." | bootstrap-little-project wholesale; little-projects' informal registry role; `configure_submodules.sh`; little-tickets' undefined purpose; the ecosystem-milestone table | Yes |
 | **Requirements & Quality** | Every behavior that matters has an auditable answer to "is this actually tested," and every delivery checkpoint has an auditable answer to "is it done." | little-requirements wholesale, plus its own never-built M8 (Use Cases & Milestones) | Yes |
 | **Version Control & Release** | Branches and versions are always in a known-safe, consistent state — never by hand, never inconsistently. | little-versions wholesale | Yes |
 | **Build & Packages** | A build artifact exists, is reproducible, and is reachable by anything that needs to install it. | little-runner's disclaimed CI non-goal (now real, including its own never-built E6: on-demand testing, JUnit-XML beyond pytest) + little-pypi wholesale | Optional — a project with no build/publish step never starts it |
-| **Deployment & Servers** | A running process — a project's server, a Claude CLI instance, or a pillar of this system itself — stays running, and can be safely replaced with a newer version without anything else noticing. | little-runner's server-lifecycle mechanics (worktree deploys, confirm-gated rollback, cgroup-aware self-restart), generalized to every Managed Process | Yes |
+| **Deployment & Servers** | A running process — a project's server, a Claude CLI instance, or a pillar of this system itself — stays running, and can be safely replaced with a newer version without anything else noticing. | little-runner's server-lifecycle mechanics (worktree deploys, confirm-gated rollback, cgroup-aware self-restart), generalized to every Managed Process | Yes. Also the sole owner of isolated-worktree provisioning — Requirements & Quality's test execution and Policy & Compliance's policy checks both call its interface for one rather than each provisioning their own. |
 | **Agentic Development** | Claude does real implementation work on a real branch, safely, and the human stays in control of when it's finished. | little-runner's `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`/`sessions.py`, generalized from GitHub-issue-only triggers | Optional — a project not using agentic dev never starts it |
 | **Dashboard** | A human can see and act on everything above, without a terminal. | little-runner's `web/`, extended with panels for every other pillar | Optional — a headless/automation-only setup can disable it. Visual identity decided: see `presentations/06-visual-identity.md`. |
 | **MCP Server** | An agent (Claude, or another tool) can see and act on everything above, without a terminal. | little-requirements' and little-versions' MCP tool surfaces, unified and namespaced | Optional — but the common case, since Claude is this ecosystem's primary caller |
@@ -192,7 +192,11 @@ one is authoritative for "does this project exist" is implementation work,
 not decided here.
 
 - **Orchestration** — `jobs`, `job_runs`, `pipelines`, `pipeline_runs`.
-- **Policy & Compliance** — `policy_rules`, `policy_check_results`.
+- **Policy & Compliance** — `policies`, `project_sets`, `policy_check_results`
+  (three-outcome: pass/fail/not-applicable). Fully specified, including the
+  scope/precedence model and the EARS-based authoring pipeline:
+  `docs/pillars/policy_compliance.md` — the schema there supersedes the
+  placeholder shape this list originally gave this pillar.
 - **Registry & Portfolio** — `projects` (incl. the super-repo container
   row), `tickets`.
 - **Requirements & Quality** — `requirements`, `test_suites`,
@@ -338,8 +342,15 @@ onboarding; see `presentations/README.md`. Includes `presentations/assets/`:
 `identity-tokens.css` (the decided Dashboard visual identity's design
 tokens, ready for implementation to consume directly) and
 `identity-reference.html` (a static, dependency-free preview of that
-identity applied to two real screens). This is additional to the standard
-layout per the
+identity applied to two real screens).
+
+`docs/pillars/` — deep, per-pillar specifications, one file each, once a
+pillar has been worked out in enough detail that `design.md`/
+`architecture.md`'s survey-level treatment stops being enough. Started
+with `docs/pillars/policy_compliance.md`; more will be added as other
+pillars get the same treatment, not all at once.
+
+This is additional to the standard layout per the
 [project structure policy](../../docs/policies/project_structure_policy.md)'s
 "projects may have additional top-level folders where their nature requires
 it" allowance.
