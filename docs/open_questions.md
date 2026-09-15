@@ -12,43 +12,179 @@ one instead").
 
 - Every open item gets a stable ID (`OQ-NNN`), assigned in raised order,
   never reused even if the item is later dropped rather than resolved.
-- An item is **Open** until it's genuinely settled, then moves to
-  **Resolved** with a date and a pointer to where the full reasoning
-  lives — usually a `presentations/*.md` deck, since that's where this
-  project already narrates a decision once it's made. This document
-  stays the index; it doesn't duplicate the narrative.
+- Each open item below has a **Your answer** field — write directly
+  under it, in this file. Partial answers, a decision plus a "but," or a
+  question back are all fine; this is a worksheet, not a form with a
+  single right shape.
+- Once an item has an answer, tell Claude to process this file: it moves
+  the item to **Resolved** (with a date and a pointer to the deck/doc
+  where the full reasoning gets written up), updates every doc the answer
+  actually affects, and clears the field so the next round starts clean.
 - **Convention, not a mechanically-enforced policy**: any Claude CLI
   session that surfaces a new open question or design gap while working
   on this project adds it here — as its own `OQ-NNN` entry, dated,
   before the session concludes — rather than leaving it as a one-off
   remark buried in a document or a conversation. This is *why* `OQ-9`
   below existed without being tracked anywhere central until this
-  document was created: the practice this document exists to fix.
-  See "As a policy" below for why only half of this convention can
-  actually be an enforced policy.
+  document was created: the practice this document exists to fix. See
+  "As a policy" below for why only half of this convention can actually
+  be an enforced policy.
 
 ## Open
 
-| ID | Title | Raised | Source |
-|---|---|---|---|
-| OQ-1 | Are the four enforceability-narrowed catalog entries (`doc-no-verbatim-duplication`, `milestone-requirements-linked-and-passing`, `no-secret-pattern-in-commit`, `no-redundant-app-auth`) still worth keeping at their weaker scope, or should some be dropped like the encryption/fabricated-content entries were? | 2026-09-15 | `docs/pillars/policy_catalog.md`, "Open questions for you" |
-| OQ-2 | Anything in the ~50-entry catalog that's flat-out wrong for where this project is heading, not just unranked? | 2026-09-15 | `docs/pillars/policy_catalog.md`, "Open questions for you" |
-| OQ-3 | Which Job types declare which gating topics — no mapping exists yet beyond the `server.launch`/`server.deploy` examples. | 2026-09-15 | `docs/pillars/policy_compliance.md`, "Left open" |
-| OQ-4 | Log retention/rotation — no tool in this ecosystem, including little-workshop's own planned per-pillar logs, has a stated policy. | 2026-09-15 | `docs/pillars/policy_catalog.md`, "Gaps" |
-| OQ-5 | Crash-loop bounds — Core's crash counter and backoff are conceptual only; no maximum retry count or backoff shape is defined. | 2026-09-15 | `docs/pillars/policy_catalog.md`, "Gaps" |
-| OQ-6 | Health-probe timeout — nothing states how long Core waits for a pillar's health response before treating it as unhealthy. | 2026-09-15 | `docs/pillars/policy_catalog.md`, "Gaps" |
-| OQ-7 | Project/data retention on removal — no policy for what happens to a project's requirements, jobs, and project files when it's deregistered. | 2026-09-15 | `docs/pillars/policy_catalog.md`, "Gaps" |
-| OQ-8 | Pillar Interface deprecation window — versioned paths (`/v1`, `/v2`) are designed; nothing states how long an old version must keep working before it can be dropped. | 2026-09-15 | `docs/pillars/policy_catalog.md`, "Gaps" |
-| OQ-9 | "Informed immediately" notification channel isn't universal — Dashboard can be disabled, GitHub isn't attached to every project, and nothing covers the gap between them. | 2026-09-15 | `docs/pillars/policy_compliance.md`, "Informing the user immediately" |
+### OQ-1 — Keep the enforceability-narrowed catalog entries?
 
-Lower priority — implementation-time detail rather than a design
-decision, expected to resolve naturally once building starts, tracked
-here only so nothing gets silently forgotten:
+*Raised 2026-09-15 · source: `docs/pillars/policy_catalog.md`, "Open questions for you"*
 
-| ID | Title | Source |
-|---|---|---|
-| OQ-10 | Exact runtime dependency list per pillar isn't finalized. | `docs/architecture.md`, Dependencies |
-| OQ-11 | Exact Bazel build-target shape per pillar isn't decided. | `docs/architecture.md`, Build |
+Four catalog entries were narrowed to their mechanically enforceable core:
+`doc-no-verbatim-duplication`, `milestone-requirements-linked-and-passing`,
+`no-secret-pattern-in-commit`, `no-redundant-app-auth`. Each is a weaker
+claim than the source material's original intent, by construction. Worth
+confirming the narrower version is still worth having as a policy — or
+should some also be dropped entirely, the way the data-at-rest-encryption
+and fabricated-content entries were?
+
+**Your answer:**
+
+
+---
+
+### OQ-2 — Anything in the catalog flat-out wrong?
+
+*Raised 2026-09-15 · source: `docs/pillars/policy_catalog.md`, "Open questions for you"*
+
+Not "unranked" or "needs narrowing" — actually wrong for where this
+project is heading. Easiest to catch now, before any catalog entry goes
+through real EARS refinement.
+
+**Your answer:**
+
+
+---
+
+### OQ-3 — Which Job types declare which gating topics?
+
+*Raised 2026-09-15 · source: `docs/pillars/policy_compliance.md`, "Left open"*
+
+Action-gating (deck 10) established that a Job *type* can declare a
+gating topic, using `server.launch`/`server.deploy` as the only examples
+so far. No actual mapping of Job types to topics exists yet for any other
+pillar. Worth sketching now for the pillars already specified, or purely
+an implementation-time decision once each pillar's Job types are defined?
+
+**Your answer:**
+
+
+---
+
+### OQ-4 — Log retention / rotation
+
+*Raised 2026-09-15 · source: `docs/pillars/policy_catalog.md`, "Gaps"*
+
+No tool in this ecosystem — including `little-runner`'s existing
+`~/.local/state/little-runner/logs/` and little-workshop's own planned
+per-pillar `~/.local/state/little-workshop/logs/<pillar>/` — has a stated
+retention or rotation policy.
+
+**Your answer:**
+
+
+---
+
+### OQ-5 — Crash-loop bounds
+
+*Raised 2026-09-15 · source: `docs/pillars/policy_catalog.md`, "Gaps"*
+
+Core's design mentions a crash counter and backoff conceptually
+(`docs/architecture.md`'s Core description). No maximum retry count or
+backoff shape is actually defined.
+
+**Your answer:**
+
+
+---
+
+### OQ-6 — Health-probe timeout
+
+*Raised 2026-09-15 · source: `docs/pillars/policy_catalog.md`, "Gaps"*
+
+Nothing states how long Core waits for a pillar's health response before
+treating it as unhealthy and acting (relaunching, marking it down).
+
+**Your answer:**
+
+
+---
+
+### OQ-7 — Project/data retention on removal
+
+*Raised 2026-09-15 · source: `docs/pillars/policy_catalog.md`, "Gaps"*
+
+No stated policy for what happens to a project's requirements, jobs, and
+project files when it's deregistered from Registry & Portfolio. Deleted
+immediately? Archived? Kept until explicitly purged?
+
+**Your answer:**
+
+
+---
+
+### OQ-8 — Pillar Interface deprecation window
+
+*Raised 2026-09-15 · source: `docs/pillars/policy_catalog.md`, "Gaps"*
+
+Versioned PI paths (`/v1`, `/v2`) are designed so a pillar can serve two
+versions at once during a migration. Nothing states how long an old
+version must keep working before it can be dropped.
+
+**Your answer:**
+
+
+---
+
+### OQ-9 — "Informed immediately" isn't a universal channel
+
+*Raised 2026-09-15 · source: `docs/pillars/policy_compliance.md`, "Informing the user immediately"*
+
+A failing policy check currently reaches the user through two channels:
+the Dashboard (can be disabled) and a per-project GitHub issue (only
+exists for projects with the GitHub adapter attached). Neither is
+universal on its own, and nothing covers a project that has neither. This
+is the item that fell out of tracking once already — see deck 16.
+
+**Your answer:**
+
+
+---
+
+## Lower priority — implementation-time detail
+
+Not design decisions so much as things to not silently forget once
+building starts.
+
+### OQ-10 — Per-pillar runtime dependencies
+
+*Raised 2026-09-15 · source: `docs/architecture.md`, Dependencies*
+
+Exact runtime dependency list per pillar isn't finalized — expected to
+mirror the absorbed tools' existing choices, not decided in detail.
+
+**Your answer:**
+
+
+---
+
+### OQ-11 — Per-pillar Bazel build-target shape
+
+*Raised 2026-09-15 · source: `docs/architecture.md`, Build*
+
+One Bazel package per pillar is expected; the exact target shape beyond
+`//:all`/`//:test` isn't decided.
+
+**Your answer:**
+
+
+---
 
 ## Resolved
 
@@ -67,6 +203,7 @@ here.
 | — | Test-script execution sandbox: PI-only network, allowlisted read-only filesystem, verdict-only writes, 30-minute async ceiling | 2026-09-15 | `presentations/13-test-script-sandbox.md` |
 | — | A script timeout is a framework fault, not a policy verdict — never routed through the 10-minute override; Gate 4 (full human approval of EARS text and script) added | 2026-09-15 | `presentations/14-verdicts-vs-faults.md` |
 | — | Registry & Portfolio is the main responsible pillar for project identity/lifecycle; bootstrap vs. Claude-CLI-driven import; project sets moved there from Policy & Compliance; registry row is authoritative over the project-files directory | 2026-09-15 | `presentations/15-project-ownership.md` |
+| — | Introduced this tracker; caught OQ-9 going unresolved; split the tracking convention into an enforceable policy and an unenforceable one | 2026-09-15 | `presentations/16-tracking-open-questions.md` |
 
 ## As a policy
 
@@ -77,9 +214,9 @@ applied to data-at-rest encryption and "no fabricated documentation"
 splits this into two very different claims:
 
 - **Enforceable, and a real catalog candidate**: `docs/open_questions.md`
-  exists and has a minimally checkable structure (an Open table, a
+  exists and has a minimally checkable structure (an Open section, a
   Resolved table). A test script can verify a file exists and roughly
-  parses. See `docs/pillars/policy_catalog.md`'s new entry,
+  parses. See `docs/pillars/policy_catalog.md`'s entry,
   `open-questions-document-exists`.
 - **Not enforceable, and not a policy**: "Claude CLI documented every
   question it surfaced." Nothing can verify, from repository state alone,
