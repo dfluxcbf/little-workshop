@@ -8,3 +8,5 @@ MODULE.bazel.lock
 .req_env/
 .reqs/
 *.egg-info/
+.coverage
+htmlcov/

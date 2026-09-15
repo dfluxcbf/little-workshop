@@ -12,6 +12,8 @@ package(default_visibility = ["//visibility:public"])
 #   bazel test  //:test                 → the real pytest suite: unit tests
 #                                          plus tests/integration's real
 #                                          `systemd --user` end-to-end proof
+#   bazel test  //:coverage             → the same suite, gated at 90%
+#                                          line coverage (--cov-fail-under=90)
 #   bazel run   //:core_server          → run Core directly from source
 #   bazel run   //:orchestration_server → run Orchestration directly from source
 #   bazel run   //:registry_server      → run Registry & Portfolio directly from source
@@ -74,6 +76,22 @@ sh_binary(
 sh_test(
     name = "test",
     srcs = ["scripts/bazel/run_pytest.sh"],
+    args = ["$(location pyproject.toml)"],
+    data = glob([
+        "src/**",
+        "tests/**",
+    ]) + ["pyproject.toml"],
+    tags = ["local", "no-sandbox"],
+)
+
+# bazel test //:coverage — same suite as //:test, plus a hard 90% line-
+# coverage gate (--cov-fail-under=90) over every src/ module, including
+# each pillar's own __main__.py — docs/requirements.md's testing-fortification
+# pass explicitly named zero-coverage entrypoints as a real gap, not
+# something to `# pragma: no cover` away.
+sh_test(
+    name = "coverage",
+    srcs = ["scripts/bazel/run_pytest_coverage.sh"],
     args = ["$(location pyproject.toml)"],
     data = glob([
         "src/**",
