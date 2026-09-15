@@ -54,15 +54,28 @@ mapping from the tools it absorbs. Implementation is underway against the
   to an hour, so its Job dispatches to a background thread and reports
   back asynchronously — the reason that path existed in the Job model
   since M1.
+- **M7 — MCP Server (minimal)**: `src/mcp_server` — a hand-rolled,
+  dependency-free JSON-RPC 2.0/MCP stdio server (`initialize`,
+  `tools/list`, `tools/call`), the same proven shape `little_versions.mcp`
+  already uses. Every mutating Job type and read endpoint built so far
+  for Registry & Portfolio, Version Control & Release, Deployment &
+  Servers, and Agentic Development is exposed as a `workshop_<pillar>_*`
+  tool, each translating straight into a Pillar Interface call — no
+  domain data of its own, the same thin-proxy role Dashboard will
+  eventually play. Registered at user scope via `claude mcp add` inside
+  `bazel run //:install`, per the root MCP policy. Never Core/systemd-
+  launched — spawned on demand by whatever MCP client attaches it
+  (`lws mcp serve`).
 
 `bazel build //:wheel`, `bazel run //:install`, and `bazel test //:test`
-all work today (316 tests: unit plus real `systemd --user` end-to-end
+all work today (352 tests: unit plus real `systemd --user` end-to-end
 proofs in `tests/integration`, including a genuine self-redeploy that
 stops and relaunches Deployment & Servers' own unit from a freshly
-checked-out commit of this repo, and a full agent-task run with only
-the agent session itself stubbed). The self-redeploy integration test
-skips cleanly — it doesn't fail the suite — when `lws` isn't
-pipx-installed yet (`bazel run //:install`).
+checked-out commit of this repo, a full agent-task run with only the
+agent session itself stubbed, and a real MCP `tools/call` round trip
+that bootstraps and lists back a project through Registry & Portfolio).
+The self-redeploy integration test skips cleanly — it doesn't fail the
+suite — when `lws` isn't pipx-installed yet (`bazel run //:install`).
 
 For the narrative version of the same decisions — cross-linked
 presentations — start at `presentations/README.md`.

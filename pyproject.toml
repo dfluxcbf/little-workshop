@@ -27,7 +27,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["common*", "core*", "orchestration*", "registry*", "version*", "deployment*", "agent*", "cli*"]
+include = ["common*", "core*", "orchestration*", "registry*", "version*", "deployment*", "agent*", "cli*", "mcp_server*"]
 
 [tool.setuptools.package-data]
 agent = ["templates/prompts/*.md"]

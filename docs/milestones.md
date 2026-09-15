@@ -23,13 +23,13 @@ discipline this project already applies to itself); the *sequence* and
 
 | ID | Objective | Depends on | Status |
 |---|---|---|---|
-| M1 | Core + Orchestration | — | Not started |
-| M2 | Registry & Portfolio — bootstrap path | M1 | Not started |
-| M3 | Version Control & Release | M1, M2 | Not started |
-| M4 | Deployment & Servers | M1, M2 | Not started |
-| M5 | Self-redeploy (reflexive) | M4 | Not started |
-| M6 | Agentic Development | M1, M2, M3, M4 | Not started |
-| M7 | MCP Server — minimal | M2, M3, M4, M6 | Not started |
+| M1 | Core + Orchestration | — | Done |
+| M2 | Registry & Portfolio — bootstrap path | M1 | Done |
+| M3 | Version Control & Release | M1, M2 | Done |
+| M4 | Deployment & Servers | M1, M2 | Done |
+| M5 | Self-redeploy (reflexive) | M4 | Done |
+| M6 | Agentic Development | M1, M2, M3, M4 | Done |
+| M7 | MCP Server — minimal | M2, M3, M4, M6 | Done |
 | M8 | Registry & Portfolio — import path | M2, M6 | Not started |
 | M9 | Requirements & Quality | M1, M2, M4 | Not started |
 | M10 | Build & Packages | M1, M2, M4 | Not started |
