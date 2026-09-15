@@ -295,9 +295,13 @@ PI, not a table another pillar could accidentally join against.
 - **Worktree-based deployment, not container-first.** Every existing
   project already deploys as a bare process via `systemd --user`; adopting
   a Docker-first model would be a regression for the sole benefit of
-  matching an unneeded PaaS convention. Docker stays available as an
-  opt-in sandbox backend for test isolation inside the Requirements &
-  Quality pillar, not the default deploy model.
+  matching an unneeded PaaS convention. Docker stays an opt-in sandbox
+  backend for test isolation inside the Requirements & Quality pillar —
+  not the default deploy model — but is the *required* execution sandbox
+  for Policy & Compliance's generated test scripts specifically, whose
+  network/filesystem boundaries need real namespace isolation to mean
+  anything; see `docs/pillars/policy_compliance.md`'s "Test-script
+  execution sandbox."
 - **A small number of safety rules are hard-coded, not `PolicyRule`s.**
   "Automation never merges/deletes/finishes on its own initiative" and "the
   agent never touches branches when a Job specifies them" are invariants in

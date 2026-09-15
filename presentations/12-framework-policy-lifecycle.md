@@ -1,4 +1,4 @@
-← [Authoring Gates & Boundaries](11-authoring-gates-and-boundaries.md) · deck 12 of 12 · back to [index](README.md)
+← [Authoring Gates & Boundaries](11-authoring-gates-and-boundaries.md) · deck 12 of 13 · next: [The Test-Script Sandbox →](13-test-script-sandbox.md)
 
 # Framework-Policy Lifecycle
 
@@ -56,4 +56,4 @@ than it is today.
 
 ---
 
-Back to [index](README.md) · or revisit [7 — Independence & Self-Governance](07-self-governance.md)
+Next: [13 — The Test-Script Sandbox →](13-test-script-sandbox.md) · or back to [index](README.md)

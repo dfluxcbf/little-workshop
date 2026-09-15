@@ -231,6 +231,73 @@ this project already applies everywhere else.
 Three outcomes per `(policy, project)` check, not two: **pass**, **fail**,
 or **not applicable** (the EARS `WHERE` case above).
 
+## Test-script execution sandbox
+
+A generated test script is unattended, AI-written code, re-run repeatedly
+against real project state. "Isolated worktree" (above) solves a
+*concurrency* problem — it doesn't step on a human's checkout — not a
+*safety* problem: a worktree is still just a directory a normal OS process
+can do anything to. This section is that boundary, stated concretely
+rather than assumed.
+
+**Network — Pillar Interfaces only, read-only calls only.** A test script
+has no general network access at all — no external HTTP, no DNS, nothing.
+The only thing it can reach is other pillars' Pillar Interfaces, through a
+mediating library the same way every other cross-pillar call works, and
+only their **safe** endpoints: get information, or request something
+computed, but never anything that mutates running state (no triggering a
+deploy, no writing through another pillar's interface, no side effect on
+anything currently running). The practical mechanism: every PI endpoint is
+classified safe (read/compute) or mutating (the usual HTTP-verb convention
+— `GET` is safe, anything that changes state isn't) at the point it's
+defined, and the sandbox's network namespace has no route to anything
+except the Unix-socket directory PI calls use, with only safe-classified
+requests actually forwarded.
+
+**Filesystem — read-only, allowlisted, scoped to project-bound or
+framework-bound.** Every policy is one or the other, not both, determined
+by what it actually checks:
+
+- **Project-bound** (a policy scoped to a project, a project set, or all
+  projects — i.e. every user policy, and any framework policy that checks
+  project state): read access to that project's repository checkout and
+  the relevant files under `~/.config/little-workshop/projects/<project>/`.
+  Nothing outside those two locations, and never another project's.
+- **Framework-bound** (a framework policy checking little-workshop's own
+  architecture — the tier-K style candidates in `policy_catalog.md`):
+  read access to a strictly enumerated set of little-workshop's own files,
+  not an open license to read anything in its state directory.
+
+Both are read-only. The natural implementation is little-workshop's
+existing optional Docker sandbox backend (already designed for
+Requirements & Quality's test execution) — for policy checks specifically
+it stops being optional: a container's own mount namespace is what turns
+"an allowlist" into something actually enforced, bind-mounting in exactly
+the paths a policy's scope grants and nothing else.
+
+**Write — verdict and Policy & Compliance's own files, nothing in the
+project.** A check never writes into the project it's checking, at all —
+read-only there is absolute. The only writes anywhere are: the verdict
+itself, using the same pattern Agentic Development already uses for a run
+result (a structured file at a harness-provided path outside every
+bind-mounted read path, so it can never be confused with — or overwrite —
+project content), and any project file already tagged with this pillar's
+own `.policy` owner tag, per `docs/architecture.md`'s existing
+Configuration & project data convention. A policy script's write access is
+exactly Policy & Compliance's own write access, never broader.
+
+**Resource bounds — an async Job, not a blocking call, thirty minutes.**
+A gated Job does not block Orchestration waiting on a synchronous check:
+Orchestration creates a `policy.check_project` Job and the gated Job
+`depends_on` it — the same dependency mechanism every other Job already
+uses, nothing new at the execution layer. The check Job gets a 30-minute
+maximum runtime. EARS-scoped policies are small by construction, so 30
+minutes is a generous ceiling against a hang or a bug, not an expected
+duration — this is sequenced *before*, and separate from, the ten-minute
+human-confirmation window in "Action-gating checks" below: first the
+check itself completes (or times out), only then does a failing result
+start that second, different clock.
+
 ## Informing the user immediately
 
 A failing check is recorded the moment its Job completes, not batched. Two
@@ -285,11 +352,19 @@ precedence resolution) on a server-related topic, for the target project.
 Orchestration is about to dispatch a Job of a gated type
    │
    ▼
-ask Policy & Compliance: does the winning policy for this Job's topic(s),
-   on this project, pass? (the identical check mechanism as an audit --
-   same 1:1 test script, same Deployment & Servers worktree -- just
-   triggered synchronously here instead of on a schedule)
-   │  pass or not-applicable → dispatch proceeds, nothing else happens
+Orchestration creates a policy.check_project Job for the winning policy
+   on this Job's topic(s) and this project, and sets the gated Job's
+   depends_on to include it -- an ordinary Job dependency, not a
+   synchronous blocking call; the check runs in its sandbox (above),
+   up to its 30-minute ceiling
+   │
+   ▼
+policy.check_project resolves: pass | fail | not_applicable | timeout
+   │  pass or not_applicable → dependency satisfied, gated Job dispatches,
+   │                           nothing else happens
+   │  timeout → treated as fail for gating purposes (see "Left open"
+   │            below -- flagged distinctly as a likely bug, not silently
+   │            equated with a real policy violation)
    ▼  fail
 Job → pending_confirmation (a new Job status, alongside
    queued/running/succeeded/failed/cancelled)
@@ -311,6 +386,11 @@ user is warned immediately -- which policy failed, on which project, and
       either. The timeout's default is always the option that changes
       nothing.
 ```
+
+Two different 30/10-minute clocks, never running at once: the check's own
+30-minute ceiling happens first, as an ordinary Job; only once it resolves
+(pass/fail/not_applicable/timeout) does a failing or timed-out result
+start the separate ten-minute human-confirmation clock.
 
 This refines and supersedes `docs/design.md`'s original job-dispatch
 diagram, which only said a failing pre-job policy check "fails (required
@@ -339,13 +419,27 @@ each is a separate question about a separate moment in the same Job.
 
 ### Left open
 
-- Policy test scripts are expected to run fast enough to check inline,
-  synchronously, before a gated action starts — there's no defined
-  maximum runtime for the check itself yet, separate from the ten-minute
-  human-response window.
+- **Resolved above**: check execution runs as an async Job with a
+  30-minute ceiling (not an inline synchronous call), per "Test-script
+  execution sandbox."
+- A check that times out is provisionally treated the same as a fail —
+  routed through the same pending_confirmation/ten-minute-override path
+  — rather than blocking outright with no override option. This is a
+  judgment call, not something settled by anything said so far: a timeout
+  most likely signals a bug in the generated script rather than a
+  genuine policy violation, and it's not obviously right that a human
+  should be offered the same "proceed anyway" override for "we don't
+  know the answer" as for "we know and it failed." Flagged for
+  confirmation, not decided unilaterally here.
 - Which Job types declare which gating topics isn't enumerated here —
   that mapping is each pillar's own implementation work as its Job types
   get defined.
+- Whether the file-read allowlist for a given policy is something the
+  human reviews and approves explicitly (alongside its EARS text, before
+  script generation) or something Claude CLI determines at
+  script-generation time, trusted within the project-bound/
+  framework-bound pool without a separate human-visible declaration step
+  — also flagged for confirmation, not decided unilaterally here.
 
 ## Data model (this pillar's own database)
 

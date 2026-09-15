@@ -202,12 +202,13 @@ before they're approved:
   `~/.local/state/little-runner/logs/`, and little-workshop's own planned
   `~/.local/state/little-workshop/logs/<pillar>/`) has no stated retention
   or rotation policy anywhere in this ecosystem.
-- **Generated-artifact sandboxing.** A policy's test script is Claude-CLI-
-  generated code that then runs against a real project checkout. Nothing
-  in `policy_compliance.md` yet constrains what that generated script is
-  *allowed* to do (network access, writes outside its worktree) — this is
-  a safety gap worth resolving before real implementation, not just a
-  documentation gap.
+- ~~**Generated-artifact sandboxing.**~~ Resolved 2026-09-15 — see
+  `policy_compliance.md`'s "Test-script execution sandbox": PI-only
+  network access restricted to safe/read endpoints, a read-only allowlist
+  scoped to project-bound or framework-bound, writes limited to the
+  verdict and this pillar's own `.policy`-tagged files, a 30-minute async
+  Job ceiling. Two sub-questions from that resolution are still open —
+  see this document's own "Open questions" below.
 - **Crash-loop bounds.** Core's design mentions a crash counter and
   backoff conceptually; no policy states a maximum retry count or backoff
   shape.
@@ -246,16 +247,26 @@ before they're approved:
 
 ## Open questions for you
 
-1. **The generated-test-script sandboxing gap** — still open. Worth its
-   own dedicated design round before any policy authoring happens for
-   real, given it's a safety question, not just a missing document?
-2. The handful of entries narrowed this round to their enforceable core
+1. **Timeout handling**: a policy check that exceeds its 30-minute ceiling
+   is provisionally routed through the same pending_confirmation path as
+   a genuine fail — the human gets the same ten-minute "proceed anyway"
+   override. A timeout more likely signals a bug in the generated script
+   than a real violation; is offering the same override for "unknown" as
+   for "known and failed" actually right, or should a timeout block
+   outright with no override?
+2. **Allowlist declaration**: should the file-read allowlist for a policy
+   be something a human explicitly reviews and approves (declared
+   alongside its EARS text, before script generation), or is it
+   acceptable for Claude CLI to determine the specific paths at
+   script-generation time, trusted within the project-bound/
+   framework-bound pool it's already confined to?
+3. The handful of entries narrowed this round to their enforceable core
    (`doc-no-verbatim-duplication`, `milestone-requirements-linked-and-passing`,
    `no-secret-pattern-in-commit`, `no-redundant-app-auth`) are weaker
    claims than the source material's original intent, by construction —
    worth confirming the narrower version is still worth having as a
    policy, rather than also dropping some of these the way the
    encryption and fabricated-content entries were.
-3. Anything in this catalog that's **flat-out wrong** for where this
+4. Anything in this catalog that's **flat-out wrong** for where this
    ecosystem is heading rather than just unranked — easiest to catch now,
    before any of it goes through EARS refinement.

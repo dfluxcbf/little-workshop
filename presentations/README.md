@@ -53,5 +53,11 @@ restating it.
     while in force, but revisable: little-workshop's own maintainers can
     edit or remove a framework policy, treated as continuous development
     of little-workshop itself rather than a runtime toggle.
+13. [The Test-Script Sandbox](13-test-script-sandbox.md) — closes the
+    generated-artifact sandboxing gap: network limited to other pillars'
+    safe interface calls, filesystem read-only and allowlisted, writes
+    limited to the verdict and this pillar's own files, a 30-minute async
+    execution ceiling — reusing Requirements & Quality's existing
+    optional Docker sandbox as the enforcement mechanism.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).
