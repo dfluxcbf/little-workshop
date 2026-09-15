@@ -168,3 +168,25 @@ def test_worktree_provision_reports_error_when_daemon_unavailable(tmp_path, caps
     exit_code = main.main(["worktree", "provision", "--project-id", "little-meals"])
     assert exit_code == 1
     assert "error" in capsys.readouterr().err
+
+
+def test_agent_run_task_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["agent", "run-task", "--project-id", "little-meals", "--title", "fix it"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_agent_runs_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["agent", "runs", "--project-id", "little-meals"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
