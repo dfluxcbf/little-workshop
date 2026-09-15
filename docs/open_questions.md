@@ -37,49 +37,8 @@ one instead").
 
 ## Open
 
-### OQ-2 — Anything in the catalog flat-out wrong?
-
-**Where this comes from.** The ~50-entry catalog was produced by mining
-the 8 root policy documents and every sibling project's own design
-decisions, then generalizing anything that named one of the four tools
-little-workshop is absorbing. That's a mechanical, first-pass process —
-never independently reviewed entry-by-entry against whether it's actually
-right for where *this* project is heading, only whether it was
-faithfully extracted from its source.
-
-**What's actually being asked.** Not "which entries are weak" (that was
-`OQ-1`, now resolved) — whether anything in the list is a genuine
-mistake: stale, contradictory to a decision made elsewhere in this
-project, or a convention that made sense for the *current* ecosystem
-tooling but won't make sense once little-workshop is the real
-infrastructure.
-
-**Why it matters.** Every catalog entry defaults to framework tier —
-immutable, applied to every project unconditionally. A mistake caught now
-costs nothing; the same mistake caught after real projects are already
-complying with it costs a framework-policy edit (still possible, per the
-resolved framework-policy-lifecycle round, but real work, not free).
-
-**Possible interpretations.** This isn't really multiple-choice, but two
-places are worth looking first, by confidence level:
-- **Lower-confidence entries** — mined from a *single* project rather
-  than a repeated pattern: `no-third-party-cdn` comes from `little-meals`
-  alone (its sibling entry, `no-redundant-app-auth`, was withdrawn this
-  round). Compare against `tailscale-only-exposure`, independently
-  established in three separate projects before it was promoted — that's
-  the level of validation a single-source entry doesn't have.
-- **Anything that assumes today's tooling** in a way the "name the
-  concern, not the tool" pass might have missed despite the sweep already
-  done for `lreq`/`lvx`/`lrun`/`little-pypi` specifically.
-
-**Status.** You asked for the file to review directly rather than
-answering from a summary — that's `docs/pillars/policy_catalog.md`. Open
-until that review happens; no rush.
-
-**Your answer:**
-
-
----
+*(none right now — `OQ-2` closed this round. New items land here as they
+surface, per "How this document works" above.)*
 
 ## Resolved
 
@@ -109,6 +68,7 @@ here.
 | OQ-9 | Remote Control resolved as the actually-universal notification channel, reusing Agentic Development's existing mechanism and `little-runner`'s own proven pattern. | 2026-09-15 | `presentations/17-answering-the-first-round.md` |
 | OQ-10 | Per-pillar runtime dependencies confirmed deferred to implementation. | 2026-09-15 | `presentations/17-answering-the-first-round.md` |
 | OQ-11 | Per-pillar build targets: `//:build`, `//:install`, `//:test`, `//:server` (the last one new to this ecosystem, specific to a pillar's long-running-service artifact type). | 2026-09-15 | `presentations/17-answering-the-first-round.md` |
+| OQ-2 | Catalog reviewed directly by the user (not summarized) — confirmed good, no changes needed. | 2026-09-15 | `presentations/18-catalog-confirmed.md` |
 
 ## As a policy
 

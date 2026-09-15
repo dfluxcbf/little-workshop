@@ -1,4 +1,4 @@
-← [Tracking Open Questions](16-tracking-open-questions.md) · deck 17 of 17 · back to [index](README.md)
+← [Tracking Open Questions](16-tracking-open-questions.md) · deck 17 of 18 · next: [The Catalog, Confirmed →](18-catalog-confirmed.md)
 
 # Answering the First Round
 
@@ -94,4 +94,4 @@ all hit the same wall: something that requires human judgment about
 
 ---
 
-Back to [index](README.md) · or revisit [9 — Policy & Compliance](09-policy-and-compliance.md)
+Next: [18 — The Catalog, Confirmed →](18-catalog-confirmed.md) · or back to [index](README.md)

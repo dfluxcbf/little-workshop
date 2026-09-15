@@ -2,12 +2,14 @@
 
 **Status.** Tier is decided: every entry below is a **framework** policy
 candidate, not a strong default users could override — confirmed 2026-09-15.
-None is an *active* policy yet — each still has to individually clear all
-four gates in `policy_compliance.md`'s authoring pipeline (EARS-compliant,
-mechanically enforceable, non-conflicting, and full human approval of both
-the EARS text and the generated script) before it becomes a real
-`policies` row. This document is the input to that pipeline, not a record
-of having run it. This catalog's own open items are tracked centrally in
+The catalog as a whole was reviewed directly by the user (not summarized)
+and confirmed good, no changes needed — 2026-09-15. None is an *active*
+policy yet — each still has to individually clear all four gates in
+`policy_compliance.md`'s authoring pipeline (EARS-compliant, mechanically
+enforceable, non-conflicting, and full human approval of both the EARS
+text and the generated script) before it becomes a real `policies` row.
+This document is the input to that pipeline, not a record of having run
+it. This catalog's own open items are tracked centrally in
 [`../open_questions.md`](../open_questions.md), not inline.
 
 **Enforceability was applied retroactively to this whole catalog**, not

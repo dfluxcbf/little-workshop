@@ -84,5 +84,8 @@ restating it.
     project removal, Remote Control as the actually-universal
     notification channel, and per-pillar build targets including a new
     `//:server`.
+18. [The Catalog, Confirmed](18-catalog-confirmed.md) — closes `OQ-2`: the
+    full policy catalog, reviewed directly by the user, confirmed good.
+    The tracker's Open section is empty for the first time.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).
