@@ -126,3 +126,21 @@ def test_list_pending_confirmations(conn):
     db.mark_pending(conn, "a", "dev", "def", "1.0.1", timeout_seconds=600)
     pending = db.list_pending_confirmations(conn)
     assert [p["project_id"] for p in pending] == ["a"]
+
+
+def test_pillar_deployment_round_trips(conn):
+    db.save_pillar_deployment(conn, "orchestration", "/tmp/orch-abc123", "abc123")
+    state = db.get_pillar_deployment(conn, "orchestration")
+    assert state["install_dir"] == "/tmp/orch-abc123"
+    assert state["commit_sha"] == "abc123"
+
+
+def test_pillar_deployment_upsert_overwrites(conn):
+    db.save_pillar_deployment(conn, "orchestration", "/tmp/orch-abc123", "abc123")
+    db.save_pillar_deployment(conn, "orchestration", "/tmp/orch-def456", "def456")
+    state = db.get_pillar_deployment(conn, "orchestration")
+    assert state["install_dir"] == "/tmp/orch-def456"
+
+
+def test_pillar_deployment_missing_returns_none(conn):
+    assert db.get_pillar_deployment(conn, "ghost") is None

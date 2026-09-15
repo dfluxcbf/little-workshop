@@ -311,6 +311,85 @@ def cmd_deployment_branches(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_deployment_redeploy_pillar(args: argparse.Namespace) -> int:
+    """The normal entry point: dispatch as an Orchestration Job, same as
+    every other mutating deployment command."""
+    paths = Paths.from_env()
+    params = {"pillar": args.pillar, "commit": args.commit}
+    if args.confirm_timeout is not None:
+        params["confirm_timeout_seconds"] = args.confirm_timeout
+    try:
+        result = client.create_job(
+            paths, type="deployment.redeploy_pillar", target_pillar="deployment", project_id=args.pillar,
+            params=params, queue_key=args.pillar, depends_on=[], created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") in ("succeeded", "running") else 1
+
+
+def cmd_deployment_redeploy_pillar_worker(args: argparse.Namespace) -> int:
+    """The self-redeploy escape hatch's worker: runs the redeploy directly
+    against Deployment & Servers' own database, in its own independent
+    systemd --user unit — never through the (about-to-be-replaced)
+    pillar's own HTTP endpoint. Reports completion back to Orchestration
+    when dispatched on behalf of an accepted Job."""
+    from deployment import db as deployment_db
+    from deployment.flow import DEFAULT_SELF_REDEPLOY_CONFIRM_SECONDS, SELF_REDEPLOY_GATED_BY_DEFAULT, DeploymentError, DeploymentFlow
+    from deployment.workshop_repo import workshop_repo_dir
+
+    paths = Paths.from_env()
+    conn = deployment_db.connect(paths.pillar_db_path("deployment"))
+    flow = DeploymentFlow(paths=paths)
+    try:
+        result = flow.redeploy_pillar_direct(conn, args.pillar, workshop_repo_dir(), args.commit)
+        gate_timeout = args.confirm_timeout
+        if gate_timeout is None and args.pillar in SELF_REDEPLOY_GATED_BY_DEFAULT:
+            gate_timeout = DEFAULT_SELF_REDEPLOY_CONFIRM_SECONDS
+        if gate_timeout:
+            result.confirm_message = flow.arm_confirm_gate(
+                conn, args.pillar, args.commit, result.commit, result.version, gate_timeout
+            )
+        payload = {"branch": result.branch, "version": result.version, "commit": result.commit, "how": result.how}
+        if result.confirm_message:
+            payload["confirm_message"] = result.confirm_message
+        succeeded, error = True, None
+    except DeploymentError as exc:
+        payload, succeeded, error = {}, False, str(exc)
+    finally:
+        conn.close()
+
+    if args.job_id:
+        client.complete_orchestration_job(paths, args.job_id, succeeded=succeeded, result=payload or None, error=error)
+
+    if not succeeded:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    _print(payload)
+    return 0
+
+
+def cmd_deployment_rollback_pillar_worker(args: argparse.Namespace) -> int:
+    """The rollback-side escape hatch's worker, dispatched the same way as
+    `redeploy-pillar-worker` when the confirm-gate watchdog's rollback
+    would otherwise stop the very unit running it."""
+    from deployment import db as deployment_db
+    from deployment.flow import DeploymentFlow
+    from deployment.workshop_repo import workshop_repo_dir
+
+    paths = Paths.from_env()
+    conn = deployment_db.connect(paths.pillar_db_path("deployment"))
+    flow = DeploymentFlow(paths=paths)
+    try:
+        summary = flow.rollback_pillar_if_unconfirmed(conn, args.pillar, workshop_repo_dir(), args.deploy_id)
+    finally:
+        conn.close()
+    print(summary)
+    return 0
+
+
 def cmd_worktree_provision(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -541,6 +620,28 @@ def build_parser() -> argparse.ArgumentParser:
     d_branches = deployment_sub.add_parser("branches", help="List a project's branches")
     d_branches.add_argument("--project-id", required=True)
     d_branches.set_defaults(func=cmd_deployment_branches)
+
+    d_redeploy = deployment_sub.add_parser("redeploy-pillar", help="Redeploy one of little-workshop's own pillars from a commit")
+    d_redeploy.add_argument("pillar")
+    d_redeploy.add_argument("--commit", default="HEAD")
+    d_redeploy.add_argument("--confirm-timeout", type=int, default=None)
+    d_redeploy.set_defaults(func=cmd_deployment_redeploy_pillar)
+
+    d_redeploy_worker = deployment_sub.add_parser(
+        "redeploy-pillar-worker", help="(internal) direct self-redeploy execution, dispatched to escape a doomed cgroup"
+    )
+    d_redeploy_worker.add_argument("pillar")
+    d_redeploy_worker.add_argument("--commit", default="HEAD")
+    d_redeploy_worker.add_argument("--confirm-timeout", type=int, default=None)
+    d_redeploy_worker.add_argument("--job-id", default=None)
+    d_redeploy_worker.set_defaults(func=cmd_deployment_redeploy_pillar_worker)
+
+    d_rollback_worker = deployment_sub.add_parser(
+        "rollback-pillar-worker", help="(internal) direct self-rollback execution, dispatched to escape a doomed cgroup"
+    )
+    d_rollback_worker.add_argument("pillar")
+    d_rollback_worker.add_argument("--deploy-id", required=True)
+    d_rollback_worker.set_defaults(func=cmd_deployment_rollback_pillar_worker)
 
     worktree = subparsers.add_parser("worktree", help="Shared worktree-provisioning capability")
     worktree_sub = worktree.add_subparsers(dest="worktree_command", required=True)
