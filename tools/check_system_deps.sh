@@ -14,6 +14,8 @@
 set -euo pipefail
 
 TIERS=(
+  $'pipx|Install with: sudo apt install -y pipx && pipx ensurepath'
+  $'systemctl|systemd --user is required to run pillars; install/enable systemd-user-session support for this OS'
 )
 
 for tier in "${TIERS[@]}"; do
