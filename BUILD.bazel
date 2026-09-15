@@ -15,6 +15,7 @@ package(default_visibility = ["//visibility:public"])
 #   bazel run   //:core_server          → run Core directly from source
 #   bazel run   //:orchestration_server → run Orchestration directly from source
 #   bazel run   //:registry_server      → run Registry & Portfolio directly from source
+#   bazel run   //:version_server       → run Version Control & Release directly from source
 #
 # docs/architecture.md's Build section calls for one Bazel package per
 # pillar with its own :build/:install/:test/:server targets. Every
@@ -98,4 +99,11 @@ sh_binary(
     srcs = ["scripts/bazel/run_server.sh"],
     data = glob(["src/**"]) + ["pyproject.toml"],
     args = ["registry", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "version_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["version", "$(location pyproject.toml)"],
 )

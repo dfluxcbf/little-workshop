@@ -100,3 +100,38 @@ def test_project_remove_reports_error_when_daemon_unavailable(tmp_path, capsys, 
     exit_code = main.main(["project", "remove", "little-widget"])
     assert exit_code == 1
     assert "error" in capsys.readouterr().err
+
+
+def test_version_feature_start_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(
+        ["version", "feature-start", "--project-id", "little-widget", "widgets"]
+    )
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_version_status_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["version", "status", "--project-id", "little-widget", "feature"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_version_config_list_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["version", "config-list", "--project-id", "little-widget"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err

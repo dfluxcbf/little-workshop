@@ -94,6 +94,103 @@ def cmd_project_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _version_job(args: argparse.Namespace, job_type: str, params: dict) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths,
+            type=job_type,
+            target_pillar="version",
+            project_id=args.project_id,
+            params=params,
+            queue_key=args.project_id,  # serialize gitflow operations per project
+            depends_on=[],
+            created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_version_init(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.init", {"production_branch": args.production_branch, "integration_branch": args.integration_branch})
+
+
+def cmd_version_topic_start(args: argparse.Namespace) -> int:
+    return _version_job(args, f"version.{args.prefix}_start", {"name": args.name, "issue": args.issue, "force": args.force})
+
+
+def cmd_version_topic_finish(args: argparse.Namespace) -> int:
+    return _version_job(args, f"version.{args.prefix}_finish", {"force": args.force, "action": args.action})
+
+
+def cmd_version_status(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.version_status(paths, args.kind, args.project_id)
+    except client.VersionPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("success") else 1
+
+
+def cmd_version_release_start(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.release_start", {"force": args.force})
+
+
+def cmd_version_release_candidate_cut(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.release_candidate_cut", {"number": args.number, "force": args.force})
+
+
+def cmd_version_release_candidate_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.version_release_candidates(paths, args.project_id)
+    except client.VersionPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_version_release_candidate_promote(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.release_candidate_promote", {"rc_number": args.rc_number})
+
+
+def cmd_version_release_finish(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.release_finish", {"force": args.force, "action": args.action})
+
+
+def cmd_version_support_start(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.support_start", {"version": args.version, "force": args.force})
+
+
+def cmd_version_support_finish(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.support_finish", {})
+
+
+def cmd_version_config_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.version_config(paths, args.project_id)
+    except client.VersionPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_version_config_add_hook(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.config_add_hook", {"hook_path": args.hook_path})
+
+
+def cmd_version_config_remove_hook(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.config_remove_hook", {"hook_path": args.hook_path})
+
+
 def cmd_project_remove(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -164,6 +261,103 @@ def build_parser() -> argparse.ArgumentParser:
     project_remove = project_sub.add_parser("remove", help="Remove a registered project")
     project_remove.add_argument("name")
     project_remove.set_defaults(func=cmd_project_remove)
+
+    version = subparsers.add_parser("version", help="Version Control & Release commands")
+    version_sub = version.add_subparsers(dest="version_command", required=True)
+
+    v_init = version_sub.add_parser("init", help="Initialize gitflow for a registered project")
+    v_init.add_argument("--project-id", required=True)
+    v_init.add_argument("--production-branch", default=None)
+    v_init.add_argument("--integration-branch", default=None)
+    v_init.set_defaults(func=cmd_version_init)
+
+    def _add_topic_commands(prefix: str) -> None:
+        start = version_sub.add_parser(f"{prefix}-start", help=f"Start a {prefix}/* branch")
+        start.add_argument("--project-id", required=True)
+        start.add_argument("name")
+        start.add_argument("--issue", type=int, default=None)
+        start.add_argument("--force", action="store_true")
+        start.set_defaults(func=cmd_version_topic_start, prefix=prefix)
+
+        finish = version_sub.add_parser(f"{prefix}-finish", help=f"Finish the current {prefix}/* branch")
+        finish.add_argument("--project-id", required=True)
+        finish.add_argument("--force", action="store_true")
+        finish.add_argument("--continue", dest="action", action="store_const", const="continue")
+        finish.add_argument("--abort", dest="action", action="store_const", const="abort")
+        finish.set_defaults(func=cmd_version_topic_finish, prefix=prefix, action=None)
+
+    _add_topic_commands("feature")
+    _add_topic_commands("improvement")
+
+    hotfix_start = version_sub.add_parser("hotfix-start", help="Start a hotfix/* branch")
+    hotfix_start.add_argument("--project-id", required=True)
+    hotfix_start.add_argument("name")
+    hotfix_start.add_argument("--issue", type=int, default=None)
+    hotfix_start.add_argument("--force", action="store_true")
+    hotfix_start.set_defaults(func=cmd_version_topic_start, prefix="hotfix")
+
+    hotfix_finish = version_sub.add_parser("hotfix-finish", help="Finish the current hotfix/* branch")
+    hotfix_finish.add_argument("--project-id", required=True)
+    hotfix_finish.add_argument("--force", action="store_true")
+    hotfix_finish.add_argument("--continue", dest="action", action="store_const", const="continue")
+    hotfix_finish.add_argument("--abort", dest="action", action="store_const", const="abort")
+    hotfix_finish.set_defaults(func=cmd_version_topic_finish, prefix="hotfix", action=None)
+
+    status = version_sub.add_parser("status", help="Show the current topic branch's status")
+    status.add_argument("--project-id", required=True)
+    status.add_argument("kind", choices=["feature", "improvement", "hotfix", "release"])
+    status.set_defaults(func=cmd_version_status)
+
+    release_start = version_sub.add_parser("release-start", help="Start a release/* branch from the integration branch")
+    release_start.add_argument("--project-id", required=True)
+    release_start.add_argument("--force", action="store_true")
+    release_start.set_defaults(func=cmd_version_release_start)
+
+    rc_cut = version_sub.add_parser("release-candidate-cut", help="Cut a release candidate tag")
+    rc_cut.add_argument("--project-id", required=True)
+    rc_cut.add_argument("--number", type=int, default=None)
+    rc_cut.add_argument("--force", action="store_true")
+    rc_cut.set_defaults(func=cmd_version_release_candidate_cut)
+
+    rc_list = version_sub.add_parser("release-candidate-list", help="List release candidate tags")
+    rc_list.add_argument("--project-id", required=True)
+    rc_list.set_defaults(func=cmd_version_release_candidate_list)
+
+    rc_promote = version_sub.add_parser("release-candidate-promote", help="Promote an RC as the release target")
+    rc_promote.add_argument("--project-id", required=True)
+    rc_promote.add_argument("rc_number", type=int)
+    rc_promote.set_defaults(func=cmd_version_release_candidate_promote)
+
+    release_finish = version_sub.add_parser("release-finish", help="Merge the release branch into production and back into dev")
+    release_finish.add_argument("--project-id", required=True)
+    release_finish.add_argument("--force", action="store_true")
+    release_finish.add_argument("--continue", dest="action", action="store_const", const="continue")
+    release_finish.add_argument("--abort", dest="action", action="store_const", const="abort")
+    release_finish.set_defaults(func=cmd_version_release_finish, action=None)
+
+    support_start = version_sub.add_parser("support-start", help="Start a support/* branch from a production tag")
+    support_start.add_argument("--project-id", required=True)
+    support_start.add_argument("version")
+    support_start.add_argument("--force", action="store_true")
+    support_start.set_defaults(func=cmd_version_support_start)
+
+    support_finish = version_sub.add_parser("support-finish", help="Attempt to finish a support/* branch (policy-refused)")
+    support_finish.add_argument("--project-id", required=True)
+    support_finish.set_defaults(func=cmd_version_support_finish)
+
+    config_list = version_sub.add_parser("config-list", help="Show the project's gitflow config")
+    config_list.add_argument("--project-id", required=True)
+    config_list.set_defaults(func=cmd_version_config_list)
+
+    config_add_hook = version_sub.add_parser("config-add-hook", help="Register a version hook script")
+    config_add_hook.add_argument("--project-id", required=True)
+    config_add_hook.add_argument("hook_path")
+    config_add_hook.set_defaults(func=cmd_version_config_add_hook)
+
+    config_remove_hook = version_sub.add_parser("config-remove-hook", help="Unregister a version hook script")
+    config_remove_hook.add_argument("--project-id", required=True)
+    config_remove_hook.add_argument("hook_path")
+    config_remove_hook.set_defaults(func=cmd_version_config_remove_hook)
 
     return parser
 
