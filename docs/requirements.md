@@ -69,3 +69,20 @@ user of that pillar (the self-application principle,
 | REQ-000000029 | Registry & Portfolio's Pillar Interface follows the Job-dispatch convention (`POST /v1/jobs/<type>`) for `project.bootstrap`/`project.remove`, and exposes direct read endpoints for `projects`/`project_sets`/`tickets` that don't need a Job's audit trail. | done |
 | REQ-000000030 | The `lws` CLI supports `project bootstrap`/`list`/`remove`; `project list` falls back to a direct database read when the daemon is down, matching the established CLI fallback convention. | done |
 | REQ-000000031 | Orchestration dispatching a real `project.bootstrap` Job to Registry & Portfolio running as a genuine `systemd --user` unit produces an actual git repository on disk — proven end-to-end, not mocked. | done |
+
+## M3 — Version Control & Release
+
+| ID | Requirement | Status |
+|---|---|---|
+| REQ-000000032 | `version.init` detects or validates production/integration branches and writes `.lvx/config.json`, kept byte-compatible with `little-versions`' existing schema so every already-`lvx`-managed project in this ecosystem needs no migration. | done |
+| REQ-000000033 | `feature`/`improvement` start creates `<prefix>/<name>` from the integration branch, refusing on a dirty tree unless forced. | done |
+| REQ-000000034 | `feature`/`improvement` finish rebases onto the integration branch, squashes to one commit, merges with `--no-ff`, bumps the patch version, runs version hooks, and deletes the branch — refusing, never auto-resolving, on a real rebase conflict. | done |
+| REQ-000000035 | A `feature`/`improvement` finish conflict is resumable: `--continue` (after resolving and staging) completes the merge; `--abort` restores the pre-finish state. Fixed a latent ordering bug found while porting: the saved finish-state file is the newest commit on the branch, so a conflict on any earlier commit means `git rebase --continue` must run *before* the state file is read back, not after. | done |
+| REQ-000000036 | `hotfix` start creates `hotfix/<name>` from the production branch; finish merges into production, bumps the patch version, tags it, and back-merges into the integration branch — resumable the same way, via `git merge` rather than rebase (no state-file-ordering issue there). | done |
+| REQ-000000037 | `release` start derives the stable version from `VERSION`, creates `release/<version>` from the integration branch. Release-candidate cut/list/promote: cutting tags `v<version>-rc.<n>` (auto-numbered), listing returns them in order, promoting records which RC is the release target. | done |
+| REQ-000000038 | `release` finish merges into production (tagging the stable version, refusing if a promoted RC isn't reachable from HEAD — cleanly, not by crashing, for a promoted RC that was never actually cut), bumps the minor version, back-merges into the integration branch, and establishes the next patch line there. | done |
+| REQ-000000039 | `support` start creates `support/<version>` from the matching production tag; finish always refuses — support history must never silently diverge from the primary lines, by policy, not by omission. | done |
+| REQ-000000040 | `version.config_add_hook`/`remove_hook` manage the registered version-hook scripts (`.sh`/`.py` only); hooks run with `LVX_NEW_VERSION` set on every version bump. | done |
+| REQ-000000041 | Every mutating command resolves its `project_id` to a repo path by calling Registry & Portfolio over a real Pillar Interface, its socket discovered through Core's registry — never a hardcoded path — and fails cleanly (never crashes) when Registry & Portfolio is unavailable. | done |
+| REQ-000000042 | This pillar keeps no database of its own; git plus the target repo's own `.lvx/config.json`/`state.json` remain the entire store. | done |
+| REQ-000000043 | Proven end-to-end: Registry & Portfolio and Version Control & Release both running as genuine `systemd --user` units, with Version resolving the bootstrapped project through Core's registry and running a real feature branch (start, a real commit, rebase, squash, merge, patch bump) via dispatched Orchestration Jobs. | done |

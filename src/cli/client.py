@@ -102,3 +102,40 @@ def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5
         projects = registry_db.list_projects(conn, status=ProjectStatus(status) if status else None)
         conn.close()
         return {"source": "fallback", "projects": [p.model_dump(mode="json") for p in projects]}
+
+
+class VersionPillarUnavailable(Exception):
+    pass
+
+
+def version_status(paths: Paths, kind: str, project_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("version"), timeout=timeout) as client:
+            response = client.get(f"/v1/status/{kind}", params={"project_id": project_id})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise VersionPillarUnavailable(
+            "Version Control & Release daemon unreachable — this pillar has no "
+            "database of its own, so there is no local fallback"
+        ) from exc
+
+
+def version_config(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("version"), timeout=timeout) as client:
+            response = client.get("/v1/config", params={"project_id": project_id})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise VersionPillarUnavailable("Version Control & Release daemon unreachable") from exc
+
+
+def version_release_candidates(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("version"), timeout=timeout) as client:
+            response = client.get("/v1/release/candidates", params={"project_id": project_id})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise VersionPillarUnavailable("Version Control & Release daemon unreachable") from exc

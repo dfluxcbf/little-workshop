@@ -19,9 +19,16 @@ mapping from the tools it absorbs. Implementation is underway against the
   `project.bootstrap` (scaffold, `git init`, `dev` branch, optional
   GitHub repo/push), `project.remove` (cascading hard delete),
   `project_sets`, `tickets`, and `lws project bootstrap/list/remove`.
+- **M3 — Version Control & Release**: `src/version` — Gitflow as a
+  pillar, absorbing `little-versions` wholesale: `feature`/`improvement`/
+  `hotfix`/`release`/`support` start/finish, release-candidate cut/list/
+  promote, version hooks, and `.lvx/config.json` kept byte-compatible
+  with the tool it replaces. No database of its own — git remains the
+  store. The first pillar to call *another* pillar (Registry &
+  Portfolio) over a real Pillar Interface, discovered through Core.
 
 `bazel build //:wheel`, `bazel run //:install`, and `bazel test //:test`
-all work today (107 tests: unit plus real `systemd --user` end-to-end
+all work today (154 tests: unit plus real `systemd --user` end-to-end
 proofs in `tests/integration`).
 
 For the narrative version of the same decisions — cross-linked
