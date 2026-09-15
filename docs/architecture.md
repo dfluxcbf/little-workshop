@@ -51,7 +51,7 @@ Interface (a small FastAPI app bound to a Unix domain socket):
 |---|---|---|---|
 | **Orchestration** | Every unit of work happens once, in the right order, and its outcome is recorded — regardless of which pillar performs it. | little-runner's per-repo queue/slot logic, generalized to every job type and every pillar | Yes — required |
 | **Policy & Compliance** | Nothing drifts from the rules this ecosystem has already agreed to, without someone finding out. | The 8 root policy docs' checkable rules; `doctor.py`; `branch_audit.py`; the checklist skill's manual verification table | Yes — required. Fully specified: `docs/pillars/policy_compliance.md`. A candidate policy set, mined from every project in this ecosystem: `docs/pillars/policy_catalog.md` — framework tier decided, individual entries still pending the authoring pipeline. |
-| **Registry & Portfolio** | There is always one true answer to "what projects exist, and what's the state of the work tracked against them." | bootstrap-little-project wholesale; little-projects' informal registry role; `configure_submodules.sh`; little-tickets' undefined purpose; the ecosystem-milestone table | Yes |
+| **Registry & Portfolio** | There is always one true answer to "what projects exist, and what's the state of the work tracked against them." | bootstrap-little-project wholesale; little-projects' informal registry role; `configure_submodules.sh`; little-tickets' undefined purpose; the ecosystem-milestone table | Yes. The main responsible pillar for a project's lifecycle and identity (creation, import, removal) — not owner of everything about a project, which stays deliberately distributed across pillars, but owner of the registration itself. Two creation paths: `project.bootstrap` (deterministic, for a new project) and import (an existing project, driven by a Claude CLI session — human-interactive or Agentic Development's own internal dispatch, the same mechanism either way — through this pillar's MCP-exposed entry point, since bringing an arbitrary existing project into conformance needs judgment a fixed pipeline can't provide). Also owns `project_sets`, moved here from Policy & Compliance — grouping projects is a registry concern even though Policy & Compliance remains its only consumer today. |
 | **Requirements & Quality** | Every behavior that matters has an auditable answer to "is this actually tested," and every delivery checkpoint has an auditable answer to "is it done." | little-requirements wholesale, plus its own never-built M8 (Use Cases & Milestones) | Yes |
 | **Version Control & Release** | Branches and versions are always in a known-safe, consistent state — never by hand, never inconsistently. | little-versions wholesale | Yes |
 | **Build & Packages** | A build artifact exists, is reproducible, and is reachable by anything that needs to install it. | little-runner's disclaimed CI non-goal (now real, including its own never-built E6: on-demand testing, JUnit-XML beyond pytest) + little-pypi wholesale | Optional — a project with no build/publish step never starts it |
@@ -185,20 +185,26 @@ a pillar exposes for other pillars to read belong in "Configuration &
 project data" above, as project files, not as rows in this database. The
 `projects` table below is the exception worth naming explicitly: it's
 Registry & Portfolio's own index of what exists (name, repo path, GitHub
-remote, cached status), not a per-project setting any other pillar writes
-— the existence of a `~/.config/little-workshop/projects/<project>/`
-directory and a row in this table are expected to stay in sync, but which
-one is authoritative for "does this project exist" is implementation work,
-not decided here.
+remote, cached status) — and, resolved this round, the *authoritative*
+one: Registry & Portfolio is this system's main responsible pillar for a
+project's lifecycle and identity (see its Components entry below), so its
+row is what "this project exists" actually means. A
+`~/.config/little-workshop/projects/<project>/` directory existing is a
+*consequence* of registration, not a parallel source of truth — Registry &
+Portfolio creates it as part of registering a project, the same way it
+creates the registry row, never the other way around.
 
 - **Orchestration** — `jobs`, `job_runs`, `pipelines`, `pipeline_runs`.
-- **Policy & Compliance** — `policies`, `project_sets`, `policy_check_results`
+- **Policy & Compliance** — `policies`, `policy_check_results`
   (three-outcome: pass/fail/not-applicable). Fully specified, including the
   scope/precedence model and the EARS-based authoring pipeline:
   `docs/pillars/policy_compliance.md` — the schema there supersedes the
-  placeholder shape this list originally gave this pillar.
+  placeholder shape this list originally gave this pillar. Reads
+  `project_sets` via Registry & Portfolio's Pillar Interface when
+  resolving a project-set-scoped policy's targets — it doesn't own that
+  table (moved this round; see Registry & Portfolio's entry below).
 - **Registry & Portfolio** — `projects` (incl. the super-repo container
-  row), `tickets`.
+  row), `project_sets`, `tickets`.
 - **Requirements & Quality** — `requirements`, `test_suites`,
   `test_results`, `use_cases`, `milestones`.
 - **Version Control & Release** — no persistent DB beyond a small cache;
@@ -233,7 +239,7 @@ PI, not a table another pillar could accidentally join against.
 | `little-versions` | Version Control & Release pillar | Same Gitflow primitives and precondition checks, called over its Pillar Interface instead of via a subprocess to a sibling CLI. Fixes the documented gap where its MCP surface doesn't live in its own source tree — the pillar's PI *is* the one surface every caller (CLI, MCP, other pillars) goes through. |
 | `little-runner` | Orchestration, Policy & Compliance, Registry & Portfolio (audit half), Requirements & Quality (testing half), Build & Packages (CI half), Deployment & Servers, Agentic Development, Dashboard pillars | Its stated non-goals ("not a general CI system," "not an interactive UI [beyond GitHub]") are lifted. Its trigger source generalizes from GitHub-issue-only to any Job source. Every safety property (branching control, one-flow-per-project, confirm-gated self-restart, cgroup-aware dispatch) is carried over unchanged, and the *mechanism itself* — worktree-based build-before-stop, confirm-gated rollback — becomes the general-purpose way every pillar (including Core and Deployment & Servers themselves) gets safely redeployed. |
 | `little-pypi` | Build & Packages pillar | Same PEP 503 + `.vsix` model; the 5-minute-session compromise is dropped since this pillar is already a persistent process — that compromise only ever existed because `little-pypi` had no persistent process to live inside. |
-| `bootstrap-little-project` | Registry & Portfolio pillar (`project.bootstrap` pipeline) | Its own two deliberate non-goals — registering the submodule, wiring the requirements database — stop being non-goals: both now touch one pillar's own table instead of shared files a single-project-scoped tool couldn't reach. |
+| `bootstrap-little-project` | Registry & Portfolio pillar (`project.bootstrap` pipeline) | Its own two deliberate non-goals — registering the submodule, wiring the requirements database — stop being non-goals: both now touch one pillar's own table instead of shared files a single-project-scoped tool couldn't reach. Also extended with a capability it never had: importing an *existing* project (not just scaffolding a new one), via a Claude-CLI-driven flow through this pillar's MCP entry point rather than a deterministic pipeline. |
 | `little-projects` (informal role) | Registry & Portfolio + Policy & Compliance pillars | `configure_submodules.sh`, `stabilize_branches.py`/`branch_audit.py`, and the hand-maintained `docs/milestones.md` ecosystem table become scheduled/on-demand Jobs and registry rows with full history. The super-repo itself keeps existing as the physical git container — its *active* tooling role migrates in, the container repository does not go away. |
 | `little-tickets` | Registry & Portfolio pillar | Its own docs currently say "purpose not yet defined" — this is that purpose: the source of record for portfolio/ecosystem tracking, including for projects with no GitHub remote (`little-mapgen`), which can't participate in the issue-driven workflow today. |
 

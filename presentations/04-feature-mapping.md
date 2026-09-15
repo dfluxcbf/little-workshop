@@ -69,6 +69,9 @@ and Dashboard.
   submodule and wiring the requirements DB were left manual because a
   single project's scope couldn't reach shared files. Now both touch one
   pillar's own table.
+- **Extended with a capability it never had**: importing an *existing*
+  project, not just scaffolding a new one — see
+  [15 — Who Owns a Project?](15-project-ownership.md).
 
 ---
 

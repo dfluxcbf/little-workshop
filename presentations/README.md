@@ -65,5 +65,10 @@ restating it.
     policy failure; and full human approval of both the EARS text and the
     generated script, every time, is what makes a separate allowlist
     review step unnecessary.
+15. [Who Owns a Project?](15-project-ownership.md) — Registry & Portfolio
+    is the main responsible pillar for a project's identity and lifecycle
+    (not everything about it); two creation paths, bootstrap and
+    Claude-CLI-driven import through its MCP entry point, reach the same
+    registration; project sets move there from Policy & Compliance.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

@@ -39,11 +39,15 @@ Tier 1 is out of scope for this pillar entirely, by design.
 ## Scope levels and precedence
 
 A policy is scoped to exactly one of: a single project, a project set, or
-all projects. Project sets are this pillar's own concept — a named,
-user-managed group of projects (create, rename, add/remove member
-projects), stored here because targeting policies is the only thing they're
-for today. (If Registry & Portfolio ever needs generic project grouping for
-an unrelated reason, that's a reconciliation for later — not decided now.)
+all projects. Project sets themselves — a named, user-managed group of
+projects (create, rename, add/remove member projects) — are owned by
+Registry & Portfolio, not this pillar: grouping projects is a registry
+concern, resolved once Registry & Portfolio was established as this
+system's main responsible pillar for project identity and lifecycle (see
+`docs/architecture.md`'s Registry & Portfolio entry). Policy & Compliance
+reads project-set membership through Registry & Portfolio's Pillar
+Interface when resolving which projects a project-set-scoped policy
+actually covers — it never stores that membership itself.
 
 Two policies can only conflict if they govern the *same concern* — so every
 policy declares a short, stable **topic** (e.g. `server-manifest-shape`,
@@ -487,9 +491,13 @@ Supersedes the placeholder `policy_rules`, `policy_check_results` pair in
   (`project` | `project_set` | `all_projects`), scope_target (a project id,
   a project-set id, or null for all-projects), created_by (`user` |
   `framework`), status, created_at, amended_at.
-- `project_sets` — id, name, member project ids.
 - `policy_check_results` — policy id, project id, outcome (`pass` | `fail`
   | `not_applicable`), checked_at, job id.
+
+`project_sets` is **not** this pillar's table — it lives in Registry &
+Portfolio (`docs/architecture.md`'s Data model), reached through that
+pillar's Pillar Interface whenever a project-set-scoped policy's targets
+need resolving.
 
 `docs/architecture.md`'s Data model section should be read with this
 document as the authoritative detail for this pillar specifically, per

@@ -406,3 +406,44 @@ a request to its owner through that owner's interface, never a direct
 write by the requester — the same "one writer, many readers" discipline
 this ecosystem already applies to `little-requirements`' database, now
 generalized to every pillar's project-scoped files.
+
+### Bringing a project under management: bootstrap vs. import
+
+Registry & Portfolio is the main responsible pillar for a project's
+identity and lifecycle — not everything about a project, which stays
+deliberately distributed across every other pillar, but whether it's
+registered at all. Two different paths reach the same outcome:
+
+```
+NEW project                              EXISTING project
+   │                                          │
+   ▼                                          ▼
+project.bootstrap pipeline                a Claude CLI session (human-
+   (deterministic: scaffold, git             interactive, or Agentic
+   init, lvx init, dev branch --             Development's own internal
+   the bootstrap-little-project              dispatch -- the same
+   sequence, now one pipeline               mechanism either way) drives
+   instead of a separate tool)              the import through Registry &
+   │                                         Portfolio's MCP-exposed entry
+   │                                         point: inspect the existing
+   │                                         repository, bring it into
+   │                                         conformance with framework
+   │                                         policy, work that genuinely
+   │                                         needs judgment a fixed
+   │                                         pipeline can't supply
+   │                                          │
+   └──────────────────┬───────────────────────┘
+                       ▼
+   Registry & Portfolio registers the project: a `projects` row +
+   a `~/.config/little-workshop/projects/<project>/` directory --
+   the row is what "this project exists" means; the directory is a
+   consequence of that, never a parallel source of truth
+```
+
+There is no separate "import mode" to build as its own mechanism: a
+human's interactive Claude Code session and Agentic Development's own
+`agent.run_task` both reach little-workshop's MCP server the identical
+way — the same relationship this very ecosystem's `little-requirements`
+and `little-versions` MCP tools already have with any Claude session that
+attaches them. Import is that mechanism, pointed at a pre-existing
+repository instead of a blank one.

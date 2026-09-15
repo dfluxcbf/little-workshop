@@ -1,4 +1,4 @@
-← [The Test-Script Sandbox](13-test-script-sandbox.md) · deck 14 of 14 · back to [index](README.md)
+← [The Test-Script Sandbox](13-test-script-sandbox.md) · deck 14 of 15 · next: [Who Owns a Project? →](15-project-ownership.md)
 
 # Verdicts vs. Faults
 
@@ -69,4 +69,4 @@ produces stays a proposal until a human has looked at it.
 
 ---
 
-Back to [index](README.md) · or revisit [9 — Policy & Compliance](09-policy-and-compliance.md)
+Next: [15 — Who Owns a Project? →](15-project-ownership.md) · or back to [index](README.md)
