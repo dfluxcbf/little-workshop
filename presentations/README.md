@@ -94,5 +94,12 @@ restating it.
     server manifest's real shape, a noted-but-undecided ambient
     notification pattern, and a new open question (`OQ-12`) caught in the
     act of writing.
+20. [The Full Milestone Sequence](20-the-full-milestone-sequence.md) —
+    M2 through M14, the complete path from Core+Orchestration to
+    everything currently defined: Registry & Portfolio split across
+    bootstrap (M2) and import (M8), self-redeploy earning its own
+    milestone (M5) right after Deployment & Servers, Policy & Compliance
+    deliberately last among the pillars given how much it depends on,
+    and self-hosting (M14) as the finish line.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

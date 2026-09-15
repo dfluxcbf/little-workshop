@@ -1,4 +1,4 @@
-← [The Catalog, Confirmed](18-catalog-confirmed.md) · deck 19 of 19 · back to [index](README.md)
+← [The Catalog, Confirmed](18-catalog-confirmed.md) · deck 19 of 20 · next: [The Full Milestone Sequence →](20-the-full-milestone-sequence.md)
 
 # Importing What Was Already Proven
 
@@ -63,4 +63,4 @@ moment it surfaced instead of losing it the way `OQ-9` once was.
 
 ---
 
-Back to [index](README.md) · or revisit [9 — Policy & Compliance](09-policy-and-compliance.md)
+Next: [20 — The Full Milestone Sequence →](20-the-full-milestone-sequence.md) · or back to [index](README.md)
