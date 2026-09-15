@@ -99,9 +99,10 @@ script.
 
 ## Authoring a policy
 
-Three gates stand between a natural-language submission and a saved
-policy. All three must pass — in order, each blocking the next — before
-Claude CLI is ever asked to write the enforcement artifact:
+Three gates stand between a natural-language submission and a generated
+enforcement artifact, and a fourth stands between that artifact and a
+saved, active policy. All four must pass — in order, each blocking the
+next:
 
 ```
 user writes a policy in natural language
@@ -141,23 +142,40 @@ GATE 3 -- non-conflicting? Two checks, one mechanical and exact, one
    │     policy it conflicts with
    ▼  passes both
 Policy & Compliance calls Agentic Development's Pillar Interface again:
-   "write the one test script that enforces this EARS requirement"
+   "write the one test script that enforces this EARS requirement" --
+   Claude CLI decides the script's own logic and which specific files it
+   needs to read (within whatever pool Gate 2's enforceability check and
+   the sandbox's project-bound/framework-bound split already constrain it
+   to) -- a proposal, not yet anything saved or executable against real
+   state
    │
    ▼
-policy record saved: EARS text + a 1:1 reference to its one test script +
-   topic + scope level + scope target (project / project set / all) +
-   created_by (user | framework)
+GATE 4 -- full user approval, every time, no exception: the user reviews
+   BOTH the EARS text AND the generated test script (which is also how
+   the file-read allowlist actually gets reviewed -- it's read directly
+   off the script the human is already looking at, not a separate
+   declaration to approve twice) before anything is saved
+   │  not approved → discarded or sent back for another authoring pass;
+   │                 nothing is saved
+   ▼  approved
+policy record saved and active: EARS text + a 1:1 reference to its one
+   test script + topic + scope level + scope target (project / project
+   set / all) + created_by (user | framework)
 ```
 
-Two separate Claude CLI calls across this flow, two different scopes of
-trust: the EARS-refinement call (Gate 1) is text-in, text-out, reviewed by
-a human before anything is built from it; the conflict check (Gate 3b) is
-read-only judgment, never a write; the final call produces the actual
-enforcement artifact, only after both gates ahead of it have passed.
-Whether the generated test script itself should also go through explicit
-human review before a policy goes active (mirroring Agentic Development's
-normal PR-review flow) isn't settled by anything said so far — still
-flagged as open.
+No policy — created or edited, user-tier or framework-tier — ever
+activates without this. Editing a policy re-runs the entire flow, Gate 4
+included: an edit is "replace this policy's EARS text and script," never
+a shortcut around review.
+
+Two separate Claude CLI calls across Gates 1-3, two different scopes of
+trust, and both stay strictly proposals until Gate 4: the EARS-refinement
+call (Gate 1) is text-in, text-out; the conflict check (Gate 3b) is
+read-only judgment, never a write; the script-writing call produces a
+draft artifact that has no effect on anything until a human has looked at
+it. Claude CLI's role throughout is *drafting* — every artifact it
+produces, at every step, is something a human reviews before it becomes
+real, never something that activates on Claude CLI's own authority.
 
 Every Claude CLI call in this flow goes through Agentic Development's
 Pillar Interface — this pillar never reimplements agentic execution
@@ -291,12 +309,16 @@ A gated Job does not block Orchestration waiting on a synchronous check:
 Orchestration creates a `policy.check_project` Job and the gated Job
 `depends_on` it — the same dependency mechanism every other Job already
 uses, nothing new at the execution layer. The check Job gets a 30-minute
-maximum runtime. EARS-scoped policies are small by construction, so 30
-minutes is a generous ceiling against a hang or a bug, not an expected
-duration — this is sequenced *before*, and separate from, the ten-minute
-human-confirmation window in "Action-gating checks" below: first the
-check itself completes (or times out), only then does a failing result
-start that second, different clock.
+maximum runtime, forcibly enforced (the sandboxed script is terminated,
+not just abandoned) — a framework design decision to guarantee nothing
+gets stuck, not a policy-enforced constraint and not something
+Policy & Compliance's rule system produced an answer to. EARS-scoped
+policies are small by construction; this ceiling is against a hang or a
+bug, never an expected duration. A script that actually completes and
+returns `fail` is what starts the separate ten-minute human-confirmation
+window in "Action-gating checks" below — a timeout never does, because
+there's no determined violation there for a human to knowingly bypass;
+see that section for the full distinction.
 
 ## Informing the user immediately
 
@@ -359,38 +381,63 @@ Orchestration creates a policy.check_project Job for the winning policy
    up to its 30-minute ceiling
    │
    ▼
-policy.check_project resolves: pass | fail | not_applicable | timeout
-   │  pass or not_applicable → dependency satisfied, gated Job dispatches,
-   │                           nothing else happens
-   │  timeout → treated as fail for gating purposes (see "Left open"
-   │            below -- flagged distinctly as a likely bug, not silently
-   │            equated with a real policy violation)
-   ▼  fail
-Job → pending_confirmation (a new Job status, alongside
-   queued/running/succeeded/failed/cancelled)
-   │
-   ▼
-user is warned immediately -- which policy failed, on which project, and
-   that the Job is waiting (Dashboard banner; the same treatment already
-   designed for an existing confirm-gated deploy's banner)
-   │
-   ├─ confirmed within the window (10 minutes -- matching little-runner's
-   │  own existing confirm_timeout_seconds default exactly, reused rather
-   │  than picked fresh) → Job dispatches, the action happens exactly as
-   │                        if the check had passed
-   └─ window elapses, no response → Job = failed, reason = "policy check
-      unconfirmed" -- the action NEVER happens. A fresh launch: the
-      server stays not running. A replace: Deployment & Servers'
-      build-before-stop sequence never starts in the first place, so the
-      old version was never touched and there is nothing to roll back
-      either. The timeout's default is always the option that changes
-      nothing.
+policy.check_project resolves one of two fundamentally different ways:
+
+   VERDICT REACHED (the script ran to completion): pass | fail |
+   not_applicable
+      │  pass or not_applicable → dependency satisfied, gated Job
+      │                           dispatches, nothing else happens
+      ▼  fail
+   Job → pending_confirmation (a new Job status, alongside
+      queued/running/succeeded/failed/cancelled)
+      │
+      ▼
+   user is warned immediately -- which policy failed, on which project,
+      and that the Job is waiting (Dashboard banner; the same treatment
+      already designed for an existing confirm-gated deploy's banner) --
+      this is the card `docs/pillars/policy_catalog.md`'s Q1 called it:
+      "if the user actually intended to break policy, they have 10
+      minutes to say so"
+      │
+      ├─ confirmed within the window (10 minutes -- matching
+      │  little-runner's own existing confirm_timeout_seconds default
+      │  exactly, reused rather than picked fresh) → Job dispatches, the
+      │  action happens exactly as if the check had passed
+      └─ window elapses, no response → Job = failed, reason = "policy
+         check unconfirmed" -- read as: this was probably broken by
+         mistake, not on purpose. The action NEVER happens. A fresh
+         launch: the server stays not running. A replace: Deployment &
+         Servers' build-before-stop sequence never starts in the first
+         place, so the old version was never touched and there is
+         nothing to roll back either.
+
+   NO VERDICT (the 30-minute ceiling was hit): not a policy outcome at
+   all -- a framework-level fault, the same category as a stuck process
+   Core would want to know about, not something Policy & Compliance's
+   rule system produced an answer to
+      │
+      ▼
+   the sandboxed script is forcibly terminated (the ceiling is an active
+      guarantee against a stuck script, not a passive wait-and-give-up)
+      │
+      ▼
+   Job = failed immediately, reason = "policy check did not complete" --
+      NO pending_confirmation, NO ten-minute window. There is nothing for
+      a human to knowingly bypass, because nothing was determined to be
+      a violation -- only that the check itself is broken. The action
+      never happens, and this is surfaced to the user as something to
+      go fix (most likely a bug in the generated script), with messaging
+      that reads distinctly from "a policy failed."
 ```
 
-Two different 30/10-minute clocks, never running at once: the check's own
-30-minute ceiling happens first, as an ordinary Job; only once it resolves
-(pass/fail/not_applicable/timeout) does a failing or timed-out result
-start the separate ten-minute human-confirmation clock.
+Two clocks with different jobs, never both on the same path. The
+30-minute ceiling is a framework design decision, not something Policy &
+Compliance's rule system enforces — the same category of self-protection
+as Core refusing to let a crashed pillar spiral, not a policy verdict, and
+EARS-scoped scripts are expected to need nowhere near it. The ten-minute
+window is the deliberate-bypass card, and it only ever starts once a
+script has actually run to completion and returned `fail` — never after a
+timeout, because there's no known violation there to knowingly bypass.
 
 This refines and supersedes `docs/design.md`'s original job-dispatch
 diagram, which only said a failing pre-job policy check "fails (required
@@ -419,27 +466,17 @@ each is a separate question about a separate moment in the same Job.
 
 ### Left open
 
-- **Resolved above**: check execution runs as an async Job with a
-  30-minute ceiling (not an inline synchronous call), per "Test-script
-  execution sandbox."
-- A check that times out is provisionally treated the same as a fail —
-  routed through the same pending_confirmation/ten-minute-override path
-  — rather than blocking outright with no override option. This is a
-  judgment call, not something settled by anything said so far: a timeout
-  most likely signals a bug in the generated script rather than a
-  genuine policy violation, and it's not obviously right that a human
-  should be offered the same "proceed anyway" override for "we don't
-  know the answer" as for "we know and it failed." Flagged for
-  confirmation, not decided unilaterally here.
+- **Resolved**: check execution runs as an async Job with a 30-minute
+  ceiling (not an inline synchronous call); a timeout is a framework
+  fault, never routed through the ten-minute override — see "Test-script
+  execution sandbox" and the resolved outcome tree above.
+- **Resolved**: the file-read allowlist doesn't need a separate
+  declaration step — Gate 4 already requires the human to review the
+  generated script directly, and the allowlist is read off that same
+  script. See "Authoring a policy," Gate 4.
 - Which Job types declare which gating topics isn't enumerated here —
   that mapping is each pillar's own implementation work as its Job types
   get defined.
-- Whether the file-read allowlist for a given policy is something the
-  human reviews and approves explicitly (alongside its EARS text, before
-  script generation) or something Claude CLI determines at
-  script-generation time, trusted within the project-bound/
-  framework-bound pool without a separate human-visible declaration step
-  — also flagged for confirmation, not decided unilaterally here.
 
 ## Data model (this pillar's own database)
 

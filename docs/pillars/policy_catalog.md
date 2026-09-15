@@ -244,29 +244,30 @@ before they're approved:
    discipline `docs/governance_policy.md` already requires generally) and
    not a casual runtime toggle. See `policy_compliance.md`'s new
    "Framework-policy lifecycle" section.
+5. **Timeout is not a policy verdict.** The 30-minute ceiling is a
+   framework design decision ("ensure scripts are not stuck"), not
+   something Policy & Compliance's rule system enforces — so a timeout
+   never enters the ten-minute pending_confirmation window, which exists
+   specifically for a human to knowingly bypass a *determined* violation.
+   A timeout has no determined violation to bypass; it fails immediately,
+   distinctly flagged as something to go fix. See `policy_compliance.md`'s
+   resolved "Action-gating checks" outcome tree.
+6. **Allowlist review folded into Gate 4, not a separate step.** Policy
+   creation/editing now requires full user approval of both the EARS text
+   and the generated test script, every time, no exception — the file
+   allowlist is read directly off the script already being reviewed
+   rather than declared and approved separately. See
+   `policy_compliance.md`'s "Authoring a policy," now four gates.
 
 ## Open questions for you
 
-1. **Timeout handling**: a policy check that exceeds its 30-minute ceiling
-   is provisionally routed through the same pending_confirmation path as
-   a genuine fail — the human gets the same ten-minute "proceed anyway"
-   override. A timeout more likely signals a bug in the generated script
-   than a real violation; is offering the same override for "unknown" as
-   for "known and failed" actually right, or should a timeout block
-   outright with no override?
-2. **Allowlist declaration**: should the file-read allowlist for a policy
-   be something a human explicitly reviews and approves (declared
-   alongside its EARS text, before script generation), or is it
-   acceptable for Claude CLI to determine the specific paths at
-   script-generation time, trusted within the project-bound/
-   framework-bound pool it's already confined to?
-3. The handful of entries narrowed this round to their enforceable core
+1. The handful of entries narrowed this round to their enforceable core
    (`doc-no-verbatim-duplication`, `milestone-requirements-linked-and-passing`,
    `no-secret-pattern-in-commit`, `no-redundant-app-auth`) are weaker
    claims than the source material's original intent, by construction —
    worth confirming the narrower version is still worth having as a
    policy, rather than also dropping some of these the way the
    encryption and fabricated-content entries were.
-4. Anything in this catalog that's **flat-out wrong** for where this
+2. Anything in this catalog that's **flat-out wrong** for where this
    ecosystem is heading rather than just unranked — easiest to catch now,
    before any of it goes through EARS refinement.

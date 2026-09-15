@@ -1,4 +1,4 @@
-← [Framework-Policy Lifecycle](12-framework-policy-lifecycle.md) · deck 13 of 13 · back to [index](README.md)
+← [Framework-Policy Lifecycle](12-framework-policy-lifecycle.md) · deck 13 of 14 · next: [Verdicts vs. Faults →](14-verdicts-vs-faults.md)
 
 # The Test-Script Sandbox
 
@@ -43,18 +43,12 @@ sequential phases of the same flow, not two competing timers.
 
 ---
 
-## Left open, genuinely
+## Resolved next
 
-- **Timeout handling**: provisionally routed through the same
-  pending_confirmation path as a real fail — same ten-minute override.
-  A timeout more likely means a bug than a violation; offering the same
-  "proceed anyway" for "unknown" as for "known and failed" isn't obviously
-  right. Flagged, not decided.
-- **Allowlist declaration**: should a policy's file-read allowlist be
-  something a human reviews explicitly, alongside its EARS text — or is
-  Claude CLI's own determination, trusted within the project-bound/
-  framework-bound pool, enough? Flagged, not decided.
+Both questions this deck left open — timeout handling, allowlist review —
+are answered in
+[14 — Verdicts vs. Faults →](14-verdicts-vs-faults.md).
 
 ---
 
-Back to [index](README.md) · or revisit [9 — Policy & Compliance](09-policy-and-compliance.md)
+Next: [14 — Verdicts vs. Faults →](14-verdicts-vs-faults.md) · or back to [index](README.md)

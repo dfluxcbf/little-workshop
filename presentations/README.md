@@ -59,5 +59,11 @@ restating it.
     limited to the verdict and this pillar's own files, a 30-minute async
     execution ceiling — reusing Requirements & Quality's existing
     optional Docker sandbox as the enforcement mechanism.
+14. [Verdicts vs. Faults](14-verdicts-vs-faults.md) — a script timeout is
+    a framework fault, never routed through the ten-minute
+    deliberate-bypass window that exists only for a real, determined
+    policy failure; and full human approval of both the EARS text and the
+    generated script, every time, is what makes a separate allowlist
+    review step unnecessary.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).
