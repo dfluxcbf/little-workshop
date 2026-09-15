@@ -27,7 +27,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["common*", "core*", "orchestration*", "cli*"]
+include = ["common*", "core*", "orchestration*", "registry*", "cli*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

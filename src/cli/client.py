@@ -85,3 +85,20 @@ def job_status(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
         job = orchestration_db.get_job(conn, job_id)
         conn.close()
         return {"source": "fallback", "job": job.model_dump(mode="json") if job else None}
+
+
+def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("registry"), timeout=timeout) as client:
+            params = {"status": status} if status else {}
+            response = client.get("/v1/projects", params=params)
+        response.raise_for_status()
+        return {"source": "daemon", "projects": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from registry import db as registry_db
+        from registry.models import ProjectStatus
+
+        conn = registry_db.connect(paths.pillar_db_path("registry"))
+        projects = registry_db.list_projects(conn, status=ProjectStatus(status) if status else None)
+        conn.close()
+        return {"source": "fallback", "projects": [p.model_dump(mode="json") for p in projects]}

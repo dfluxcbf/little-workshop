@@ -1,0 +1,225 @@
+"""Registry & Portfolio's own SQLite file — `projects`, `project_sets`,
+`tickets` (docs/architecture.md's Data model). WAL mode, one file,
+opened only by this pillar.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+from registry.models import Project, ProjectSet, ProjectStatus, Ticket, TicketStatus
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS projects (
+    name TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    repo_url TEXT,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_sets (
+    name TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_set_members (
+    set_name TEXT NOT NULL,
+    project_name TEXT NOT NULL,
+    PRIMARY KEY (set_name, project_name)
+);
+
+CREATE TABLE IF NOT EXISTS tickets (
+    id TEXT PRIMARY KEY,
+    project_name TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+
+def connect(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.executescript(SCHEMA)
+    conn.commit()
+    return conn
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _parse_iso(value: str) -> datetime:
+    return datetime.fromisoformat(value)
+
+
+# -- projects ----------------------------------------------------------
+
+
+def insert_project(conn: sqlite3.Connection, project: Project) -> None:
+    conn.execute(
+        """INSERT INTO projects (name, path, repo_url, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            project.name,
+            project.path,
+            project.repo_url,
+            project.status.value,
+            _iso(project.created_at),
+            _iso(project.updated_at),
+        ),
+    )
+    conn.commit()
+
+
+def _row_to_project(row: sqlite3.Row) -> Project:
+    return Project(
+        name=row["name"],
+        path=row["path"],
+        repo_url=row["repo_url"],
+        status=ProjectStatus(row["status"]),
+        created_at=_parse_iso(row["created_at"]),
+        updated_at=_parse_iso(row["updated_at"]),
+    )
+
+
+def get_project(conn: sqlite3.Connection, name: str) -> Project | None:
+    row = conn.execute("SELECT * FROM projects WHERE name = ?", (name,)).fetchone()
+    return _row_to_project(row) if row else None
+
+
+def list_projects(conn: sqlite3.Connection, *, status: ProjectStatus | None = None) -> list[Project]:
+    if status is None:
+        rows = conn.execute("SELECT * FROM projects ORDER BY name").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM projects WHERE status = ? ORDER BY name", (status.value,)
+        ).fetchall()
+    return [_row_to_project(row) for row in rows]
+
+
+def delete_project(conn: sqlite3.Connection, name: str) -> None:
+    """Hard delete — no soft-delete, no undo (docs/open_questions.md OQ-7)."""
+    conn.execute("DELETE FROM projects WHERE name = ?", (name,))
+    conn.execute("DELETE FROM project_set_members WHERE project_name = ?", (name,))
+    conn.execute("DELETE FROM tickets WHERE project_name = ?", (name,))
+    conn.commit()
+
+
+# -- project_sets --------------------------------------------------------
+
+
+def create_project_set(conn: sqlite3.Connection, project_set: ProjectSet) -> None:
+    conn.execute(
+        "INSERT INTO project_sets (name, created_at) VALUES (?, ?)",
+        (project_set.name, _iso(project_set.created_at)),
+    )
+    for project_name in project_set.project_names:
+        conn.execute(
+            "INSERT OR IGNORE INTO project_set_members (set_name, project_name) VALUES (?, ?)",
+            (project_set.name, project_name),
+        )
+    conn.commit()
+
+
+def get_project_set(conn: sqlite3.Connection, name: str) -> ProjectSet | None:
+    row = conn.execute("SELECT * FROM project_sets WHERE name = ?", (name,)).fetchone()
+    if row is None:
+        return None
+    members = conn.execute(
+        "SELECT project_name FROM project_set_members WHERE set_name = ? ORDER BY project_name",
+        (name,),
+    ).fetchall()
+    return ProjectSet(
+        name=row["name"],
+        project_names=[m["project_name"] for m in members],
+        created_at=_parse_iso(row["created_at"]),
+    )
+
+
+def add_to_project_set(conn: sqlite3.Connection, set_name: str, project_name: str) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO project_set_members (set_name, project_name) VALUES (?, ?)",
+        (set_name, project_name),
+    )
+    conn.commit()
+
+
+def remove_from_project_set(conn: sqlite3.Connection, set_name: str, project_name: str) -> None:
+    conn.execute(
+        "DELETE FROM project_set_members WHERE set_name = ? AND project_name = ?",
+        (set_name, project_name),
+    )
+    conn.commit()
+
+
+def list_project_sets(conn: sqlite3.Connection) -> list[ProjectSet]:
+    rows = conn.execute("SELECT name FROM project_sets ORDER BY name").fetchall()
+    return [get_project_set(conn, row["name"]) for row in rows]
+
+
+# -- tickets -------------------------------------------------------------
+
+
+def insert_ticket(conn: sqlite3.Connection, ticket: Ticket) -> None:
+    conn.execute(
+        """INSERT INTO tickets (id, project_name, title, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            ticket.id,
+            ticket.project_name,
+            ticket.title,
+            ticket.status.value,
+            _iso(ticket.created_at),
+            _iso(ticket.updated_at),
+        ),
+    )
+    conn.commit()
+
+
+def _row_to_ticket(row: sqlite3.Row) -> Ticket:
+    return Ticket(
+        id=row["id"],
+        project_name=row["project_name"],
+        title=row["title"],
+        status=TicketStatus(row["status"]),
+        created_at=_parse_iso(row["created_at"]),
+        updated_at=_parse_iso(row["updated_at"]),
+    )
+
+
+def get_ticket(conn: sqlite3.Connection, ticket_id: str) -> Ticket | None:
+    row = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+    return _row_to_ticket(row) if row else None
+
+
+def list_tickets(conn: sqlite3.Connection, *, project_name: str | None = None) -> list[Ticket]:
+    if project_name is None:
+        rows = conn.execute("SELECT * FROM tickets ORDER BY created_at").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM tickets WHERE project_name = ? ORDER BY created_at", (project_name,)
+        ).fetchall()
+    return [_row_to_ticket(row) for row in rows]
+
+
+def update_ticket_status(conn: sqlite3.Connection, ticket_id: str, status: TicketStatus) -> None:
+    conn.execute(
+        "UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?",
+        (status.value, _iso(datetime.now(timezone.utc)), ticket_id),
+    )
+    conn.commit()
+
+
+def new_ticket_id() -> str:
+    return uuid.uuid4().hex

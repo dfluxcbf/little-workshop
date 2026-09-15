@@ -58,6 +58,62 @@ def cmd_job_status(args: argparse.Namespace) -> int:
     return 0 if result.get("job") is not None else 1
 
 
+def cmd_project_bootstrap(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    params = {
+        "name": args.name,
+        "dest_dir": args.dest_dir,
+        "owner": args.owner,
+        "description": args.description,
+        "create_github_repo": args.create_github_repo,
+        "public": args.public,
+        "remote_host": args.remote_host,
+        "github_token": args.github_token,
+    }
+    try:
+        result = client.create_job(
+            paths,
+            type="project.bootstrap",
+            target_pillar="registry",
+            project_id=args.name,
+            params=params,
+            queue_key=None,
+            depends_on=[],
+            created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_project_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    _print(client.list_projects(paths, status=args.status))
+    return 0
+
+
+def cmd_project_remove(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths,
+            type="project.remove",
+            target_pillar="registry",
+            project_id=args.name,
+            params={"name": args.name},
+            queue_key=None,
+            depends_on=[],
+            created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="lws")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -86,6 +142,28 @@ def build_parser() -> argparse.ArgumentParser:
     job_status = job_sub.add_parser("status", help="Show one Job")
     job_status.add_argument("job_id")
     job_status.set_defaults(func=cmd_job_status)
+
+    project = subparsers.add_parser("project", help="Registry & Portfolio project commands")
+    project_sub = project.add_subparsers(dest="project_command", required=True)
+
+    project_bootstrap = project_sub.add_parser("bootstrap", help="Scaffold and register a new project")
+    project_bootstrap.add_argument("name")
+    project_bootstrap.add_argument("--dest-dir", required=True)
+    project_bootstrap.add_argument("--owner", default="dfluxcbf")
+    project_bootstrap.add_argument("--description", default="")
+    project_bootstrap.add_argument("--create-github-repo", action="store_true")
+    project_bootstrap.add_argument("--public", action="store_true")
+    project_bootstrap.add_argument("--remote-host", default="github.com")
+    project_bootstrap.add_argument("--github-token", default=None)
+    project_bootstrap.set_defaults(func=cmd_project_bootstrap)
+
+    project_list = project_sub.add_parser("list", help="List registered projects")
+    project_list.add_argument("--status", default=None)
+    project_list.set_defaults(func=cmd_project_list)
+
+    project_remove = project_sub.add_parser("remove", help="Remove a registered project")
+    project_remove.add_argument("name")
+    project_remove.set_defaults(func=cmd_project_remove)
 
     return parser
 
