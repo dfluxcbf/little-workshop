@@ -100,6 +100,15 @@ restating it.
     bootstrap (M2) and import (M8), self-redeploy earning its own
     milestone (M5) right after Deployment & Servers, Policy & Compliance
     deliberately last among the pillars given how much it depends on,
-    and self-hosting (M14) as the finish line.
+    and self-hosting (M14) as the finish line. **Turned out incomplete —
+    see deck 21.**
+21. [What the First Pass Missed](21-what-the-first-pass-missed.md) — the
+    `lws` CLI never got a real architecture entry despite being
+    referenced constantly; the Pipeline engine was designed in
+    `design.md` and then silently dropped from M1's scope; and the
+    entire ecosystem-migration story (the other real projects still
+    depending on `lreq`/`lvx`/`lrun`/`little-pypi`) had no milestone at
+    all. Three new milestones (M15–M17) fix the last one; M1 absorbs the
+    first two.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

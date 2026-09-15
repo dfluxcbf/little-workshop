@@ -69,6 +69,32 @@ MCP tool call) into a Pillar Interface call against whichever pillar
 actually owns the answer, exactly the same discipline every other pillar
 follows.
 
+**CLI (`lws`)** — not a pillar, not Core, and missing its own formal
+treatment until now despite being referenced in passing throughout this
+document (the Feature mapping table's `little-versions` row, for one:
+"the pillar's PI *is* the one surface every caller (CLI, MCP, other
+pillars) goes through"). A third thin, stateless proxy alongside
+Dashboard and MCP Server — one function per subcommand, no logic of its
+own, talking to the daemon over a local socket for anything needing
+shared state, falling back to direct state-file/database reads for pure
+reads when the daemon isn't running (the same fallback `lrun status`
+already uses today). Absorbs `lreq`/`lvx`/`lrun`/`little-pypi`/
+`bootstrap-little-project`'s command surfaces as `lws` subcommands
+(`lws req`, `lws version`, `lws job`, ...), one pillar's worth of
+subcommands added as that pillar is actually built rather than designed
+as one command tree up front. Needed earlier than Dashboard or MCP
+Server: it's the only interface that can exist before any pillar with a
+web or agent-facing surface does, and is what actually exercises Core
+and Orchestration during their own construction.
+
+**Compatibility shims**: once `lws` exists, the five absorbed tools'
+original CLIs (`lreq`, `lvx`, `lrun`, `little-pypi`, `bootstrap-little-project`)
+are expected to become thin forwarders to the equivalent `lws` subcommand
+— muscle memory and any existing script that still calls them keeps
+working during the transition, rather than every caller needing to
+switch atomically the moment a pillar ships. This is deliberately
+separate from building `lws` itself; see `docs/milestones.md`.
+
 ## Pillar Interface (PI)
 
 - **Transport**: HTTP bound to a Unix domain socket, one per pillar

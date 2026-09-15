@@ -1,4 +1,4 @@
-← [Importing What Was Already Proven](19-importing-what-was-already-proven.md) · deck 20 of 20 · back to [index](README.md)
+← [Importing What Was Already Proven](19-importing-what-was-already-proven.md) · deck 20 of 21 · next: [What the First Pass Missed →](21-what-the-first-pass-missed.md)
 
 # The Full Milestone Sequence
 
@@ -77,4 +77,10 @@ implementer hits it mid-build.
 
 ---
 
-Back to [index](README.md) · or revisit [9 — Policy & Compliance](09-policy-and-compliance.md)
+**This deck's own sequence turned out to be incomplete** — see
+[21 — What the First Pass Missed](21-what-the-first-pass-missed.md) for
+what it left out and why.
+
+---
+
+Next: [21 — What the First Pass Missed →](21-what-the-first-pass-missed.md) · or back to [index](README.md)

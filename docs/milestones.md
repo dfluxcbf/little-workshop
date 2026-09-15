@@ -37,9 +37,34 @@ discipline this project already applies to itself); the *sequence* and
 | M12 | Populate the policy catalog | M11 | Not started |
 | M13 | Dashboard | M2–M12 (whatever exists by then) | Not started |
 | M14 | Self-hosting / dogfooding | M2, M3, M9, M11 | Not started |
+| M15 | Compatibility shims | M1–M13 (whichever tool each shim forwards to) | Not started |
+| M16 | Ecosystem cutover | M14, M15 | Not started |
+| M17 | Retire the absorbed tools | M16 | Not started |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
 dependency graph is visible up front, not discovered one milestone late.
+**M15–M17 were missing from the first pass entirely** — every milestone
+through M14 makes little-workshop internally complete, but none of them
+address the actual point of the project: the other real projects in this
+ecosystem still depend on `lreq`/`lvx`/`lrun`/`little-pypi` until
+something migrates them off. Caught on review, not found by re-reading
+`docs/design.md`'s own Purpose section closely enough the first time.
+
+### Cross-cutting, every pillar milestone (M2–M13)
+
+Two things every one of M2 through M13 delivers, not called out
+per-milestone below to avoid repeating the same line thirteen times:
+
+- **Grows the `lws` CLI** with that pillar's own subcommands (see
+  `docs/architecture.md`'s new CLI entry) — the same incremental-growth
+  treatment already stated for MCP Server in M7, now explicit for the
+  CLI too, and started earlier than M7 since `lws` exists from M1.
+- **Writes that pillar's own `docs/pillars/<name>.md`**, the same
+  treatment `docs/pillars/policy_compliance.md` and
+  `agentic_development.md` already have — a milestone isn't documented,
+  per this file's own inherited definition-of-done, if the survey-level
+  treatment in `design.md`/`architecture.md` is all that exists once the
+  pillar is real.
 
 ## M1 — Core + Orchestration
 
@@ -54,7 +79,25 @@ pillar exists.
 - **Orchestration**: the `Job` model (`id, type, target_pillar,
   project_id, params, status, queue_key, depends_on, created_by,
   result`), dispatch over a pillar's Pillar Interface, the `queue_key`
-  mutex, the self-pumping queue, `depends_on` resolution.
+  mutex, the self-pumping queue, `depends_on` resolution. **Also**
+  `Pipeline`/`PipelineRun` (`docs/design.md`'s Core Concepts) — a named,
+  versioned DAG of Job templates expanded into concrete Jobs at trigger
+  time, missing from this milestone's first draft even though it's
+  Orchestration's own table (`docs/architecture.md`'s Data model already
+  lists `pipelines`, `pipeline_runs`) and needs no new execution-layer
+  primitive beyond what dependency-linked Jobs already provide.
+- **A minimal `lws` CLI** (`docs/architecture.md`'s new CLI entry) — just
+  enough to exercise Core and Orchestration directly (`lws core status`,
+  `lws job create/list/status`), since nothing else capable of driving
+  them (Dashboard, MCP) exists yet and won't for several more
+  milestones. Grows with every pillar from here on; see "Cross-cutting"
+  above.
+- **The project-files shared access library** (`docs/architecture.md`'s
+  Configuration & project data) — the thing that actually enforces
+  filename-encoded write-ownership (`<name>.<owner-tag>.<format>`) for
+  every pillar from M2 onward. Belongs here, not in whichever pillar
+  first happens to use it, because every pillar from M2 on needs the
+  same enforcement and none of them should each reimplement it.
 - **Shared infrastructure that has to start somewhere**: the size-based
   log-retention convention (`docs/open_questions.md` `OQ-4`) belongs
   here, since Core is the first thing that writes a log — implement it
@@ -247,3 +290,57 @@ pillar (M3) at the same time, at the maintainers' discretion — plain
 the pillar exists, since nothing in `docs/governance_policy.md` requires
 dogfooding a capability the moment it's available, only that it's
 available to dogfood.
+
+## M15 — Compatibility shims
+
+`docs/architecture.md`'s new CLI entry names this explicitly: once a
+pillar's `lws` subcommand exists, the tool it absorbed — `lreq`, `lvx`,
+`lrun`, `little-pypi`, or `bootstrap-little-project` — becomes a thin
+forwarder to it, one shim per tool, each shippable the moment its own
+pillar is far enough along (in practice, mostly after M2/M3/M4/M6/M9/M10
+individually, not all five at once). Existing scripts, muscle memory,
+and this very ecosystem's own root policies (which still say "every
+submodule uses `lreq`/`lvx`") keep working unmodified during the
+transition instead of every caller needing to switch the moment a
+pillar ships.
+
+Explicitly not a redesign of any of the five tools' command surfaces —
+a shim's whole job is behaving identically to the tool it replaces from
+the outside, while the real work happens in `lws` underneath.
+
+## M16 — Ecosystem cutover
+
+The actual point of this project, not just little-workshop's own
+internal completeness: every other project in this ecosystem
+(`little-meals`, `little-mindcheck`, `little-termstyle`, `little-spectrum`,
+`little-tickets`, `little-mapgen`, `little-home`, and `bundle-littles`'
+own requirements-DB wiring) currently depends on
+`lreq`/`lvx`/`lrun`/`little-pypi` directly. Migrating each one, one
+project at a time, verified against the same root policies before and
+after the switch, is what actually fulfills `docs/design.md`'s stated
+purpose ("governs the full software lifecycle... for every project in
+this ecosystem") rather than only proving little-workshop can govern
+itself (M14).
+
+Depends on M14 — self-hosting is little-workshop trusting itself with
+its own repository before it's trusted with a household's actual running
+applications (`little-meals`, `little-mindcheck`) — and M15, since the
+shims are what make each individual project's cutover a config change
+instead of a rewrite of that project's own tooling assumptions.
+
+Sequencing within this milestone (project order, one at a time vs.
+batched, rollback plan per project) is implementation planning for when
+this milestone actually starts, not decided here.
+
+## M17 — Retire the absorbed tools
+
+Once nothing in the ecosystem depends on `little-requirements`,
+`little-versions`, `little-runner`, `little-pypi`, or
+`bootstrap-little-project` — confirmed by M16 actually completing, not
+assumed — those five repositories' own active development ends. What
+happens to them physically (archived, marked read-only, deleted outright)
+is a decision for whoever owns them at the time, not fixed now, far in
+advance of anything that would make it real. The one thing worth stating
+today: this milestone is the actual retirement, not a milestone about
+planning to eventually consider retiring them — that planning is this
+paragraph.
