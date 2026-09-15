@@ -194,7 +194,12 @@ supersede the first round's "Module" concept.
   lockstep.
 - **Job** — the unit of work Orchestration coordinates: `{id, type,
   target_pillar, project_id, params, status, queue_key, depends_on,
-  created_by, result}`. Every operation any absorbed tool performs today —
+  created_by, result}`. `status` is one of `queued | running |
+  pending_confirmation | succeeded | failed | cancelled` —
+  `pending_confirmation` is a gated Job waiting on a human response to a
+  failing policy check before it's allowed to proceed at all; see
+  `docs/pillars/policy_compliance.md`'s "Action-gating checks." Every
+  operation any absorbed tool performs today —
   `requirement.create`, `version.feature_finish`, `test.run_suite`,
   `build.run`, `package.publish`, `server.deploy`, `agent.run_task`,
   `policy.check`, `project.bootstrap` — is a Job type, dispatched over that
@@ -248,11 +253,19 @@ Job created in Orchestration  {type, target_pillar, project_id, params,
 Orchestration: ready? (depends_on satisfied, queue_key free)
    │  no  → stays queued
    ▼  yes
-Policy & Compliance: pre-job check for this Job's type/project
-   (Policy asks the target pillar's PI for whatever facts it needs — it
-    never opens that pillar's database)
-   │  fails (required rule)  →  Job = failed, reason = policy violation
-   ▼  passes
+Policy & Compliance: does this Job's type declare a gating topic? (most
+   don't, and skip straight to dispatch — Policy asks the target pillar's
+   PI for whatever facts a relevant policy's check needs; it never opens
+   that pillar's database)
+   │  no gating topic, or the winning policy passes/is not applicable
+   ▼  → dispatch proceeds
+   │  fails  →  Job = pending_confirmation; user warned immediately;
+   │            confirmed within the window → dispatch proceeds anyway;
+   │            window elapses → Job = failed, action never happens.
+   │            See `docs/pillars/policy_compliance.md`'s "Action-gating
+   │            checks" for the full flow — this replaces this diagram's
+   │            earlier, simpler "fails → Job = failed" outcome.
+   ▼
 Orchestration calls target_pillar's Pillar Interface (POST /v1/jobs/<type>)
    over that pillar's Unix domain socket
    │

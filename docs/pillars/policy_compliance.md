@@ -205,6 +205,83 @@ to register itself as a project in its own Registry & Portfolio once that
 pillar exists, so framework policies apply to little-workshop exactly as
 they apply to everything else it manages, not as a special case.
 
+## Action-gating checks
+
+Distinct from the on-demand/scheduled audit above (`policy.check_all`,
+checking everywhere a policy applies, at leisure): some Jobs must not run
+at all until the policy governing their action passes. A Job *type*
+declares which topic(s), if any, gate it — most declare none, and dispatch
+with no policy involvement whatsoever, sparse and opt-in rather than a
+blanket check on everything. `server.launch` and `server.deploy`, for
+example, are gated by whichever policy currently wins (the usual
+precedence resolution) on a server-related topic, for the target project.
+
+```
+Orchestration is about to dispatch a Job of a gated type
+   │
+   ▼
+ask Policy & Compliance: does the winning policy for this Job's topic(s),
+   on this project, pass? (the identical check mechanism as an audit --
+   same 1:1 test script, same Deployment & Servers worktree -- just
+   triggered synchronously here instead of on a schedule)
+   │  pass or not-applicable → dispatch proceeds, nothing else happens
+   ▼  fail
+Job → pending_confirmation (a new Job status, alongside
+   queued/running/succeeded/failed/cancelled)
+   │
+   ▼
+user is warned immediately -- which policy failed, on which project, and
+   that the Job is waiting (Dashboard banner; the same treatment already
+   designed for an existing confirm-gated deploy's banner)
+   │
+   ├─ confirmed within the window (10 minutes -- matching little-runner's
+   │  own existing confirm_timeout_seconds default exactly, reused rather
+   │  than picked fresh) → Job dispatches, the action happens exactly as
+   │                        if the check had passed
+   └─ window elapses, no response → Job = failed, reason = "policy check
+      unconfirmed" -- the action NEVER happens. A fresh launch: the
+      server stays not running. A replace: Deployment & Servers'
+      build-before-stop sequence never starts in the first place, so the
+      old version was never touched and there is nothing to roll back
+      either. The timeout's default is always the option that changes
+      nothing.
+```
+
+This refines and supersedes `docs/design.md`'s original job-dispatch
+diagram, which only said a failing pre-job policy check "fails (required
+rule) → Job = failed" — written before this mechanism existed. The
+outcome now depends on whether anyone answers in time, not on the check
+result alone.
+
+### Two confirm-gates, not one mechanism reused twice
+
+Both share a skeleton — mark pending, arm a timeout, wait, do the safe
+thing on timeout — but they answer different questions at different
+points in a Job's life, so they stay two named things with two owners:
+
+| | Deploy confirmation (existing) | Policy confirmation (this) |
+|---|---|---|
+| Owner | Deployment & Servers | Orchestration |
+| Arms | *After* the new version is already running | *Before* the action has started at all |
+| Timeout default | Roll back to the last confirmed commit | Never start — there's nothing to roll back |
+| Scope | Server/pillar redeploys only | Any Job type that declares a gating topic |
+
+A gated `server.deploy` Job can pass through both in sequence: first
+policy confirmation (proceed despite the failure, or never start), then —
+only once the new version is genuinely running — Deployment & Servers'
+own deploy confirmation (keep it, or roll back). They don't conflict;
+each is a separate question about a separate moment in the same Job.
+
+### Left open
+
+- Policy test scripts are expected to run fast enough to check inline,
+  synchronously, before a gated action starts — there's no defined
+  maximum runtime for the check itself yet, separate from the ten-minute
+  human-response window.
+- Which Job types declare which gating topics isn't enumerated here —
+  that mapping is each pillar's own implementation work as its Job types
+  get defined.
+
 ## Data model (this pillar's own database)
 
 Supersedes the placeholder `policy_rules`, `policy_check_results` pair in

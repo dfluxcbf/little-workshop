@@ -39,5 +39,9 @@ restating it.
    scope/precedence, EARS, the two-Claude-CLI-call authoring pipeline, and
    enforcement. Full spec:
    [`../docs/pillars/policy_compliance.md`](../docs/pillars/policy_compliance.md).
+10. [Action-Gating: Policy Confirmation](10-action-gating-confirmation.md)
+    — when a policy check actually runs relative to the action it governs:
+    fail closed, human override within ten minutes, or the action never
+    happens at all.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

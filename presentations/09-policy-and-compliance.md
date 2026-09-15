@@ -1,4 +1,4 @@
-← [Core's Recovery & Configuration](08-core-recovery-and-configuration.md) · deck 9 of 9 · back to [index](README.md)
+← [Core's Recovery & Configuration](08-core-recovery-and-configuration.md) · deck 9 of 10 · next: [Action-Gating: Policy Confirmation →](10-action-gating-confirmation.md)
 
 # Policy & Compliance: Rules for the Rules
 
