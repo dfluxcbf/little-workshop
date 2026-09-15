@@ -59,7 +59,7 @@ Interface (a small FastAPI app bound to a Unix domain socket):
 | **Version Control & Release** | Branches and versions are always in a known-safe, consistent state — never by hand, never inconsistently. | little-versions wholesale | Yes |
 | **Build & Packages** | A build artifact exists, is reproducible, and is reachable by anything that needs to install it. | little-runner's disclaimed CI non-goal (now real, including its own never-built E6: on-demand testing, JUnit-XML beyond pytest) + little-pypi wholesale | Optional — a project with no build/publish step never starts it |
 | **Deployment & Servers** | A running process — a project's server, a Claude CLI instance, or a pillar of this system itself — stays running, and can be safely replaced with a newer version without anything else noticing. | little-runner's server-lifecycle mechanics (worktree deploys, confirm-gated rollback, cgroup-aware self-restart), generalized to every Managed Process | Yes. Also the sole owner of isolated-worktree provisioning — Requirements & Quality's test execution and Policy & Compliance's policy checks both call its interface for one rather than each provisioning their own. |
-| **Agentic Development** | Claude does real implementation work on a real branch, safely, and the human stays in control of when it's finished. | little-runner's `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`/`sessions.py`, generalized from GitHub-issue-only triggers | Optional — a project not using agentic dev never starts it |
+| **Agentic Development** | Claude does real implementation work on a real branch, safely, and the human stays in control of when it's finished. | little-runner's `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`/`sessions.py`, generalized from GitHub-issue-only triggers | Optional — a project not using agentic dev never starts it. Fully specified: `docs/pillars/agentic_development.md`. |
 | **Dashboard** | A human can see and act on everything above, without a terminal. | little-runner's `web/`, extended with panels for every other pillar | Optional — a headless/automation-only setup can disable it. Visual identity decided: see `presentations/06-visual-identity.md`. |
 | **MCP Server** | An agent (Claude, or another tool) can see and act on everything above, without a terminal. | little-requirements' and little-versions' MCP tool surfaces, unified and namespaced | Optional — but the common case, since Claude is this ecosystem's primary caller |
 
@@ -148,6 +148,24 @@ manifest — the direct descendant of little-runner's existing per-project
 `~/.config/little-runner/projects/<owner>-<name>.toml`, now split by owner
 instead of being one shared file). Core owns no project files — it isn't a
 pillar and has no project-scoped concerns of its own.
+
+`manifest.deployment.toml`'s shape is inherited close to verbatim from
+`little-runner`'s own proven `[server]` table (root
+`docs/features/server_management.md`) — the one application-specific
+piece every other mechanic (build, launch, readiness, Tailscale mapping)
+is generic against:
+
+```toml
+[server]
+name    = "little-meals"
+command = "lmeals serve"
+port    = 8765
+match   = ".local/bin/lmeals serve"
+install = ["bazel", "run", "//:install"]
+
+[server.tailscale]
+https_port = 443
+```
 
 **Read/write rule**: any pillar may *read* any project file regardless of
 owner tag. Only the owning pillar may *write* its own files. A pillar
@@ -385,9 +403,10 @@ identity applied to two real screens).
 
 `docs/pillars/` — deep, per-pillar specifications, one file each, once a
 pillar has been worked out in enough detail that `design.md`/
-`architecture.md`'s survey-level treatment stops being enough. Started
-with `docs/pillars/policy_compliance.md`; more will be added as other
-pillars get the same treatment, not all at once.
+`architecture.md`'s survey-level treatment stops being enough. Holds
+`policy_compliance.md`, `policy_catalog.md` (its candidate policy set),
+and `agentic_development.md`; more will be added as other pillars get the
+same treatment, not all at once.
 
 This is additional to the standard layout per the
 [project structure policy](../../docs/policies/project_structure_policy.md)'s

@@ -1,4 +1,4 @@
-← [Answering the First Round](17-answering-the-first-round.md) · deck 18 of 18 · back to [index](README.md)
+← [Answering the First Round](17-answering-the-first-round.md) · deck 18 of 19 · next: [Importing What Was Already Proven →](19-importing-what-was-already-proven.md)
 
 # The Catalog, Confirmed
 
@@ -29,4 +29,4 @@ since the last round closed, not that nothing ever will.
 
 ---
 
-Back to [index](README.md) · or revisit [9 — Policy & Compliance](09-policy-and-compliance.md)
+Next: [19 — Importing What Was Already Proven →](19-importing-what-was-already-proven.md) · or back to [index](README.md)

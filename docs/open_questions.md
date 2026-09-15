@@ -37,8 +37,48 @@ one instead").
 
 ## Open
 
-*(none right now — `OQ-2` closed this round. New items land here as they
-surface, per "How this document works" above.)*
+### OQ-12 — Do review-mode and action-gating compose on the same Job?
+
+**Where this comes from.** Surfaced while writing
+`docs/pillars/agentic_development.md` during a final import pass over the
+whole ecosystem — not a pre-existing gap, a new one caught in the act of
+writing, per this document's own "Claude CLI documents what it surfaces"
+convention.
+
+**What's actually being asked.** Agentic Development's review mode
+(manual vs. auto-approve) answers "is the agent's *own* work good enough
+to finish automatically." Policy & Compliance's action-gating
+(`pending_confirmation`) answers a different question: "does a *policy*
+allow this action to happen at all." Nothing says what happens when a
+single Job is subject to both — e.g. an auto-approved agentic task whose
+resulting action is also gated by a failing policy.
+
+**Why it matters.** These two mechanisms were designed independently, in
+different rounds, for different reasons, and were never checked against
+each other on a single Job. Without an answer, an implementer has to
+guess whether policy-gating happens before or after auto-approval
+resolves, or whether auto-approve should be allowed to skip gating
+entirely (it shouldn't, by every principle already established — a
+policy is never optional — but that needs to actually be stated, not
+assumed).
+
+**Possible interpretations.**
+- (a) Gating always resolves first, regardless of review mode —
+  auto-approve only ever governs the agent's own report/test-result
+  check, never a policy check. A gated Job stays gated no matter what
+  review mode it was submitted under.
+- (b) The two compose sequentially in a fixed order (e.g. policy gate,
+  then review-mode check) with each step's own confirmation window,
+  potentially stacking two human interactions for one Job.
+- (c) Auto-approve implicitly pre-answers a gate's confirmation (since
+  the human already said "proceed without me looking" at submission
+  time) — rejected on its face by (a)'s reasoning above, but worth ruling
+  out explicitly rather than leaving unstated.
+
+**Your answer:**
+
+
+---
 
 ## Resolved
 

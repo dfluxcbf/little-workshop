@@ -87,5 +87,12 @@ restating it.
 18. [The Catalog, Confirmed](18-catalog-confirmed.md) — closes `OQ-2`: the
     full policy catalog, reviewed directly by the user, confirmed good.
     The tracker's Open section is empty for the first time.
+19. [Importing What Was Already Proven](19-importing-what-was-already-proven.md)
+    — a final ecosystem-wide sweep: Agentic Development gets its own full
+    pillar spec (BranchingSpec, the completion marker, review modes, the
+    seven-section change report, two GitHub-adapter techniques), the
+    server manifest's real shape, a noted-but-undecided ambient
+    notification pattern, and a new open question (`OQ-12`) caught in the
+    act of writing.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).

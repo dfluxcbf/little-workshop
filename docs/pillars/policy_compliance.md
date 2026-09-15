@@ -425,6 +425,20 @@ project itself — but Remote Control is what actually closes the gap
 `OQ-9` raised: the one channel guaranteed to exist regardless of a
 project's own configuration.
 
+**A fourth mode worth noting, not yet decided into the design**: this
+ecosystem already has a proven pattern for *ambient*, low-stakes
+awareness that's lighter than any of the three channels above — a
+`PostToolUse` hook (`.claude/hooks/branch_audit_check.py`) that re-runs
+the branch audit opportunistically after a git command, rate-limited
+(at most once every 5 minutes) and purely informational (a
+`systemMessage`, never blocking, never gating anything). Nothing above
+plays that role for Policy & Compliance — every existing channel is tied
+to either a genuine failure (Dashboard/GitHub/Remote Control) or a
+scheduled audit. Whether something like it belongs here too, for
+surfacing a passive compliance signal without the weight of a full
+notification, is left as a future consideration, not a decision made by
+importing the pattern's existence.
+
 ## The "little-workshop itself" tab
 
 A framework policy is authored through the identical pipeline as a user
