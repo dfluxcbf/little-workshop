@@ -1,12 +1,93 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 package(default_visibility = ["//visibility:public"])
 
-# No build artifacts defined yet. Add wheel/vsix/exe/install/test targets here
-# as the project grows — see little-projects/docs/policies/build_policy.md for
-# the standard target names every project should expose, and its "Portability"
-# / "Dependency isolation" / "Missing system dependencies" sections: no
-# hardcoded paths/usernames, install CLI tools via `pipx` (not `pip install
-# --user`), and any `sh_binary`/genrule that needs a system tool that can't be
-# isolated must run tools/check_system_deps.sh as a preflight step first (see
-# that script — install targets should wire it in as a `data` dependency and
-# invoke it before doing real work, the way bootstrap-little-project's own
-# BUILD.bazel does for its `//:install` target).
+# ---------------------------------------------------------------------------
+#   bazel build //:all                  → every artifact (the wheel)
+#   bazel build //:wheel                → the Python wheel (common+core+
+#                                          orchestration+cli — see below)
+#   bazel run   //:install              → preflight (tools/check_system_deps.sh),
+#                                          then pipx-install the wheel (`lws`)
+#   bazel test  //:test                 → the real pytest suite: unit tests
+#                                          plus tests/integration's real
+#                                          `systemd --user` end-to-end proof
+#   bazel run   //:core_server          → run Core directly from source
+#   bazel run   //:orchestration_server → run Orchestration directly from source
+#
+# docs/architecture.md's Build section calls for one Bazel package per
+# pillar with its own :build/:install/:test/:server targets. M1 (Core +
+# Orchestration) ships both from one wheel for now — there's no
+# independent-redeploy story yet to make splitting them worthwhile (that
+# lands with Deployment & Servers' worktree-per-pillar mechanism, M4/M5).
+# `:core_server`/`:orchestration_server` below are this milestone's stand-in
+# for each pillar's own future `:server` target.
+# ---------------------------------------------------------------------------
+
+exports_files(["VERSION", "pyproject.toml"])
+
+genrule(
+    name = "wheel",
+    srcs = glob([
+        "src/**",
+    ]) + [
+        "README.md",
+        "pyproject.toml",
+        "VERSION",
+    ],
+    outs = ["little_workshop-0.1.0-py3-none-any.whl"],
+    cmd = """
+set -euo pipefail
+PROJECT_ROOT="$$(dirname $(location pyproject.toml))"
+TMP_OUT="$$(mktemp -d)"
+trap 'rm -rf "$$TMP_OUT"' EXIT
+cd "$$PROJECT_ROOT"
+python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir "$$TMP_OUT" . >/dev/null
+cp "$$TMP_OUT"/*.whl "$@"
+""",
+    local = True,
+    tags = ["local", "no-sandbox"],
+)
+
+filegroup(
+    name = "all",
+    srcs = [":wheel"],
+)
+
+sh_binary(
+    name = "install",
+    srcs = ["scripts/bazel/install_wheel.sh"],
+    data = [
+        ":wheel",
+        "tools/check_system_deps.sh",
+    ],
+    args = [
+        "$(location :wheel)",
+        "$(location tools/check_system_deps.sh)",
+    ],
+)
+
+sh_test(
+    name = "test",
+    srcs = ["scripts/bazel/run_pytest.sh"],
+    args = ["$(location pyproject.toml)"],
+    data = glob([
+        "src/**",
+        "tests/**",
+    ]) + ["pyproject.toml"],
+    tags = ["local", "no-sandbox"],
+)
+
+sh_binary(
+    name = "core_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["core", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "orchestration_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["orchestration", "$(location pyproject.toml)"],
+)

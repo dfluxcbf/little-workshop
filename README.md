@@ -7,10 +7,15 @@ ecosystem, sized for one PC and up to two developers. Absorbs
 `bootstrap-little-project` as internal modules of one daemon, rather than
 replacing them with separate third-party peers.
 
-Design-only right now: see `docs/design.md` for the purpose, goals, and core
-concepts, and `docs/architecture.md` for the pillar breakdown, data model,
-and feature mapping from the tools it absorbs. No implementation exists yet
-— see `docs/milestones.md`.
+See `docs/design.md` for the purpose, goals, and core concepts, and
+`docs/architecture.md` for the pillar breakdown, data model, and feature
+mapping from the tools it absorbs. Implementation is underway against the
+17-milestone sequence in `docs/milestones.md` — M1 (Core + Orchestration,
+the substrate every pillar depends on) is done: `src/common`, `src/core`,
+`src/orchestration`, and a minimal `lws` CLI (`src/cli`), proven
+end-to-end against a real `systemd --user` session in
+`tests/integration`. `bazel build //:wheel`, `bazel run //:install`, and
+`bazel test //:test` all work today.
 
 For the narrative version of the same decisions — cross-linked
 presentations — start at `presentations/README.md`.

@@ -6,3 +6,5 @@ __pycache__/
 bazel-*
 MODULE.bazel.lock
 .req_env/
+.reqs/
+*.egg-info/
