@@ -209,6 +209,23 @@ supersede the first round's "Module" concept.
   reports completion back through its own callback, the same "queue pumps
   itself" shape `little-runner`'s repository-slot logic already uses,
   now crossing a process boundary instead of staying in-process.
+- **ScheduledTask** (`docs/milestones.md` M9) — a durable definition,
+  owned by Orchestration, distinct from a Job: `{id, name, job_template,
+  schedule, state, next_run_at}`. `job_template` is a Job's own creation
+  payload (`type`, `target_pillar`, `project_id`, `params`, `queue_key`,
+  `depends_on`); `schedule` is `once` (a specific date/time) or
+  `recurring` (a set of weekdays plus one time-of-day) — deliberately
+  not full cron. At `next_run_at`, Orchestration creates a real Job from
+  `job_template` with `created_by: "scheduler"`. Eight operations:
+  `add`/`edit`/`remove`/`trigger`/`cancel`/`stop`/`postpone`/`queue` —
+  see `docs/pillars/orchestration.md` for what each means precisely.
+  `stop` is opt-in per Job type (the same pattern Policy & Compliance's
+  action-gating uses for topics), since most Job types — a fast,
+  synchronous git sequence, say — have no safe mid-flight interruption
+  point. `queue` generalizes `queue_key` from a strict mutex into a
+  configurable-capacity pool (default 1, so every existing caller's
+  behavior is unchanged) rather than adding a second concurrency
+  mechanism alongside it.
 - **Pipeline / PipelineRun** — a named, versioned DAG of Job templates,
   expanded into concrete Jobs at trigger time. A node's target pillar and
   `project_id` can differ from other nodes in the same pipeline, which is
@@ -247,7 +264,7 @@ caller (CLI / MCP tool / Dashboard / scheduler / pipeline expansion)
    │
    ▼
 Job created in Orchestration  {type, target_pillar, project_id, params,
-                                queue_key, depends_on}
+                                queue_key, depends_on, created_by}
    │
    ▼
 Orchestration: ready? (depends_on satisfied, queue_key free)
@@ -282,6 +299,13 @@ pillar executes (synchronously for a quick op, or accepts the Job and
 Job = succeeded | failed, recorded in Orchestration; releasing this
    queue_key may make another queued Job ready (the queue pumps itself)
 ```
+
+`scheduler` above is no longer just a placeholder caller name:
+`docs/milestones.md`'s M9 gives Orchestration a `ScheduledTask` concept
+(`add`/`edit`/`remove`/`trigger`/`cancel`/`stop`/`postpone`/`queue`, over
+a `once` or weekday-`recurring` schedule) that creates exactly this
+shape of Job, on its own timing, with `created_by: "scheduler"` — see
+`docs/pillars/orchestration.md`.
 
 ### Crash recovery (Core's job — fast, dumb, no rebuild)
 

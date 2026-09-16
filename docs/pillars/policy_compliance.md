@@ -13,7 +13,7 @@ Policy & Compliance is the pillar that guards every checkable rule this
 ecosystem has agreed to — the 8 root policy docs' checkable content,
 `doctor.py`, `branch_audit.py`, and the checklist skill's manual
 verification table, all absorbed into one mechanical enforcement path.
-**Not yet built** (`docs/milestones.md` M11, depending on M6 for every
+**Not yet built** (`docs/milestones.md` M12, depending on M6 for every
 EARS-refinement/conflict-check/script-generation call and M4 for every
 test-script execution — this pillar is scheduled this late because those
 dependencies weren't ready earlier, not because its own design wasn't).
@@ -23,7 +23,7 @@ that specification. A companion document,
 `docs/pillars/policy_catalog.md`, holds a candidate set of roughly 50
 policies mined from this ecosystem's existing tools — tier already
 decided, individual entries still pending the authoring pipeline
-described below (M12, run one entry at a time through the real pipeline).
+described below (M13, run one entry at a time through the real pipeline).
 
 ## Purpose & goal
 
@@ -55,7 +55,7 @@ without someone finding out" (`docs/architecture.md`).
   human-override flow.
 - **Definition-of-done and policy-conflict resolution** — the multi-pillar
   half of "is this actually done," paired with Requirements & Quality's
-  own M9 implementation of the same concept from its side.
+  own M10 implementation of the same concept from its side.
 - **Remote Control as the notification channel** — reusing Agentic
   Development's own proven capability for a second purpose (a
   time-sensitive policy notification), not a new mechanism.
@@ -73,9 +73,12 @@ without someone finding out" (`docs/architecture.md`).
   audit or an action-gate decision.
 - **Called by**: Orchestration — every Job dispatch consults this pillar
   first for any Job type that declares a gated topic, before the Job
-  ever reaches its real target pillar. `lws`, the MCP Server (once its
-  catalog covers this pillar), and Requirements & Quality (M9), for the
-  policy-conflict half of definition-of-done.
+  ever reaches its real target pillar; this includes a `policy.check_all`
+  Job dispatched by a recurring `ScheduledTask`, once Orchestration's
+  scheduled tasks (M9) exist — the periodic-audit case is just that Job
+  type on a timer, not a mechanism of this pillar's own. `lws`, the MCP
+  Server (once its catalog covers this pillar), and Requirements &
+  Quality (M10), for the policy-conflict half of definition-of-done.
 - **Discovered through**: Core, like every pillar.
 
 ## Three tiers of rules, not one
