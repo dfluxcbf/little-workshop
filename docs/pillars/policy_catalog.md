@@ -3,13 +3,22 @@
 **Status.** Tier is decided: every entry below is a **framework** policy
 candidate, not a strong default users could override — confirmed 2026-09-15.
 The catalog as a whole was reviewed directly by the user (not summarized)
-and confirmed good, no changes needed — 2026-09-15. None is an *active*
-policy yet — each still has to individually clear all four gates in
-`policy_compliance.md`'s authoring pipeline (EARS-compliant, mechanically
-enforceable, non-conflicting, and full human approval of both the EARS
-text and the generated script) before it becomes a real `policies` row.
-This document is the input to that pipeline, not a record of having run
-it. This catalog's own open items are tracked centrally in
+and confirmed good, no changes needed — 2026-09-15. `docs/milestones.md`
+M13 built the real, reusable tool for running an entry through the
+pipeline (`lws policy catalog list`/`run`, `workshop_policy_catalog_*`)
+and carried exactly one entry (`version-file-single-source`, below) all
+the way to a real, activated `policies` row as a working proof — Gate 4's
+"full human approval, every time, no exception" is fundamentally
+incompatible with unattended bulk population, so the other 58 entries
+below are still real future work, one topic at a time, through this
+same tool — never a bulk import. That live run also surfaced a real,
+now-fixed defect: the script-generation prompt didn't originally state
+the sandbox's actual mount paths, so the real Claude CLI guessed at a
+resolution convention that doesn't exist — see `docs/requirements.md`'s
+M13 section (REQ-000000132) for the full story. This document is the
+input to that pipeline, not a
+record of having run it for everything below. This catalog's own open
+items are tracked centrally in
 [`../open_questions.md`](../open_questions.md), not inline.
 
 **Enforceability was applied retroactively to this whole catalog**, not

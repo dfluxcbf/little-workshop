@@ -129,10 +129,15 @@ _CODE_FENCE_RE = re.compile(r"^```(?:python)?\s*\n(.*?)\n```\s*$", re.DOTALL)
 def generate_test_script(query: QueryFn, ears_text: str, *, project_bound: bool) -> str:
     scope_note = (
         "This policy is project-bound: the script may only read the target project's own "
-        "repository checkout and its little-workshop project-files directory."
+        "repository checkout, real-mounted read-only inside the sandbox at the fixed path "
+        "/project (use that literal path directly — never an environment variable, never a "
+        "walk-up from the working directory, since the script's own cwd is /policy, not "
+        "inside the checkout). If the requirement also needs little-workshop's own "
+        "project-files directory for this project, it is mounted read-only at /project-files."
         if project_bound else
         "This policy is framework-bound: the script may only read little-workshop's own "
-        "enumerated source/docs files, never a specific user project's."
+        "source and docs, real-mounted read-only inside the sandbox at the fixed paths "
+        "/framework/src and /framework/docs (use those literal paths directly)."
     )
     prompt = (
         "Write ONE pytest test script (a single Python file's full contents, nothing else) "

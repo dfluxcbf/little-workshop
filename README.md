@@ -142,9 +142,23 @@ mapping from the tools it absorbs. Implementation is underway against the
   Two documented simplifications: the sandbox's network is `--network
   none` rather than a Pillar-Interface-only proxy, and gated Job-type
   declarations are a small, real start, not `OQ-3`'s full mapping.
+- **M13 — Populate the policy catalog (in progress)**: `lws policy
+  catalog list`/`run` and matching `workshop_policy_catalog_*` MCP tools
+  drive one `docs/pillars/policy_catalog.md` entry at a time through
+  the identical `policy.author`/`policy.activate` pipeline any other
+  policy uses — never a bulk import, since Gate 4's full human approval
+  has no shortcut. One entry (`version-file-single-source`) carried all
+  the way to a real, activated policy as a working proof, checked for
+  real via the real Docker sandbox against a real bootstrapped project.
+  That live run against the real Claude CLI (not the deterministic
+  fake-stub tests) also caught and fixed a real defect: the
+  script-generation prompt never stated the sandbox's actual mount
+  paths, so a generated script would have silently found nothing to
+  check even for a compliant project. The other 58 catalog entries stay
+  queued as real future work through this same tool.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1491 tests — 1378 unit, 113 real
+`bazel test //:coverage` all work today (1509 tests — 1394 unit, 115 real
 `systemd --user` end-to-end integration proofs — at 99% line coverage
 over `src/`, measured with `python3 -m pytest --cov=src`; see
 `scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific

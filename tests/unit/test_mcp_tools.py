@@ -741,3 +741,27 @@ def test_policy_confirm_calls_client(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "policy_confirm_job", result={"confirmed": True})
     tools_mod.TOOLS_BY_NAME["workshop_policy_confirm"].handler(paths, {"job_id": "j1"})
     assert calls[0] == ((paths, "j1"), {})
+
+
+def test_policy_catalog_list_returns_every_entry(paths):
+    entries = tools_mod.TOOLS_BY_NAME["workshop_policy_catalog_list"].handler(paths, {})
+    assert len(entries) >= 50
+    assert any(e["topic"] == "two-long-lived-branches" for e in entries)
+
+
+def test_policy_catalog_run_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_policy_catalog_run"].handler(
+        paths, {"topic": "two-long-lived-branches", "target_pillar": "version"}
+    )
+    call = fake_create_job[0]
+    assert call["type"] == "policy.author"
+    assert call["params"]["topic"] == "two-long-lived-branches"
+    assert call["params"]["created_by"] == "framework"
+    assert call["params"]["scope_level"] == "all_projects"
+
+
+def test_policy_catalog_run_unknown_topic_raises(paths):
+    import pytest
+
+    with pytest.raises(ValueError, match="no catalog entry"):
+        tools_mod.TOOLS_BY_NAME["workshop_policy_catalog_run"].handler(paths, {"topic": "ghost", "target_pillar": "version"})

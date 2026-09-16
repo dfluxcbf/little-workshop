@@ -123,3 +123,28 @@ def test_generate_test_script_notes_project_bound_vs_framework_bound_in_the_prom
 
     gates.generate_test_script(query, "x", project_bound=True)
     assert "project-bound" in captured["prompt"]
+
+
+def test_generate_test_script_states_the_real_sandbox_mount_paths():
+    """A real M13 catalog run against the real Claude CLI produced a
+    script that guessed at LWS_PROJECT_ROOT/an upward .git walk from
+    cwd — neither exists in the real sandbox (cwd is /policy, the
+    checkout is bind-mounted at the fixed path /project) — so the
+    script silently found no VERSION file even for a compliant project.
+    The prompt must state the real, fixed mount paths explicitly rather
+    than leaving Claude to guess a resolution convention that doesn't
+    exist."""
+    captured = {}
+
+    def query(prompt):
+        captured["prompt"] = prompt
+        return "def test_x(): pass"
+
+    gates.generate_test_script(query, "x", project_bound=True)
+    assert "/project" in captured["prompt"]
+    assert "/project-files" in captured["prompt"]
+    assert "environment variable" in captured["prompt"]
+
+    gates.generate_test_script(query, "x", project_bound=False)
+    assert "/framework/src" in captured["prompt"]
+    assert "/framework/docs" in captured["prompt"]

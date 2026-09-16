@@ -35,7 +35,7 @@ discipline this project already applies to itself); the *sequence* and
 | M10 | Requirements & Quality | M1, M2, M4 | Done |
 | M11 | Build & Packages | M1, M2, M4 | Done |
 | M12 | Policy & Compliance | M1, M4, M6, M10 | Done |
-| M13 | Populate the policy catalog | M12 | Not started |
+| M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Not started |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Not started |
 | M16 | Compatibility shims | M1–M14 (whichever tool each shim forwards to) | Not started |

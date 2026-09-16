@@ -601,6 +601,32 @@ def cmd_policy_activate(args: argparse.Namespace) -> int:
     return _policy_job(args, "policy.activate", draft)
 
 
+def cmd_policy_catalog_list(args: argparse.Namespace) -> int:
+    from policy.catalog import load_catalog
+
+    entries = load_catalog()
+    _print([
+        {"topic": e.topic, "section": e.section, "section_title": e.section_title, "ears_text": e.ears_text, "source": e.source}
+        for e in entries
+    ])
+    return 0
+
+
+def cmd_policy_catalog_run(args: argparse.Namespace) -> int:
+    from policy.catalog import find_entry
+
+    entry = find_entry(args.topic)
+    if entry is None:
+        print(f"error: no catalog entry named {args.topic!r}", file=sys.stderr)
+        return 1
+
+    params = {
+        "ears_text": entry.ears_text, "topic": entry.topic, "target_pillar": args.target_pillar,
+        "scope_level": "all_projects", "created_by": "framework",
+    }
+    return _policy_job(args, "policy.author", params)
+
+
 def cmd_policy_remove(args: argparse.Namespace) -> int:
     return _policy_job(args, "policy.remove", {"policy_id": args.policy_id})
 
@@ -1394,6 +1420,17 @@ def build_parser() -> argparse.ArgumentParser:
     policy_activate.add_argument("draft_json", help="Path to a JSON file holding policy.author's own result")
     policy_activate.add_argument("--policy-id", default=None, help="Editing an existing policy in place")
     policy_activate.set_defaults(func=cmd_policy_activate)
+
+    policy_catalog = policy_sub.add_parser("catalog", help="docs/pillars/policy_catalog.md's ~50 candidate framework policies (M13)")
+    policy_catalog_sub = policy_catalog.add_subparsers(dest="policy_catalog_command", required=True)
+
+    policy_catalog_list = policy_catalog_sub.add_parser("list", help="List every catalog entry")
+    policy_catalog_list.set_defaults(func=cmd_policy_catalog_list)
+
+    policy_catalog_run = policy_catalog_sub.add_parser("run", help="Gates 1-3 for one catalog entry, framework tier, all-projects scope")
+    policy_catalog_run.add_argument("topic", help="The catalog entry's own topic")
+    policy_catalog_run.add_argument("--target-pillar", required=True)
+    policy_catalog_run.set_defaults(func=cmd_policy_catalog_run)
 
     policy_remove = policy_sub.add_parser("remove", help="Delete a policy for good")
     policy_remove.add_argument("policy_id")
