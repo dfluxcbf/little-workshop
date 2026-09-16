@@ -26,7 +26,7 @@ from mcp_server.server import MCPServer
 from orchestration.app import build_app as build_orchestration_app
 from orchestration import db as orchestration_db
 
-from helpers import UvicornThread, requires_systemd_user
+from helpers import INTEGRATION, UvicornThread, requires_systemd_user
 
 
 def _core_and_orchestration(workshop_env, known_pillars):
@@ -285,3 +285,91 @@ def test_mcp_tools_call_with_wrong_argument_type_is_rejected_as_invalid_params(w
         assert rejected["error"]["code"] == -32602
     finally:
         core_server.stop()
+
+
+@requires_systemd_user
+def test_mcp_schedule_add_and_trigger_creates_a_real_job_via_orchestration(workshop_env):
+    env = {"PYTHONPATH": str(INTEGRATION)}
+    reference_command = [sys.executable, "-m", "reference_pillar", str(workshop_env.paths.socket_path("reference"))]
+    systemd.start("reference", reference_command, environment=env, runner=DEFAULT_RUNNER)
+    try:
+        probe = probe_health(workshop_env.paths.socket_path("reference"), timeout=5.0, max_retries=10)
+        assert probe.ok, probe.error
+
+        core_server, orch_server, conn = _core_and_orchestration(workshop_env, ("reference",))
+        try:
+            mcp = MCPServer(paths=workshop_env.paths)
+            add_response = mcp.handle_request({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "workshop_schedule_add", "arguments": {
+                    "name": "nightly-noop", "type": "noop", "target_pillar": "reference",
+                    "days_of_week": [0, 1, 2, 3, 4, 5, 6], "time_of_day": "09:00",
+                }},
+            })
+            assert add_response["result"]["isError"] is False, add_response
+
+            import json
+
+            created = json.loads(add_response["result"]["content"][0]["text"])
+            task_id = created["id"]
+
+            trigger_response = mcp.handle_request({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "workshop_schedule_trigger", "arguments": {"task_id": task_id}},
+            })
+            assert trigger_response["result"]["isError"] is False, trigger_response
+            job = json.loads(trigger_response["result"]["content"][0]["text"])
+            assert job["status"] == "succeeded"
+            assert job["created_by"] == "scheduler"
+
+            status_response = mcp.handle_request({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "workshop_schedule_status", "arguments": {"task_id": task_id}},
+            })
+            payload = json.loads(status_response["result"]["content"][0]["text"])
+            assert payload["last_job_id"] == job["id"]
+        finally:
+            orch_server.stop()
+            core_server.stop()
+            conn.close()
+    finally:
+        systemd.stop("reference", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_mcp_job_stop_interrupts_a_real_running_job(workshop_env):
+    env = {"PYTHONPATH": str(INTEGRATION)}
+    reference_command = [sys.executable, "-m", "reference_pillar", str(workshop_env.paths.socket_path("reference"))]
+    systemd.start("reference", reference_command, environment=env, runner=DEFAULT_RUNNER)
+    try:
+        probe = probe_health(workshop_env.paths.socket_path("reference"), timeout=5.0, max_retries=10)
+        assert probe.ok, probe.error
+
+        core_server, orch_server, conn = _core_and_orchestration(workshop_env, ("reference",))
+        try:
+            created = cli_client.create_job(
+                workshop_env.paths, type="slow", target_pillar="reference", params={},
+                queue_key=None, depends_on=[], created_by="integration-test",
+            )
+            assert created["status"] == "running"
+
+            mcp = MCPServer(paths=workshop_env.paths)
+            stop_response = mcp.handle_request({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "workshop_job_stop", "arguments": {"job_id": created["id"]}},
+            })
+            assert stop_response["result"]["isError"] is False, stop_response
+
+            import json
+
+            payload = json.loads(stop_response["result"]["content"][0]["text"])
+            assert payload == {"stopped": True, "reason": None}
+
+            settled = cli_client.job_status(workshop_env.paths, created["id"])
+            assert settled["job"]["status"] == "stopped"
+        finally:
+            orch_server.stop()
+            core_server.stop()
+            conn.close()
+    finally:
+        systemd.stop("reference", runner=DEFAULT_RUNNER)

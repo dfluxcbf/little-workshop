@@ -171,3 +171,38 @@ def test_importing_the_same_name_twice_fails_the_second_time(tmp_path, workshop_
             conn.close()
     finally:
         systemd.stop("registry", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_import_fails_cleanly_when_path_is_not_a_git_repository(tmp_path, workshop_env):
+    env = workshop_env.env
+    systemd.start("registry", [sys.executable, "-m", "registry"], environment=env, runner=DEFAULT_RUNNER)
+    try:
+        probe = probe_health(workshop_env.paths.socket_path("registry"), timeout=5.0, max_retries=10)
+        assert probe.ok, probe.error
+
+        def socket_lookup(pillar: str):
+            return workshop_env.paths.socket_path("registry") if pillar == "registry" else None
+
+        conn = orchestration_db.connect(workshop_env.paths.pillar_db_path("orchestration"))
+        orch_server = UvicornThread(build_orchestration_app(conn, socket_lookup), workshop_env.paths.socket_path("orchestration"))
+        orch_server.start()
+        try:
+            not_a_repo = tmp_path / "just-a-directory"
+            not_a_repo.mkdir()
+            (not_a_repo / "README.md").write_text("no .git here\n", encoding="utf-8")
+
+            imported = cli_client.create_job(
+                workshop_env.paths, type="project.import", target_pillar="registry", project_id="not-a-repo",
+                params={"name": "not-a-repo", "path": str(not_a_repo)}, queue_key=None, depends_on=[],
+                created_by="integration-test",
+            )
+            assert imported["status"] == "failed", imported
+
+            listed = cli_client.list_projects(workshop_env.paths)
+            assert listed["projects"] == []
+        finally:
+            orch_server.stop()
+            conn.close()
+    finally:
+        systemd.stop("registry", runner=DEFAULT_RUNNER)

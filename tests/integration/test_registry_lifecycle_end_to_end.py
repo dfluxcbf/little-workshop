@@ -328,3 +328,56 @@ def test_project_remove_does_not_yet_cascade_to_other_pillars_data(tmp_path, wor
             conn.close()
     finally:
         _stop_pillars("registry", "version")
+
+
+@requires_systemd_user
+def test_project_get_returns_404_for_an_unknown_project(workshop_env):
+    systemd.start("registry", [sys.executable, "-m", "registry"], environment=workshop_env.env, runner=DEFAULT_RUNNER)
+    try:
+        probe = probe_health(workshop_env.paths.socket_path("registry"), timeout=5.0, max_retries=10)
+        assert probe.ok, probe.error
+
+        with client_for_socket(workshop_env.paths.socket_path("registry"), timeout=5.0) as registry_client:
+            response = registry_client.get("/v1/projects/does-not-exist")
+        assert response.status_code == 404
+    finally:
+        systemd.stop("registry", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_project_sets_get_returns_404_for_an_unknown_set(workshop_env):
+    systemd.start("registry", [sys.executable, "-m", "registry"], environment=workshop_env.env, runner=DEFAULT_RUNNER)
+    try:
+        probe = probe_health(workshop_env.paths.socket_path("registry"), timeout=5.0, max_retries=10)
+        assert probe.ok, probe.error
+
+        with client_for_socket(workshop_env.paths.socket_path("registry"), timeout=5.0) as registry_client:
+            response = registry_client.get("/v1/project_sets/does-not-exist")
+        assert response.status_code == 404
+    finally:
+        systemd.stop("registry", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_project_sets_creating_a_duplicate_name_is_not_yet_handled_cleanly(workshop_env):
+    """Investigated: `registry/db.py`'s `project_sets.name` is a PRIMARY
+    KEY, and `create_project_set` does a plain `INSERT` with no
+    IGNORE/upsert and no app-layer pre-check -- a second create with the
+    same name raises a real `sqlite3.IntegrityError` straight out of the
+    handler, uncaught, becoming a bare 500. A genuine, confirmed gap
+    (the same shape as `test_project_remove_does_not_yet_cascade_to_other_
+    pillars_data` above), locked in here rather than fixed, so a future
+    change to it is a deliberate, visible decision."""
+    systemd.start("registry", [sys.executable, "-m", "registry"], environment=workshop_env.env, runner=DEFAULT_RUNNER)
+    try:
+        probe = probe_health(workshop_env.paths.socket_path("registry"), timeout=5.0, max_retries=10)
+        assert probe.ok, probe.error
+
+        with client_for_socket(workshop_env.paths.socket_path("registry"), timeout=5.0) as registry_client:
+            first = registry_client.post("/v1/project_sets", json={"name": "widgets", "project_names": []})
+            assert first.status_code == 200
+
+            second = registry_client.post("/v1/project_sets", json={"name": "widgets", "project_names": []})
+            assert second.status_code == 500
+    finally:
+        systemd.stop("registry", runner=DEFAULT_RUNNER)

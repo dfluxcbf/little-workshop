@@ -90,7 +90,7 @@ mapping from the tools it absorbs. Implementation is underway against the
   mutex behavior) instead of a second concurrency mechanism.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1086 tests — 1014 unit, 72 real
+`bazel test //:coverage` all work today (1115 tests — 1014 unit, 101 real
 `systemd --user` end-to-end integration proofs — at 99% line coverage
 over `src/`, measured with `python3 -m pytest --cov=src`; see
 `scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific
@@ -118,6 +118,20 @@ Orchestration's dispatch timeout being too tight for real subprocess-
 backed jobs under load — the same "real end-to-end tests are the actual
 arbiter of correctness" discipline every milestone above already
 followed.
+
+A follow-up pass raised integration coverage further, from 72 to 101 real
+`systemd --user`/real-socket end-to-end tests: the remaining M9
+scheduled-task operations (cancel/postpone/remove/edit/list/get, and
+`stop` against a non-running Job), `queue_key` capacity edge cases, real
+`lws schedule`/`lws job stop` and MCP `workshop_schedule_*`/
+`workshop_job_stop` round trips, a full Improvement gitflow cycle and
+multi-RC release-candidate listing, `deployment.stop`/status/confirmation
+edge cases, and further Core supervision scenarios (a disabled pillar
+never launched, a healthy reconcile loop staying a clean no-op). Along
+the way it also locked in one more confirmed, undocumented gap —
+Registry's `project_sets.name` `PRIMARY KEY` has no app-layer duplicate
+check, so a second `project_sets` create with the same name raises a raw
+500 rather than failing cleanly.
 
 For the narrative version of the same decisions — cross-linked
 presentations — start at `presentations/README.md`.
