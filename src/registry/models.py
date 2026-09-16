@@ -70,3 +70,14 @@ class BootstrapResult(BaseModel):
     repo_url: str | None = None
     github_created: bool = False
     pushed: bool = False
+
+
+class ImportParams(BaseModel):
+    name: str
+    path: str
+
+
+class ImportResult(BaseModel):
+    name: str
+    path: str
+    repo_url: str | None = None

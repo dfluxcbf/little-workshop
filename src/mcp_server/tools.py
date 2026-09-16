@@ -98,6 +98,13 @@ def _project_bootstrap(paths: Paths, args: JSONDict) -> Any:
     )
 
 
+def _project_import(paths: Paths, args: JSONDict) -> Any:
+    return client.create_job(
+        paths, type="project.import", target_pillar="registry", project_id=args["name"],
+        params={"name": args["name"], "path": args["path"]}, queue_key=None, depends_on=[], created_by="mcp",
+    )
+
+
 def _project_remove(paths: Paths, args: JSONDict) -> Any:
     return client.create_job(
         paths, type="project.remove", target_pillar="registry", project_id=args["name"],
@@ -343,6 +350,16 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "remote_host": _prop("string", "Git remote host. Default: github.com."),
                  "github_token": _prop("string", "GitHub token, if create_github_repo is true."),
              }, ["name", "dest_dir"]), _project_bootstrap),
+    ToolSpec("workshop_project_import", "Register an existing, already-checked-out repository — the other half of "
+             "project.bootstrap (docs/milestones.md M8). Deliberately mechanical: it only registers what's there "
+             "(reading the repo's own `origin` remote if one exists), it never scaffolds or checks policy "
+             "conformance — inspect and fix the repository yourself first, the same judgment call a human session "
+             "would make, then call this once it's ready. A normal workshop_agent_run_task afterward is how any "
+             "further conformance work actually gets done, once the project is registered and resolvable.",
+             _schema({
+                 "name": _prop("string", "The project's name to register it under."),
+                 "path": _prop("string", "Absolute path to the existing, already-checked-out git repository."),
+             }, ["name", "path"]), _project_import),
     ToolSpec("workshop_project_remove", "Hard-delete a registered project: cascades to every pillar's own data for it.",
              _schema({"name": _prop("string", "The project's name.")}, ["name"]), _project_remove),
     ToolSpec("workshop_project_list", "List every registered project, with its overall status.",

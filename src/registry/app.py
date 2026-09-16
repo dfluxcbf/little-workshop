@@ -18,7 +18,8 @@ from pydantic import BaseModel, ValidationError
 from common.paths import Paths
 from registry import db
 from registry.bootstrap import BootstrapError, bootstrap_project
-from registry.models import BootstrapParams, ProjectSet, ProjectStatus, Ticket
+from registry.import_ import ProjectImportError, import_project
+from registry.models import BootstrapParams, ImportParams, ProjectSet, ProjectStatus, Ticket
 from registry.removal import ProjectNotFoundError, remove_project
 
 
@@ -58,6 +59,19 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             try:
                 result = bootstrap_project(conn, paths, bootstrap_params)
             except BootstrapError as exc:
+                return {"outcome": "failed", "error": str(exc)}
+        return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
+
+    @app.post("/v1/jobs/project.import")
+    def job_import(request: JobRequest) -> dict:
+        try:
+            import_params = ImportParams(**request.params)
+        except ValidationError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        with lock:
+            try:
+                result = import_project(conn, paths, import_params)
+            except ProjectImportError as exc:
                 return {"outcome": "failed", "error": str(exc)}
         return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
 

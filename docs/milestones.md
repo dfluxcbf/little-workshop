@@ -30,7 +30,7 @@ discipline this project already applies to itself); the *sequence* and
 | M5 | Self-redeploy (reflexive) | M4 | Done |
 | M6 | Agentic Development | M1, M2, M3, M4 | Done |
 | M7 | MCP Server — minimal | M2, M3, M4, M6 | Done |
-| M8 | Registry & Portfolio — import path | M2, M6 | Not started |
+| M8 | Registry & Portfolio — import path | M2, M6 | Done |
 | M9 | Requirements & Quality | M1, M2, M4 | Not started |
 | M10 | Build & Packages | M1, M2, M4 | Not started |
 | M11 | Policy & Compliance | M1, M4, M6, M9 | Not started |

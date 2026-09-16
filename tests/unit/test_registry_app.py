@@ -222,3 +222,55 @@ def test_job_bootstrap_missing_required_params_fails_cleanly_not_a_crash(client)
     body = response.json()
     assert body["outcome"] == "failed"
     assert "dest_dir" in body["error"]
+
+
+def _git(args, cwd) -> None:
+    import subprocess
+
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def test_job_import_registers_an_existing_repo(client):
+    app_client, workdir = client
+    repo = workdir / "little-widget"
+    repo.mkdir()
+    _git(["init", "-b", "master"], repo)
+    _git(["config", "user.email", "t@example.com"], repo)
+    _git(["config", "user.name", "T"], repo)
+    (repo / "README.md").write_text("# widget\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "first"], repo)
+
+    response = app_client.post(
+        "/v1/jobs/project.import", json={"job_id": "j1", "params": {"name": "little-widget", "path": str(repo)}}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "succeeded"
+    assert body["result"]["path"] == str(repo)
+
+    project = app_client.get("/v1/projects/little-widget").json()
+    assert project["path"] == str(repo)
+
+
+def test_job_import_missing_required_params_fails_cleanly_not_a_crash(client):
+    app_client, _ = client
+    response = app_client.post(
+        "/v1/jobs/project.import", json={"job_id": "j1", "params": {"name": "little-widget"}}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "failed"
+    assert "path" in body["error"]
+
+
+def test_job_import_nonexistent_path_fails_cleanly(client):
+    app_client, workdir = client
+    response = app_client.post(
+        "/v1/jobs/project.import",
+        json={"job_id": "j1", "params": {"name": "little-widget", "path": str(workdir / "nowhere")}},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "failed"
+    assert "does not exist" in body["error"]
