@@ -17,6 +17,7 @@ package(default_visibility = ["//visibility:public"])
 #   bazel run   //:core_server          → run Core directly from source
 #   bazel run   //:orchestration_server → run Orchestration directly from source
 #   bazel run   //:registry_server      → run Registry & Portfolio directly from source
+#   bazel run   //:requirements_server  → run Requirements & Quality directly from source
 #   bazel run   //:version_server       → run Version Control & Release directly from source
 #   bazel run   //:deployment_server    → run Deployment & Servers directly from source
 #   bazel run   //:agent_server         → run Agentic Development directly from source
@@ -123,6 +124,13 @@ sh_binary(
     srcs = ["scripts/bazel/run_server.sh"],
     data = glob(["src/**"]) + ["pyproject.toml"],
     args = ["registry", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "requirements_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["requirements", "$(location pyproject.toml)"],
 )
 
 sh_binary(

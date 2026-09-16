@@ -349,3 +349,102 @@ def test_deployment_redeploy_pillar_worker_reports_error_on_raw_runtime_error(tm
     assert job_id == "job-1"
     assert succeeded is False
     assert "reference is not a tree" in error
+
+
+def test_requirements_suite_create_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["requirements", "suite", "create", "--project-id", "little-widget", "core"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_requirements_suite_list_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+    from requirements import db as requirements_db
+    from requirements.models import TestSuite
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    conn = requirements_db.connect(paths.pillar_db_path("requirements"))
+    requirements_db.insert_test_suite(conn, TestSuite(id="s1", project_id="little-widget", name="core"))
+    conn.close()
+
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["requirements", "suite", "list"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"] == "fallback"
+    assert len(output["test_suites"]) == 1
+
+
+def test_requirements_create_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["requirements", "create", "--project-id", "little-widget", "REQ-1", "thing works"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_requirements_list_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+    from requirements import db as requirements_db
+    from requirements.models import Requirement
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    conn = requirements_db.connect(paths.pillar_db_path("requirements"))
+    requirements_db.insert_requirement(conn, Requirement(id="r1", project_id="little-widget", key="REQ-1", title="a"))
+    conn.close()
+
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["requirements", "list"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"] == "fallback"
+    assert len(output["requirements"]) == 1
+
+
+def test_requirements_status_falls_back_and_reports_missing_requirement(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["requirements", "status", "nonexistent"])
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["requirement"] is None
+
+
+def test_requirements_report_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["requirements", "report", "--project-id", "little-widget"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_requirements_result_list_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+    from requirements import db as requirements_db
+    from requirements.models import TestResult, TestSuite
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    conn = requirements_db.connect(paths.pillar_db_path("requirements"))
+    requirements_db.insert_test_suite(conn, TestSuite(id="s1", project_id="little-widget", name="core"))
+    requirements_db.insert_test_result(conn, TestResult(id="t1", project_id="little-widget", suite_id="s1", test_name="t", verdict="passed"))
+    conn.close()
+
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["requirements", "result", "list"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"] == "fallback"
+    assert len(output["test_results"]) == 1

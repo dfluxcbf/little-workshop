@@ -88,9 +88,23 @@ mapping from the tools it absorbs. Implementation is underway against the
   10-minute in-process thread. `queue_key` gained a configurable
   concurrency capacity (default 1, unchanged from every prior caller's
   mutex behavior) instead of a second concurrency mechanism.
+- **M10 — Requirements & Quality**: `little-requirements`' full model
+  (Project→Suite→Requirement→TestResult, draft/published) absorbed as
+  one pillar-owned, `project_id`-scoped database, plus its own
+  never-built M8 (a Use-Case/Milestone axis independent of test suites)
+  and E6 (JUnit-XML ingestion beyond pytest, and sandboxed on-demand
+  test execution via Deployment & Servers' worktree interface) actually
+  built. Eleven operations exposed identically on the Pillar Interface,
+  `lws requirements ...`, and matching `workshop_requirements_*` MCP
+  tools. A definition-of-done report (`GET /v1/report`) marks a
+  requirement done only when published, linked to a test suite, and
+  that suite's latest run passed — Policy & Compliance's (M12) own
+  half of the same concept is the *conflict-with-a-policy* side, still
+  to come. Periodic test runs needed no mechanism of their own: just an
+  Orchestration `ScheduledTask` (M9) naming `requirements.run_tests`.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1115 tests — 1014 unit, 101 real
+`bazel test //:coverage` all work today (1242 tests — 1138 unit, 104 real
 `systemd --user` end-to-end integration proofs — at 99% line coverage
 over `src/`, measured with `python3 -m pytest --cov=src`; see
 `scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific

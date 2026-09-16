@@ -519,3 +519,142 @@ def test_mcp_serve_invokes_the_stdio_server_with_the_resolved_paths(paths, monke
     monkeypatch.setattr("mcp_server.server.serve", fake_serve)
     assert main.main(["mcp", "serve"]) == 0
     assert captured["paths"] is paths
+
+
+# ---------------------------------------------------------------------------
+# requirements
+# ---------------------------------------------------------------------------
+
+def test_requirements_suite_create_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["requirements", "suite", "create", "--project-id", "p1", "core", "--description", "d"]) == 0
+    assert captured["type"] == "requirements.create_test_suite"
+    assert captured["target_pillar"] == "requirements"
+    assert captured["params"] == {"name": "core", "description": "d"}
+
+
+def test_requirements_suite_delete_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "succeeded"})
+    assert main.main(["requirements", "suite", "delete", "--project-id", "p1", "s1"]) == 0
+
+
+def test_requirements_suite_list_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "requirements_list_test_suites", lambda p, project_id: {"source": "daemon", "test_suites": []})
+    assert main.main(["requirements", "suite", "list"]) == 0
+    assert _out(capsys)["source"] == "daemon"
+
+
+def test_requirements_suite_status_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "requirements_get_test_suite", lambda p, suite_id: {"test_suite": {"id": suite_id}})
+    assert main.main(["requirements", "suite", "status", "s1"]) == 0
+    assert _out(capsys)["test_suite"]["id"] == "s1"
+
+
+def test_requirements_use_case_create_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["requirements", "use-case", "create", "--project-id", "p1", "checkout"]) == 0
+    assert captured["type"] == "requirements.create_use_case"
+    assert captured["params"]["name"] == "checkout"
+
+
+def test_requirements_milestone_create_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["requirements", "milestone", "create", "--project-id", "p1", "beta"]) == 0
+    assert captured["type"] == "requirements.create_milestone"
+
+
+def test_requirements_create_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main([
+        "requirements", "create", "--project-id", "p1", "REQ-1", "thing works",
+        "--use-case-id", "u1", "--milestone-id", "m1",
+    ]) == 0
+    assert captured["params"] == {
+        "key": "REQ-1", "title": "thing works", "description": "", "category": "",
+        "use_case_id": "u1", "milestone_id": "m1",
+    }
+
+
+def test_requirements_update_only_includes_provided_fields(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["requirements", "update", "--project-id", "p1", "r1", "--title", "new title"]) == 0
+    assert captured["params"] == {"requirement_id": "r1", "title": "new title"}
+
+
+def test_requirements_publish_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "succeeded"})
+    assert main.main(["requirements", "publish", "--project-id", "p1", "r1"]) == 0
+
+
+def test_requirements_delete_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "succeeded"})
+    assert main.main(["requirements", "delete", "--project-id", "p1", "r1"]) == 0
+
+
+def test_requirements_link_and_unlink_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "succeeded"})
+    assert main.main(["requirements", "link", "--project-id", "p1", "r1", "s1"]) == 0
+    assert main.main(["requirements", "unlink", "--project-id", "p1", "r1", "s1"]) == 0
+
+
+def test_requirements_list_with_status_filter(paths, capsys, monkeypatch):
+    captured = {}
+
+    def fake_list(p, project_id, status):
+        captured["args"] = (project_id, status)
+        return {"source": "daemon", "requirements": []}
+
+    monkeypatch.setattr(main.client, "requirements_list_requirements", fake_list)
+    assert main.main(["requirements", "list", "--project-id", "p1", "--status", "published"]) == 0
+    assert captured["args"] == ("p1", "published")
+
+
+def test_requirements_status_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "requirements_get_requirement", lambda p, req_id: {"requirement": {"id": req_id}})
+    assert main.main(["requirements", "status", "r1"]) == 0
+    assert _out(capsys)["requirement"]["id"] == "r1"
+
+
+def test_requirements_result_record_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["requirements", "result", "record", "--project-id", "p1", "s1", "t1", "failed", "--detail", "boom"]) == 0
+    assert captured["params"] == {"suite_id": "s1", "test_name": "t1", "verdict": "failed", "detail": "boom"}
+
+
+def test_requirements_result_list_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "requirements_list_test_results", lambda p, project_id, suite_id: {"source": "daemon", "test_results": []})
+    assert main.main(["requirements", "result", "list"]) == 0
+
+
+def test_requirements_import_junit_reads_the_xml_file_and_builds_job_params(paths, capsys, monkeypatch, tmp_path):
+    xml_file = tmp_path / "report.xml"
+    xml_file.write_text("<testsuite/>", encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["requirements", "import-junit", "--project-id", "p1", "s1", str(xml_file)]) == 0
+    assert captured["params"] == {"suite_id": "s1", "xml": "<testsuite/>"}
+
+
+def test_requirements_run_tests_builds_expected_job_params_with_custom_command(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main([
+        "requirements", "run-tests", "--project-id", "p1", "s1", "--commitish", "abc123",
+        "--test-command", "python3 -m pytest tests/unit",
+    ]) == 0
+    assert captured["params"] == {
+        "suite_id": "s1", "commitish": "abc123", "test_command": ["python3", "-m", "pytest", "tests/unit"],
+    }
+    assert captured["timeout"] == 600.0
+
+
+def test_requirements_report_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "requirements_report", lambda p, project_id: {"project_id": project_id, "requirements": []})
+    assert main.main(["requirements", "report", "--project-id", "p1"]) == 0
+    assert _out(capsys)["project_id"] == "p1"

@@ -260,6 +260,141 @@ def version_release_candidates(paths: Paths, project_id: str, *, timeout: float 
         raise VersionPillarUnavailable("Version Control & Release daemon unreachable") from exc
 
 
+class RequirementsPillarUnavailable(Exception):
+    pass
+
+
+def requirements_list_test_suites(paths: Paths, project_id: str | None = None, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("requirements"), timeout=timeout) as client:
+            response = client.get("/v1/test_suites", params={"project_id": project_id} if project_id else {})
+        response.raise_for_status()
+        return {"source": "daemon", "test_suites": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from requirements import db as requirements_db
+
+        conn = requirements_db.connect(paths.pillar_db_path("requirements"))
+        suites = requirements_db.list_test_suites(conn, project_id=project_id)
+        conn.close()
+        return {"source": "fallback", "test_suites": [s.model_dump(mode="json") for s in suites]}
+
+
+def requirements_get_test_suite(paths: Paths, suite_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("requirements"), timeout=timeout) as client:
+            response = client.get(f"/v1/test_suites/{suite_id}")
+        response.raise_for_status()
+        return {"source": "daemon", "test_suite": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from requirements import db as requirements_db
+
+        conn = requirements_db.connect(paths.pillar_db_path("requirements"))
+        suite = requirements_db.get_test_suite(conn, suite_id)
+        conn.close()
+        return {"source": "fallback", "test_suite": suite.model_dump(mode="json") if suite else None}
+
+
+def requirements_list_requirements(
+    paths: Paths, project_id: str | None = None, status: str | None = None, *, timeout: float = 5.0
+) -> dict:
+    params = {k: v for k, v in {"project_id": project_id, "status": status}.items() if v}
+    try:
+        with client_for_socket(paths.socket_path("requirements"), timeout=timeout) as client:
+            response = client.get("/v1/requirements", params=params)
+        response.raise_for_status()
+        return {"source": "daemon", "requirements": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from requirements import db as requirements_db
+        from requirements.models import RequirementStatus
+
+        conn = requirements_db.connect(paths.pillar_db_path("requirements"))
+        items = requirements_db.list_requirements(
+            conn, project_id=project_id, status=RequirementStatus(status) if status else None
+        )
+        conn.close()
+        return {"source": "fallback", "requirements": [r.model_dump(mode="json") for r in items]}
+
+
+def requirements_get_requirement(paths: Paths, requirement_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("requirements"), timeout=timeout) as client:
+            response = client.get(f"/v1/requirements/{requirement_id}")
+        response.raise_for_status()
+        return {"source": "daemon", "requirement": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from requirements import db as requirements_db
+
+        conn = requirements_db.connect(paths.pillar_db_path("requirements"))
+        requirement = requirements_db.get_requirement(conn, requirement_id)
+        payload = None
+        if requirement is not None:
+            payload = requirement.model_dump(mode="json")
+            payload["suite_ids"] = requirements_db.list_suites_for_requirement(conn, requirement_id)
+        conn.close()
+        return {"source": "fallback", "requirement": payload}
+
+
+def requirements_list_test_results(
+    paths: Paths, project_id: str | None = None, suite_id: str | None = None, *, timeout: float = 5.0
+) -> dict:
+    params = {k: v for k, v in {"project_id": project_id, "suite_id": suite_id}.items() if v}
+    try:
+        with client_for_socket(paths.socket_path("requirements"), timeout=timeout) as client:
+            response = client.get("/v1/test_results", params=params)
+        response.raise_for_status()
+        return {"source": "daemon", "test_results": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from requirements import db as requirements_db
+
+        conn = requirements_db.connect(paths.pillar_db_path("requirements"))
+        results = requirements_db.list_test_results(conn, project_id=project_id, suite_id=suite_id)
+        conn.close()
+        return {"source": "fallback", "test_results": [r.model_dump(mode="json") for r in results]}
+
+
+def requirements_list_use_cases(paths: Paths, project_id: str | None = None, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("requirements"), timeout=timeout) as client:
+            response = client.get("/v1/use_cases", params={"project_id": project_id} if project_id else {})
+        response.raise_for_status()
+        return {"source": "daemon", "use_cases": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from requirements import db as requirements_db
+
+        conn = requirements_db.connect(paths.pillar_db_path("requirements"))
+        items = requirements_db.list_use_cases(conn, project_id=project_id)
+        conn.close()
+        return {"source": "fallback", "use_cases": [u.model_dump(mode="json") for u in items]}
+
+
+def requirements_list_milestones(paths: Paths, project_id: str | None = None, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("requirements"), timeout=timeout) as client:
+            response = client.get("/v1/milestones", params={"project_id": project_id} if project_id else {})
+        response.raise_for_status()
+        return {"source": "daemon", "milestones": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from requirements import db as requirements_db
+
+        conn = requirements_db.connect(paths.pillar_db_path("requirements"))
+        items = requirements_db.list_milestones(conn, project_id=project_id)
+        conn.close()
+        return {"source": "fallback", "milestones": [m.model_dump(mode="json") for m in items]}
+
+
+def requirements_report(paths: Paths, project_id: str, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("requirements"), timeout=timeout) as client:
+            response = client.get("/v1/report", params={"project_id": project_id})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise RequirementsPillarUnavailable(
+            "Requirements & Quality daemon unreachable — the definition-of-done report is computed "
+            "live and has no local fallback"
+        ) from exc
+
+
 class DeploymentPillarUnavailable(Exception):
     pass
 

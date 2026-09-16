@@ -335,6 +335,111 @@ def _deployment_branches(paths: Paths, args: JSONDict) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Requirements & Quality
+# ---------------------------------------------------------------------------
+
+def _requirements_job(paths: Paths, job_type: str, project_id: str, params: JSONDict) -> Any:
+    return client.create_job(
+        paths, type=job_type, target_pillar="requirements", project_id=project_id,
+        params=params, queue_key=None, depends_on=[], created_by="mcp",
+    )
+
+
+def _requirements_suite_create(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.create_test_suite", args["project_id"], {
+        "name": args["name"], "description": args.get("description", ""),
+    })
+
+
+def _requirements_suite_delete(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.delete_test_suite", args["project_id"], {"suite_id": args["suite_id"]})
+
+
+def _requirements_suite_list(paths: Paths, args: JSONDict) -> Any:
+    return client.requirements_list_test_suites(paths, args.get("project_id"))
+
+
+def _requirements_use_case_create(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.create_use_case", args["project_id"], {
+        "name": args["name"], "description": args.get("description", ""),
+    })
+
+
+def _requirements_milestone_create(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.create_milestone", args["project_id"], {
+        "name": args["name"], "description": args.get("description", ""),
+    })
+
+
+def _requirements_create(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.create_requirement", args["project_id"], {
+        "key": args["key"], "title": args["title"], "description": args.get("description", ""),
+        "category": args.get("category", ""), "use_case_id": args.get("use_case_id"),
+        "milestone_id": args.get("milestone_id"),
+    })
+
+
+def _requirements_update(paths: Paths, args: JSONDict) -> Any:
+    fields = {"requirement_id": args["requirement_id"]}
+    for name in ("title", "description", "category"):
+        if name in args:
+            fields[name] = args[name]
+    return _requirements_job(paths, "requirements.update_requirement", args["project_id"], fields)
+
+
+def _requirements_publish(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.publish_requirement", args["project_id"], {"requirement_id": args["requirement_id"]})
+
+
+def _requirements_delete(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.delete_requirement", args["project_id"], {"requirement_id": args["requirement_id"]})
+
+
+def _requirements_link_suite(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.link_requirement_to_suite", args["project_id"], {
+        "requirement_id": args["requirement_id"], "suite_id": args["suite_id"],
+    })
+
+
+def _requirements_unlink_suite(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.unlink_requirement_from_suite", args["project_id"], {
+        "requirement_id": args["requirement_id"], "suite_id": args["suite_id"],
+    })
+
+
+def _requirements_list(paths: Paths, args: JSONDict) -> Any:
+    return client.requirements_list_requirements(paths, args.get("project_id"), args.get("status"))
+
+
+def _requirements_get(paths: Paths, args: JSONDict) -> Any:
+    return client.requirements_get_requirement(paths, args["requirement_id"])
+
+
+def _requirements_result_record(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.record_test_result", args["project_id"], {
+        "suite_id": args["suite_id"], "test_name": args["test_name"], "verdict": args["verdict"],
+        "detail": args.get("detail", ""),
+    })
+
+
+def _requirements_import_junit(paths: Paths, args: JSONDict) -> Any:
+    return _requirements_job(paths, "requirements.import_junit", args["project_id"], {
+        "suite_id": args["suite_id"], "xml": args["xml"],
+    })
+
+
+def _requirements_run_tests(paths: Paths, args: JSONDict) -> Any:
+    params = {"suite_id": args["suite_id"], "commitish": args.get("commitish", "HEAD")}
+    if args.get("test_command"):
+        params["test_command"] = args["test_command"]
+    return _requirements_job(paths, "requirements.run_tests", args["project_id"], params)
+
+
+def _requirements_report(paths: Paths, args: JSONDict) -> Any:
+    return client.requirements_report(paths, args["project_id"])
+
+
+# ---------------------------------------------------------------------------
 # Agentic Development
 # ---------------------------------------------------------------------------
 
@@ -530,6 +635,77 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _deployment_confirmation_status),
     ToolSpec("workshop_deployment_branches", "List the branches Deployment & Servers knows about for a project.",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _deployment_branches),
+
+    ToolSpec("workshop_requirements_suite_create", "Create a test suite for a project.",
+             _schema({"project_id": _PROJECT_ID, "name": _prop("string", "Suite name."),
+                      "description": _prop("string", "Suite description.")}, ["project_id", "name"]), _requirements_suite_create),
+    ToolSpec("workshop_requirements_suite_delete", "Delete a test suite (and its result history/requirement links).",
+             _schema({"project_id": _PROJECT_ID, "suite_id": _prop("string", "The test suite's id.")},
+                     ["project_id", "suite_id"]), _requirements_suite_delete),
+    ToolSpec("workshop_requirements_suite_list", "List a project's test suites.",
+             _schema({"project_id": _prop("string", "Filter by project. Omit to list every project's suites.")}),
+             _requirements_suite_list),
+    ToolSpec("workshop_requirements_use_case_create", "Create a use case — the M8 axis, independent of test suites.",
+             _schema({"project_id": _PROJECT_ID, "name": _prop("string", "Use case name."),
+                      "description": _prop("string", "Use case description.")}, ["project_id", "name"]), _requirements_use_case_create),
+    ToolSpec("workshop_requirements_milestone_create", "Create a milestone — the M8 axis, independent of test suites.",
+             _schema({"project_id": _PROJECT_ID, "name": _prop("string", "Milestone name."),
+                      "description": _prop("string", "Milestone description.")}, ["project_id", "name"]), _requirements_milestone_create),
+    ToolSpec("workshop_requirements_create", "Create a draft requirement. Editable until published.",
+             _schema({
+                 "project_id": _PROJECT_ID, "key": _prop("string", "A human requirement key, e.g. REQ-000000001."),
+                 "title": _prop("string", "Short title."), "description": _prop("string", "Full requirement text."),
+                 "category": _prop("string", "Free-text category."),
+                 "use_case_id": _prop("string", "Optional linked use case id."),
+                 "milestone_id": _prop("string", "Optional linked milestone id."),
+             }, ["project_id", "key", "title"]), _requirements_create),
+    ToolSpec("workshop_requirements_update", "Edit a draft requirement's fields. Refused once published.",
+             _schema({
+                 "project_id": _PROJECT_ID, "requirement_id": _prop("string", "The requirement's id."),
+                 "title": _prop("string", "New title."), "description": _prop("string", "New description."),
+                 "category": _prop("string", "New category."),
+             }, ["project_id", "requirement_id"]), _requirements_update),
+    ToolSpec("workshop_requirements_publish", "Publish a requirement, locking it against further edits.",
+             _schema({"project_id": _PROJECT_ID, "requirement_id": _prop("string", "The requirement's id.")},
+                     ["project_id", "requirement_id"]), _requirements_publish),
+    ToolSpec("workshop_requirements_delete", "Delete a requirement for good.",
+             _schema({"project_id": _PROJECT_ID, "requirement_id": _prop("string", "The requirement's id.")},
+                     ["project_id", "requirement_id"]), _requirements_delete),
+    ToolSpec("workshop_requirements_link_suite", "Link a requirement to a test suite that covers it.",
+             _schema({"project_id": _PROJECT_ID, "requirement_id": _prop("string", "The requirement's id."),
+                      "suite_id": _prop("string", "The test suite's id.")},
+                     ["project_id", "requirement_id", "suite_id"]), _requirements_link_suite),
+    ToolSpec("workshop_requirements_unlink_suite", "Unlink a requirement from a test suite.",
+             _schema({"project_id": _PROJECT_ID, "requirement_id": _prop("string", "The requirement's id."),
+                      "suite_id": _prop("string", "The test suite's id.")},
+                     ["project_id", "requirement_id", "suite_id"]), _requirements_unlink_suite),
+    ToolSpec("workshop_requirements_list", "List requirements, optionally filtered by project and/or status.",
+             _schema({"project_id": _prop("string", "Filter by project."),
+                      "status": _prop("string", "draft|published")}), _requirements_list),
+    ToolSpec("workshop_requirements_get", "Get one requirement by id, including the test suites linked to it.",
+             _schema({"requirement_id": _prop("string", "The requirement's id.")}, ["requirement_id"]), _requirements_get),
+    ToolSpec("workshop_requirements_result_record", "Record a single test result manually.",
+             _schema({
+                 "project_id": _PROJECT_ID, "suite_id": _prop("string", "The test suite this result belongs to."),
+                 "test_name": _prop("string", "The test's name."),
+                 "verdict": _prop("string", "passed|failed|skipped|error"),
+                 "detail": _prop("string", "Optional failure/error detail."),
+             }, ["project_id", "suite_id", "test_name", "verdict"]), _requirements_result_record),
+    ToolSpec("workshop_requirements_import_junit", "Ingest an existing JUnit-XML report (E6) into a test suite's results.",
+             _schema({"project_id": _PROJECT_ID, "suite_id": _prop("string", "The test suite to record results under."),
+                      "xml": _prop("string", "The JUnit-XML report's own text content.")},
+                     ["project_id", "suite_id", "xml"]), _requirements_import_junit),
+    ToolSpec("workshop_requirements_run_tests", "Run a suite's tests sandboxed, in a fresh Deployment & Servers "
+             "worktree of a given commit (E6's on-demand testing) — never the project's own working checkout.",
+             _schema({
+                 "project_id": _PROJECT_ID, "suite_id": _prop("string", "The test suite to record results under."),
+                 "commitish": _prop("string", "Branch, tag, or commit to test. Default: HEAD."),
+                 "test_command": _prop("array", "Override test command, e.g. [\"python3\",\"-m\",\"pytest\",\"tests/unit\"].",
+                                        items={"type": "string"}),
+             }, ["project_id", "suite_id"]), _requirements_run_tests),
+    ToolSpec("workshop_requirements_report", "Definition-of-done report for a project: for each requirement, "
+             "whether it is published, tested, passing, and therefore done.",
+             _schema({"project_id": _PROJECT_ID}, ["project_id"]), _requirements_report),
 
     ToolSpec("workshop_agent_run_task", "Run Claude Code on a project, on a real branch, under human review.",
              _schema({
