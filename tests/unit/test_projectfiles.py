@@ -77,3 +77,23 @@ def test_list_files_empty_for_unregistered_project(tmp_path):
     paths = make_paths(tmp_path)
     client = ProjectFilesClient(paths, "policy")
     assert client.list_files("nonexistent") == []
+
+
+def test_exists_true_after_write(tmp_path):
+    paths = make_paths(tmp_path)
+    client = ProjectFilesClient(paths, "policy")
+    client.write("little-meals", "retention.policy.json", "{}")
+    assert client.exists("little-meals", "retention.policy.json") is True
+
+
+def test_exists_false_for_missing_file(tmp_path):
+    paths = make_paths(tmp_path)
+    client = ProjectFilesClient(paths, "policy")
+    assert client.exists("little-meals", "retention.policy.json") is False
+
+
+def test_exists_validates_filename_shape(tmp_path):
+    paths = make_paths(tmp_path)
+    client = ProjectFilesClient(paths, "policy")
+    with pytest.raises(MalformedFilenameError):
+        client.exists("little-meals", "noext")

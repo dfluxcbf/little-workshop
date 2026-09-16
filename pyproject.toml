@@ -38,6 +38,15 @@ pythonpath = ["src"]
 
 [tool.coverage.run]
 source = ["src"]
+# Bazel's sandboxed test action resolves "src" under a runfiles tree whose
+# absolute path differs from a plain checkout's — relative_files makes
+# coverage.py record and match paths relative to this file's own
+# directory instead of by absolute path, the standard fix for a sandboxed/
+# CI root that shifts between the measurement and reporting phases of one
+# run (both phases still happen in the same process here, but Bazel's
+# runfiles tree uses symlinks that otherwise still defeat absolute-path
+# matching).
+relative_files = true
 
 [tool.coverage.report]
 skip_covered = false

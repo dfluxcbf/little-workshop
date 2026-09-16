@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from common.manifest import Manifest, PillarEntry, default_manifest, load_manifest, write_manifest
@@ -56,3 +57,70 @@ def test_manifest_defaults_carry_the_documented_numbers():
     assert manifest.health_probe_max_retries == 10
     assert manifest.crash_relaunch_max_attempts == 10
     assert manifest.crash_relaunch_interval_seconds == 60.0
+
+
+def test_enabled_pillars_returns_only_the_enabled_ones():
+    manifest = default_manifest()
+    enabled = manifest.enabled_pillars()
+    assert "orchestration" in enabled
+    assert "build" not in enabled
+    assert "dashboard" not in enabled
+
+
+def test_is_enabled_false_for_unknown_pillar():
+    manifest = default_manifest()
+    assert manifest.is_enabled("not-a-real-pillar") is False
+
+
+def test_write_manifest_round_trips_a_pillar_command(tmp_path):
+    manifest = default_manifest()
+    manifest.pillars["build"] = PillarEntry(
+        name="build", enabled=True, command=["python3", "-m", "build", "--flag=has \"quotes\""]
+    )
+    path = tmp_path / "manifest.toml"
+    write_manifest(path, manifest)
+
+    text = path.read_text()
+    assert 'command = ["python3", "-m", "build"' in text
+
+    loaded = load_manifest(path)
+    assert loaded.pillars["build"].command == ["python3", "-m", "build", '--flag=has "quotes"']
+
+
+def test_paths_from_env_uses_xdg_variables(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    paths = Paths.from_env()
+    assert paths.config_home == tmp_path / "cfg" / "little-workshop"
+    assert paths.state_home == tmp_path / "state" / "little-workshop"
+
+
+def test_paths_from_env_falls_back_to_home_when_xdg_unset(monkeypatch):
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    paths = Paths.from_env()
+    assert paths.config_home == Path.home() / ".config" / "little-workshop"
+    assert paths.state_home == Path.home() / ".local" / "state" / "little-workshop"
+
+
+def test_pillar_log_dir_and_path(tmp_path):
+    paths = make_paths(tmp_path)
+    assert paths.pillar_log_dir("agent") == paths.logs_dir / "agent"
+    assert paths.pillar_log_path("agent") == paths.logs_dir / "agent" / "agent.log"
+
+
+def test_worktree_path_is_scoped_under_worktrees_dir(tmp_path):
+    paths = make_paths(tmp_path)
+    assert paths.worktree_path("wt-1") == paths.worktrees_dir / "wt-1"
+
+
+def test_project_dir_is_scoped_under_projects_dir(tmp_path):
+    paths = make_paths(tmp_path)
+    assert paths.project_dir("little-meals") == paths.projects_dir / "little-meals"
+
+
+def test_pillar_db_path_and_socket_path(tmp_path):
+    paths = make_paths(tmp_path)
+    assert paths.pillar_db_path("registry") == paths.pillars_db_dir / "registry.db"
+    assert paths.socket_path("registry") == paths.sockets_dir / "registry.sock"
+    assert paths.core_socket_path == paths.sockets_dir / "core.sock"

@@ -84,11 +84,15 @@ sh_test(
     tags = ["local", "no-sandbox"],
 )
 
-# bazel test //:coverage — same suite as //:test, plus a hard 90% line-
-# coverage gate (--cov-fail-under=90) over every src/ module, including
-# each pillar's own __main__.py — docs/requirements.md's testing-fortification
-# pass explicitly named zero-coverage entrypoints as a real gap, not
-# something to `# pragma: no cover` away.
+# bazel test //:coverage — same suite as //:test, plus a 90% line-coverage
+# gate (--cov-fail-under=90) over every src/ module, including each
+# pillar's own __main__.py. KNOWN LIMITATION: under `bazel test` itself
+# the coverage percentage this target reports is not trustworthy (see
+# scripts/bazel/run_pytest_coverage.sh's comment) — every test still has
+# to pass, but for the real number, run that script directly:
+#   bash scripts/bazel/run_pytest_coverage.sh pyproject.toml
+# (99% measured that way as of the testing-fortification pass this target
+# was added in.)
 sh_test(
     name = "coverage",
     srcs = ["scripts/bazel/run_pytest_coverage.sh"],

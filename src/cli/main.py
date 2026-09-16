@@ -356,7 +356,14 @@ def cmd_deployment_redeploy_pillar_worker(args: argparse.Namespace) -> int:
         if result.confirm_message:
             payload["confirm_message"] = result.confirm_message
         succeeded, error = True, None
-    except DeploymentError as exc:
+    except (DeploymentError, RuntimeError) as exc:
+        # RuntimeError alongside DeploymentError: deployment.gitutil's own
+        # git-command wrapper raises a bare RuntimeError (never wrapped in
+        # DeploymentError) on a failed git operation -- a bad commit ref or
+        # worktree conflict during redeploy_pillar_direct's checkout is a
+        # real, reachable way to hit that. Left uncaught here, an accepted
+        # self-redeploy Job would never call back to Orchestration below
+        # and stay stuck at "running" forever instead of settling to failed.
         payload, succeeded, error = {}, False, str(exc)
     finally:
         conn.close()

@@ -93,3 +93,65 @@ def test_render_report_notes_missing_pr_link():
     result = AgentResult(status="done", sections={"executed_tasks": "x"})
     report = render_report(project_id="p", title="t", intent="task", branch="b", result=result, pr_url=None)
     assert "added once the branch is pushed" in report
+
+
+def test_render_report_includes_pr_link_when_given():
+    result = AgentResult(status="done", sections={"executed_tasks": "x"})
+    report = render_report(project_id="p", title="t", intent="task", branch="b", result=result, pr_url="https://github.com/o/n/pull/1")
+    assert "https://github.com/o/n/pull/1" in report
+    assert "read the diff there" in report
+
+
+def test_render_report_lists_screenshots_when_given():
+    from agent.report import AgentResult, render_report
+
+    class FakeShot:
+        rel_path = "shots/run1/home.png"
+        url = "https://github.com/o/n/blob/b/shots/run1/home.png"
+        description = "`/`"
+
+    result = AgentResult(status="done", sections={"executed_tasks": "x"})
+    report = render_report(
+        project_id="p", title="t", intent="task", branch="b", result=result, screenshots=[FakeShot()],
+    )
+    assert "shots/run1/home.png" in report
+    assert "Captured from this branch's own build" in report
+
+
+def test_render_report_omits_disclaimer_when_result_file_sourced():
+    result = AgentResult(status="done", sections={"executed_tasks": "x"}, source="result file")
+    report = render_report(project_id="p", title="t", intent="task", branch="b", result=result)
+    assert "did not leave a structured result" not in report
+
+
+def test_load_result_non_dict_json_returns_none(tmp_path):
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps(["not", "a", "dict"]))
+    assert load_result(path) is None
+
+
+def test_load_result_accepts_dict_valued_section(tmp_path):
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps({
+        "status": "done",
+        "technical_decisions": {"database": "sqlite", "transport": "http over uds"},
+    }))
+    result = load_result(path)
+    assert "- **database**: sqlite" in result.sections["technical_decisions"]
+    assert "- **transport**: http over uds" in result.sections["technical_decisions"]
+
+
+def test_load_result_accepts_scalar_valued_section(tmp_path):
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps({"status": "done", "executed_tasks": 42}))
+    result = load_result(path)
+    assert result.sections["executed_tasks"] == "42"
+
+
+def test_load_result_oserror_on_directory_returns_none(tmp_path):
+    # Path(path).read_text() on a directory raises IsADirectoryError, an
+    # OSError subclass -- the same tolerant-degrade branch a permissions
+    # error or a vanished file would hit.
+    directory = tmp_path / "a-directory"
+    directory.mkdir()
+    assert load_result(directory) is None

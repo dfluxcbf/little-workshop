@@ -112,3 +112,120 @@ def test_tools_call_job_outcome_failed_is_reported_as_tool_error(server, monkeyp
 
 def test_notification_call_with_no_id_returns_none_even_on_error(server):
     assert server.handle_request({"method": "tools/call", "params": {"name": "nope"}}) is None
+
+
+def test_invoke_tool_catches_key_error_from_handler(server, monkeypatch):
+    import mcp_server.server as server_module
+    from mcp_server.tools import ToolSpec, _schema
+
+    def bad_handler(paths, args):
+        raise KeyError("missing")
+
+    fake_tool = ToolSpec("workshop_fake_key_error", "test only", _schema(), bad_handler)
+    monkeypatch.setitem(server_module.TOOLS_BY_NAME, fake_tool.name, fake_tool)
+
+    response = server.handle_request(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": fake_tool.name, "arguments": {}}}
+    )
+    result = response["result"]
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert "invalid arguments" in payload["message"]
+
+
+def test_invoke_tool_catches_value_error_from_handler(server, monkeypatch):
+    import mcp_server.server as server_module
+    from mcp_server.tools import ToolSpec, _schema
+
+    def bad_handler(paths, args):
+        raise ValueError("bad value")
+
+    fake_tool = ToolSpec("workshop_fake_value_error", "test only", _schema(), bad_handler)
+    monkeypatch.setitem(server_module.TOOLS_BY_NAME, fake_tool.name, fake_tool)
+
+    response = server.handle_request(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": fake_tool.name, "arguments": {}}}
+    )
+    result = response["result"]
+    assert result["isError"] is True
+    payload = json.loads(result["content"][0]["text"])
+    assert "bad value" in payload["message"]
+
+
+def test_server_version_uses_importlib_metadata_when_no_version_passed(paths, monkeypatch):
+    from mcp_server.server import MCPServer
+
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "1.2.3")
+    server_no_version = MCPServer(paths=paths)
+    assert server_no_version.server_version == "1.2.3"
+
+
+def test_server_version_falls_back_when_package_not_found(paths, monkeypatch):
+    from importlib.metadata import PackageNotFoundError
+
+    from mcp_server.server import MCPServer, _FALLBACK_SERVER_VERSION
+
+    def raise_not_found(name):
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr("importlib.metadata.version", raise_not_found)
+    server_no_version = MCPServer(paths=paths)
+    assert server_no_version.server_version == _FALLBACK_SERVER_VERSION
+
+
+def test_mcpserver_defaults_paths_from_env_when_not_given(monkeypatch, tmp_path):
+    from common.paths import Paths
+    from mcp_server.server import MCPServer
+
+    sentinel = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(Paths, "from_env", staticmethod(lambda: sentinel))
+    server_default = MCPServer()
+    assert server_default.paths is sentinel
+
+
+def test_serve_reads_stdin_lines_and_writes_json_rpc_responses(paths, monkeypatch, capsys):
+    import io
+
+    from mcp_server.server import serve
+
+    requests = "\n".join([
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
+        "",  # blank lines are skipped
+        "not valid json{{{",
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"}),
+    ]) + "\n"
+    monkeypatch.setattr("sys.stdin", io.StringIO(requests))
+
+    exit_code = serve(paths)
+    assert exit_code == 0
+
+    lines = [line for line in capsys.readouterr().out.strip().split("\n") if line]
+    responses = [json.loads(line) for line in lines]
+    assert len(responses) == 3
+
+    assert responses[0]["id"] == 1
+    assert responses[0]["result"]["serverInfo"]["name"] == "little-workshop"
+
+    assert responses[1]["id"] is None
+    assert responses[1]["error"]["code"] == -32700
+
+    assert responses[2]["id"] == 2
+    assert responses[2]["result"] == {}
+
+
+def test_serve_skips_pure_whitespace_lines(paths, monkeypatch, capsys):
+    import io
+
+    from mcp_server.server import serve
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("   \n\t\n"))
+    exit_code = serve(paths)
+    assert exit_code == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_main_invokes_serve_and_returns_its_exit_code(monkeypatch):
+    import mcp_server.server as server_module
+
+    monkeypatch.setattr(server_module, "serve", lambda: 42)
+    assert server_module.main() == 42

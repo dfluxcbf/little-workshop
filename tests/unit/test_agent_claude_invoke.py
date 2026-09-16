@@ -67,3 +67,15 @@ def test_parse_status_takes_last_match():
 
 def test_parse_status_case_insensitive():
     assert parse_status("agent_status: DONE") == "done"
+
+
+def test_parse_claude_output_skips_malformed_trailing_brace_line():
+    # The last line starts with "{" but isn't valid JSON -- the trailing-
+    # json-line scan must skip it and keep looking further back instead
+    # of giving up immediately.
+    stdout = "\n".join([
+        json.dumps({"result": "the real one", "is_error": False}),
+        "{this is not valid json",
+    ])
+    text, is_error, raw = parse_claude_output(stdout)
+    assert text == "the real one"

@@ -187,3 +187,152 @@ def test_complete_orchestration_job_is_a_noop_when_orchestration_unavailable(pat
     # No Core running at all -- resolve_pillar_socket returns None -- must
     # not raise, matching every other best-effort notification path.
     _complete_orchestration_job(paths, "job-1", succeeded=True, result={"x": 1}, error=None)
+
+
+def test_complete_orchestration_job_posts_to_the_callback_when_reachable(paths, tmp_path, monkeypatch):
+    import httpx
+
+    import agent.app as app_module
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(app_module, "resolve_pillar_socket", lambda paths, pillar, **kw: tmp_path / "orch.sock")
+    monkeypatch.setattr(
+        app_module, "client_for_socket",
+        lambda socket_path, *, timeout=5.0: httpx.Client(transport=httpx.MockTransport(handler), base_url="http://pillar"),
+    )
+
+    app_module._complete_orchestration_job(paths, "job-1", succeeded=True, result={"x": 1}, error=None)
+    assert len(calls) == 1
+    assert calls[0].url.path == "/v1/jobs/job-1/complete"
+
+
+def test_complete_orchestration_job_swallows_connection_errors(paths, tmp_path, monkeypatch):
+    import httpx
+
+    import agent.app as app_module
+
+    def handler(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    monkeypatch.setattr(app_module, "resolve_pillar_socket", lambda paths, pillar, **kw: tmp_path / "orch.sock")
+    monkeypatch.setattr(
+        app_module, "client_for_socket",
+        lambda socket_path, *, timeout=5.0: httpx.Client(transport=httpx.MockTransport(handler), base_url="http://pillar"),
+    )
+    app_module._complete_orchestration_job(paths, "job-1", succeeded=False, result=None, error="boom")  # must not raise
+
+
+def test_run_task_job_fails_cleanly_when_project_resolution_fails(paths, conn, tmp_path, monkeypatch):
+    from common.registry_client import ProjectResolutionError
+
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+
+    def raising_resolve(paths_, project_id, **kw):
+        raise ProjectResolutionError(f"no such project {project_id!r}")
+
+    monkeypatch.setattr("agent.app.resolve_project", raising_resolve)
+    response = client.post(
+        "/v1/jobs/agent.run_task", json={"job_id": "j1", "project_id": "ghost", "params": {"title": "t"}},
+    )
+    assert response.json()["outcome"] == "failed"
+
+
+def test_run_task_worker_failure_reports_failed_status(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    # A dirty checkout (never committed) makes flow.run_task fail before
+    # ever invoking claude -- the app-level worker branch that reports
+    # `succeeded=False` back to Orchestration.
+    response = client.post(
+        "/v1/jobs/agent.run_task",
+        json={"job_id": "j1", "project_id": "little-meals", "params": {"title": "t", "branching": {"mode": "existing", "branch": "ghost-branch"}}},
+    )
+    run_id = response.json()["result"]["run_id"]
+    run = _wait_for_run(client, "little-meals", run_id)
+    assert run["status"] == "failed"
+
+
+def test_finish_task_job_missing_run_id_fails_cleanly(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    response = client.post("/v1/jobs/agent.finish_task", json={"job_id": "j2", "params": {}})
+    assert response.json()["outcome"] == "failed"
+    assert "run_id" in response.json()["error"]
+
+
+def test_finish_task_job_run_not_found_fails_cleanly(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    response = client.post("/v1/jobs/agent.finish_task", json={"job_id": "j2", "params": {"run_id": "nonexistent"}})
+    assert response.json()["outcome"] == "failed"
+    assert "no such run" in response.json()["error"]
+
+
+def test_finish_task_job_project_resolution_failure(paths, conn, tmp_path, monkeypatch):
+    from common.registry_client import ProjectResolutionError
+
+    client, repo = make_client(paths, conn, tmp_path, monkeypatch)
+    response = client.post(
+        "/v1/jobs/agent.run_task",
+        json={"job_id": "j1", "project_id": "little-meals", "params": {"title": "fix it", "branching": {"mode": "new", "branch_type": "improvement"}}},
+    )
+    run_id = response.json()["result"]["run_id"]
+    _wait_for_run(client, "little-meals", run_id)
+
+    def raising_resolve(paths_, project_id, **kw):
+        raise ProjectResolutionError("gone")
+
+    monkeypatch.setattr("agent.app.resolve_project", raising_resolve)
+    finish_response = client.post("/v1/jobs/agent.finish_task", json={"job_id": "j2", "params": {"run_id": run_id}})
+    assert finish_response.json()["outcome"] == "failed"
+
+
+def test_finish_task_job_agent_flow_error_is_reported_as_failed(paths, conn, tmp_path, monkeypatch):
+    from agent.app import build_app
+    from agent.flow import AgentFlow, AgentFlowError
+    from fastapi.testclient import TestClient
+
+    repo = make_repo(tmp_path)
+
+    class RaisingFlow(AgentFlow):
+        def finish_task(self, conn, run_id, *, project_dir):
+            raise AgentFlowError("cannot finish")
+
+    monkeypatch.setattr(
+        "agent.app.resolve_project",
+        lambda paths_, project_id, **kw: {"name": project_id, "path": str(repo), "repo_url": None, "status": "active"},
+    )
+    run_id = db.new_run_id()
+    db.create_run(conn, run_id, job_id=None, project_id="little-meals", intent="task", review_mode="manual", title="t", source={})
+    db.update_run(conn, run_id, status=db.AWAITING_FINISH, branch="feature/x", branch_type="feature")
+
+    app = build_app(paths, conn, flow=RaisingFlow(paths=paths))
+    client = TestClient(app)
+    response = client.post("/v1/jobs/agent.finish_task", json={"job_id": "j3", "params": {"run_id": run_id}})
+    assert response.json()["outcome"] == "failed"
+    assert "cannot finish" in response.json()["error"]
+
+
+def test_skip_task_job_missing_run_id_fails_cleanly(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    response = client.post("/v1/jobs/agent.skip_task", json={"job_id": "j2", "params": {}})
+    assert response.json()["outcome"] == "failed"
+    assert "run_id" in response.json()["error"]
+
+
+def test_skip_task_job_agent_flow_error_is_reported_as_failed(paths, conn, tmp_path, monkeypatch):
+    from agent.app import build_app
+    from agent.flow import AgentFlow, AgentFlowError
+    from fastapi.testclient import TestClient
+
+    class RaisingSkipFlow(AgentFlow):
+        def skip_task(self, conn, run_id):
+            raise AgentFlowError("cannot skip")
+
+    app = build_app(paths, conn, flow=RaisingSkipFlow(paths=paths))
+    client = TestClient(app)
+    response = client.post("/v1/jobs/agent.skip_task", json={"job_id": "j2", "params": {"run_id": "whatever"}})
+    assert response.json()["outcome"] == "failed"
+    assert "cannot skip" in response.json()["error"]

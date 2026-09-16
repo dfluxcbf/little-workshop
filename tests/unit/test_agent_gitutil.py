@@ -103,3 +103,61 @@ def test_fetch_is_a_noop_without_origin_remote(tmp_path):
 def test_pull_ff_only_is_a_noop_without_origin_remote(tmp_path):
     repo = make_repo(tmp_path)
     gitutil.pull_ff_only(repo, "dev")  # must not raise
+
+
+def test_fetch_runs_git_fetch_when_origin_configured(tmp_path):
+    repo = make_repo(tmp_path)
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "init", "--bare", "-b", "dev", str(bare)], check=True, capture_output=True)
+    _git(["remote", "add", "origin", str(bare)], repo)
+    gitutil.fetch(repo)  # must not raise, and actually runs `git fetch`
+
+
+def test_pull_ff_only_runs_git_pull_when_origin_configured(tmp_path):
+    repo = make_repo(tmp_path)
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "init", "--bare", "-b", "dev", str(bare)], check=True, capture_output=True)
+    _git(["remote", "add", "origin", str(bare)], repo)
+    gitutil.push(repo, "dev")
+    gitutil.pull_ff_only(repo, "dev")  # already up to date, but exercises the real `git pull --ff-only`
+
+
+def test_run_with_check_raises_on_failure(tmp_path):
+    repo = make_repo(tmp_path)
+    try:
+        gitutil.run(["git", "checkout", "no-such-branch"], repo, check=True)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "git command failed" in str(exc)
+
+
+def test_branch_location_remote_only(tmp_path):
+    repo = make_repo(tmp_path)
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "init", "--bare", "-b", "dev", str(bare)], check=True, capture_output=True)
+    _git(["remote", "add", "origin", str(bare)], repo)
+    gitutil.checkout_new(repo, "feature/x", "dev")
+    gitutil.push(repo, "feature/x")
+    gitutil.checkout(repo, "dev")
+    _git(["branch", "-D", "feature/x"], repo)  # local ref gone, origin keeps it
+    _git(["fetch", "origin", "--prune"], repo)
+    assert gitutil.branch_location(repo, "feature/x") == "remote"
+
+
+def test_checkout_remote_tracking(tmp_path):
+    repo = make_repo(tmp_path)
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "init", "--bare", "-b", "dev", str(bare)], check=True, capture_output=True)
+    _git(["remote", "add", "origin", str(bare)], repo)
+    gitutil.checkout_new(repo, "feature/x", "dev")
+    gitutil.push(repo, "feature/x")
+    gitutil.checkout(repo, "dev")
+    _git(["branch", "-D", "feature/x"], repo)
+    _git(["fetch", "origin", "--prune"], repo)
+
+    gitutil.checkout_remote_tracking(repo, "feature/x")
+    assert gitutil.current_branch(repo) == "feature/x"
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "feature/x@{upstream}"], cwd=repo, capture_output=True, text=True,
+    )
+    assert result.stdout.strip() == "origin/feature/x"

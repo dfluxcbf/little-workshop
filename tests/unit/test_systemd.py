@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from common import systemd
 from common.shell import CommandResult
 
@@ -55,3 +57,40 @@ def test_stop_targets_the_right_unit():
     runner = FakeRunner(CommandResult(0, "", ""))
     systemd.stop("policy", runner=runner)
     assert runner.calls[0] == ["systemctl", "--user", "stop", "little-workshop-policy.service"]
+
+
+def test_reset_failed_targets_the_right_unit():
+    runner = FakeRunner(CommandResult(0, "", ""))
+    systemd.reset_failed("policy", runner=runner)
+    assert runner.calls[0] == ["systemctl", "--user", "reset-failed", "little-workshop-policy.service"]
+
+
+def test_start_without_working_directory_omits_the_flag():
+    runner = FakeRunner(CommandResult(0, "", ""))
+    systemd.start("orchestration", ["python3", "-m", "orchestration"], runner=runner)
+    (argv,) = runner.calls
+    assert not any(arg.startswith("--working-directory=") for arg in argv)
+
+
+def test_start_without_environment_still_sets_path(monkeypatch):
+    monkeypatch.delenv("PATH", raising=False)
+    runner = FakeRunner(CommandResult(0, "", ""))
+    systemd.start("orchestration", ["python3", "-m", "orchestration"], runner=runner)
+    (argv,) = runner.calls
+    assert any(arg.startswith("--setenv=PATH=") for arg in argv)
+    assert not any(arg.startswith("--setenv=FOO") for arg in argv)
+
+
+def test_user_path_env_prepends_local_bin_when_missing(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    result = systemd.user_path_env()
+    home_bin = str(Path.home() / ".local" / "bin")
+    assert result.split(":")[0] == home_bin
+    assert "/usr/bin" in result
+
+
+def test_user_path_env_leaves_path_unchanged_when_local_bin_already_present(monkeypatch):
+    home_bin = str(Path.home() / ".local" / "bin")
+    monkeypatch.setenv("PATH", f"{home_bin}:/usr/bin")
+    result = systemd.user_path_env()
+    assert result == f"{home_bin}:/usr/bin"

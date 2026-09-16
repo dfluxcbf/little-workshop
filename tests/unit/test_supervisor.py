@@ -173,6 +173,43 @@ def test_reconcile_never_retries_a_faulted_pillar(tmp_path):
     assert not any(c[0] == "systemd-run" for c in runner.calls[calls_before:])
 
 
+def test_startup_relaunches_an_active_but_unhealthy_pillar(tmp_path):
+    manifest = make_manifest()
+    runner = FakeRunner(active={"orchestration": True})
+    supervisor = Supervisor(
+        paths=make_paths(tmp_path),
+        manifest=manifest,
+        runner=runner,
+        probe=probe_always(HealthResult(ok=False, attempts=1, error="not answering yet")),
+    )
+    supervisor.startup()
+
+    entry = supervisor.registry.get("orchestration")
+    # active-but-unhealthy falls through to _attempt_relaunch -- systemd-run
+    # is invoked even though the unit was already "active".
+    assert any(c[0] == "systemd-run" for c in runner.calls)
+    assert entry.status == PillarStatus.CRASHED  # probe still reports unhealthy after relaunch
+
+
+def test_reconcile_leaves_an_active_and_healthy_pillar_alone(tmp_path):
+    manifest = make_manifest()
+    runner = FakeRunner(active={"orchestration": True})
+    supervisor = Supervisor(
+        paths=make_paths(tmp_path),
+        manifest=manifest,
+        runner=runner,
+        probe=probe_always(HealthResult(ok=True, attempts=1)),
+    )
+    supervisor.registry.entries["orchestration"] = _registry_entry_crashed(supervisor, count=2)
+
+    supervisor.reconcile_once()
+
+    entry = supervisor.registry.get("orchestration")
+    assert entry.status == PillarStatus.HEALTHY
+    assert entry.crash_count == 0  # reset, not incremented, once confirmed healthy
+    assert not any(c[0] == "systemd-run" for c in runner.calls)  # no relaunch needed
+
+
 def _registry_entry_crashed(supervisor: Supervisor, count: int):
     from core.registry import RegistryEntry
 

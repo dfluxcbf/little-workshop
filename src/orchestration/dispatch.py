@@ -24,7 +24,7 @@ from orchestration.queue import cascade_dependency_failures, ready_jobs
 SocketLookup = Callable[[str], Path | None]
 
 
-def dispatch_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 10.0) -> Job:
+def dispatch_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 20.0) -> Job:
     socket_path = socket_lookup(job.target_pillar)
     if socket_path is None:
         job.status = JobStatus.FAILED
