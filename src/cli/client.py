@@ -395,6 +395,55 @@ def requirements_report(paths: Paths, project_id: str, *, timeout: float = 10.0)
         ) from exc
 
 
+def build_list_runs(paths: Paths, project_id: str | None = None, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("build"), timeout=timeout) as client:
+            response = client.get("/v1/build_runs", params={"project_id": project_id} if project_id else {})
+        response.raise_for_status()
+        return {"source": "daemon", "build_runs": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from build import db as build_db
+
+        conn = build_db.connect(paths.pillar_db_path("build"))
+        runs = build_db.list_build_runs(conn, project_id=project_id)
+        conn.close()
+        return {"source": "fallback", "build_runs": [r.model_dump(mode="json") for r in runs]}
+
+
+def build_get_run(paths: Paths, run_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("build"), timeout=timeout) as client:
+            response = client.get(f"/v1/build_runs/{run_id}")
+        response.raise_for_status()
+        return {"source": "daemon", "build_run": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from build import db as build_db
+
+        conn = build_db.connect(paths.pillar_db_path("build"))
+        run = build_db.get_build_run(conn, run_id)
+        conn.close()
+        return {"source": "fallback", "build_run": run.model_dump(mode="json") if run else None}
+
+
+def build_list_packages(
+    paths: Paths, project_id: str | None = None, kind: str | None = None, *, timeout: float = 5.0
+) -> dict:
+    params = {k: v for k, v in {"project_id": project_id, "kind": kind}.items() if v}
+    try:
+        with client_for_socket(paths.socket_path("build"), timeout=timeout) as client:
+            response = client.get("/v1/packages", params=params)
+        response.raise_for_status()
+        return {"source": "daemon", "packages": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from build import db as build_db
+        from build.models import PackageKind
+
+        conn = build_db.connect(paths.pillar_db_path("build"))
+        packages = build_db.list_packages(conn, project_id=project_id, kind=PackageKind(kind) if kind else None)
+        conn.close()
+        return {"source": "fallback", "packages": [p.model_dump(mode="json") for p in packages]}
+
+
 class DeploymentPillarUnavailable(Exception):
     pass
 

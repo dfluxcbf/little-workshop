@@ -440,6 +440,54 @@ def _requirements_report(paths: Paths, args: JSONDict) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Build & Packages
+# ---------------------------------------------------------------------------
+
+def _build_job(paths: Paths, job_type: str, project_id: str, params: JSONDict) -> Any:
+    return client.create_job(
+        paths, type=job_type, target_pillar="build", project_id=project_id,
+        params=params, queue_key=None, depends_on=[], created_by="mcp",
+    )
+
+
+def _build_run(paths: Paths, args: JSONDict) -> Any:
+    return _build_job(paths, "build.run", args["project_id"], {
+        "commitish": args.get("commitish", "HEAD"), "command": args["command"],
+        "from_fork": args.get("from_fork", False),
+    })
+
+
+def _build_run_list(paths: Paths, args: JSONDict) -> Any:
+    return client.build_list_runs(paths, args.get("project_id"))
+
+
+def _build_run_status(paths: Paths, args: JSONDict) -> Any:
+    return client.build_get_run(paths, args["run_id"])
+
+
+def _build_publish_pypi(paths: Paths, args: JSONDict) -> Any:
+    return _build_job(paths, "build.publish_pypi", args["project_id"], {
+        "build_run_id": args["build_run_id"], "name": args["name"], "version": args["version"],
+        "filename": args["filename"], "content_base64": args["content_base64"],
+    })
+
+
+def _build_publish_vsix(paths: Paths, args: JSONDict) -> Any:
+    return _build_job(paths, "build.publish_vsix", args["project_id"], {
+        "build_run_id": args["build_run_id"], "name": args["name"], "version": args["version"],
+        "filename": args["filename"], "content_base64": args["content_base64"],
+    })
+
+
+def _build_package_list(paths: Paths, args: JSONDict) -> Any:
+    return client.build_list_packages(paths, args.get("project_id"), args.get("kind"))
+
+
+def _build_package_delete(paths: Paths, args: JSONDict) -> Any:
+    return _build_job(paths, "build.delete_package", args["project_id"], {"package_id": args["package_id"]})
+
+
+# ---------------------------------------------------------------------------
 # Agentic Development
 # ---------------------------------------------------------------------------
 
@@ -706,6 +754,41 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_requirements_report", "Definition-of-done report for a project: for each requirement, "
              "whether it is published, tested, passing, and therefore done.",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _requirements_report),
+
+    ToolSpec("workshop_build_run", "Run a build/test command sandboxed, in a fresh Deployment & Servers "
+             "worktree of a given commit — never the project's own working checkout. Mark from_fork true for "
+             "an untrusted PR: the fork-safety gate then refuses to let this run's result be published.",
+             _schema({
+                 "project_id": _PROJECT_ID, "commitish": _prop("string", "Branch, tag, or commit to build. Default: HEAD."),
+                 "command": _prop("array", "The build/test command, e.g. [\"python3\",\"-m\",\"pytest\"].", items={"type": "string"}),
+                 "from_fork": _prop("boolean", "Mark this run as untrusted. Default: false."),
+             }, ["project_id", "command"]), _build_run),
+    ToolSpec("workshop_build_run_list", "List build runs, optionally filtered by project.",
+             _schema({"project_id": _prop("string", "Filter by project.")}), _build_run_list),
+    ToolSpec("workshop_build_run_status", "Get one build run by id, including its exit code and log.",
+             _schema({"run_id": _prop("string", "The build run's id.")}, ["run_id"]), _build_run_status),
+    ToolSpec("workshop_build_publish_pypi", "Publish a wheel/sdist to the internal PEP 503 index. Refused "
+             "(the fork-safety gate) unless build_run_id names a real, succeeded, non-fork build run.",
+             _schema({
+                 "project_id": _PROJECT_ID, "build_run_id": _prop("string", "A succeeded, non-fork build run's id."),
+                 "name": _prop("string", "Package (project) name."), "version": _prop("string", "Package version."),
+                 "filename": _prop("string", "The wheel/sdist filename."),
+                 "content_base64": _prop("string", "The file's own bytes, base64-encoded."),
+             }, ["project_id", "build_run_id", "name", "version", "filename", "content_base64"]), _build_publish_pypi),
+    ToolSpec("workshop_build_publish_vsix", "Publish a .vsix VS Code extension. Refused (the fork-safety gate) "
+             "unless build_run_id names a real, succeeded, non-fork build run.",
+             _schema({
+                 "project_id": _PROJECT_ID, "build_run_id": _prop("string", "A succeeded, non-fork build run's id."),
+                 "name": _prop("string", "Extension name."), "version": _prop("string", "Extension version."),
+                 "filename": _prop("string", "The .vsix filename."),
+                 "content_base64": _prop("string", "The file's own bytes, base64-encoded."),
+             }, ["project_id", "build_run_id", "name", "version", "filename", "content_base64"]), _build_publish_vsix),
+    ToolSpec("workshop_build_package_list", "List published packages, optionally filtered by project and/or kind.",
+             _schema({"project_id": _prop("string", "Filter by project."),
+                      "kind": _prop("string", "pypi|vsix")}), _build_package_list),
+    ToolSpec("workshop_build_package_delete", "Delete a published package for good.",
+             _schema({"project_id": _PROJECT_ID, "package_id": _prop("string", "The package's id.")},
+                     ["project_id", "package_id"]), _build_package_delete),
 
     ToolSpec("workshop_agent_run_task", "Run Claude Code on a project, on a real branch, under human review.",
              _schema({

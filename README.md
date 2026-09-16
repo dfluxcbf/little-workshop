@@ -102,9 +102,25 @@ mapping from the tools it absorbs. Implementation is underway against the
   half of the same concept is the *conflict-with-a-policy* side, still
   to come. Periodic test runs needed no mechanism of their own: just an
   Orchestration `ScheduledTask` (M9) naming `requirements.run_tests`.
+- **M11 — Build & Packages**: `little-runner`'s disclaimed "not a
+  general CI system" non-goal lifted — `build.run` runs a project's own
+  arbitrary build/test command inside a Deployment & Servers-provisioned
+  worktree, never the project's own working checkout, recording a
+  `BuildRun`. Fork-safety-gated PR testing: a `from_fork`-flagged run
+  can still execute, but `build.publish_pypi`/`build.publish_vsix`
+  check the run's *stored* record (never a caller-supplied claim) and
+  refuse to publish anything built from one. `little-pypi` absorbed for
+  package hosting — a real PEP 503 Simple Repository API computed live
+  from this pillar's own database (metadata in the DB, blobs on disk,
+  a deliberate modernization of `little-pypi`'s pure-filesystem model)
+  plus its own `.vsix` namespace, deliberately outside the PEP 503
+  index. Seven operations exposed identically on the Pillar Interface,
+  `lws build ...`, and matching `workshop_build_*` MCP tools. Periodic
+  builds needed no mechanism of their own either: just a `ScheduledTask`
+  naming `build.run`.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1242 tests — 1138 unit, 104 real
+`bazel test //:coverage` all work today (1328 tests — 1219 unit, 109 real
 `systemd --user` end-to-end integration proofs — at 99% line coverage
 over `src/`, measured with `python3 -m pytest --cov=src`; see
 `scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific
