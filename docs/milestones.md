@@ -40,11 +40,10 @@ discipline this project already applies to itself); the *sequence* and
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Not started |
 | M16 | Compatibility shims | M1–M14 (whichever tool each shim forwards to) | Not started |
 | M17 | Ecosystem cutover | M15, M16 | Not started |
-| M18 | Retire the absorbed tools | M17 | Not started |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
 dependency graph is visible up front, not discovered one milestone late.
-**M16–M18 were missing from the first pass entirely** — every milestone
+**M16–M17 were missing from the first pass entirely** — every milestone
 through M15 makes little-workshop internally complete, but none of them
 address the actual point of the project: the other real projects in this
 ecosystem still depend on `lreq`/`lvx`/`lrun`/`little-pypi` until
@@ -431,16 +430,3 @@ instead of a rewrite of that project's own tooling assumptions.
 Sequencing within this milestone (project order, one at a time vs.
 batched, rollback plan per project) is implementation planning for when
 this milestone actually starts, not decided here.
-
-## M18 — Retire the absorbed tools
-
-Once nothing in the ecosystem depends on `little-requirements`,
-`little-versions`, `little-runner`, `little-pypi`, or
-`bootstrap-little-project` — confirmed by M17 actually completing, not
-assumed — those five repositories' own active development ends. What
-happens to them physically (archived, marked read-only, deleted outright)
-is a decision for whoever owns them at the time, not fixed now, far in
-advance of anything that would make it real. The one thing worth stating
-today: this milestone is the actual retirement, not a milestone about
-planning to eventually consider retiring them — that planning is this
-paragraph.
