@@ -41,13 +41,24 @@ class GatePoint(str, Enum):
     Job-type table. A Job type belongs to zero or more categories
     (declared by the pillar that owns it); a policy gates zero or more
     categories (chosen at authoring/configuration time, independent of
-    its EARS text and script)."""
+    its EARS text and script).
+
+    `SELF_REDEPLOY`, `SERVER_STOP`, `PACKAGE_PUBLISH`, and
+    `PROJECT_REGISTRATION` added 2026-09-16, split out from
+    `DEPLOY_REDEPLOY`/`RELEASE` (or newly covering a previously
+    ungated Job type) once real usage showed the original six
+    conflated meaningfully different blast radii — see
+    `docs/requirements.md`'s policy-usability-refinement follow-up."""
     BUILD_INSTALL = "build_install"
     SERVER_LAUNCH = "server_launch"
     DEPLOY_REDEPLOY = "deploy_redeploy"
+    SELF_REDEPLOY = "self_redeploy"
+    SERVER_STOP = "server_stop"
     RELEASE = "release"
+    PACKAGE_PUBLISH = "package_publish"
     BRANCH_FINISH = "branch_finish"
     PROJECT_REMOVAL = "project_removal"
+    PROJECT_REGISTRATION = "project_registration"
 
 
 class Policy(BaseModel):

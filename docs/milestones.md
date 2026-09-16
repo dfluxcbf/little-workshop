@@ -360,6 +360,18 @@ layout, Mission Control's exact color tokens, violet excluded). Placed
 late deliberately — its value scales with how much there already is to
 show, and none of the pillars above need it to function.
 
+**A concrete, already-backed panel**: policy management — every policy
+listed in its natural-language `ears_text` form with a checkbox for its
+`enabled` toggle, a per-policy gate-point selector (the six categories,
+multi-select or none), a raw view/edit of the generated `test_script`
+(feeding straight into `policy.activate`, Gate 4's own human-review
+step — never a bypass of it), and a per-project waiver
+grant/revoke/list view with its required `reason` shown inline. The
+entire backend for this (`policy.configure`, `policy.waiver_grant`/
+`revoke`, `GET /v1/policies/gating-for-job`) already exists as real
+Pillar Interface calls and `workshop_policy_*` MCP tools — this
+milestone is the UI surfacing what's already there, not new mechanism.
+
 ## M15 — Self-hosting / dogfooding
 
 The point where this project's own self-application principle

@@ -20,10 +20,10 @@ documented simplifications against the design below: the test-script
 sandbox's network isolation is `--network none` rather than the
 finer-grained "Pillar-Interface-only, safe-endpoints-only" proxy
 described in "Test-script execution sandbox," and which Job types
-declare which gating topics is a small, concrete, real proof
-(`deployment.deploy` on `deployment-policy`) rather than the full
-mapping `docs/open_questions.md`'s `OQ-3` always left to each pillar's
-own future work. A companion document, `docs/pillars/policy_catalog.md`,
+declare which gate-point categories is a small, concrete, real start
+(`orchestration/policy_gate.py`'s `JOB_TYPE_CATEGORIES`) rather than the
+full mapping `docs/open_questions.md`'s `OQ-3` always left to each
+pillar's own future work. A companion document, `docs/pillars/policy_catalog.md`,
 holds a candidate set of roughly 50 policies mined from this ecosystem's
 existing tools — tier already decided, individual entries still pending
 the authoring pipeline described below (M13, run one entry at a time
@@ -53,10 +53,18 @@ without someone finding out" (`docs/architecture.md`).
   only network, allowlisted read-only filesystem — how a policy's own
   check actually runs without trusting it.
 - **Action-gating** — extends Orchestration's Job model with a
-  `pending_confirmation` state: a Job whose type declares a gated topic
-  doesn't dispatch until the policy currently winning precedence on that
-  topic, for that project, passes. Fail-closed, with a 10-minute
-  human-override flow.
+  `pending_confirmation` state: a Job whose type declares one or more
+  gate-point categories doesn't dispatch until every currently-winning,
+  enabled, non-waived policy gating any of those categories, for that
+  project, passes — refined 2026-09-16 from a single fixed topic per
+  Job type into a per-*policy*, user-chosen set of categories, so a Job
+  can now be held by more than one policy at once. Fail-closed, with a
+  10-minute human-override flow.
+- **Usability controls** — a policy can be enabled/disabled without
+  re-authoring, and a project that genuinely can't comply can be granted
+  an explicit, auditable, reversible **waiver** against one policy —
+  distinct from scope precedence: framework tier still can't be
+  silently shadowed by a lower-scope policy. Added 2026-09-16.
 - **Definition-of-done and policy-conflict resolution** — the multi-pillar
   half of "is this actually done," paired with Requirements & Quality's
   own M10 implementation of the same concept from its side.
@@ -82,8 +90,8 @@ without someone finding out" (`docs/architecture.md`).
   `target_pillar` names — to check its state as part of an audit or an
   action-gate decision.
 - **Called by**: Orchestration — every Job dispatch consults this pillar
-  first for any Job type that declares a gated topic, before the Job
-  ever reaches its real target pillar; this includes a `policy.check_all`
+  first for any Job type that declares a gate-point category, before the
+  Job ever reaches its real target pillar; this includes a `policy.check_all`
   Job dispatched by a recurring `ScheduledTask`, once Orchestration's
   scheduled tasks (M9) exist — the periodic-audit case is just that Job
   type on a timer, not a mechanism of this pillar's own. `lws`, the MCP
@@ -562,9 +570,16 @@ at all until the policy governing their action passes.
 has the concrete implementation): gating moved from a fixed, code-level
 Job-type→topic table to a per-*policy*, user-chosen set of **gate
 points** — `build_install`, `server_launch`, `deploy_redeploy`,
-`release`, `branch_finish`, `project_removal` — chosen at authoring or
-reconfiguration time, independent of the policy's own EARS text and
-script. A Job *type* still declares which of these categories it
+`self_redeploy`, `server_stop`, `release`, `package_publish`,
+`branch_finish`, `project_removal`, `project_registration` — chosen at
+authoring or reconfiguration time, independent of the policy's own
+EARS text and script. `self_redeploy` and `package_publish` were split
+out from `deploy_redeploy`/`release` on the very same day, once real
+usage showed those two conflated meaningfully different blast radii:
+little-workshop redeploying its *own* pillars is a different risk than
+an ordinary user-project redeploy, and cutting a git release tag is a
+different action than pushing an artifact to the real, world-visible
+PEP 503 index. A Job *type* still declares which of these categories it
 belongs to (most declare none, dispatching with no policy involvement
 whatsoever — sparse and opt-in, never a blanket check on everything),
 but a policy now opts into gating zero, one, or several of those

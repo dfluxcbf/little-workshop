@@ -42,10 +42,14 @@ SocketLookup = Callable[[str], object]
 # Policy & Compliance never share a Python import.
 JOB_TYPE_CATEGORIES: dict[str, set[str]] = {
     "build.run": {"build_install"},
-    "build.publish_pypi": {"release"},
-    "build.publish_vsix": {"release"},
+    "build.publish_pypi": {"package_publish"},
+    "build.publish_vsix": {"package_publish"},
     "deployment.deploy": {"server_launch", "deploy_redeploy"},
+    "deployment.stop": {"server_stop"},
+    "deployment.redeploy_pillar": {"self_redeploy"},
     "project.remove": {"project_removal"},
+    "project.bootstrap": {"project_registration"},
+    "project.import": {"project_registration"},
     "version.release_start": {"release"},
     "version.release_candidate_cut": {"release"},
     "version.release_candidate_promote": {"release"},

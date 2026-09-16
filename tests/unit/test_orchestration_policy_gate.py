@@ -37,6 +37,21 @@ def _policy_socket_lookup(app, monkeypatch):
     return socket_lookup
 
 
+def test_job_type_categories_covers_the_four_2026_09_16_additions():
+    """`self_redeploy`, `server_stop`, `package_publish`, and
+    `project_registration` were split out of `deploy_redeploy`/`release`
+    (or newly added) once real usage showed the original six categories
+    conflated meaningfully different blast radii — see GatePoint's own
+    docstring in policy/models.py."""
+    categories = policy_gate.JOB_TYPE_CATEGORIES
+    assert categories["build.publish_pypi"] == {"package_publish"}
+    assert categories["build.publish_vsix"] == {"package_publish"}
+    assert categories["deployment.stop"] == {"server_stop"}
+    assert categories["deployment.redeploy_pillar"] == {"self_redeploy"}
+    assert categories["project.bootstrap"] == {"project_registration"}
+    assert categories["project.import"] == {"project_registration"}
+
+
 def test_resolve_gating_policy_ids_returns_empty_when_socket_lookup_has_no_policy_entry():
     assert policy_gate.resolve_gating_policy_ids(lambda p: None, "proj-a", {"server_launch"}) == []
 
@@ -151,7 +166,7 @@ def test_attach_policy_gate_sends_the_jobs_own_categories(conn, monkeypatch):
 
 
 def test_maybe_gate_false_for_an_ungated_job_type(conn):
-    job = Job(type="deployment.stop", target_pillar="deployment", project_id="proj-a")
+    job = Job(type="deployment.restart_sandbox", target_pillar="deployment", project_id="proj-a")
     db.insert_job(conn, job)
     assert policy_gate.maybe_gate(conn, job) is False
 
