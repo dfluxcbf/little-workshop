@@ -87,6 +87,157 @@ def test_trigger_unknown_pipeline_404s(client):
     assert response.status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# Scheduled tasks -- docs/milestones.md M9
+# ---------------------------------------------------------------------------
+
+_ONCE_PAYLOAD = {
+    "name": "nightly-test-run",
+    "job_template": {"type": "noop", "target_pillar": "reference"},
+    "schedule": {"kind": "once", "at": "2026-01-01T02:00:00"},
+}
+
+_RECURRING_PAYLOAD = {
+    "name": "nightly-test-run",
+    "job_template": {"type": "noop", "target_pillar": "reference"},
+    "schedule": {"kind": "recurring", "days_of_week": [0, 1, 2, 3, 4], "time_of_day": "02:00"},
+}
+
+
+def test_create_scheduled_task_computes_next_run_at(client):
+    response = client.post("/v1/scheduled_tasks", json=_ONCE_PAYLOAD)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["next_run_at"] == "2026-01-01T02:00:00"
+    assert body["missed_run_at"] is None
+
+
+def test_get_and_list_scheduled_tasks(client):
+    created = client.post("/v1/scheduled_tasks", json=_ONCE_PAYLOAD).json()
+
+    get_response = client.get(f"/v1/scheduled_tasks/{created['id']}")
+    assert get_response.status_code == 200
+    assert get_response.json()["name"] == "nightly-test-run"
+
+    list_response = client.get("/v1/scheduled_tasks")
+    assert len(list_response.json()) == 1
+
+
+def test_get_scheduled_task_not_found(client):
+    assert client.get("/v1/scheduled_tasks/ghost").status_code == 404
+
+
+def test_edit_scheduled_task_updates_job_template(client):
+    created = client.post("/v1/scheduled_tasks", json=_ONCE_PAYLOAD).json()
+
+    response = client.patch(
+        f"/v1/scheduled_tasks/{created['id']}",
+        json={"job_template": {"type": "always_fail", "target_pillar": "reference"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["job_template"]["type"] == "always_fail"
+    # Unrelated fields (the schedule) are untouched by a partial edit.
+    assert response.json()["schedule"]["kind"] == "once"
+
+
+def test_edit_scheduled_task_changing_schedule_recomputes_next_run_at(client):
+    created = client.post("/v1/scheduled_tasks", json=_RECURRING_PAYLOAD).json()
+
+    response = client.patch(
+        f"/v1/scheduled_tasks/{created['id']}",
+        json={"schedule": {"kind": "once", "at": "2030-06-01T09:00:00"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["next_run_at"] == "2030-06-01T09:00:00"
+
+
+def test_remove_scheduled_task_deletes_it(client):
+    created = client.post("/v1/scheduled_tasks", json=_ONCE_PAYLOAD).json()
+
+    response = client.delete(f"/v1/scheduled_tasks/{created['id']}")
+    assert response.status_code == 200
+    assert response.json()["removed"] is True
+    assert client.get(f"/v1/scheduled_tasks/{created['id']}").status_code == 404
+
+
+def test_trigger_scheduled_task_creates_a_job_now(client):
+    created = client.post("/v1/scheduled_tasks", json=_RECURRING_PAYLOAD).json()
+
+    response = client.post(f"/v1/scheduled_tasks/{created['id']}/trigger")
+    assert response.status_code == 200
+    assert response.json()["created_by"] == "scheduler"
+
+    reloaded = client.get(f"/v1/scheduled_tasks/{created['id']}").json()
+    assert reloaded["last_job_id"] == response.json()["id"]
+    # trigger never touches next_run_at.
+    assert reloaded["next_run_at"] == created["next_run_at"]
+
+
+def test_cancel_scheduled_task_skips_the_next_occurrence(client):
+    created = client.post("/v1/scheduled_tasks", json=_RECURRING_PAYLOAD).json()
+
+    response = client.post(f"/v1/scheduled_tasks/{created['id']}/cancel")
+    assert response.status_code == 200
+    assert response.json()["cancelled"] == "next_occurrence"
+
+
+def test_postpone_scheduled_task_retargets_next_run_at(client):
+    created = client.post("/v1/scheduled_tasks", json=_RECURRING_PAYLOAD).json()
+
+    response = client.post(
+        f"/v1/scheduled_tasks/{created['id']}/postpone", json={"at": "2030-01-01T05:00:00"}
+    )
+    assert response.status_code == 200
+    assert response.json()["next_run_at"] == "2030-01-01T05:00:00"
+
+
+def test_scheduled_task_operations_404_on_unknown_id(client):
+    assert client.post("/v1/scheduled_tasks/ghost/trigger").status_code == 404
+    assert client.post("/v1/scheduled_tasks/ghost/cancel").status_code == 404
+    assert client.post("/v1/scheduled_tasks/ghost/postpone", json={"at": "2030-01-01T00:00:00"}).status_code == 404
+    assert client.delete("/v1/scheduled_tasks/ghost").status_code == 404
+    assert client.patch("/v1/scheduled_tasks/ghost", json={"name": "x"}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Queue capacity -- the `queue` operation
+# ---------------------------------------------------------------------------
+
+def test_queue_capacity_defaults_to_1(client):
+    response = client.get("/v1/queue_keys/little-meals/capacity")
+    assert response.status_code == 200
+    assert response.json() == {"queue_key": "little-meals", "capacity": 1}
+
+
+def test_set_queue_capacity_round_trips(client):
+    post_response = client.post("/v1/queue_keys/little-meals/capacity", json={"capacity": 3})
+    assert post_response.status_code == 200
+    assert post_response.json()["capacity"] == 3
+
+    get_response = client.get("/v1/queue_keys/little-meals/capacity")
+    assert get_response.json()["capacity"] == 3
+
+
+def test_set_queue_capacity_rejects_zero(client):
+    response = client.post("/v1/queue_keys/little-meals/capacity", json={"capacity": 0})
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# stop -- docs/milestones.md M9
+# ---------------------------------------------------------------------------
+
+def test_stop_job_endpoint_404s_on_unknown_job(client):
+    assert client.post("/v1/jobs/ghost/stop").status_code == 404
+
+
+def test_stop_job_endpoint_reports_not_running(client):
+    created = client.post("/v1/jobs", json={"type": "noop", "target_pillar": "reference"}).json()
+    response = client.post(f"/v1/jobs/{created['id']}/stop")
+    assert response.status_code == 200
+    assert response.json()["stopped"] is False
+
+
 def test_complete_job_callback(conn):
     def available(pillar):
         return None

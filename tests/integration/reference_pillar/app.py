@@ -19,6 +19,10 @@ class JobRequest(BaseModel):
 
 def build_app() -> FastAPI:
     app = FastAPI(title="reference pillar (M1 proof only)")
+    # Tracks "slow"-type job ids currently accepted-but-not-done, so
+    # /v1/jobs/{id}/stop has something real to interrupt — M9's own
+    # end-to-end proof of a genuine `stop` call.
+    running: set[str] = set()
 
     @app.get("/v1/health")
     def health() -> dict:
@@ -40,6 +44,14 @@ def build_app() -> FastAPI:
         # `queue_key` mutex/depends_on machinery for real, the same
         # "accepted" async pattern M5/M6's self-redeploy and agent.run_task
         # actually use in the real pillars.
+        running.add(request.job_id)
         return {"outcome": "accepted", "result": {"dispatched": True}}
+
+    @app.post("/v1/jobs/{job_id}/stop")
+    def stop(job_id: str) -> dict:
+        if job_id in running:
+            running.discard(job_id)
+            return {"stopped": True}
+        return {"stopped": False, "reason": "not a running 'slow' job"}
 
     return app

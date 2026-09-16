@@ -31,7 +31,7 @@ discipline this project already applies to itself); the *sequence* and
 | M6 | Agentic Development | M1, M2, M3, M4 | Done |
 | M7 | MCP Server — minimal | M2, M3, M4, M6 | Done |
 | M8 | Registry & Portfolio — import path | M2, M6 | Done |
-| M9 | Orchestration — scheduled tasks | M1 | Not started |
+| M9 | Orchestration — scheduled tasks | M1 | Done |
 | M10 | Requirements & Quality | M1, M2, M4 | Not started |
 | M11 | Build & Packages | M1, M2, M4 | Not started |
 | M12 | Policy & Compliance | M1, M4, M6, M10 | Not started |

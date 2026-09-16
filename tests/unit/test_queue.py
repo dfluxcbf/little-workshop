@@ -59,6 +59,37 @@ def test_queue_key_mutex_frees_once_holder_completes(conn):
     assert is_ready(conn, queued) is True
 
 
+def test_queue_key_capacity_of_2_allows_a_second_concurrent_job(conn):
+    db.set_queue_capacity(conn, "little-meals", 2)
+
+    running = Job(type="deploy", target_pillar="deployment", queue_key="little-meals")
+    db.insert_job(conn, running)
+    running.status = JobStatus.RUNNING
+    db.update_job(conn, running)
+
+    queued = Job(type="deploy", target_pillar="deployment", queue_key="little-meals")
+    db.insert_job(conn, queued)
+    assert is_ready(conn, queued) is True
+
+
+def test_queue_key_capacity_of_2_still_blocks_a_third(conn):
+    db.set_queue_capacity(conn, "little-meals", 2)
+
+    for _ in range(2):
+        running = Job(type="deploy", target_pillar="deployment", queue_key="little-meals")
+        db.insert_job(conn, running)
+        running.status = JobStatus.RUNNING
+        db.update_job(conn, running)
+
+    queued = Job(type="deploy", target_pillar="deployment", queue_key="little-meals")
+    db.insert_job(conn, queued)
+    assert is_ready(conn, queued) is False
+
+
+def test_queue_capacity_defaults_to_1_when_never_set(conn):
+    assert db.get_queue_capacity(conn, "never-configured") == 1
+
+
 def test_ready_jobs_returns_only_the_ready_ones(conn):
     ready = Job(type="noop", target_pillar="reference")
     blocked_dep = Job(type="noop", target_pillar="reference")

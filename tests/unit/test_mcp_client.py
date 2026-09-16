@@ -239,6 +239,132 @@ def test_agent_run_status_success(paths, monkeypatch):
     assert client.agent_run_status(paths, "little-meals", "r1") == {"run_id": "r1"}
 
 
+def test_stop_job_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.post("/v1/jobs/{job_id}/stop")
+    def stop(job_id: str) -> dict:
+        return {"stopped": True, "reason": None}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.stop_job(paths, "j1") == {"stopped": True, "reason": None}
+
+
+def test_create_scheduled_task_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.post("/v1/scheduled_tasks")
+    def create(body: dict) -> dict:
+        return {"id": "s1", "name": body["name"]}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    result = client.create_scheduled_task(
+        paths, name="nightly", job_template={"type": "noop", "target_pillar": "reference"},
+        schedule={"kind": "once", "at": "2030-01-01T00:00:00"},
+    )
+    assert result == {"id": "s1", "name": "nightly"}
+
+
+def test_list_scheduled_tasks_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/scheduled_tasks")
+    def list_tasks() -> list[dict]:
+        return [{"id": "s1"}]
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.list_scheduled_tasks(paths) == [{"id": "s1"}]
+
+
+def test_get_scheduled_task_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/scheduled_tasks/{task_id}")
+    def get(task_id: str) -> dict:
+        return {"id": task_id}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.get_scheduled_task(paths, "s1") == {"id": "s1"}
+
+
+def test_edit_scheduled_task_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.patch("/v1/scheduled_tasks/{task_id}")
+    def edit(task_id: str, body: dict) -> dict:
+        return {"id": task_id, **body}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.edit_scheduled_task(paths, "s1", name="renamed") == {"id": "s1", "name": "renamed"}
+
+
+def test_remove_scheduled_task_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.delete("/v1/scheduled_tasks/{task_id}")
+    def remove(task_id: str) -> dict:
+        return {"id": task_id, "removed": True}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.remove_scheduled_task(paths, "s1") == {"id": "s1", "removed": True}
+
+
+def test_trigger_scheduled_task_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.post("/v1/scheduled_tasks/{task_id}/trigger")
+    def trigger(task_id: str) -> dict:
+        return {"id": "j1", "created_by": "scheduler"}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.trigger_scheduled_task(paths, "s1") == {"id": "j1", "created_by": "scheduler"}
+
+
+def test_cancel_scheduled_task_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.post("/v1/scheduled_tasks/{task_id}/cancel")
+    def cancel(task_id: str) -> dict:
+        return {"cancelled": "next_occurrence"}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.cancel_scheduled_task(paths, "s1") == {"cancelled": "next_occurrence"}
+
+
+def test_postpone_scheduled_task_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.post("/v1/scheduled_tasks/{task_id}/postpone")
+    def postpone(task_id: str, body: dict) -> dict:
+        return {"id": task_id, "next_run_at": body["at"]}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    result = client.postpone_scheduled_task(paths, "s1", "2030-06-01T00:00:00")
+    assert result == {"id": "s1", "next_run_at": "2030-06-01T00:00:00"}
+
+
+def test_get_queue_capacity_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/queue_keys/{queue_key}/capacity")
+    def get_capacity(queue_key: str) -> dict:
+        return {"queue_key": queue_key, "capacity": 1}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.get_queue_capacity(paths, "little-meals") == {"queue_key": "little-meals", "capacity": 1}
+
+
+def test_set_queue_capacity_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.post("/v1/queue_keys/{queue_key}/capacity")
+    def set_capacity(queue_key: str, body: dict) -> dict:
+        return {"queue_key": queue_key, "capacity": body["capacity"]}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.set_queue_capacity(paths, "little-meals", 3) == {"queue_key": "little-meals", "capacity": 3}
+
+
 def test_get_raises_pillar_unavailable_on_http_error_status(paths, monkeypatch):
     from fastapi import HTTPException
 

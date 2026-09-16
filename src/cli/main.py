@@ -58,6 +58,139 @@ def cmd_job_status(args: argparse.Namespace) -> int:
     return 0 if result.get("job") is not None else 1
 
 
+def cmd_job_stop(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.stop_job(paths, args.job_id)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("stopped") else 1
+
+
+def cmd_schedule_add(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    params = json.loads(args.params) if args.params else {}
+    job_template = {
+        "type": args.type, "target_pillar": args.target_pillar, "project_id": args.project_id,
+        "params": params, "queue_key": args.queue_key, "depends_on": args.depends_on or [],
+    }
+    if args.at:
+        schedule = {"kind": "once", "at": args.at}
+    else:
+        schedule = {
+            "kind": "recurring",
+            "days_of_week": [int(d) for d in args.days.split(",")] if args.days else [],
+            "time_of_day": args.time_of_day,
+        }
+    try:
+        result = client.create_scheduled_task(paths, name=args.name, job_template=job_template, schedule=schedule)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_schedule_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    _print(client.list_scheduled_tasks(paths))
+    return 0
+
+
+def cmd_schedule_status(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    result = client.get_scheduled_task(paths, args.task_id)
+    _print(result)
+    return 0 if result.get("scheduled_task") is not None else 1
+
+
+def cmd_schedule_edit(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    fields: dict = {}
+    if args.name:
+        fields["name"] = args.name
+    if args.job_template_json:
+        fields["job_template"] = json.loads(args.job_template_json)
+    if args.at:
+        fields["schedule"] = {"kind": "once", "at": args.at}
+    elif args.days or args.time_of_day:
+        fields["schedule"] = {
+            "kind": "recurring",
+            "days_of_week": [int(d) for d in args.days.split(",")] if args.days else [],
+            "time_of_day": args.time_of_day,
+        }
+    try:
+        result = client.edit_scheduled_task(paths, args.task_id, **fields)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_schedule_remove(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.remove_scheduled_task(paths, args.task_id)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_schedule_trigger(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.trigger_scheduled_task(paths, args.task_id)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_schedule_cancel(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.cancel_scheduled_task(paths, args.task_id)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("cancelled") else 1
+
+
+def cmd_schedule_postpone(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.postpone_scheduled_task(paths, args.task_id, args.at)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_schedule_queue_get(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    _print(client.get_queue_capacity(paths, args.queue_key))
+    return 0
+
+
+def cmd_schedule_queue_set(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.set_queue_capacity(paths, args.queue_key, args.capacity)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
 def cmd_project_bootstrap(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     params = {
@@ -568,6 +701,71 @@ def build_parser() -> argparse.ArgumentParser:
     job_status = job_sub.add_parser("status", help="Show one Job")
     job_status.add_argument("job_id")
     job_status.set_defaults(func=cmd_job_status)
+
+    job_stop = job_sub.add_parser("stop", help="Interrupt a currently running Job")
+    job_stop.add_argument("job_id")
+    job_stop.set_defaults(func=cmd_job_stop)
+
+    schedule = subparsers.add_parser("schedule", help="Orchestration scheduled-task commands")
+    schedule_sub = schedule.add_subparsers(dest="schedule_command", required=True)
+
+    schedule_add = schedule_sub.add_parser("add", help="Add a scheduled task")
+    schedule_add.add_argument("name")
+    schedule_add.add_argument("--type", required=True, help="The Job type the schedule fires")
+    schedule_add.add_argument("--target-pillar", required=True)
+    schedule_add.add_argument("--project-id", default=None)
+    schedule_add.add_argument("--params", default=None, help="JSON object")
+    schedule_add.add_argument("--queue-key", default=None)
+    schedule_add.add_argument("--depends-on", action="append", default=None)
+    schedule_add.add_argument("--at", default=None, help="ISO datetime for a one-shot schedule")
+    schedule_add.add_argument("--days", default=None, help="Comma-separated weekdays, 0=Monday..6=Sunday")
+    schedule_add.add_argument("--time-of-day", default=None, help="HH:MM, host local time")
+    schedule_add.set_defaults(func=cmd_schedule_add)
+
+    schedule_list = schedule_sub.add_parser("list", help="List scheduled tasks")
+    schedule_list.set_defaults(func=cmd_schedule_list)
+
+    schedule_status = schedule_sub.add_parser("status", help="Show one scheduled task")
+    schedule_status.add_argument("task_id")
+    schedule_status.set_defaults(func=cmd_schedule_status)
+
+    schedule_edit = schedule_sub.add_parser("edit", help="Edit a scheduled task")
+    schedule_edit.add_argument("task_id")
+    schedule_edit.add_argument("--name", default=None)
+    schedule_edit.add_argument("--job-template-json", default=None, help="A full JobTemplate, as JSON")
+    schedule_edit.add_argument("--at", default=None, help="Switch to a one-shot schedule at this ISO datetime")
+    schedule_edit.add_argument("--days", default=None, help="Switch to recurring: comma-separated weekdays")
+    schedule_edit.add_argument("--time-of-day", default=None, help="Switch to recurring: HH:MM")
+    schedule_edit.set_defaults(func=cmd_schedule_edit)
+
+    schedule_remove = schedule_sub.add_parser("remove", help="Remove a scheduled task")
+    schedule_remove.add_argument("task_id")
+    schedule_remove.set_defaults(func=cmd_schedule_remove)
+
+    schedule_trigger = schedule_sub.add_parser("trigger", help="Fire a scheduled task's Job right now")
+    schedule_trigger.add_argument("task_id")
+    schedule_trigger.set_defaults(func=cmd_schedule_trigger)
+
+    schedule_cancel = schedule_sub.add_parser("cancel", help="Cancel a pending firing (missed or upcoming)")
+    schedule_cancel.add_argument("task_id")
+    schedule_cancel.set_defaults(func=cmd_schedule_cancel)
+
+    schedule_postpone = schedule_sub.add_parser("postpone", help="Retarget a pending firing to a new date/time")
+    schedule_postpone.add_argument("task_id")
+    schedule_postpone.add_argument("--at", required=True, help="ISO datetime")
+    schedule_postpone.set_defaults(func=cmd_schedule_postpone)
+
+    schedule_queue = schedule_sub.add_parser("queue", help="Manage a queue_key's concurrency capacity")
+    schedule_queue_sub = schedule_queue.add_subparsers(dest="schedule_queue_command", required=True)
+
+    schedule_queue_get = schedule_queue_sub.add_parser("get", help="Show a queue_key's capacity")
+    schedule_queue_get.add_argument("queue_key")
+    schedule_queue_get.set_defaults(func=cmd_schedule_queue_get)
+
+    schedule_queue_set = schedule_queue_sub.add_parser("set", help="Set a queue_key's capacity")
+    schedule_queue_set.add_argument("queue_key")
+    schedule_queue_set.add_argument("--capacity", type=int, required=True)
+    schedule_queue_set.set_defaults(func=cmd_schedule_queue_set)
 
     project = subparsers.add_parser("project", help="Registry & Portfolio project commands")
     project_sub = project.add_subparsers(dest="project_command", required=True)

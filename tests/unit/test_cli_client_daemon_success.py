@@ -52,6 +52,50 @@ def _make_stub_app(paths: Paths | None = None) -> FastAPI:
     def job_status(job_id: str):
         return {"id": job_id, "status": "succeeded"}
 
+    @app.post("/v1/jobs/{job_id}/stop")
+    def stop_job(job_id: str):
+        return {"stopped": True, "reason": None}
+
+    @app.post("/v1/scheduled_tasks")
+    def create_scheduled_task(body: dict):
+        return {"id": "s1", "name": body["name"], "next_run_at": None}
+
+    @app.get("/v1/scheduled_tasks")
+    def list_scheduled_tasks():
+        return [{"id": "s1"}]
+
+    @app.get("/v1/scheduled_tasks/{task_id}")
+    def get_scheduled_task(task_id: str):
+        return {"id": task_id}
+
+    @app.patch("/v1/scheduled_tasks/{task_id}")
+    def edit_scheduled_task(task_id: str, body: dict):
+        return {"id": task_id, **body}
+
+    @app.delete("/v1/scheduled_tasks/{task_id}")
+    def remove_scheduled_task(task_id: str):
+        return {"id": task_id, "removed": True}
+
+    @app.post("/v1/scheduled_tasks/{task_id}/trigger")
+    def trigger_scheduled_task(task_id: str):
+        return {"id": "j1", "created_by": "scheduler"}
+
+    @app.post("/v1/scheduled_tasks/{task_id}/cancel")
+    def cancel_scheduled_task(task_id: str):
+        return {"cancelled": "next_occurrence"}
+
+    @app.post("/v1/scheduled_tasks/{task_id}/postpone")
+    def postpone_scheduled_task(task_id: str, body: dict):
+        return {"id": task_id, "next_run_at": body["at"]}
+
+    @app.get("/v1/queue_keys/{queue_key}/capacity")
+    def get_queue_capacity(queue_key: str):
+        return {"queue_key": queue_key, "capacity": 1}
+
+    @app.post("/v1/queue_keys/{queue_key}/capacity")
+    def set_queue_capacity(queue_key: str, body: dict):
+        return {"queue_key": queue_key, "capacity": body["capacity"]}
+
     @app.post("/v1/jobs/{job_id}/complete")
     def complete_job(job_id: str, body: dict):
         return {"id": job_id, "status": "succeeded" if body.get("succeeded") else "failed"}
@@ -239,6 +283,63 @@ def test_agent_runs_hits_the_real_agent_socket(paths_with_live_daemons):
 def test_agent_run_status_hits_the_real_agent_socket(paths_with_live_daemons):
     result = client.agent_run_status(paths_with_live_daemons, "little-widget", "r1")
     assert result["status"] == "finished"
+
+
+def test_stop_job_hits_the_real_orchestration_socket(paths_with_live_daemons):
+    result = client.stop_job(paths_with_live_daemons, "j1")
+    assert result["stopped"] is True
+
+
+def test_create_scheduled_task_hits_the_real_orchestration_socket(paths_with_live_daemons):
+    result = client.create_scheduled_task(
+        paths_with_live_daemons, name="nightly", job_template={"type": "noop", "target_pillar": "reference"},
+        schedule={"kind": "once", "at": "2030-01-01T00:00:00"},
+    )
+    assert result["name"] == "nightly"
+
+
+def test_list_scheduled_tasks_reports_daemon_source(paths_with_live_daemons):
+    result = client.list_scheduled_tasks(paths_with_live_daemons)
+    assert result["source"] == "daemon"
+    assert result["scheduled_tasks"] == [{"id": "s1"}]
+
+
+def test_get_scheduled_task_reports_daemon_source(paths_with_live_daemons):
+    result = client.get_scheduled_task(paths_with_live_daemons, "s1")
+    assert result["scheduled_task"]["id"] == "s1"
+
+
+def test_edit_scheduled_task_hits_the_real_orchestration_socket(paths_with_live_daemons):
+    result = client.edit_scheduled_task(paths_with_live_daemons, "s1", name="renamed")
+    assert result["name"] == "renamed"
+
+
+def test_remove_scheduled_task_hits_the_real_orchestration_socket(paths_with_live_daemons):
+    assert client.remove_scheduled_task(paths_with_live_daemons, "s1")["removed"] is True
+
+
+def test_trigger_scheduled_task_hits_the_real_orchestration_socket(paths_with_live_daemons):
+    assert client.trigger_scheduled_task(paths_with_live_daemons, "s1")["created_by"] == "scheduler"
+
+
+def test_cancel_scheduled_task_hits_the_real_orchestration_socket(paths_with_live_daemons):
+    assert client.cancel_scheduled_task(paths_with_live_daemons, "s1")["cancelled"] == "next_occurrence"
+
+
+def test_postpone_scheduled_task_hits_the_real_orchestration_socket(paths_with_live_daemons):
+    result = client.postpone_scheduled_task(paths_with_live_daemons, "s1", "2030-06-01T00:00:00")
+    assert result["next_run_at"] == "2030-06-01T00:00:00"
+
+
+def test_get_queue_capacity_reports_daemon_source(paths_with_live_daemons):
+    result = client.get_queue_capacity(paths_with_live_daemons, "little-meals")
+    assert result["source"] == "daemon"
+    assert result["capacity"] == 1
+
+
+def test_set_queue_capacity_hits_the_real_orchestration_socket(paths_with_live_daemons):
+    result = client.set_queue_capacity(paths_with_live_daemons, "little-meals", 3)
+    assert result["capacity"] == 3
 
 
 def test_complete_orchestration_job_reports_true_on_success(paths_with_live_daemons):

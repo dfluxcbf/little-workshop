@@ -77,6 +77,57 @@ def _job_status(paths: Paths, args: JSONDict) -> Any:
     return client.job_status(paths, args["job_id"])
 
 
+def _job_stop(paths: Paths, args: JSONDict) -> Any:
+    return client.stop_job(paths, args["job_id"])
+
+
+def _schedule_add(paths: Paths, args: JSONDict) -> Any:
+    job_template = {
+        "type": args["type"], "target_pillar": args["target_pillar"], "project_id": args.get("project_id"),
+        "params": args.get("params", {}), "queue_key": args.get("queue_key"), "depends_on": args.get("depends_on", []),
+    }
+    if args.get("at"):
+        schedule = {"kind": "once", "at": args["at"]}
+    else:
+        schedule = {
+            "kind": "recurring", "days_of_week": args.get("days_of_week", []),
+            "time_of_day": args.get("time_of_day"),
+        }
+    return client.create_scheduled_task(paths, name=args["name"], job_template=job_template, schedule=schedule)
+
+
+def _schedule_list(paths: Paths, args: JSONDict) -> Any:
+    return client.list_scheduled_tasks(paths)
+
+
+def _schedule_status(paths: Paths, args: JSONDict) -> Any:
+    return client.get_scheduled_task(paths, args["task_id"])
+
+
+def _schedule_remove(paths: Paths, args: JSONDict) -> Any:
+    return client.remove_scheduled_task(paths, args["task_id"])
+
+
+def _schedule_trigger(paths: Paths, args: JSONDict) -> Any:
+    return client.trigger_scheduled_task(paths, args["task_id"])
+
+
+def _schedule_cancel(paths: Paths, args: JSONDict) -> Any:
+    return client.cancel_scheduled_task(paths, args["task_id"])
+
+
+def _schedule_postpone(paths: Paths, args: JSONDict) -> Any:
+    return client.postpone_scheduled_task(paths, args["task_id"], args["at"])
+
+
+def _schedule_queue_get(paths: Paths, args: JSONDict) -> Any:
+    return client.get_queue_capacity(paths, args["queue_key"])
+
+
+def _schedule_queue_set(paths: Paths, args: JSONDict) -> Any:
+    return client.set_queue_capacity(paths, args["queue_key"], args["capacity"])
+
+
 # ---------------------------------------------------------------------------
 # Registry & Portfolio
 # ---------------------------------------------------------------------------
@@ -337,6 +388,51 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"status": _prop("string", "queued|running|pending_confirmation|succeeded|failed|cancelled")}), _job_list),
     ToolSpec("workshop_job_status", "Get one Job's current status and result by id.",
              _schema({"job_id": _prop("string", "The Job id.")}, ["job_id"]), _job_status),
+    ToolSpec("workshop_job_stop", "Interrupt a Job that is currently running. Most Job types have no safe "
+             "mid-flight interruption point and report back that they are not stoppable, rather than being "
+             "silently ignored or left to hang.",
+             _schema({"job_id": _prop("string", "The Job id.")}, ["job_id"]), _job_stop),
+    ToolSpec("workshop_schedule_add", "Add a scheduled task: a durable definition that creates a Job of any "
+             "type this MCP server already exposes, on its own timing. Provide either `at` (a one-shot ISO "
+             "datetime) or `days_of_week`+`time_of_day` (recurring, host local time) — not both.",
+             _schema({
+                 "name": _prop("string", "A human label for the schedule."),
+                 "type": _prop("string", "The Job type to fire, e.g. version.release_start."),
+                 "target_pillar": _prop("string", "The pillar that owns that Job type."),
+                 "project_id": _prop("string", "The project this Job targets, if any."),
+                 "params": _prop("object", "The Job's own params."),
+                 "queue_key": _prop("string", "Serializes against other Jobs sharing this key."),
+                 "depends_on": _prop("array", "Job ids this fired Job should depend on.", items={"type": "string"}),
+                 "at": _prop("string", "One-shot ISO datetime, host local time."),
+                 "days_of_week": _prop("array", "Recurring: 0=Monday..6=Sunday.", items={"type": "integer"}),
+                 "time_of_day": _prop("string", "Recurring: \"HH:MM\", host local time."),
+             }, ["name", "type", "target_pillar"]), _schedule_add),
+    ToolSpec("workshop_schedule_list", "List every scheduled task.", _schema(), _schedule_list),
+    ToolSpec("workshop_schedule_status", "Get one scheduled task by id, including any pending missed-run question.",
+             _schema({"task_id": _prop("string", "The scheduled task's id.")}, ["task_id"]), _schedule_status),
+    ToolSpec("workshop_schedule_remove", "Delete a scheduled task for good: cancels a pending firing or stops "
+             "a running one first. Jobs it already created stay in Orchestration's history.",
+             _schema({"task_id": _prop("string", "The scheduled task's id.")}, ["task_id"]), _schedule_remove),
+    ToolSpec("workshop_schedule_trigger", "Fire a scheduled task's Job right now, out of band — its own timing "
+             "is unaffected. Also resolves a pending missed-run question, if there was one.",
+             _schema({"task_id": _prop("string", "The scheduled task's id.")}, ["task_id"]), _schedule_trigger),
+    ToolSpec("workshop_schedule_cancel", "Dismiss a pending missed-run question without firing it, or — if "
+             "there is none — skip the one upcoming occurrence.",
+             _schema({"task_id": _prop("string", "The scheduled task's id.")}, ["task_id"]), _schedule_cancel),
+    ToolSpec("workshop_schedule_postpone", "Retarget one pending firing to a different date/time. The "
+             "recurring baseline itself is untouched.",
+             _schema({
+                 "task_id": _prop("string", "The scheduled task's id."),
+                 "at": _prop("string", "The new ISO datetime, host local time."),
+             }, ["task_id", "at"]), _schedule_postpone),
+    ToolSpec("workshop_schedule_queue_get", "Get a queue_key's current concurrency capacity (default 1).",
+             _schema({"queue_key": _prop("string", "The queue_key to check.")}, ["queue_key"]), _schedule_queue_get),
+    ToolSpec("workshop_schedule_queue_set", "Set a queue_key's concurrency capacity — how many Jobs sharing "
+             "that key may run at once.",
+             _schema({
+                 "queue_key": _prop("string", "The queue_key to configure."),
+                 "capacity": _prop("integer", "Maximum concurrent Jobs for this key. At least 1."),
+             }, ["queue_key", "capacity"]), _schedule_queue_set),
 
     ToolSpec("workshop_project_bootstrap", "Scaffold and register a brand-new project (the deterministic path: "
              "git init, lvx init, dev branch, optional GitHub repo).",

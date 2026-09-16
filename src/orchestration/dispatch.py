@@ -23,6 +23,25 @@ from orchestration.queue import cascade_dependency_failures, ready_jobs
 # before ever trying to connect.
 SocketLookup = Callable[[str], Path | None]
 
+# docs/pillars/orchestration.md's "stop: declared, with a probing
+# fallback" — job types the *maintainer* already knows can never safely
+# be interrupted mid-flight, so a `stop` call against one is rejected
+# immediately, no network round trip. Every other type (including ones
+# no pillar has actually built a `stop` hook for yet) falls through to
+# actually attempting the real call and trusting the target pillar's own
+# answer — the probing fallback. This set only ever grows by a
+# maintainer's own hand; nothing computes it.
+DECLARED_UNSTOPPABLE_JOB_TYPES: frozenset[str] = frozenset({
+    "project.bootstrap", "project.import", "project.remove",
+    "version.init", "version.feature_start", "version.feature_finish",
+    "version.improvement_start", "version.improvement_finish",
+    "version.hotfix_start", "version.hotfix_finish",
+    "version.release_start", "version.release_candidate_cut",
+    "version.release_candidate_promote", "version.release_finish",
+    "version.support_start", "version.support_finish",
+    "version.config_add_hook", "version.config_remove_hook",
+})
+
 
 def dispatch_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 20.0) -> Job:
     socket_path = socket_lookup(job.target_pillar)
@@ -82,6 +101,45 @@ def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup) -
     dispatch everything actually ready."""
     cascade_dependency_failures(conn)
     return [dispatch_job(conn, job, socket_lookup) for job in ready_jobs(conn)]
+
+
+def stop_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 10.0) -> dict:
+    """`docs/milestones.md` M9's `stop`: interrupt a Job that is
+    currently *running* — scheduled-originated or not. Never raises;
+    every outcome (already settled, declared unstoppable, target
+    unreachable, target genuinely stopped it, target says it can't) is a
+    plain `{"stopped": bool, "reason": str | None}` the caller can show
+    directly."""
+    if job.status != JobStatus.RUNNING:
+        return {"stopped": False, "reason": f"job is {job.status.value}, not running"}
+
+    if job.type in DECLARED_UNSTOPPABLE_JOB_TYPES:
+        return {"stopped": False, "reason": f"{job.type!r} is declared unstoppable"}
+
+    socket_path = socket_lookup(job.target_pillar)
+    if socket_path is None:
+        return {"stopped": False, "reason": "target pillar unreachable"}
+
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.post(f"/v1/jobs/{job.id}/stop")
+    except (httpx.ConnectError, httpx.TimeoutException, OSError):
+        return {"stopped": False, "reason": "target pillar unreachable"}
+
+    if response.status_code == 200 and response.json().get("stopped"):
+        job.status = JobStatus.STOPPED
+        job.error = "stopped by user"
+        update_job(conn, job)
+        insert_job_run(
+            conn, job.id, outcome="stopped", detail=job.error,
+            started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+        )
+        return {"stopped": True, "reason": None}
+
+    reason = "not stoppable"
+    if response.status_code == 200:
+        reason = response.json().get("reason", reason)
+    return {"stopped": False, "reason": reason}
 
 
 def complete_job(conn: sqlite3.Connection, job: Job, *, succeeded: bool, result: dict | None, error: str | None) -> Job:

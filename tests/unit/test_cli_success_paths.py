@@ -98,6 +98,106 @@ def test_job_status_missing_exits_1(paths, capsys, monkeypatch):
     assert main.main(["job", "status", "nope"]) == 1
 
 
+def test_job_stop_success_exits_0(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "stop_job", lambda p, job_id, **kw: {"stopped": True, "reason": None})
+    assert main.main(["job", "stop", "j1"]) == 0
+
+
+def test_job_stop_not_stoppable_exits_1(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "stop_job", lambda p, job_id, **kw: {"stopped": False, "reason": "not stoppable"})
+    assert main.main(["job", "stop", "j1"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# schedule
+# ---------------------------------------------------------------------------
+
+def test_schedule_add_recurring_builds_the_right_payload(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_scheduled_task", lambda p, **kw: (captured.update(kw), {"id": "s1"})[1])
+    assert main.main([
+        "schedule", "add", "nightly-tests", "--type", "noop", "--target-pillar", "reference",
+        "--days", "0,1,2,3,4", "--time-of-day", "02:00",
+    ]) == 0
+    assert captured["name"] == "nightly-tests"
+    assert captured["job_template"]["type"] == "noop"
+    assert captured["schedule"] == {"kind": "recurring", "days_of_week": [0, 1, 2, 3, 4], "time_of_day": "02:00"}
+
+
+def test_schedule_add_once_builds_the_right_payload(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_scheduled_task", lambda p, **kw: (captured.update(kw), {"id": "s1"})[1])
+    main.main(["schedule", "add", "one-off", "--type", "noop", "--target-pillar", "reference", "--at", "2030-01-01T02:00:00"])
+    assert captured["schedule"] == {"kind": "once", "at": "2030-01-01T02:00:00"}
+
+
+def test_schedule_list_success(paths, monkeypatch):
+    monkeypatch.setattr(main.client, "list_scheduled_tasks", lambda p, **kw: {"source": "daemon", "scheduled_tasks": []})
+    assert main.main(["schedule", "list"]) == 0
+
+
+def test_schedule_status_found_exits_0(paths, monkeypatch):
+    monkeypatch.setattr(
+        main.client, "get_scheduled_task",
+        lambda p, task_id, **kw: {"source": "daemon", "scheduled_task": {"id": task_id}},
+    )
+    assert main.main(["schedule", "status", "s1"]) == 0
+
+
+def test_schedule_status_missing_exits_1(paths, monkeypatch):
+    monkeypatch.setattr(
+        main.client, "get_scheduled_task", lambda p, task_id, **kw: {"source": "daemon", "scheduled_task": None}
+    )
+    assert main.main(["schedule", "status", "ghost"]) == 1
+
+
+def test_schedule_remove_success(paths, monkeypatch):
+    monkeypatch.setattr(main.client, "remove_scheduled_task", lambda p, task_id, **kw: {"id": task_id, "removed": True})
+    assert main.main(["schedule", "remove", "s1"]) == 0
+
+
+def test_schedule_trigger_success(paths, monkeypatch):
+    monkeypatch.setattr(main.client, "trigger_scheduled_task", lambda p, task_id, **kw: {"id": "j1", "status": "running"})
+    assert main.main(["schedule", "trigger", "s1"]) == 0
+
+
+def test_schedule_cancel_success_exits_0(paths, monkeypatch):
+    monkeypatch.setattr(main.client, "cancel_scheduled_task", lambda p, task_id, **kw: {"cancelled": "next_occurrence"})
+    assert main.main(["schedule", "cancel", "s1"]) == 0
+
+
+def test_schedule_cancel_nothing_to_cancel_exits_1(paths, monkeypatch):
+    monkeypatch.setattr(
+        main.client, "cancel_scheduled_task", lambda p, task_id, **kw: {"cancelled": None, "reason": "nothing pending"}
+    )
+    assert main.main(["schedule", "cancel", "s1"]) == 1
+
+
+def test_schedule_postpone_success(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        main.client, "postpone_scheduled_task",
+        lambda p, task_id, at, **kw: (captured.update(task_id=task_id, at=at), {"next_run_at": at})[1],
+    )
+    assert main.main(["schedule", "postpone", "s1", "--at", "2030-01-01T05:00:00"]) == 0
+    assert captured == {"task_id": "s1", "at": "2030-01-01T05:00:00"}
+
+
+def test_schedule_queue_get_success(paths, monkeypatch):
+    monkeypatch.setattr(main.client, "get_queue_capacity", lambda p, queue_key, **kw: {"queue_key": queue_key, "capacity": 1})
+    assert main.main(["schedule", "queue", "get", "little-meals"]) == 0
+
+
+def test_schedule_queue_set_success(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        main.client, "set_queue_capacity",
+        lambda p, queue_key, capacity, **kw: (captured.update(queue_key=queue_key, capacity=capacity), {"capacity": capacity})[1],
+    )
+    assert main.main(["schedule", "queue", "set", "little-meals", "--capacity", "3"]) == 0
+    assert captured == {"queue_key": "little-meals", "capacity": 3}
+
+
 # ---------------------------------------------------------------------------
 # project
 # ---------------------------------------------------------------------------
