@@ -1454,7 +1454,7 @@ def build_parser() -> argparse.ArgumentParser:
     policy_author.add_argument("--scope-target", default=None)
     policy_author.add_argument("--created-by", default="user", choices=["user", "framework"])
     policy_author.add_argument("--policy-id", default=None, help="Editing an existing policy: exclude it from conflict checks")
-    policy_author.add_argument("--gate-points", default=None, help="Comma-separated: build_install,server_launch,deploy_redeploy,release,branch_finish,project_removal")
+    policy_author.add_argument("--gate-points", default=None, help="Comma-separated: build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
     policy_author.set_defaults(func=cmd_policy_author)
 
     policy_activate = policy_sub.add_parser("activate", help="Gate 4: save a policy.author draft after human approval")
@@ -1491,7 +1491,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     policy_gating_for_job = policy_sub.add_parser("gating-for-job", help="Which policies currently gate a project for a given set of action categories")
     policy_gating_for_job.add_argument("--project-id", required=True)
-    policy_gating_for_job.add_argument("--categories", required=True, help="Comma-separated: build_install,server_launch,deploy_redeploy,release,branch_finish,project_removal")
+    policy_gating_for_job.add_argument("--categories", required=True, help="Comma-separated: build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
     policy_gating_for_job.set_defaults(func=cmd_policy_gating_for_job)
 
     policy_catalog = policy_sub.add_parser("catalog", help="docs/pillars/policy_catalog.md's ~50 candidate framework policies (M13)")

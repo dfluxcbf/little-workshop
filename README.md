@@ -170,10 +170,13 @@ the requirement's own meaning) and **per-project waivers**
 deliberately distinct from scope-shadowing: a framework policy still
 can never be silently overridden by a lower-scope policy. Gating
 behavior itself moved from a fixed Job-type-to-topic table to a
-per-policy, user-chosen set of six gate points (`build_install`,
+per-policy, user-chosen set of gate points (`build_install`,
 `server_launch`, `deploy_redeploy`, `release`, `branch_finish`,
-`project_removal`) — a Job can now be gated by more than one policy at
-once, resolved through a new `GET /v1/policies/gating-for-job`
+`project_removal`, plus `self_redeploy`, `server_stop`,
+`package_publish`, and `project_registration` added the same day once
+real Job-type coverage showed the original six conflated meaningfully
+different blast radii) — a Job can now be gated by more than one policy
+at once, resolved through a new `GET /v1/policies/gating-for-job`
 endpoint. Proven end-to-end for real: a `gate_points`-configured policy
 gates a real deploy exactly as the original single-topic mechanism did;
 disabling it lets a previously-blocked deploy through; and a waiver
@@ -181,7 +184,7 @@ lets one project's deploy through while a second, non-waived project on
 the identical policy still genuinely blocks.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1578 tests — 1461 unit, 117 real
+`bazel test //:coverage` all work today (1580 tests — 1463 unit, 117 real
 `systemd --user` end-to-end integration proofs — at 99% line coverage
 over `src/`, measured with `python3 -m pytest --cov=src`; see
 `scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific

@@ -252,17 +252,25 @@ supersede the first round's "Module" concept.
   `project_id` can differ from other nodes in the same pipeline, which is
   what makes a pipeline spanning several submodules — or several pillars —
   possible.
-- **PolicyRule** — a predicate plus a message, owned by the Policy &
-  Compliance pillar, evaluated by asking the relevant pillars' own
-  interfaces for the facts a rule needs (never by reading another pillar's
+- **Policy** (design placeholder `PolicyRule`, built as `Policy` —
+  `docs/pillars/policy_compliance.md` is authoritative) — an EARS-form
+  requirement plus a real, sandboxed pytest script, owned by the Policy &
+  Compliance pillar, checked by asking the relevant pillars' own
+  interfaces for the facts it needs (never by reading another pillar's
   storage directly). Seeded from this ecosystem's eight existing root
   policy documents, which remain the human-readable rationale, not the
-  enforcement mechanism. A small number of existing rules — automation never
-  merges/deletes/finishes on its own initiative; the agent never touches
-  branches when a Job specifies them — are hard-coded invariants inside the
-  Orchestration and Agentic Development pillars themselves, not user-editable
-  `PolicyRule`s, because they're safety properties this ecosystem depends
-  on, not conventions someone might reasonably want to loosen.
+  enforcement mechanism. Carries `enabled` (a toggle, no re-authoring)
+  and `gate_points` (which of six action categories it gates on
+  failure, user-chosen) — refined 2026-09-16 so a project that
+  genuinely can't fulfill a policy has a real, auditable way to say so:
+  a **waiver**, a distinct per-project/per-policy exception that never
+  changes the policy itself. A small number of existing rules —
+  automation never merges/deletes/finishes on its own initiative; the
+  agent never touches branches when a Job specifies them — are
+  hard-coded invariants inside the Orchestration and Agentic Development
+  pillars themselves, not user-editable `Policy` rows at all, because
+  they're safety properties this ecosystem depends on, not conventions
+  someone might reasonably want to loosen or waive.
 - **Managed Process** — the abstraction the Deployment & Servers pillar uses
   for anything long-running it's responsible for: a unit name, a start
   command, a health probe, a log reference. A project's server, a Claude CLI
@@ -291,11 +299,14 @@ Job created in Orchestration  {type, target_pillar, project_id, params,
 Orchestration: ready? (depends_on satisfied, queue_key free)
    │  no  → stays queued
    ▼  yes
-Policy & Compliance: does this Job's type declare a gating topic? (most
-   don't, and skip straight to dispatch — Policy asks the target pillar's
-   PI for whatever facts a relevant policy's check needs; it never opens
-   that pillar's database)
-   │  no gating topic, or the winning policy passes/is not applicable
+Policy & Compliance: does this Job's type declare a gate-point category
+   (build-install, server-launch, deploy/redeploy, release, branch-finish,
+   project-removal)? Most don't, and skip straight to dispatch. If it
+   does, every currently-winning, *enabled*, *non-waived* policy gating
+   that category — a Job can now be gated by more than one at once —
+   gets checked (Policy asks the target pillar's PI for whatever facts
+   each check needs; it never opens that pillar's database)
+   │  no matching category, or every governing policy passes/is not applicable
    ▼  → dispatch proceeds
    │  fails  →  Job = pending_confirmation; user warned immediately;
    │            confirmed within the window → dispatch proceeds anyway;

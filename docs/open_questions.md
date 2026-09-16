@@ -37,7 +37,48 @@ one instead").
 
 ## Open
 
-_(none currently — see Resolved below)_
+### OQ-13 — Should granting a policy waiver itself be gated, reviewed, or time-boxed?
+
+**Where this comes from.** Surfaced while building the 2026-09-16 policy
+usability refinement (enable/disable, per-project waivers, per-policy
+gate points) — not a pre-existing gap, a new one caught in the act of
+implementing, per this document's own "Claude CLI documents what it
+surfaces" convention.
+
+**What's actually being asked.** `policy.waiver_grant` is an ordinary,
+ungated Job today: any caller who can reach Policy & Compliance's own
+Pillar Interface can grant a project a permanent exception to any
+policy — including a framework one — by supplying nothing more than a
+`reason` string. There's no approval step, no expiry, and no periodic
+re-justification. That's a real, if narrow, hole in "framework policy
+is never overridden by anything" — technically true (the policy itself
+is untouched, and every *other* project still obeys it) but a waiver
+still means a specific project stops being checked against it,
+indefinitely, on one person's say-so.
+
+**Why it matters.** If waivers are meant to be rare, deliberate
+exceptions, an ungated, permanent, unreviewed grant path is easy to
+reach for as a workaround rather than a last resort — the opposite of
+what the framework tier exists to guarantee. If they're meant to be
+routine "this project is just different" configuration, then the
+current shape (a reason, an audit trail via `created_at`, nothing more)
+is already right-sized, and adding process would just be friction.
+
+**Possible interpretations.**
+- (a) Leave it exactly as built: a reason and a timestamp are the whole
+  audit trail; any caller with PI access can grant/revoke freely,
+  same trust model as everything else in this single-user household
+  system (`docs/architecture.md`'s "no multi-tenant auth" decision).
+- (b) A waiver against a *framework* policy specifically routes through
+  its own gate (e.g. requires the same kind of explicit confirmation an
+  action-gated Job's own `pending_confirmation` window uses) — user
+  waivers stay ungated, since a user policy is already fully within
+  that user's own authority to edit or remove outright.
+- (c) Waivers expire by default (a `expires_at`, optional) and surface
+  on `policy.check_all`/a periodic audit as "this waiver is stale,
+  reconfirm or let the policy re-apply" — never silently permanent.
+
+**Your answer:**
 
 ---
 

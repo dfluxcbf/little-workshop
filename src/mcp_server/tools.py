@@ -48,10 +48,14 @@ _PROJECT_ID = _prop("string", "The project's registered id/name in Registry & Po
 _FORCE = _prop("boolean", "Proceed even if the working tree is dirty. Default: false.")
 _ACTION = _prop("string", "Resume ('continue') or cancel ('abort') a finish paused by a conflict.", enum=["continue", "abort"])
 _ISSUE = _prop("integer", "Tracker issue number to link to this branch.")
+_GATE_POINT_VALUES = [
+    "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
+    "release", "package_publish", "branch_finish", "project_removal", "project_registration",
+]
 _GATE_POINTS = _prop(
     "array", "Which action categories this policy gates on failure. Any subset, or omit/empty for none: "
-    "build_install, server_launch, deploy_redeploy, release, branch_finish, project_removal.",
-    items={"type": "string", "enum": ["build_install", "server_launch", "deploy_redeploy", "release", "branch_finish", "project_removal"]},
+    + ", ".join(_GATE_POINT_VALUES) + ".",
+    items={"type": "string", "enum": _GATE_POINT_VALUES},
 )
 
 
