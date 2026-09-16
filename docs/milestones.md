@@ -37,7 +37,7 @@ discipline this project already applies to itself); the *sequence* and
 | M12 | Policy & Compliance | M1, M4, M6, M10 | Done |
 | M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
-| M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Not started |
+| M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
 | M16 | Compatibility shims | M1–M14 (whichever tool each shim forwards to) | Not started |
 | M17 | Ecosystem cutover | M15, M16 | Not started |
 
@@ -404,6 +404,29 @@ pillar (M3) at the same time, at the maintainers' discretion — plain
 the pillar exists, since nothing in `docs/governance_policy.md` requires
 dogfooding a capability the moment it's available, only that it's
 available to dogfood.
+
+**Delivered (2026-09-16)**: little-workshop registered itself (name
+`little-workshop`) via a real `project.import` against its own real
+checkout; all 146 `docs/requirements.md` entries migrated into real
+Requirements & Quality `Requirement` rows (16 real `Milestone` rows, one
+per section, `status` mapped `done`→`published`/`not done`→`draft`);
+one framework-policy candidate (formalizing the independence
+principle's "no `.lvx/config.json`" rule) drafted through the real
+pipeline against the real Claude CLI. **Deliberately not done**: Gate 4
+activation of that draft (left for a maintainer's own review — this
+project's own Gate 4 discipline, `docs/requirements.md` REQ-000000133,
+applies to little-workshop's own framework policies exactly as it does
+to anyone else's, self-application principle in action); the evolution
+principle wasn't formalized this pass (no mechanically-checkable core
+was found that wasn't either trivial or already covered by this
+document's own "Amendments" convention — a real Gate-2-shaped judgment
+call, not an oversight); version tracking stays on plain `git`, at the
+maintainers' own discretion per this section's own text above. A real,
+previously-invisible defect surfaced along the way and is tracked as
+`docs/open_questions.md`'s `OQ-14`: `orchestration/dispatch.py`'s fixed
+20-second dispatch timeout is too short for some real (non-fake-stub)
+Claude CLI calls, intermittently misreporting a real Gate-pipeline call
+as "pillar unreachable."
 
 ## M16 — Compatibility shims
 
