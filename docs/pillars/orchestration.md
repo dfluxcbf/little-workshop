@@ -57,7 +57,7 @@ dispatched.
   wired between them on trigger. Built as general-purpose infrastructure
   in M1; no pillar has a concrete use for it yet as of M8.
 
-## Scheduled tasks (not yet built — `docs/milestones.md` M9)
+## Scheduled tasks (`docs/milestones.md` M9)
 
 A `ScheduledTask` is a durable definition, distinct from a `Job`, that
 produces a real Job on its own timing — the identical creation shape any

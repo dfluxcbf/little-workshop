@@ -488,3 +488,126 @@ def test_every_declared_tool_has_a_handler_test_or_is_exercised_elsewhere():
     source = pathlib.Path(__file__).read_text(encoding="utf-8")
     missing = [name for name in tools_mod.TOOLS_BY_NAME if source.count(name) < 1]
     assert missing == []
+
+
+def test_requirements_suite_create_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_suite_create"].handler(
+        paths, {"project_id": "p1", "name": "core", "description": "d"}
+    )
+    call = fake_create_job[0]
+    assert call["type"] == "requirements.create_test_suite"
+    assert call["target_pillar"] == "requirements"
+    assert call["project_id"] == "p1"
+    assert call["params"] == {"name": "core", "description": "d"}
+
+
+def test_requirements_suite_delete_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_suite_delete"].handler(paths, {"project_id": "p1", "suite_id": "s1"})
+    assert fake_create_job[0]["params"] == {"suite_id": "s1"}
+
+
+def test_requirements_suite_list_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "requirements_list_test_suites", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_suite_list"].handler(paths, {"project_id": "p1"})
+    assert calls[0] == ((paths, "p1"), {})
+
+
+def test_requirements_use_case_create_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_use_case_create"].handler(paths, {"project_id": "p1", "name": "checkout"})
+    call = fake_create_job[0]
+    assert call["type"] == "requirements.create_use_case"
+    assert call["params"]["name"] == "checkout"
+
+
+def test_requirements_milestone_create_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_milestone_create"].handler(paths, {"project_id": "p1", "name": "beta"})
+    call = fake_create_job[0]
+    assert call["type"] == "requirements.create_milestone"
+
+
+def test_requirements_create_builds_job_with_optional_axes(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_create"].handler(paths, {
+        "project_id": "p1", "key": "REQ-1", "title": "thing works", "use_case_id": "u1", "milestone_id": "m1",
+    })
+    call = fake_create_job[0]
+    assert call["type"] == "requirements.create_requirement"
+    assert call["params"]["key"] == "REQ-1"
+    assert call["params"]["use_case_id"] == "u1"
+    assert call["params"]["milestone_id"] == "m1"
+
+
+def test_requirements_update_only_includes_provided_fields(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_update"].handler(paths, {
+        "project_id": "p1", "requirement_id": "r1", "title": "new title",
+    })
+    assert fake_create_job[0]["params"] == {"requirement_id": "r1", "title": "new title"}
+
+
+def test_requirements_publish_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_publish"].handler(paths, {"project_id": "p1", "requirement_id": "r1"})
+    assert fake_create_job[0]["type"] == "requirements.publish_requirement"
+
+
+def test_requirements_delete_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_delete"].handler(paths, {"project_id": "p1", "requirement_id": "r1"})
+    assert fake_create_job[0]["type"] == "requirements.delete_requirement"
+
+
+def test_requirements_link_suite_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_link_suite"].handler(
+        paths, {"project_id": "p1", "requirement_id": "r1", "suite_id": "s1"}
+    )
+    assert fake_create_job[0]["params"] == {"requirement_id": "r1", "suite_id": "s1"}
+
+
+def test_requirements_unlink_suite_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_unlink_suite"].handler(
+        paths, {"project_id": "p1", "requirement_id": "r1", "suite_id": "s1"}
+    )
+    assert fake_create_job[0]["type"] == "requirements.unlink_requirement_from_suite"
+
+
+def test_requirements_list_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "requirements_list_requirements", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_list"].handler(paths, {"project_id": "p1", "status": "published"})
+    assert calls[0] == ((paths, "p1", "published"), {})
+
+
+def test_requirements_get_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "requirements_get_requirement", result={"id": "r1"})
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_get"].handler(paths, {"requirement_id": "r1"})
+    assert calls[0] == ((paths, "r1"), {})
+
+
+def test_requirements_result_record_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_result_record"].handler(paths, {
+        "project_id": "p1", "suite_id": "s1", "test_name": "t1", "verdict": "failed", "detail": "boom",
+    })
+    assert fake_create_job[0]["params"] == {"suite_id": "s1", "test_name": "t1", "verdict": "failed", "detail": "boom"}
+
+
+def test_requirements_import_junit_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_import_junit"].handler(paths, {
+        "project_id": "p1", "suite_id": "s1", "xml": "<testsuite/>",
+    })
+    assert fake_create_job[0]["params"] == {"suite_id": "s1", "xml": "<testsuite/>"}
+
+
+def test_requirements_run_tests_builds_job_with_default_commitish(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_run_tests"].handler(paths, {"project_id": "p1", "suite_id": "s1"})
+    assert fake_create_job[0]["params"] == {"suite_id": "s1", "commitish": "HEAD"}
+
+
+def test_requirements_run_tests_builds_job_with_custom_command(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_run_tests"].handler(paths, {
+        "project_id": "p1", "suite_id": "s1", "commitish": "abc123", "test_command": ["python3", "-m", "pytest"],
+    })
+    assert fake_create_job[0]["params"] == {
+        "suite_id": "s1", "commitish": "abc123", "test_command": ["python3", "-m", "pytest"],
+    }
+
+
+def test_requirements_report_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "requirements_report", result={"done_count": 0})
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_report"].handler(paths, {"project_id": "p1"})
+    assert calls[0] == ((paths, "p1"), {})

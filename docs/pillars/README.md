@@ -13,10 +13,10 @@ right.
 
 | Pillar | Status |
 |---|---|
-| [Orchestration](orchestration.md) | Built (M1); scheduled tasks not yet built (M9) |
+| [Orchestration](orchestration.md) | Built (M1, M9) |
 | [Policy & Compliance](policy_compliance.md) (+ [catalog](policy_catalog.md)) | Not yet built (M12/M13) — fully specified |
 | [Registry & Portfolio](registry_portfolio.md) | Built (M2, M8) |
-| [Requirements & Quality](requirements_quality.md) | Not yet built (M10) |
+| [Requirements & Quality](requirements_quality.md) | Built (M10) |
 | [Version Control & Release](version_control_release.md) | Built (M3) |
 | [Build & Packages](build_packages.md) | Not yet built (M11) |
 | [Deployment & Servers](deployment_servers.md) | Built (M4, M5) |

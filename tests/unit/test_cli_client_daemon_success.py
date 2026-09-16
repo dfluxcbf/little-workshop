@@ -148,6 +148,38 @@ def _make_stub_app(paths: Paths | None = None) -> FastAPI:
     def get_run(project_id: str, run_id: str):
         return {"run_id": run_id, "status": "finished"}
 
+    @app.get("/v1/test_suites")
+    def list_test_suites(project_id: str | None = None):
+        return [{"id": "s1", "project_id": project_id}]
+
+    @app.get("/v1/test_suites/{suite_id}")
+    def get_test_suite(suite_id: str):
+        return {"id": suite_id}
+
+    @app.get("/v1/requirements")
+    def list_requirements(project_id: str | None = None, status: str | None = None):
+        return [{"id": "r1", "status": status}]
+
+    @app.get("/v1/requirements/{requirement_id}")
+    def get_requirement(requirement_id: str):
+        return {"id": requirement_id, "suite_ids": []}
+
+    @app.get("/v1/test_results")
+    def list_test_results(project_id: str | None = None, suite_id: str | None = None):
+        return [{"id": "tr1", "suite_id": suite_id}]
+
+    @app.get("/v1/use_cases")
+    def list_use_cases(project_id: str | None = None):
+        return [{"id": "u1"}]
+
+    @app.get("/v1/milestones")
+    def list_milestones(project_id: str | None = None):
+        return [{"id": "m1"}]
+
+    @app.get("/v1/report")
+    def report(project_id: str):
+        return {"project_id": project_id, "done_count": 0, "requirements": []}
+
     return app
 
 
@@ -182,7 +214,7 @@ def paths_with_live_daemons(tmp_path):
 
     app = _make_stub_app(paths)
     servers = []
-    for pillar in ("core", "orchestration", "registry", "version", "deployment", "agent"):
+    for pillar in ("core", "orchestration", "registry", "version", "deployment", "agent", "requirements"):
         socket_path = paths.core_socket_path if pillar == "core" else paths.socket_path(pillar)
         server = _UvicornThread(app, socket_path)
         server.start()
@@ -238,6 +270,53 @@ def test_version_config_hits_the_real_version_socket(paths_with_live_daemons):
 def test_version_release_candidates_hits_the_real_version_socket(paths_with_live_daemons):
     result = client.version_release_candidates(paths_with_live_daemons, "little-widget")
     assert result["candidates"] == [1, 2]
+
+
+def test_requirements_list_test_suites_reports_daemon_source(paths_with_live_daemons):
+    result = client.requirements_list_test_suites(paths_with_live_daemons, "p1")
+    assert result["source"] == "daemon"
+    assert result["test_suites"][0]["id"] == "s1"
+
+
+def test_requirements_get_test_suite_reports_daemon_source(paths_with_live_daemons):
+    result = client.requirements_get_test_suite(paths_with_live_daemons, "s1")
+    assert result["source"] == "daemon"
+    assert result["test_suite"]["id"] == "s1"
+
+
+def test_requirements_list_requirements_reports_daemon_source(paths_with_live_daemons):
+    result = client.requirements_list_requirements(paths_with_live_daemons, "p1", "published")
+    assert result["source"] == "daemon"
+    assert result["requirements"][0]["status"] == "published"
+
+
+def test_requirements_get_requirement_reports_daemon_source(paths_with_live_daemons):
+    result = client.requirements_get_requirement(paths_with_live_daemons, "r1")
+    assert result["source"] == "daemon"
+    assert result["requirement"]["id"] == "r1"
+
+
+def test_requirements_list_test_results_reports_daemon_source(paths_with_live_daemons):
+    result = client.requirements_list_test_results(paths_with_live_daemons, "p1", "s1")
+    assert result["source"] == "daemon"
+    assert result["test_results"][0]["suite_id"] == "s1"
+
+
+def test_requirements_list_use_cases_reports_daemon_source(paths_with_live_daemons):
+    result = client.requirements_list_use_cases(paths_with_live_daemons, "p1")
+    assert result["source"] == "daemon"
+    assert result["use_cases"][0]["id"] == "u1"
+
+
+def test_requirements_list_milestones_reports_daemon_source(paths_with_live_daemons):
+    result = client.requirements_list_milestones(paths_with_live_daemons, "p1")
+    assert result["source"] == "daemon"
+    assert result["milestones"][0]["id"] == "m1"
+
+
+def test_requirements_report_hits_the_real_requirements_socket(paths_with_live_daemons):
+    result = client.requirements_report(paths_with_live_daemons, "p1")
+    assert result["project_id"] == "p1"
 
 
 def test_deployment_status_hits_the_real_deployment_socket(paths_with_live_daemons):

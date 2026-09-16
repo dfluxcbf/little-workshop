@@ -121,6 +121,25 @@ def deployment_branches(paths: Paths, project_id: str, *, timeout: float = 5.0) 
     return _get(paths, "deployment", f"/v1/branches/{project_id}", timeout=timeout)
 
 
+def requirements_list_test_suites(paths: Paths, project_id: str | None = None, *, timeout: float = 5.0):
+    return _get(paths, "requirements", "/v1/test_suites", params={"project_id": project_id} if project_id else None, timeout=timeout)
+
+
+def requirements_list_requirements(
+    paths: Paths, project_id: str | None = None, status: str | None = None, *, timeout: float = 5.0
+):
+    params = {k: v for k, v in {"project_id": project_id, "status": status}.items() if v}
+    return _get(paths, "requirements", "/v1/requirements", params=params or None, timeout=timeout)
+
+
+def requirements_get_requirement(paths: Paths, requirement_id: str, *, timeout: float = 5.0) -> dict:
+    return _get(paths, "requirements", f"/v1/requirements/{requirement_id}", timeout=timeout)
+
+
+def requirements_report(paths: Paths, project_id: str, *, timeout: float = 10.0) -> dict:
+    return _get(paths, "requirements", "/v1/report", params={"project_id": project_id}, timeout=timeout)
+
+
 def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> dict:
     return _get(paths, "agent", f"/v1/runs/{project_id}", params={"status": status} if status else None, timeout=timeout)
 

@@ -377,3 +377,67 @@ def test_get_raises_pillar_unavailable_on_http_error_status(paths, monkeypatch):
     _rig(paths, monkeypatch, "registry", app)
     with pytest.raises(client.PillarUnavailable):
         client.get_project(paths, "ghost")
+
+
+def test_requirements_list_test_suites_raises_when_requirements_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.requirements_list_test_suites(paths)
+
+
+def test_requirements_list_requirements_raises_when_requirements_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.requirements_list_requirements(paths)
+
+
+def test_requirements_get_requirement_raises_when_requirements_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.requirements_get_requirement(paths, "r1")
+
+
+def test_requirements_report_raises_when_requirements_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.requirements_report(paths, "little-widget")
+
+
+def test_requirements_list_test_suites_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/test_suites")
+    def list_suites(project_id: str | None = None) -> list[dict]:
+        return [{"id": "s1", "project_id": project_id}]
+
+    _rig(paths, monkeypatch, "requirements", app)
+    assert client.requirements_list_test_suites(paths, "p1") == [{"id": "s1", "project_id": "p1"}]
+
+
+def test_requirements_list_requirements_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/requirements")
+    def list_requirements(project_id: str | None = None, status: str | None = None) -> list[dict]:
+        return [{"id": "r1", "status": status}]
+
+    _rig(paths, monkeypatch, "requirements", app)
+    assert client.requirements_list_requirements(paths, "p1", "published") == [{"id": "r1", "status": "published"}]
+
+
+def test_requirements_get_requirement_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/requirements/{requirement_id}")
+    def get_requirement(requirement_id: str) -> dict:
+        return {"id": requirement_id}
+
+    _rig(paths, monkeypatch, "requirements", app)
+    assert client.requirements_get_requirement(paths, "r1") == {"id": "r1"}
+
+
+def test_requirements_report_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/report")
+    def report(project_id: str) -> dict:
+        return {"project_id": project_id, "done_count": 0}
+
+    _rig(paths, monkeypatch, "requirements", app)
+    assert client.requirements_report(paths, "p1") == {"project_id": "p1", "done_count": 0}
