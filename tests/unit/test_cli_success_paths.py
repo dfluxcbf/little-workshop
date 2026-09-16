@@ -833,3 +833,28 @@ def test_job_policy_confirm_success(paths, capsys, monkeypatch):
 def test_job_policy_confirm_timeout_success(paths, capsys, monkeypatch):
     monkeypatch.setattr(main.client, "policy_confirm_timeout_job", lambda p, job_id: {"timed_out": True})
     assert main.main(["job", "policy-confirm-timeout", "j1"]) == 0
+
+
+def test_policy_catalog_list_prints_every_entry(paths, capsys):
+    assert main.main(["policy", "catalog", "list"]) == 0
+    output = _out(capsys)
+    assert len(output) >= 50
+    assert any(e["topic"] == "two-long-lived-branches" for e in output)
+
+
+def test_policy_catalog_run_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "catalog", "run", "two-long-lived-branches", "--target-pillar", "version"]) == 0
+    assert captured["type"] == "policy.author"
+    assert captured["params"]["topic"] == "two-long-lived-branches"
+    assert captured["params"]["target_pillar"] == "version"
+    assert captured["params"]["scope_level"] == "all_projects"
+    assert captured["params"]["created_by"] == "framework"
+    assert "exactly two long-lived branches" in captured["params"]["ears_text"]
+
+
+def test_policy_catalog_run_unknown_topic_fails_cleanly(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "succeeded"})
+    assert main.main(["policy", "catalog", "run", "ghost-topic", "--target-pillar", "version"]) == 1
+    assert "error" in capsys.readouterr().err

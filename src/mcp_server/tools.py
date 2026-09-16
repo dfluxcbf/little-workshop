@@ -553,6 +553,27 @@ def _policy_confirm(paths: Paths, args: JSONDict) -> Any:
     return client.policy_confirm_job(paths, args["job_id"])
 
 
+def _policy_catalog_list(paths: Paths, args: JSONDict) -> Any:
+    from policy.catalog import load_catalog
+
+    return [
+        {"topic": e.topic, "section": e.section, "section_title": e.section_title, "ears_text": e.ears_text, "source": e.source}
+        for e in load_catalog()
+    ]
+
+
+def _policy_catalog_run(paths: Paths, args: JSONDict) -> Any:
+    from policy.catalog import find_entry
+
+    entry = find_entry(args["topic"])
+    if entry is None:
+        raise ValueError(f"no catalog entry named {args['topic']!r}")
+    return _policy_job(paths, "policy.author", None, {
+        "ears_text": entry.ears_text, "topic": entry.topic, "target_pillar": args["target_pillar"],
+        "scope_level": "all_projects", "created_by": "framework",
+    })
+
+
 # ---------------------------------------------------------------------------
 # Agentic Development
 # ---------------------------------------------------------------------------
@@ -904,6 +925,15 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_policy_confirm", "Confirm a policy-gated Job that's pending_confirmation, dispatching it "
              "despite the policy failure — the 10-minute deliberate-bypass window.",
              _schema({"job_id": _prop("string", "The gated Job's id.")}, ["job_id"]), _policy_confirm),
+    ToolSpec("workshop_policy_catalog_list", "List every candidate framework policy in "
+             "docs/pillars/policy_catalog.md (M13) — none is active until authored and activated.",
+             _schema(), _policy_catalog_list),
+    ToolSpec("workshop_policy_catalog_run", "Gates 1-3 for one catalog entry, framework tier, all-projects scope — "
+             "the result is a draft for workshop_policy_activate, same as workshop_policy_author.",
+             _schema({
+                 "topic": _prop("string", "The catalog entry's own topic."),
+                 "target_pillar": _prop("string", "The one pillar this policy's subject governs."),
+             }, ["topic", "target_pillar"]), _policy_catalog_run),
 
     ToolSpec("workshop_agent_run_task", "Run Claude Code on a project, on a real branch, under human review.",
              _schema({
