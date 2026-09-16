@@ -192,3 +192,59 @@ def test_import_junit_ingests_an_existing_report_against_a_real_requirements_uni
         results = cli_client.requirements_list_test_results(workshop_env.paths, project_id, suite_id)
         assert results["test_results"][0]["source"] == "junit"
         assert results["test_results"][0]["verdict"] == "failed"
+
+
+@requires_systemd_user
+def test_a_published_requirement_can_no_longer_be_edited(tmp_path, workshop_env):
+    """A locked record, for real: once published, `requirements.
+    update_requirement` refuses — the definition-of-done report's own
+    `published` status would otherwise mean nothing if the text behind
+    it could still silently change."""
+    with _Session(workshop_env):
+        project_id = "little-widget"
+        _bootstrap(tmp_path, workshop_env, project_id)
+
+        requirement = _job(workshop_env, "requirements.create_requirement", project_id, {
+            "key": "REQ-1", "title": "the widget actually works",
+        })
+        requirement_id = requirement["result"]["id"]
+        publish = _job(workshop_env, "requirements.publish_requirement", project_id, {"requirement_id": requirement_id})
+        assert publish["status"] == "succeeded", publish
+
+        edit = _job(workshop_env, "requirements.update_requirement", project_id, {
+            "requirement_id": requirement_id, "title": "a rewritten title after publishing",
+        })
+        assert edit["status"] == "failed", edit
+        assert "draft" in edit["error"]
+
+        fetched = cli_client.requirements_get_requirement(workshop_env.paths, requirement_id)
+        assert fetched["requirement"]["title"] == "the widget actually works"
+
+
+@requires_systemd_user
+def test_unlinking_a_requirement_from_a_suite_removes_it_from_the_report(tmp_path, workshop_env):
+    with _Session(workshop_env):
+        project_id = "little-widget"
+        _bootstrap(tmp_path, workshop_env, project_id)
+
+        suite = _job(workshop_env, "requirements.create_test_suite", project_id, {"name": "core"})
+        suite_id = suite["result"]["id"]
+        requirement = _job(workshop_env, "requirements.create_requirement", project_id, {
+            "key": "REQ-1", "title": "the widget actually works",
+        })
+        requirement_id = requirement["result"]["id"]
+
+        link = _job(workshop_env, "requirements.link_requirement_to_suite", project_id, {
+            "requirement_id": requirement_id, "suite_id": suite_id,
+        })
+        assert link["status"] == "succeeded", link
+        linked_report = cli_client.requirements_report(workshop_env.paths, project_id)
+        assert linked_report["requirements"][0]["suite_ids"] == [suite_id]
+
+        unlink = _job(workshop_env, "requirements.unlink_requirement_from_suite", project_id, {
+            "requirement_id": requirement_id, "suite_id": suite_id,
+        })
+        assert unlink["status"] == "succeeded", unlink
+
+        unlinked_report = cli_client.requirements_report(workshop_env.paths, project_id)
+        assert unlinked_report["requirements"][0]["suite_ids"] == []

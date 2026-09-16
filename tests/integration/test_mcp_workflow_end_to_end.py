@@ -373,3 +373,98 @@ def test_mcp_job_stop_interrupts_a_real_running_job(workshop_env):
             conn.close()
     finally:
         systemd.stop("reference", runner=DEFAULT_RUNNER)
+
+
+_FAKE_CLAUDE = r"""#!/usr/bin/env python3
+import json
+import re
+import sys
+
+prompt = sys.argv[2]
+
+if "ENFORCEABLE:" in prompt:
+    result = "ENFORCEABLE: yes"
+elif "pytest test script" in prompt:
+    result = "def test_default():\n    assert True\n"
+elif "NO_CONFLICT" in prompt or "CONFLICT:" in prompt:
+    result = "NO_CONFLICT"
+else:
+    match = re.search(r"Requirement:\n(.*?)\n\n", prompt, re.DOTALL)
+    text = match.group(1) if match else prompt
+    result = "EARS_OK: " + text
+
+print(json.dumps({"result": result, "is_error": False}))
+"""
+
+
+@requires_systemd_user
+def test_mcp_policy_configure_and_list_reach_real_policy_and_compliance(tmp_path, workshop_env, monkeypatch):
+    """No MCP-level policy proof existed before this pass — every prior
+    policy proof went through `cli.client` directly. `workshop_policy_*`
+    tools are a real, separate thin-proxy code path
+    (`mcp_server/client.py`), never exercised end-to-end until now."""
+    import os
+    import stat
+
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    claude_path = fake_bin / "claude"
+    claude_path.write_text(_FAKE_CLAUDE, encoding="utf-8")
+    claude_path.chmod(claude_path.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
+
+    env = workshop_env.env
+    for pillar in ("registry", "agent", "policy"):
+        systemd.start(pillar, [sys.executable, "-m", pillar], environment=env, runner=DEFAULT_RUNNER)
+    try:
+        for pillar in ("registry", "agent", "policy"):
+            probe = probe_health(workshop_env.paths.socket_path(pillar), timeout=5.0, max_retries=10)
+            assert probe.ok, f"{pillar}: {probe.error}"
+
+        core_server, orch_server, conn = _core_and_orchestration(workshop_env, ("registry", "agent", "policy"))
+        try:
+            author = cli_client.create_job(
+                workshop_env.paths, type="policy.author", target_pillar="policy",
+                params={
+                    "ears_text": "every project shall have a name", "topic": "mcp-policy-topic",
+                    "target_pillar": "registry", "scope_level": "all_projects", "created_by": "framework",
+                },
+                queue_key=None, depends_on=[], created_by="integration-test", timeout=60.0,
+            )
+            assert author["status"] == "succeeded", author
+            activated = cli_client.create_job(
+                workshop_env.paths, type="policy.activate", target_pillar="policy",
+                params={**author["result"], "approved": True},
+                queue_key=None, depends_on=[], created_by="integration-test", timeout=60.0,
+            )
+            assert activated["status"] == "succeeded", activated
+            policy_id = activated["result"]["id"]
+
+            mcp = MCPServer(paths=workshop_env.paths)
+            list_response = mcp.handle_request({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "workshop_policy_list", "arguments": {}},
+            })
+            assert list_response["result"]["isError"] is False, list_response
+
+            import json as _json
+            listed = _json.loads(list_response["result"]["content"][0]["text"])
+            assert any(p["id"] == policy_id for p in listed)
+
+            configure_response = mcp.handle_request({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "workshop_policy_configure", "arguments": {
+                    "policy_id": policy_id, "enabled": False,
+                }},
+            })
+            assert configure_response["result"]["isError"] is False, configure_response
+
+            fetched = cli_client.policy_get(workshop_env.paths, policy_id)
+            assert fetched["policy"]["enabled"] is False
+        finally:
+            orch_server.stop()
+            core_server.stop()
+            conn.close()
+    finally:
+        for pillar in ("registry", "agent", "policy"):
+            systemd.stop(pillar, runner=DEFAULT_RUNNER)

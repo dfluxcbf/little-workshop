@@ -11,8 +11,11 @@ fork-flagged build run.
 from __future__ import annotations
 
 import base64
+import os
+import stat
 import subprocess
 import sys
+from pathlib import Path
 
 from cli import client as cli_client
 from common import systemd
@@ -215,3 +218,179 @@ def test_fork_safety_gate_refuses_to_publish_a_real_fork_triggered_run(tmp_path,
         with client_for_socket(workshop_env.paths.socket_path("build"), timeout=5.0) as http:
             download = http.get("/packages/untrusted-1.0.0.whl")
             assert download.status_code == 404
+
+
+@requires_systemd_user
+def test_delete_package_removes_both_the_db_row_and_the_blob_together(tmp_path, workshop_env):
+    """REQ-000000109's own real proof: a deleted package never leaves a
+    listing entry with no file behind it, or a file on disk with no
+    listing — both the `packages` row and the physical blob go together,
+    checked against the real filesystem, not just the API response."""
+    with _Session(workshop_env):
+        project_id = "little-widget"
+        _bootstrap(tmp_path, workshop_env, project_id)
+
+        run = _job(workshop_env, "build.run", project_id, {
+            "commitish": "master", "command": [sys.executable, "-c", "print('built')"],
+        })
+        content = base64.b64encode(b"disposable wheel content").decode()
+        published = _job(workshop_env, "build.publish_pypi", project_id, {
+            "build_run_id": run["result"]["id"], "name": "disposable-widget", "version": "1.0.0",
+            "filename": "disposable_widget-1.0.0-py3-none-any.whl", "content_base64": content,
+        })
+        package_id = published["result"]["id"]
+
+        with client_for_socket(workshop_env.paths.socket_path("build"), timeout=5.0) as http:
+            assert http.get(f"/v1/packages/{package_id}").status_code == 200
+            assert http.get("/packages/disposable_widget-1.0.0-py3-none-any.whl").status_code == 200
+
+        deleted = _job(workshop_env, "build.delete_package", project_id, {"package_id": package_id})
+        assert deleted["status"] == "succeeded", deleted
+
+        with client_for_socket(workshop_env.paths.socket_path("build"), timeout=5.0) as http:
+            assert http.get(f"/v1/packages/{package_id}").status_code == 404
+            assert http.get("/packages/disposable_widget-1.0.0-py3-none-any.whl").status_code == 404
+            root_index = http.get("/simple/")
+            assert 'href="disposable-widget/"' not in root_index.text
+
+
+@requires_systemd_user
+def test_delete_package_with_an_unknown_id_fails_cleanly(tmp_path, workshop_env):
+    with _Session(workshop_env):
+        project_id = "little-widget"
+        _bootstrap(tmp_path, workshop_env, project_id)
+
+        deleted = _job(workshop_env, "build.delete_package", project_id, {"package_id": "not-a-real-id"})
+        assert deleted["status"] == "failed", deleted
+        assert "not found" in deleted["error"]
+
+
+_FAKE_CLAUDE = r"""#!/usr/bin/env python3
+import json
+import re
+import sys
+
+prompt = sys.argv[2]
+
+if "ENFORCEABLE:" in prompt:
+    result = "ENFORCEABLE: yes"
+elif "pytest test script" in prompt:
+    result = "def test_never():\n    assert False\n"
+elif "NO_CONFLICT" in prompt or "CONFLICT:" in prompt:
+    result = "NO_CONFLICT"
+else:
+    match = re.search(r"Requirement:\n(.*?)\n\n", prompt, re.DOTALL)
+    text = match.group(1) if match else prompt
+    result = "EARS_OK: " + text
+
+print(json.dumps({"result": result, "is_error": False}))
+"""
+
+
+def _write_fake_claude(fake_bin: Path) -> None:
+    claude_path = fake_bin / "claude"
+    claude_path.write_text(_FAKE_CLAUDE, encoding="utf-8")
+    claude_path.chmod(claude_path.stat().st_mode | stat.S_IEXEC)
+
+
+@requires_systemd_user
+def test_package_publish_gate_point_blocks_a_real_publish_until_confirmed(tmp_path, workshop_env, monkeypatch):
+    """`package_publish`'s first real end-to-end proof — 2026-09-16's
+    gate-point expansion split this out of `release` since publishing an
+    artifact and cutting a version release are different acts that can
+    fail independently. Its own dedicated session (registry, deployment,
+    build, agent, policy) since the shared module-level `_Session` above
+    only starts the three pillars M11's own proofs need."""
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
+
+    pillars = ("registry", "deployment", "build", "agent", "policy")
+    env = workshop_env.env
+    for pillar in pillars:
+        systemd.start(pillar, [sys.executable, "-m", pillar], environment=env, runner=DEFAULT_RUNNER)
+    try:
+        for pillar in pillars:
+            probe = probe_health(workshop_env.paths.socket_path(pillar), timeout=5.0, max_retries=10)
+            assert probe.ok, f"{pillar}: {probe.error}"
+
+        core_supervisor = Supervisor(paths=workshop_env.paths, manifest=Manifest())
+        for pillar in pillars:
+            core_supervisor.registry.set(
+                RegistryEntry(name=pillar, socket_path=workshop_env.paths.socket_path(pillar), status=PillarStatus.HEALTHY)
+            )
+        core_server = UvicornThread(build_core_app(core_supervisor), workshop_env.paths.core_socket_path)
+        core_server.start()
+
+        def socket_lookup(pillar: str):
+            return workshop_env.paths.socket_path(pillar) if pillar in pillars else None
+
+        conn = orchestration_db.connect(workshop_env.paths.pillar_db_path("orchestration"))
+        orch_server = UvicornThread(build_orchestration_app(conn, socket_lookup), workshop_env.paths.socket_path("orchestration"))
+        orch_server.start()
+        try:
+            project_id = "little-widget"
+            _bootstrap(tmp_path, workshop_env, project_id)
+
+            author = cli_client.create_job(
+                workshop_env.paths, type="policy.author", target_pillar="policy",
+                params={
+                    "ears_text": "ALWAYS_FAIL: publishing a package is always blocked for this test",
+                    "topic": "package-publish-policy", "target_pillar": "build",
+                    "scope_level": "all_projects", "created_by": "framework",
+                },
+                queue_key=None, depends_on=[], created_by="integration-test", timeout=60.0,
+            )
+            assert author["status"] == "succeeded", author
+            activated = cli_client.create_job(
+                workshop_env.paths, type="policy.activate", target_pillar="policy",
+                params={**author["result"], "approved": True, "gate_points": ["package_publish"]},
+                queue_key=None, depends_on=[], created_by="integration-test", timeout=60.0,
+            )
+            assert activated["status"] == "succeeded", activated
+
+            run = cli_client.create_job(
+                workshop_env.paths, type="build.run", target_pillar="build", project_id=project_id,
+                params={"commitish": "master", "command": [sys.executable, "-c", "print('built')"]},
+                queue_key=None, depends_on=[], created_by="integration-test", timeout=60.0,
+            )
+            assert run["status"] == "succeeded", run
+
+            content = base64.b64encode(b"gated wheel content").decode()
+            publish = cli_client.create_job(
+                workshop_env.paths, type="build.publish_pypi", target_pillar="build", project_id=project_id,
+                params={
+                    "build_run_id": run["result"]["id"], "name": "gated-widget", "version": "1.0.0",
+                    "filename": "gated_widget-1.0.0-py3-none-any.whl", "content_base64": content,
+                },
+                queue_key=None, depends_on=[], created_by="integration-test",
+            )
+            with client_for_socket(workshop_env.paths.socket_path("orchestration"), timeout=10.0) as http:
+                http.post("/v1/pump")
+
+            def _still_pending():
+                return cli_client.job_status(workshop_env.paths, publish["id"])["job"]["status"] == "pending_confirmation"
+
+            import time
+            deadline = time.time() + 30
+            while time.time() < deadline and not _still_pending():
+                time.sleep(0.3)
+            assert _still_pending(), cli_client.job_status(workshop_env.paths, publish["id"])
+
+            with client_for_socket(workshop_env.paths.socket_path("build"), timeout=5.0) as http:
+                assert http.get("/packages/gated_widget-1.0.0-py3-none-any.whl").status_code == 404
+
+            confirmed = cli_client.policy_confirm_job(workshop_env.paths, publish["id"])
+            assert confirmed["confirmed"] is True
+            assert confirmed["job"]["status"] == "succeeded"
+
+            with client_for_socket(workshop_env.paths.socket_path("build"), timeout=5.0) as http:
+                assert http.get("/packages/gated_widget-1.0.0-py3-none-any.whl").status_code == 200
+        finally:
+            orch_server.stop()
+            core_server.stop()
+            conn.close()
+    finally:
+        for pillar in pillars:
+            systemd.stop(pillar, runner=DEFAULT_RUNNER)

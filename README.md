@@ -184,8 +184,13 @@ lets one project's deploy through while a second, non-waived project on
 the identical policy still genuinely blocks.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1580 tests — 1463 unit, 117 real
-`systemd --user` end-to-end integration proofs — at 99% line coverage
+`bazel test //:coverage` all work today (1636 tests — 1499 unit, 137 real
+`systemd --user` end-to-end integration proofs (a deliberate +15%
+expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
+three of four newly-added gate-point categories that don't hit a
+project-registration chicken-and-egg problem (`OQ-15`), scope-precedence
+resolved live against real Registry project sets, waiver/precedence
+interaction, and a first MCP-level policy proof) — at 99% line coverage
 over `src/`, measured with `python3 -m pytest --cov=src`; see
 `scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific
 limitation in that target's own reported percentage). Integration

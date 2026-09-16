@@ -180,6 +180,41 @@ def test_project_sets_create_add_and_remove_member(tmp_path, workshop_env):
 
 
 @requires_systemd_user
+def test_project_set_membership_add_is_idempotent_and_remove_of_a_non_member_is_a_no_op(tmp_path, workshop_env):
+    systemd.start("registry", [sys.executable, "-m", "registry"], environment=workshop_env.env, runner=DEFAULT_RUNNER)
+    try:
+        probe = probe_health(workshop_env.paths.socket_path("registry"), timeout=5.0, max_retries=10)
+        assert probe.ok, probe.error
+
+        core_server, orch_server, conn = _core_and_orchestration(workshop_env, ("registry",))
+        try:
+            dest_dir = tmp_path / "workdir"
+            dest_dir.mkdir()
+            created = cli_client.create_job(
+                workshop_env.paths, type="project.bootstrap", target_pillar="registry", project_id="little-widget",
+                params={"name": "little-widget", "dest_dir": str(dest_dir)}, queue_key=None, depends_on=[],
+                created_by="integration-test",
+            )
+            assert created["status"] == "succeeded", created
+
+            with client_for_socket(workshop_env.paths.socket_path("registry"), timeout=5.0) as registry_client:
+                registry_client.post("/v1/project_sets", json={"name": "widgets", "project_names": ["little-widget"]})
+
+                added_again = registry_client.post("/v1/project_sets/widgets/members/little-widget").json()
+                assert added_again["project_names"] == ["little-widget"]  # never duplicated
+
+                removed_non_member = registry_client.delete("/v1/project_sets/widgets/members/never-a-member")
+                assert removed_non_member.status_code == 200
+                assert removed_non_member.json()["project_names"] == ["little-widget"]
+        finally:
+            orch_server.stop()
+            core_server.stop()
+            conn.close()
+    finally:
+        systemd.stop("registry", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
 def test_tickets_create_and_list_filtered_by_project(tmp_path, workshop_env):
     systemd.start("registry", [sys.executable, "-m", "registry"], environment=workshop_env.env, runner=DEFAULT_RUNNER)
     try:

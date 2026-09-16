@@ -137,6 +137,61 @@ down.
 
 ---
 
+### OQ-15 — A `project_registration`-gating policy can't be project-bound, only framework-bound
+
+**Where this comes from.** Surfaced 2026-09-16 writing this pass's first
+real end-to-end proof of the `project_registration` gate point
+(`tests/integration/test_policy_end_to_end.py`): a project-bound policy
+(`target_pillar` naming the pillar that owns the action, e.g.
+`registry`, scope `all_projects`) gating `project.bootstrap` makes its
+own `policy.check_project` dependency fail outright — not a `fail`
+verdict, a genuine Job failure — because `policy/app.py`'s
+`_mounts_for_policy` tries to resolve the *new* project's own checkout
+path to bind-mount it into the sandbox, and that project doesn't exist
+in Registry & Portfolio yet (registering it is the very Job being
+gated). The proof test works around this by authoring a framework-bound
+policy instead (`target_pillar == "policy"` itself, checking against
+little-workshop's own `src`/`docs` — the one case `_mounts_for_policy`
+already treats specially), which sidesteps the chicken-and-egg problem
+but can't express "check something about the *incoming* project before
+letting it register," only "check something about little-workshop
+itself before letting any project register."
+
+**What's actually being asked.** Is a project-bound `project_registration`
+gate a real, wanted capability (e.g. "the incoming project's directory
+must already be a git repo," checkable against the path in
+`project.import`'s own params without needing the sandbox's project-dir
+mount at all), and if so, should `_mounts_for_policy`/the sandbox gain a
+third mode for "check the pre-registration params/path directly," or is
+framework-bound-only a fine permanent restriction for this one gate
+point specifically (distinct from every other gate point, which all gate
+an action against an *already-registered* project)?
+
+**Why it matters.** Right now a maintainer authoring a
+`project_registration`-gating policy with `target_pillar` set to the
+project's owning pillar (the natural choice, matching every other gate
+point's own convention) gets a confusing genuine Job failure rather than
+a clean Gate-time rejection explaining why — nothing catches this at
+authoring time, only at check time, against a real project attempting
+to register.
+
+**Possible interpretations.**
+- (a) Leave it framework-bound-only, and have Gate 3 (or a new,
+  earlier check) reject a project-bound `target_pillar` combined with
+  `project_registration` in `gate_points` at authoring time, with a
+  clear error, rather than letting it fail confusingly later.
+- (b) Add a third `_mounts_for_policy` mode specifically for
+  pre-registration checks: mount whatever `project.bootstrap`/`project.
+  import`'s own params describe (e.g. `dest_dir`/`path`) directly,
+  never a resolved-from-the-registry project directory.
+- (c) Treat this as evidence `project_registration` needs its own
+  distinct check mechanism entirely, separate from `policy.check_project`
+  — future work, not a small fix.
+
+**Your answer:**
+
+---
+
 ## Resolved
 
 Terse by design — full reasoning lives at the linked deck, never repeated

@@ -204,3 +204,64 @@ def test_dashboard_renders_an_unreachable_pillar_as_a_visible_error_not_a_crash(
                 assert "UNREACHABLE" in response.text
     finally:
         systemd.stop("dashboard", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_dashboard_jobs_panel_filters_by_status_against_real_settled_jobs(tmp_path, workshop_env, monkeypatch):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        _author_and_activate(
+            workshop_env, ears_text="every project shall have a name",
+            topic="project-has-a-name-2", target_pillar="registry",
+        )
+        failing_author = cli_client.create_job(
+            workshop_env.paths, type="policy.author", target_pillar="policy",
+            params={
+                "ears_text": "", "topic": "invalid-empty-ears", "target_pillar": "registry",
+                "scope_level": "all_projects", "created_by": "framework",
+            },
+            queue_key=None, depends_on=[], created_by="integration-test", timeout=60.0,
+        )
+        assert failing_author["status"] == "failed", failing_author
+
+        with client_for_socket(workshop_env.paths.socket_path("dashboard"), timeout=10.0) as http:
+            all_jobs = http.get("/jobs")
+            assert "policy.author" in all_jobs.text
+
+            succeeded_only = http.get("/jobs", params={"status": "succeeded"})
+            assert succeeded_only.status_code == 200
+            assert 'pill fail">failed' not in succeeded_only.text
+
+            failed_only = http.get("/jobs", params={"status": "failed"})
+            assert failed_only.status_code == 200
+            assert 'pill fail">failed' in failed_only.text
+            assert "policy.author" in failed_only.text
+
+
+@requires_systemd_user
+def test_dashboard_policies_panel_lists_every_policy_across_topics(tmp_path, workshop_env, monkeypatch):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        first = _author_and_activate(
+            workshop_env, ears_text="every project shall have a README",
+            topic="readme-required", target_pillar="registry",
+        )
+        second = _author_and_activate(
+            workshop_env, ears_text="every project shall have a LICENSE",
+            topic="license-required", target_pillar="registry",
+        )
+
+        with client_for_socket(workshop_env.paths.socket_path("dashboard"), timeout=10.0) as http:
+            listing = http.get("/policies")
+            assert "every project shall have a README" in listing.text
+            assert "every project shall have a LICENSE" in listing.text
+
+            first_detail = http.get(f"/policies/{first['id']}")
+            assert "every project shall have a README" in first_detail.text
+            assert "every project shall have a LICENSE" not in first_detail.text

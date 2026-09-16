@@ -206,3 +206,51 @@ def test_import_fails_cleanly_when_path_is_not_a_git_repository(tmp_path, worksh
             conn.close()
     finally:
         systemd.stop("registry", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_importing_a_name_already_taken_by_a_bootstrapped_project_fails_the_same_way(tmp_path, workshop_env):
+    """The existing duplicate-name proof only exercises import-vs-import.
+    Registry & Portfolio's own registry is one shared namespace regardless
+    of which of the two entry points (`project.bootstrap`, `project.
+    import`) created the first row — a real proof that the check is
+    keyed on the name itself, not on which path produced it."""
+    env = workshop_env.env
+    systemd.start("registry", [sys.executable, "-m", "registry"], environment=env, runner=DEFAULT_RUNNER)
+    try:
+        probe = probe_health(workshop_env.paths.socket_path("registry"), timeout=5.0, max_retries=10)
+        assert probe.ok, probe.error
+
+        def socket_lookup(pillar: str):
+            return workshop_env.paths.socket_path("registry") if pillar == "registry" else None
+
+        conn = orchestration_db.connect(workshop_env.paths.pillar_db_path("orchestration"))
+        orch_server = UvicornThread(build_orchestration_app(conn, socket_lookup), workshop_env.paths.socket_path("orchestration"))
+        orch_server.start()
+        try:
+            dest_dir = tmp_path / "workdir"
+            dest_dir.mkdir()
+            bootstrapped = cli_client.create_job(
+                workshop_env.paths, type="project.bootstrap", target_pillar="registry", project_id="little-widget",
+                params={"name": "little-widget", "dest_dir": str(dest_dir)}, queue_key=None, depends_on=[],
+                created_by="integration-test",
+            )
+            assert bootstrapped["status"] == "succeeded", bootstrapped
+
+            pre_existing = _make_existing_repo(tmp_path, "unrelated-repo-name")
+            blocked = cli_client.create_job(
+                workshop_env.paths, type="project.import", target_pillar="registry", project_id="little-widget",
+                params={"name": "little-widget", "path": str(pre_existing)}, queue_key=None, depends_on=[],
+                created_by="integration-test",
+            )
+            assert blocked["status"] == "failed", blocked
+            assert "already registered" in blocked["error"]
+
+            listed = cli_client.list_projects(workshop_env.paths)
+            assert len(listed["projects"]) == 1
+            assert listed["projects"][0]["path"] == str(dest_dir / "little-widget")
+        finally:
+            orch_server.stop()
+            conn.close()
+    finally:
+        systemd.stop("registry", runner=DEFAULT_RUNNER)

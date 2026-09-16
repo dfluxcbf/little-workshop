@@ -424,3 +424,292 @@ stop_timeout_seconds = 15
         assert _wait_until(lambda: cli_client.job_status(workshop_env.paths, gated_deploy["id"])["job"]["status"] == "pending_confirmation")
 
         systemd.stop(f"deploy-{waived_project}", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_project_registration_gate_point_blocks_a_real_bootstrap_until_confirmed(tmp_path, workshop_env, monkeypatch):
+    """2026-09-16's gate-point expansion added `project_registration`,
+    previously ungated — this is its first real end-to-end proof (the
+    unit-level tests only assert the `JOB_TYPE_CATEGORIES` mapping, never
+    a real blocked-then-confirmed Job)."""
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        author = _author(
+            workshop_env, ears_text="ALWAYS_FAIL: project registration is always blocked for this test",
+            topic="project-registration-policy", target_pillar="policy", scope_level="all_projects",
+            gate_points=["project_registration"], created_by="framework",
+        )
+        _activate(workshop_env, author["result"])
+
+        project_id = "gated-new-project"
+        dest_dir = tmp_path / "workdir"
+        dest_dir.mkdir()
+        bootstrap = cli_client.create_job(
+            workshop_env.paths, type="project.bootstrap", target_pillar="registry", project_id=project_id,
+            params={"name": project_id, "dest_dir": str(dest_dir)}, queue_key=None, depends_on=[],
+            created_by="integration-test",
+        )
+        _pump(workshop_env)
+        assert _wait_until(lambda: cli_client.job_status(workshop_env.paths, bootstrap["id"])["job"]["status"] == "pending_confirmation")
+        assert not (dest_dir / project_id).exists()
+
+        confirmed = cli_client.policy_confirm_job(workshop_env.paths, bootstrap["id"])
+        assert confirmed["confirmed"] is True
+        assert confirmed["job"]["status"] == "succeeded"
+        assert (dest_dir / project_id).is_dir()
+
+
+@requires_systemd_user
+def test_server_stop_gate_point_blocks_a_real_stop_and_the_server_stays_up(tmp_path, workshop_env, monkeypatch):
+    """`server_stop`'s first real end-to-end proof: a running server
+    survives a gated, unconfirmed `deployment.stop` — the mirror image of
+    the existing gated-deploy tests above, proving the category is wired
+    to its own Job type independently of `server_launch`/`deploy_redeploy`."""
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        project_id = "little-widget"
+        _bootstrap(tmp_path, workshop_env, project_id)
+
+        port = PORT + 5
+        manifest_toml = f"""
+[server]
+name = "{project_id}"
+command = "python3 -m http.server {port}"
+port = {port}
+match = "http.server {port}"
+install = ["true"]
+ready_timeout_seconds = 15
+stop_timeout_seconds = 15
+"""
+        ProjectFilesClient(workshop_env.paths, caller_pillar="deployment").write(project_id, "manifest.deployment.toml", manifest_toml)
+
+        deploy = cli_client.create_job(
+            workshop_env.paths, type="deployment.deploy", target_pillar="deployment", project_id=project_id,
+            params={"branch": "master"}, queue_key=project_id, depends_on=[], created_by="integration-test",
+        )
+        assert deploy["status"] == "succeeded", deploy  # no gating policy authored yet
+        assert port_is_listening(port)
+
+        author = _author(
+            workshop_env, ears_text="ALWAYS_FAIL: stopping a server is always blocked for this test",
+            topic="server-stop-policy", target_pillar="deployment", scope_level="all_projects",
+            gate_points=["server_stop"],
+        )
+        _activate(workshop_env, author["result"])
+
+        stop = cli_client.create_job(
+            workshop_env.paths, type="deployment.stop", target_pillar="deployment", project_id=project_id,
+            params={}, queue_key=project_id, depends_on=[], created_by="integration-test",
+        )
+        _pump(workshop_env)
+        assert _wait_until(lambda: cli_client.job_status(workshop_env.paths, stop["id"])["job"]["status"] == "pending_confirmation")
+        assert port_is_listening(port)  # still up: the stop never ran
+
+        confirmed = cli_client.policy_confirm_job(workshop_env.paths, stop["id"])
+        assert confirmed["confirmed"] is True
+        assert confirmed["job"]["status"] == "succeeded"
+        assert not port_is_listening(port)
+
+
+@requires_systemd_user
+def test_scope_precedence_resolves_live_against_real_registry_project_sets(tmp_path, workshop_env, monkeypatch):
+    """Precedence (project-specific > project-set > all-projects) is
+    only ever unit-tested against a mocked registry client
+    (`test_policy_precedence.py`) — this is its first real proof against
+    a genuine Registry & Portfolio unit's own `project_sets` membership,
+    reached live through Policy & Compliance's Pillar Interface call,
+    never mirrored data."""
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        _bootstrap(tmp_path, workshop_env, "little-widget")
+
+        from common.uds_client import client_for_socket
+
+        with client_for_socket(workshop_env.paths.socket_path("registry"), timeout=5.0) as http:
+            created_set = http.post("/v1/project_sets", json={"name": "widgets-team", "project_names": ["little-widget"]})
+            assert created_set.status_code == 200, created_set.text
+
+        all_projects_draft = _author(
+            workshop_env, ears_text="EARS_OK: all-projects default", topic="precedence-topic",
+            target_pillar="registry", scope_level="all_projects",
+        )
+        all_projects_policy = _activate(workshop_env, all_projects_draft["result"])["result"]
+
+        winning = cli_client.policy_winning(workshop_env.paths, "precedence-topic", "little-widget")
+        assert winning["policy"]["id"] == all_projects_policy["id"]
+
+        set_draft = _author(
+            workshop_env, ears_text="EARS_OK: widgets-team override", topic="precedence-topic",
+            target_pillar="registry", scope_level="project_set", scope_target="widgets-team",
+        )
+        set_policy = _activate(workshop_env, set_draft["result"])["result"]
+
+        winning = cli_client.policy_winning(workshop_env.paths, "precedence-topic", "little-widget")
+        assert winning["policy"]["id"] == set_policy["id"]  # project-set beats all-projects
+
+        project_draft = _author(
+            workshop_env, ears_text="EARS_OK: little-widget's own override", topic="precedence-topic",
+            target_pillar="registry", scope_level="project", scope_target="little-widget",
+        )
+        project_policy = _activate(workshop_env, project_draft["result"])["result"]
+
+        winning = cli_client.policy_winning(workshop_env.paths, "precedence-topic", "little-widget")
+        assert winning["policy"]["id"] == project_policy["id"]  # project-specific beats everything
+
+        # A different project, never in the project set, still only ever
+        # sees the all-projects policy — the set-scoped and
+        # project-specific ones above never leak to it.
+        other_winning = cli_client.policy_winning(workshop_env.paths, "precedence-topic", "some-other-project")
+        assert other_winning["policy"]["id"] == all_projects_policy["id"]
+
+
+@requires_systemd_user
+def test_a_disabled_policy_is_invisible_to_winning_policy_resolution(tmp_path, workshop_env, monkeypatch):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        draft = _author(
+            workshop_env, ears_text="EARS_OK: a default policy", topic="disabled-precedence-topic",
+            target_pillar="registry", scope_level="all_projects",
+        )
+        policy = _activate(workshop_env, draft["result"])["result"]
+
+        winning = cli_client.policy_winning(workshop_env.paths, "disabled-precedence-topic", "any-project")
+        assert winning["policy"]["id"] == policy["id"]
+
+        disabled = cli_client.create_job(
+            workshop_env.paths, type="policy.configure", target_pillar="policy",
+            params={"policy_id": policy["id"], "enabled": False},
+            queue_key=None, depends_on=[], created_by="integration-test",
+        )
+        assert disabled["status"] == "succeeded", disabled
+
+        winning_after = cli_client.policy_winning(workshop_env.paths, "disabled-precedence-topic", "any-project")
+        assert winning_after["policy"] is None
+
+
+@requires_systemd_user
+def test_a_waiver_on_a_project_set_scoped_policy_falls_through_to_all_projects(tmp_path, workshop_env, monkeypatch):
+    """Combines two mechanisms this pass proved separately (scope
+    precedence and waivers): a waived project-set policy doesn't just
+    stop winning, it falls all the way through to whatever the next
+    lower-precedence policy is — never leaving the waived project with
+    no policy at all when one genuinely exists underneath."""
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        _bootstrap(tmp_path, workshop_env, "little-widget")
+
+        from common.uds_client import client_for_socket
+
+        with client_for_socket(workshop_env.paths.socket_path("registry"), timeout=5.0) as http:
+            http.post("/v1/project_sets", json={"name": "widgets-team", "project_names": ["little-widget"]})
+
+        all_projects_draft = _author(
+            workshop_env, ears_text="EARS_OK: all-projects fallback", topic="waiver-precedence-topic",
+            target_pillar="registry", scope_level="all_projects",
+        )
+        all_projects_policy = _activate(workshop_env, all_projects_draft["result"])["result"]
+
+        set_draft = _author(
+            workshop_env, ears_text="EARS_OK: widgets-team override", topic="waiver-precedence-topic",
+            target_pillar="registry", scope_level="project_set", scope_target="widgets-team",
+        )
+        set_policy = _activate(workshop_env, set_draft["result"])["result"]
+
+        winning = cli_client.policy_winning(workshop_env.paths, "waiver-precedence-topic", "little-widget")
+        assert winning["policy"]["id"] == set_policy["id"]
+
+        waiver = cli_client.create_job(
+            workshop_env.paths, type="policy.waiver_grant", target_pillar="policy", project_id="little-widget",
+            params={"policy_id": set_policy["id"], "reason": "widgets-team policy doesn't fit this project"},
+            queue_key=None, depends_on=[], created_by="integration-test",
+        )
+        assert waiver["status"] == "succeeded", waiver
+
+        winning_after_waiver = cli_client.policy_winning(workshop_env.paths, "waiver-precedence-topic", "little-widget")
+        assert winning_after_waiver["policy"]["id"] == all_projects_policy["id"]
+
+        # A project never in the set, and never waived, only ever saw the
+        # all-projects fallback in the first place — the waiver above
+        # changed nothing about it.
+        untouched = cli_client.policy_winning(workshop_env.paths, "waiver-precedence-topic", "little-gadget")
+        assert untouched["policy"]["id"] == all_projects_policy["id"]
+
+
+@requires_systemd_user
+def test_granting_a_second_waiver_for_the_same_project_and_policy_is_rejected(tmp_path, workshop_env, monkeypatch):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        draft = _author(
+            workshop_env, ears_text="EARS_OK: a waivable policy", topic="double-waiver-topic",
+            target_pillar="registry", scope_level="all_projects",
+        )
+        policy_id = _activate(workshop_env, draft["result"])["result"]["id"]
+
+        first = cli_client.create_job(
+            workshop_env.paths, type="policy.waiver_grant", target_pillar="policy", project_id="little-widget",
+            params={"policy_id": policy_id, "reason": "first reason"},
+            queue_key=None, depends_on=[], created_by="integration-test",
+        )
+        assert first["status"] == "succeeded", first
+
+        second = cli_client.create_job(
+            workshop_env.paths, type="policy.waiver_grant", target_pillar="policy", project_id="little-widget",
+            params={"policy_id": policy_id, "reason": "a second, different reason"},
+            queue_key=None, depends_on=[], created_by="integration-test",
+        )
+        assert second["status"] == "failed", second
+        assert "already holds a waiver" in second["error"]
+
+        waivers = cli_client.policy_list_waivers(workshop_env.paths, policy_id=policy_id, project_id="little-widget")
+        assert len(waivers["waivers"]) == 1
+        assert waivers["waivers"][0]["reason"] == "first reason"
+
+
+@requires_systemd_user
+def test_revoking_an_unknown_waiver_fails_cleanly(tmp_path, workshop_env, monkeypatch):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        revoked = cli_client.create_job(
+            workshop_env.paths, type="policy.waiver_revoke", target_pillar="policy",
+            params={"waiver_id": "not-a-real-waiver-id"},
+            queue_key=None, depends_on=[], created_by="integration-test",
+        )
+        assert revoked["status"] == "failed", revoked
+        assert "not found" in revoked["error"]
+
+
+@requires_systemd_user
+def test_configuring_an_unknown_policy_id_fails_cleanly(tmp_path, workshop_env, monkeypatch):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        configured = cli_client.create_job(
+            workshop_env.paths, type="policy.configure", target_pillar="policy",
+            params={"policy_id": "not-a-real-policy-id", "enabled": False},
+            queue_key=None, depends_on=[], created_by="integration-test",
+        )
+        assert configured["status"] == "failed", configured
+        assert "not found" in configured["error"]
