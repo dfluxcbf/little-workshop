@@ -611,3 +611,59 @@ def test_requirements_report_calls_client(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "requirements_report", result={"done_count": 0})
     tools_mod.TOOLS_BY_NAME["workshop_requirements_report"].handler(paths, {"project_id": "p1"})
     assert calls[0] == ((paths, "p1"), {})
+
+
+def test_build_run_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_build_run"].handler(paths, {
+        "project_id": "p1", "command": ["python3", "-m", "pytest"], "from_fork": True,
+    })
+    call = fake_create_job[0]
+    assert call["type"] == "build.run"
+    assert call["target_pillar"] == "build"
+    assert call["params"] == {"commitish": "HEAD", "command": ["python3", "-m", "pytest"], "from_fork": True}
+
+
+def test_build_run_defaults_from_fork_to_false(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_build_run"].handler(paths, {"project_id": "p1", "command": ["true"]})
+    assert fake_create_job[0]["params"]["from_fork"] is False
+
+
+def test_build_run_list_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "build_list_runs", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_build_run_list"].handler(paths, {"project_id": "p1"})
+    assert calls[0] == ((paths, "p1"), {})
+
+
+def test_build_run_status_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "build_get_run", result={"id": "r1"})
+    tools_mod.TOOLS_BY_NAME["workshop_build_run_status"].handler(paths, {"run_id": "r1"})
+    assert calls[0] == ((paths, "r1"), {})
+
+
+def test_build_publish_pypi_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_build_publish_pypi"].handler(paths, {
+        "project_id": "p1", "build_run_id": "r1", "name": "pkg", "version": "1.0.0",
+        "filename": "pkg-1.0.0.whl", "content_base64": "Zm9v",
+    })
+    call = fake_create_job[0]
+    assert call["type"] == "build.publish_pypi"
+    assert call["params"]["build_run_id"] == "r1"
+
+
+def test_build_publish_vsix_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_build_publish_vsix"].handler(paths, {
+        "project_id": "p1", "build_run_id": "r1", "name": "ext", "version": "0.1.0",
+        "filename": "ext-0.1.0.vsix", "content_base64": "Zm9v",
+    })
+    assert fake_create_job[0]["type"] == "build.publish_vsix"
+
+
+def test_build_package_list_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "build_list_packages", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_build_package_list"].handler(paths, {"project_id": "p1", "kind": "pypi"})
+    assert calls[0] == ((paths, "p1", "pypi"), {})
+
+
+def test_build_package_delete_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_build_package_delete"].handler(paths, {"project_id": "p1", "package_id": "pkg1"})
+    assert fake_create_job[0]["params"] == {"package_id": "pkg1"}

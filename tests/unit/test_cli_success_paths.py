@@ -658,3 +658,75 @@ def test_requirements_report_success(paths, capsys, monkeypatch):
     monkeypatch.setattr(main.client, "requirements_report", lambda p, project_id: {"project_id": project_id, "requirements": []})
     assert main.main(["requirements", "report", "--project-id", "p1"]) == 0
     assert _out(capsys)["project_id"] == "p1"
+
+
+# ---------------------------------------------------------------------------
+# build
+# ---------------------------------------------------------------------------
+
+def test_build_run_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main([
+        "build", "run", "--project-id", "p1", "--commitish", "abc123", "--from-fork", "--", "python3", "-m", "pytest",
+    ]) == 0
+    assert captured["type"] == "build.run"
+    assert captured["target_pillar"] == "build"
+    assert captured["params"] == {"commitish": "abc123", "command": ["python3", "-m", "pytest"], "from_fork": True}
+    assert captured["timeout"] == 1800.0
+
+
+def test_build_run_without_double_dash_still_captures_the_command(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["build", "run", "--project-id", "p1", "true"]) == 0
+    assert captured["params"]["command"] == ["true"]
+
+
+def test_build_run_list_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "build_list_runs", lambda p, project_id: {"source": "daemon", "build_runs": []})
+    assert main.main(["build", "run-list"]) == 0
+    assert _out(capsys)["source"] == "daemon"
+
+
+def test_build_run_status_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "build_get_run", lambda p, run_id: {"build_run": {"id": run_id}})
+    assert main.main(["build", "run-status", "r1"]) == 0
+    assert _out(capsys)["build_run"]["id"] == "r1"
+
+
+def test_build_publish_pypi_reads_the_file_and_base64_encodes_it(paths, capsys, monkeypatch, tmp_path):
+    wheel = tmp_path / "pkg-1.0.0.whl"
+    wheel.write_bytes(b"fake wheel bytes")
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main([
+        "build", "publish-pypi", "--project-id", "p1", "--build-run-id", "r1", "pkg", "1.0.0", str(wheel),
+    ]) == 0
+    assert captured["type"] == "build.publish_pypi"
+    assert captured["params"]["filename"] == "pkg-1.0.0.whl"
+    import base64
+    assert base64.b64decode(captured["params"]["content_base64"]) == b"fake wheel bytes"
+
+
+def test_build_publish_vsix_reads_the_file_and_base64_encodes_it(paths, capsys, monkeypatch, tmp_path):
+    vsix = tmp_path / "ext-0.1.0.vsix"
+    vsix.write_bytes(b"fake vsix bytes")
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main([
+        "build", "publish-vsix", "--project-id", "p1", "--build-run-id", "r1", "ext", "0.1.0", str(vsix),
+    ]) == 0
+    assert captured["type"] == "build.publish_vsix"
+
+
+def test_build_package_list_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "build_list_packages", lambda p, project_id, kind: {"source": "daemon", "packages": []})
+    assert main.main(["build", "package-list"]) == 0
+
+
+def test_build_package_delete_success(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["build", "package-delete", "--project-id", "p1", "pkg1"]) == 0
+    assert captured["params"] == {"package_id": "pkg1"}

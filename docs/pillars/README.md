@@ -18,7 +18,7 @@ right.
 | [Registry & Portfolio](registry_portfolio.md) | Built (M2, M8) |
 | [Requirements & Quality](requirements_quality.md) | Built (M10) |
 | [Version Control & Release](version_control_release.md) | Built (M3) |
-| [Build & Packages](build_packages.md) | Not yet built (M11) |
+| [Build & Packages](build_packages.md) | Built (M11) |
 | [Deployment & Servers](deployment_servers.md) | Built (M4, M5) |
 | [Agentic Development](agentic_development.md) | Built (M6) — fully specified |
 | [Dashboard](dashboard.md) | Not yet built (M14) |

@@ -180,6 +180,18 @@ def _make_stub_app(paths: Paths | None = None) -> FastAPI:
     def report(project_id: str):
         return {"project_id": project_id, "done_count": 0, "requirements": []}
 
+    @app.get("/v1/build_runs")
+    def list_build_runs(project_id: str | None = None):
+        return [{"id": "r1", "project_id": project_id}]
+
+    @app.get("/v1/build_runs/{run_id}")
+    def get_build_run(run_id: str):
+        return {"id": run_id}
+
+    @app.get("/v1/packages")
+    def list_build_packages(project_id: str | None = None, kind: str | None = None):
+        return [{"id": "pkg1", "kind": kind}]
+
     return app
 
 
@@ -214,7 +226,7 @@ def paths_with_live_daemons(tmp_path):
 
     app = _make_stub_app(paths)
     servers = []
-    for pillar in ("core", "orchestration", "registry", "version", "deployment", "agent", "requirements"):
+    for pillar in ("core", "orchestration", "registry", "version", "deployment", "agent", "requirements", "build"):
         socket_path = paths.core_socket_path if pillar == "core" else paths.socket_path(pillar)
         server = _UvicornThread(app, socket_path)
         server.start()
@@ -317,6 +329,24 @@ def test_requirements_list_milestones_reports_daemon_source(paths_with_live_daem
 def test_requirements_report_hits_the_real_requirements_socket(paths_with_live_daemons):
     result = client.requirements_report(paths_with_live_daemons, "p1")
     assert result["project_id"] == "p1"
+
+
+def test_build_list_runs_reports_daemon_source(paths_with_live_daemons):
+    result = client.build_list_runs(paths_with_live_daemons, "p1")
+    assert result["source"] == "daemon"
+    assert result["build_runs"][0]["id"] == "r1"
+
+
+def test_build_get_run_reports_daemon_source(paths_with_live_daemons):
+    result = client.build_get_run(paths_with_live_daemons, "r1")
+    assert result["source"] == "daemon"
+    assert result["build_run"]["id"] == "r1"
+
+
+def test_build_list_packages_reports_daemon_source(paths_with_live_daemons):
+    result = client.build_list_packages(paths_with_live_daemons, "p1", "pypi")
+    assert result["source"] == "daemon"
+    assert result["packages"][0]["kind"] == "pypi"
 
 
 def test_deployment_status_hits_the_real_deployment_socket(paths_with_live_daemons):

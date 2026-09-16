@@ -448,3 +448,90 @@ def test_requirements_result_list_falls_back_to_direct_db_read(tmp_path, capsys,
     output = json.loads(capsys.readouterr().out)
     assert output["source"] == "fallback"
     assert len(output["test_results"]) == 1
+
+
+def test_build_run_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["build", "run", "--project-id", "little-widget", "--", "true"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_build_run_list_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+    from build import db as build_db
+    from build.models import BuildRun
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    conn = build_db.connect(paths.pillar_db_path("build"))
+    build_db.insert_build_run(conn, BuildRun(id="r1", project_id="little-widget", commitish="HEAD", command=["true"]))
+    conn.close()
+
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["build", "run-list"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"] == "fallback"
+    assert len(output["build_runs"]) == 1
+
+
+def test_build_run_status_falls_back_and_reports_missing_run(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["build", "run-status", "nonexistent"])
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["build_run"] is None
+
+
+def test_build_publish_pypi_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    wheel = tmp_path / "pkg-1.0.0.whl"
+    wheel.write_bytes(b"fake wheel")
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main([
+        "build", "publish-pypi", "--project-id", "little-widget", "--build-run-id", "r1", "pkg", "1.0.0", str(wheel),
+    ])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_build_package_list_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+    from build import db as build_db
+    from build.models import Package, PackageKind
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    conn = build_db.connect(paths.pillar_db_path("build"))
+    build_db.insert_package(conn, Package(
+        id="pkg1", project_id="little-widget", kind=PackageKind.PYPI, name="pkg", normalized_name="pkg",
+        version="1.0.0", filename="pkg-1.0.0.whl",
+    ))
+    conn.close()
+
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["build", "package-list"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"] == "fallback"
+    assert len(output["packages"]) == 1
+
+
+def test_build_package_delete_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["build", "package-delete", "--project-id", "little-widget", "pkg1"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err

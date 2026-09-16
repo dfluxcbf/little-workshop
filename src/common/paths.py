@@ -111,6 +111,17 @@ class Paths:
     def worktree_path(self, worktree_id: str) -> Path:
         return self.worktrees_dir / worktree_id
 
+    @property
+    def packages_dir(self) -> Path:
+        """Build & Packages' own package blobs (docs/milestones.md M11) —
+        metadata lives in this pillar's own database, the blobs
+        themselves stay on disk, `little-pypi`'s own "blobs on disk"
+        model carried over unchanged in shape."""
+        return self.state_home / "packages"
+
+    def package_blob_path(self, kind: str, filename: str) -> Path:
+        return self.packages_dir / kind / filename
+
     def ensure_layout(self) -> None:
         """Create every directory this system needs before anything writes to it."""
         self.config_home.mkdir(parents=True, exist_ok=True)
@@ -119,5 +130,6 @@ class Paths:
         self.pillars_db_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.worktrees_dir.mkdir(parents=True, exist_ok=True)
+        self.packages_dir.mkdir(parents=True, exist_ok=True)
         for pillar in PILLARS:
             self.pillar_config_dir(pillar).mkdir(parents=True, exist_ok=True)

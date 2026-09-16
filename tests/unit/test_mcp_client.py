@@ -441,3 +441,51 @@ def test_requirements_report_success(paths, monkeypatch):
 
     _rig(paths, monkeypatch, "requirements", app)
     assert client.requirements_report(paths, "p1") == {"project_id": "p1", "done_count": 0}
+
+
+def test_build_list_runs_raises_when_build_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.build_list_runs(paths)
+
+
+def test_build_get_run_raises_when_build_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.build_get_run(paths, "r1")
+
+
+def test_build_list_packages_raises_when_build_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.build_list_packages(paths)
+
+
+def test_build_list_runs_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/build_runs")
+    def list_runs(project_id: str | None = None) -> list[dict]:
+        return [{"id": "r1", "project_id": project_id}]
+
+    _rig(paths, monkeypatch, "build", app)
+    assert client.build_list_runs(paths, "p1") == [{"id": "r1", "project_id": "p1"}]
+
+
+def test_build_get_run_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/build_runs/{run_id}")
+    def get_run(run_id: str) -> dict:
+        return {"id": run_id}
+
+    _rig(paths, monkeypatch, "build", app)
+    assert client.build_get_run(paths, "r1") == {"id": "r1"}
+
+
+def test_build_list_packages_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/packages")
+    def list_packages(project_id: str | None = None, kind: str | None = None) -> list[dict]:
+        return [{"id": "pkg1", "kind": kind}]
+
+    _rig(paths, monkeypatch, "build", app)
+    assert client.build_list_packages(paths, "p1", "pypi") == [{"id": "pkg1", "kind": "pypi"}]

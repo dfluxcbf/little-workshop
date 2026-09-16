@@ -6,6 +6,7 @@ function per subcommand. Just enough for M1: `lws core status`,
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
 from pathlib import Path
@@ -483,6 +484,66 @@ def cmd_requirements_report(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     _print(result)
+    return 0
+
+
+def _build_job(args: argparse.Namespace, job_type: str, params: dict, *, timeout: float = 30.0) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths, type=job_type, target_pillar="build", project_id=args.project_id,
+            params=params, queue_key=None, depends_on=[], created_by="lws", timeout=timeout,
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_build_run(args: argparse.Namespace) -> int:
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    return _build_job(args, "build.run", {
+        "commitish": args.commitish, "command": command, "from_fork": args.from_fork,
+    }, timeout=1800.0)
+
+
+def cmd_build_run_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    _print(client.build_list_runs(paths, args.project_id))
+    return 0
+
+
+def cmd_build_run_status(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    result = client.build_get_run(paths, args.run_id)
+    _print(result)
+    return 0 if result.get("build_run") is not None else 1
+
+
+def cmd_build_publish_pypi(args: argparse.Namespace) -> int:
+    content_base64 = base64.b64encode(Path(args.file).read_bytes()).decode()
+    return _build_job(args, "build.publish_pypi", {
+        "build_run_id": args.build_run_id, "name": args.name, "version": args.version,
+        "filename": Path(args.file).name, "content_base64": content_base64,
+    })
+
+
+def cmd_build_publish_vsix(args: argparse.Namespace) -> int:
+    content_base64 = base64.b64encode(Path(args.file).read_bytes()).decode()
+    return _build_job(args, "build.publish_vsix", {
+        "build_run_id": args.build_run_id, "name": args.name, "version": args.version,
+        "filename": Path(args.file).name, "content_base64": content_base64,
+    })
+
+
+def cmd_build_package_delete(args: argparse.Namespace) -> int:
+    return _build_job(args, "build.delete_package", {"package_id": args.package_id})
+
+
+def cmd_build_package_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    _print(client.build_list_packages(paths, args.project_id, args.kind))
     return 0
 
 
@@ -1165,6 +1226,50 @@ def build_parser() -> argparse.ArgumentParser:
     report = requirements_sub.add_parser("report", help="Definition-of-done report for a project")
     report.add_argument("--project-id", required=True)
     report.set_defaults(func=cmd_requirements_report)
+
+    build = subparsers.add_parser("build", help="Build & Packages commands")
+    build_sub = build.add_subparsers(dest="build_command", required=True)
+
+    build_run = build_sub.add_parser("run", help="Run a build/test command sandboxed in a fresh worktree")
+    build_run.add_argument("--project-id", required=True)
+    build_run.add_argument("--commitish", default="HEAD")
+    build_run.add_argument("--from-fork", action="store_true", help="Mark this run as untrusted (fork-safety gate: blocks publish)")
+    build_run.add_argument("command", nargs=argparse.REMAINDER, help="The build/test command, e.g. -- python3 -m pytest")
+    build_run.set_defaults(func=cmd_build_run)
+
+    build_run_list = build_sub.add_parser("run-list", help="List build runs")
+    build_run_list.add_argument("--project-id", default=None)
+    build_run_list.set_defaults(func=cmd_build_run_list)
+
+    build_run_status = build_sub.add_parser("run-status", help="Show one build run")
+    build_run_status.add_argument("run_id")
+    build_run_status.set_defaults(func=cmd_build_run_status)
+
+    build_publish_pypi = build_sub.add_parser("publish-pypi", help="Publish a wheel/sdist to the internal PEP 503 index")
+    build_publish_pypi.add_argument("--project-id", required=True)
+    build_publish_pypi.add_argument("--build-run-id", required=True)
+    build_publish_pypi.add_argument("name")
+    build_publish_pypi.add_argument("version")
+    build_publish_pypi.add_argument("file")
+    build_publish_pypi.set_defaults(func=cmd_build_publish_pypi)
+
+    build_publish_vsix = build_sub.add_parser("publish-vsix", help="Publish a .vsix extension")
+    build_publish_vsix.add_argument("--project-id", required=True)
+    build_publish_vsix.add_argument("--build-run-id", required=True)
+    build_publish_vsix.add_argument("name")
+    build_publish_vsix.add_argument("version")
+    build_publish_vsix.add_argument("file")
+    build_publish_vsix.set_defaults(func=cmd_build_publish_vsix)
+
+    build_package_list = build_sub.add_parser("package-list", help="List published packages")
+    build_package_list.add_argument("--project-id", default=None)
+    build_package_list.add_argument("--kind", choices=["pypi", "vsix"], default=None)
+    build_package_list.set_defaults(func=cmd_build_package_list)
+
+    build_package_delete = build_sub.add_parser("package-delete", help="Delete a published package")
+    build_package_delete.add_argument("--project-id", required=True)
+    build_package_delete.add_argument("package_id")
+    build_package_delete.set_defaults(func=cmd_build_package_delete)
 
     deployment = subparsers.add_parser("deployment", help="Deployment & Servers commands")
     deployment_sub = deployment.add_subparsers(dest="deployment_command", required=True)

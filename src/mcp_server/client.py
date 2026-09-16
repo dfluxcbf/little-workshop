@@ -140,6 +140,21 @@ def requirements_report(paths: Paths, project_id: str, *, timeout: float = 10.0)
     return _get(paths, "requirements", "/v1/report", params={"project_id": project_id}, timeout=timeout)
 
 
+def build_list_runs(paths: Paths, project_id: str | None = None, *, timeout: float = 5.0):
+    return _get(paths, "build", "/v1/build_runs", params={"project_id": project_id} if project_id else None, timeout=timeout)
+
+
+def build_get_run(paths: Paths, run_id: str, *, timeout: float = 5.0) -> dict:
+    return _get(paths, "build", f"/v1/build_runs/{run_id}", timeout=timeout)
+
+
+def build_list_packages(
+    paths: Paths, project_id: str | None = None, kind: str | None = None, *, timeout: float = 5.0
+):
+    params = {k: v for k, v in {"project_id": project_id, "kind": kind}.items() if v}
+    return _get(paths, "build", "/v1/packages", params=params or None, timeout=timeout)
+
+
 def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> dict:
     return _get(paths, "agent", f"/v1/runs/{project_id}", params={"status": status} if status else None, timeout=timeout)
 
