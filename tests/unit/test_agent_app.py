@@ -336,3 +336,56 @@ def test_skip_task_job_agent_flow_error_is_reported_as_failed(paths, conn, tmp_p
     response = client.post("/v1/jobs/agent.skip_task", json={"job_id": "j2", "params": {"run_id": "whatever"}})
     assert response.json()["outcome"] == "failed"
     assert "cannot skip" in response.json()["error"]
+
+
+class FakeQueryRunner:
+    def __init__(self, *, response_text="ok", is_error=False):
+        self.response_text = response_text
+        self.is_error = is_error
+        self.calls = []
+
+    def run(self, argv, timeout=None, cwd=None):
+        self.calls.append({"argv": argv, "cwd": cwd, "timeout": timeout})
+        payload = {"result": self.response_text, "is_error": self.is_error}
+        return CommandResult(0, json.dumps(payload), "")
+
+
+def test_agent_query_returns_claudes_text(paths, conn):
+    fake = FakeQueryRunner(response_text="EARS_OK: WHEN X, the system shall Y.")
+    app = build_app(paths, conn, flow=AgentFlow(paths=paths, runner=fake))
+    client = TestClient(app)
+
+    response = client.post("/v1/jobs/agent.query", json={"job_id": "j1", "params": {"prompt": "refine this"}})
+    assert response.json()["outcome"] == "succeeded"
+    assert response.json()["result"]["text"] == "EARS_OK: WHEN X, the system shall Y."
+    assert fake.calls[0]["cwd"] is not None  # runs in a scratch dir, never the caller's cwd
+
+
+def test_agent_query_requires_a_prompt(paths, conn):
+    app = build_app(paths, conn, flow=AgentFlow(paths=paths, runner=FakeQueryRunner()))
+    client = TestClient(app)
+
+    response = client.post("/v1/jobs/agent.query", json={"job_id": "j1", "params": {}})
+    assert response.json()["outcome"] == "failed"
+    assert "prompt" in response.json()["error"]
+
+
+def test_agent_query_reports_failed_when_claude_reports_is_error(paths, conn):
+    fake = FakeQueryRunner(response_text="couldn't do that", is_error=True)
+    app = build_app(paths, conn, flow=AgentFlow(paths=paths, runner=fake))
+    client = TestClient(app)
+
+    response = client.post("/v1/jobs/agent.query", json={"job_id": "j1", "params": {"prompt": "x"}})
+    assert response.json()["outcome"] == "failed"
+    assert response.json()["error"] == "couldn't do that"
+
+
+def test_agent_query_never_creates_a_run_record(paths, conn):
+    """Distinct from agent.run_task: no branch, no PR, no run history —
+    this call has no side effects on this pillar's own database at all."""
+    fake = FakeQueryRunner(response_text="fine")
+    app = build_app(paths, conn, flow=AgentFlow(paths=paths, runner=fake))
+    client = TestClient(app)
+
+    client.post("/v1/jobs/agent.query", json={"job_id": "j1", "params": {"prompt": "x"}})
+    assert db.list_runs(conn, "any-project") == []

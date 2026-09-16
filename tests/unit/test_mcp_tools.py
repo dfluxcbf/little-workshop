@@ -667,3 +667,77 @@ def test_build_package_list_calls_client(paths, monkeypatch):
 def test_build_package_delete_builds_job(paths, fake_create_job):
     tools_mod.TOOLS_BY_NAME["workshop_build_package_delete"].handler(paths, {"project_id": "p1", "package_id": "pkg1"})
     assert fake_create_job[0]["params"] == {"package_id": "pkg1"}
+
+
+def test_policy_author_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_policy_author"].handler(paths, {
+        "ears_text": "the system shall x", "topic": "t", "target_pillar": "deployment", "scope_level": "all_projects",
+    })
+    call = fake_create_job[0]
+    assert call["type"] == "policy.author"
+    assert call["target_pillar"] == "policy"
+    assert call["params"]["ears_text"] == "the system shall x"
+    assert call["params"]["created_by"] == "user"
+
+
+def test_policy_activate_builds_job_with_approved_true(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_policy_activate"].handler(paths, {
+        "ears_text": "x", "test_script": "y", "topic": "t", "target_pillar": "deployment", "scope_level": "all_projects",
+    })
+    assert fake_create_job[0]["params"]["approved"] is True
+
+
+def test_policy_activate_with_policy_id_edits_in_place(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_policy_activate"].handler(paths, {
+        "ears_text": "x", "test_script": "y", "topic": "t", "target_pillar": "deployment", "scope_level": "all_projects",
+        "policy_id": "pol1",
+    })
+    assert fake_create_job[0]["params"]["policy_id"] == "pol1"
+
+
+def test_policy_remove_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_policy_remove"].handler(paths, {"policy_id": "pol1"})
+    assert fake_create_job[0]["params"] == {"policy_id": "pol1"}
+
+
+def test_policy_list_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "policy_list", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_policy_list"].handler(paths, {"topic": "t"})
+    assert calls[0] == ((paths, "t"), {})
+
+
+def test_policy_get_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "policy_get", result={"id": "pol1"})
+    tools_mod.TOOLS_BY_NAME["workshop_policy_get"].handler(paths, {"policy_id": "pol1"})
+    assert calls[0] == ((paths, "pol1"), {})
+
+
+def test_policy_winning_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "policy_winning", result={"policy": None})
+    tools_mod.TOOLS_BY_NAME["workshop_policy_winning"].handler(paths, {"topic": "t", "project_id": "proj-a"})
+    assert calls[0] == ((paths, "t", "proj-a"), {})
+
+
+def test_policy_check_project_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_policy_check_project"].handler(paths, {"policy_id": "pol1", "project_id": "proj-a"})
+    call = fake_create_job[0]
+    assert call["type"] == "policy.check_project"
+    assert call["project_id"] == "proj-a"
+    assert call["params"] == {"policy_id": "pol1"}
+
+
+def test_policy_check_all_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_policy_check_all"].handler(paths, {"policy_id": "pol1"})
+    assert fake_create_job[0]["params"] == {"policy_id": "pol1"}
+
+
+def test_policy_results_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "policy_check_results", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_policy_results"].handler(paths, {"policy_id": "pol1"})
+    assert calls[0] == ((paths, "pol1", None), {})
+
+
+def test_policy_confirm_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "policy_confirm_job", result={"confirmed": True})
+    tools_mod.TOOLS_BY_NAME["workshop_policy_confirm"].handler(paths, {"job_id": "j1"})
+    assert calls[0] == ((paths, "j1"), {})

@@ -22,6 +22,7 @@ package(default_visibility = ["//visibility:public"])
 #   bazel run   //:version_server       → run Version Control & Release directly from source
 #   bazel run   //:deployment_server    → run Deployment & Servers directly from source
 #   bazel run   //:agent_server         → run Agentic Development directly from source
+#   bazel run   //:policy_server        → run Policy & Compliance directly from source
 #
 # docs/architecture.md's Build section calls for one Bazel package per
 # pillar with its own :build/:install/:test/:server targets. Every
@@ -160,4 +161,11 @@ sh_binary(
     srcs = ["scripts/bazel/run_server.sh"],
     data = glob(["src/**"]) + ["pyproject.toml"],
     args = ["agent", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "policy_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["policy", "$(location pyproject.toml)"],
 )

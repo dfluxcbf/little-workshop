@@ -155,6 +155,27 @@ def build_list_packages(
     return _get(paths, "build", "/v1/packages", params=params or None, timeout=timeout)
 
 
+def policy_list(paths: Paths, topic: str | None = None, *, timeout: float = 5.0):
+    return _get(paths, "policy", "/v1/policies", params={"topic": topic} if topic else None, timeout=timeout)
+
+
+def policy_get(paths: Paths, policy_id: str, *, timeout: float = 5.0) -> dict:
+    return _get(paths, "policy", f"/v1/policies/{policy_id}", timeout=timeout)
+
+
+def policy_winning(paths: Paths, topic: str, project_id: str, *, timeout: float = 10.0) -> dict:
+    return _get(paths, "policy", "/v1/policies/winning", params={"topic": topic, "project_id": project_id}, timeout=timeout)
+
+
+def policy_check_results(paths: Paths, policy_id: str | None = None, project_id: str | None = None, *, timeout: float = 5.0):
+    params = {k: v for k, v in {"policy_id": policy_id, "project_id": project_id}.items() if v}
+    return _get(paths, "policy", "/v1/policy_check_results", params=params or None, timeout=timeout)
+
+
+def policy_confirm_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/policy_confirm", timeout=timeout)
+
+
 def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> dict:
     return _get(paths, "agent", f"/v1/runs/{project_id}", params={"status": status} if status else None, timeout=timeout)
 

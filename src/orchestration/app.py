@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from orchestration import db
+from orchestration import db, policy_gate
 from orchestration.dispatch import SocketLookup, complete_job, dispatch_ready_jobs, stop_job
 from orchestration.models import (
     Job,
@@ -91,6 +91,7 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup) -> FastAPI:
         job = Job(**request.model_dump())
         with lock:
             db.insert_job(conn, job)
+            policy_gate.attach_policy_gate(conn, socket_lookup, job)
             dispatch_ready_jobs(conn, socket_lookup)
             return db.get_job(conn, job.id).model_dump(mode="json")
 
@@ -127,6 +128,24 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup) -> FastAPI:
             if job is None:
                 raise HTTPException(status_code=404, detail="job not found")
             return stop_job(conn, job, socket_lookup)
+
+    @app.post("/v1/jobs/{job_id}/policy_confirm")
+    def policy_confirm(job_id: str) -> dict:
+        with lock:
+            job = db.get_job(conn, job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="job not found")
+            result = policy_gate.confirm(conn, job, socket_lookup)
+            dispatch_ready_jobs(conn, socket_lookup)
+            return result
+
+    @app.post("/v1/jobs/{job_id}/policy_confirm_timeout")
+    def policy_confirm_timeout(job_id: str) -> dict:
+        with lock:
+            job = db.get_job(conn, job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="job not found")
+            return policy_gate.confirm_timeout(conn, job)
 
     @app.post("/v1/pump")
     def pump() -> list[dict]:

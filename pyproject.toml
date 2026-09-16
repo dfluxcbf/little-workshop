@@ -27,7 +27,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["common*", "core*", "orchestration*", "registry*", "requirements*", "version*", "build*", "deployment*", "agent*", "cli*", "mcp_server*"]
+include = ["common*", "core*", "orchestration*", "registry*", "requirements*", "version*", "build*", "policy*", "deployment*", "agent*", "cli*", "mcp_server*"]
 
 [tool.setuptools.package-data]
 agent = ["templates/prompts/*.md"]
@@ -35,6 +35,9 @@ agent = ["templates/prompts/*.md"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "docker: exercises a real Docker sandbox (policy/sandbox.py) — skips cleanly if the daemon isn't available",
+]
 
 [tool.coverage.run]
 source = ["src"]

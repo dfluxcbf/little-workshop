@@ -21,6 +21,7 @@ from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
 from agent import db
 from agent.flow import AgentFlow, AgentFlowError
+from agent.query import run_query
 
 
 def _complete_orchestration_job(paths: Paths, job_id: str, *, succeeded: bool, result: dict | None, error: str | None) -> None:
@@ -88,6 +89,20 @@ def build_app(paths: Paths, conn: sqlite3.Connection, flow: AgentFlow | None = N
 
         threading.Thread(target=worker, daemon=True).start()
         return {"outcome": "accepted", "result": {"dispatched": True, "run_id": run_id}}
+
+    @app.post("/v1/jobs/agent.query")
+    def job_query(request: JobRequest) -> dict:
+        prompt = request.params.get("prompt")
+        if not prompt:
+            return {"outcome": "failed", "error": "missing params.prompt"}
+        timeout = request.params.get("timeout_seconds")
+        kwargs = {"runner": flow.runner}
+        if timeout:
+            kwargs["timeout"] = float(timeout)
+        result = run_query(prompt, **kwargs)
+        if result.is_error:
+            return {"outcome": "failed", "error": result.text or "claude reported an error"}
+        return {"outcome": "succeeded", "result": {"text": result.text}}
 
     @app.post("/v1/jobs/agent.finish_task")
     def job_finish_task(request: JobRequest) -> dict:

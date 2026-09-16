@@ -192,6 +192,30 @@ def _make_stub_app(paths: Paths | None = None) -> FastAPI:
     def list_build_packages(project_id: str | None = None, kind: str | None = None):
         return [{"id": "pkg1", "kind": kind}]
 
+    @app.get("/v1/policies")
+    def list_policies(topic: str | None = None):
+        return [{"id": "pol1", "topic": topic}]
+
+    @app.get("/v1/policies/winning")
+    def policy_winning(topic: str, project_id: str):
+        return {"topic": topic, "project_id": project_id, "policy": None}
+
+    @app.get("/v1/policies/{policy_id}")
+    def get_policy(policy_id: str):
+        return {"id": policy_id}
+
+    @app.get("/v1/policy_check_results")
+    def policy_check_results(policy_id: str | None = None, project_id: str | None = None):
+        return [{"policy_id": policy_id}]
+
+    @app.post("/v1/jobs/{job_id}/policy_confirm")
+    def policy_confirm(job_id: str):
+        return {"confirmed": True, "job_id": job_id}
+
+    @app.post("/v1/jobs/{job_id}/policy_confirm_timeout")
+    def policy_confirm_timeout(job_id: str):
+        return {"timed_out": True, "job_id": job_id}
+
     return app
 
 
@@ -226,7 +250,7 @@ def paths_with_live_daemons(tmp_path):
 
     app = _make_stub_app(paths)
     servers = []
-    for pillar in ("core", "orchestration", "registry", "version", "deployment", "agent", "requirements", "build"):
+    for pillar in ("core", "orchestration", "registry", "version", "deployment", "agent", "requirements", "build", "policy"):
         socket_path = paths.core_socket_path if pillar == "core" else paths.socket_path(pillar)
         server = _UvicornThread(app, socket_path)
         server.start()
@@ -347,6 +371,39 @@ def test_build_list_packages_reports_daemon_source(paths_with_live_daemons):
     result = client.build_list_packages(paths_with_live_daemons, "p1", "pypi")
     assert result["source"] == "daemon"
     assert result["packages"][0]["kind"] == "pypi"
+
+
+def test_policy_list_reports_daemon_source(paths_with_live_daemons):
+    result = client.policy_list(paths_with_live_daemons, "t")
+    assert result["source"] == "daemon"
+    assert result["policies"][0]["topic"] == "t"
+
+
+def test_policy_get_reports_daemon_source(paths_with_live_daemons):
+    result = client.policy_get(paths_with_live_daemons, "pol1")
+    assert result["source"] == "daemon"
+    assert result["policy"]["id"] == "pol1"
+
+
+def test_policy_winning_hits_the_real_policy_socket(paths_with_live_daemons):
+    result = client.policy_winning(paths_with_live_daemons, "t", "proj-a")
+    assert result["topic"] == "t"
+
+
+def test_policy_check_results_reports_daemon_source(paths_with_live_daemons):
+    result = client.policy_check_results(paths_with_live_daemons, "pol1")
+    assert result["source"] == "daemon"
+    assert result["results"][0]["policy_id"] == "pol1"
+
+
+def test_policy_confirm_job_hits_the_real_orchestration_socket(paths_with_live_daemons):
+    result = client.policy_confirm_job(paths_with_live_daemons, "j1")
+    assert result["confirmed"] is True
+
+
+def test_policy_confirm_timeout_job_hits_the_real_orchestration_socket(paths_with_live_daemons):
+    result = client.policy_confirm_timeout_job(paths_with_live_daemons, "j1")
+    assert result["timed_out"] is True
 
 
 def test_deployment_status_hits_the_real_deployment_socket(paths_with_live_daemons):

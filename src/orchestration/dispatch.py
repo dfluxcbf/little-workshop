@@ -98,9 +98,20 @@ def dispatch_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup
 
 def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup) -> list[Job]:
     """The queue's own pump: fail anything whose dependency died, then
-    dispatch everything actually ready."""
+    dispatch everything actually ready — except a gated Job type whose
+    governing policy check just came back `fail`, which goes to
+    `pending_confirmation` instead of dispatching (docs/milestones.md
+    M12's action-gating)."""
+    from orchestration import policy_gate
+
     cascade_dependency_failures(conn)
-    return [dispatch_job(conn, job, socket_lookup) for job in ready_jobs(conn)]
+    dispatched: list[Job] = []
+    for job in ready_jobs(conn):
+        if policy_gate.maybe_gate(conn, job):
+            dispatched.append(job)
+            continue
+        dispatched.append(dispatch_job(conn, job, socket_lookup))
+    return dispatched
 
 
 def stop_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 10.0) -> dict:

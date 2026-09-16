@@ -84,6 +84,26 @@ def stop_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> dict:
         raise DaemonUnavailable("Orchestration daemon unreachable — stopping a job needs the daemon") from exc
 
 
+def policy_confirm_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post(f"/v1/jobs/{job_id}/policy_confirm")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable — confirming a gated job needs the daemon") from exc
+
+
+def policy_confirm_timeout_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post(f"/v1/jobs/{job_id}/policy_confirm_timeout")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable — the confirm-gate watchdog needs the daemon") from exc
+
+
 def create_scheduled_task(paths: Paths, *, timeout: float = 10.0, **fields) -> dict:
     try:
         with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
@@ -442,6 +462,69 @@ def build_list_packages(
         packages = build_db.list_packages(conn, project_id=project_id, kind=PackageKind(kind) if kind else None)
         conn.close()
         return {"source": "fallback", "packages": [p.model_dump(mode="json") for p in packages]}
+
+
+class PolicyPillarUnavailable(Exception):
+    pass
+
+
+def policy_list(paths: Paths, topic: str | None = None, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.get("/v1/policies", params={"topic": topic} if topic else {})
+        response.raise_for_status()
+        return {"source": "daemon", "policies": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from policy import db as policy_db
+
+        conn = policy_db.connect(paths.pillar_db_path("policy"))
+        policies = policy_db.list_policies(conn, topic=topic)
+        conn.close()
+        return {"source": "fallback", "policies": [p.model_dump(mode="json") for p in policies]}
+
+
+def policy_get(paths: Paths, policy_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.get(f"/v1/policies/{policy_id}")
+        response.raise_for_status()
+        return {"source": "daemon", "policy": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from policy import db as policy_db
+
+        conn = policy_db.connect(paths.pillar_db_path("policy"))
+        policy = policy_db.get_policy(conn, policy_id)
+        conn.close()
+        return {"source": "fallback", "policy": policy.model_dump(mode="json") if policy else None}
+
+
+def policy_winning(paths: Paths, topic: str, project_id: str, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.get("/v1/policies/winning", params={"topic": topic, "project_id": project_id})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise PolicyPillarUnavailable(
+            "Policy & Compliance daemon unreachable — winning-policy resolution needs project-set membership "
+            "live from Registry & Portfolio, and has no local fallback"
+        ) from exc
+
+
+def policy_check_results(paths: Paths, policy_id: str | None = None, project_id: str | None = None, *, timeout: float = 5.0) -> dict:
+    params = {k: v for k, v in {"policy_id": policy_id, "project_id": project_id}.items() if v}
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.get("/v1/policy_check_results", params=params)
+        response.raise_for_status()
+        return {"source": "daemon", "results": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from policy import db as policy_db
+
+        conn = policy_db.connect(paths.pillar_db_path("policy"))
+        results = policy_db.list_check_results(conn, policy_id=policy_id, project_id=project_id)
+        conn.close()
+        return {"source": "fallback", "results": [r.model_dump(mode="json") for r in results]}
 
 
 class DeploymentPillarUnavailable(Exception):
