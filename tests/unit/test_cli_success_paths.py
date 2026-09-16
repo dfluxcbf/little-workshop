@@ -730,3 +730,106 @@ def test_build_package_delete_success(paths, capsys, monkeypatch):
     monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
     assert main.main(["build", "package-delete", "--project-id", "p1", "pkg1"]) == 0
     assert captured["params"] == {"package_id": "pkg1"}
+
+
+# ---------------------------------------------------------------------------
+# policy
+# ---------------------------------------------------------------------------
+
+def test_policy_author_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main([
+        "policy", "author", "the system shall x", "--topic", "t", "--target-pillar", "deployment",
+        "--scope-level", "project", "--scope-target", "proj-a", "--created-by", "user",
+    ]) == 0
+    assert captured["type"] == "policy.author"
+    assert captured["target_pillar"] == "policy"
+    assert captured["params"] == {
+        "ears_text": "the system shall x", "topic": "t", "target_pillar": "deployment",
+        "scope_level": "project", "scope_target": "proj-a", "created_by": "user",
+    }
+
+
+def test_policy_activate_reads_draft_json_and_marks_approved(paths, capsys, monkeypatch, tmp_path):
+    import json as jsonlib
+
+    draft = {
+        "ears_text": "WHEN x, the system shall y.", "test_script": "def test_x(): pass",
+        "topic": "t", "target_pillar": "deployment", "scope_level": "all_projects", "scope_target": None,
+        "created_by": "user",
+    }
+    draft_file = tmp_path / "draft.json"
+    draft_file.write_text(jsonlib.dumps(draft), encoding="utf-8")
+
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "activate", str(draft_file)]) == 0
+    assert captured["type"] == "policy.activate"
+    assert captured["params"]["approved"] is True
+    assert captured["params"]["ears_text"] == "WHEN x, the system shall y."
+
+
+def test_policy_activate_with_policy_id_edits_in_place(paths, capsys, monkeypatch, tmp_path):
+    import json as jsonlib
+
+    draft_file = tmp_path / "draft.json"
+    draft_file.write_text(jsonlib.dumps({
+        "ears_text": "x", "test_script": "y", "topic": "t", "target_pillar": "deployment",
+        "scope_level": "all_projects", "created_by": "user",
+    }), encoding="utf-8")
+
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "activate", str(draft_file), "--policy-id", "pol1"]) == 0
+    assert captured["params"]["policy_id"] == "pol1"
+
+
+def test_policy_remove_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "succeeded"})
+    assert main.main(["policy", "remove", "pol1"]) == 0
+
+
+def test_policy_list_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "policy_list", lambda p, topic: {"source": "daemon", "policies": []})
+    assert main.main(["policy", "list"]) == 0
+
+
+def test_policy_status_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "policy_get", lambda p, policy_id: {"policy": {"id": policy_id}})
+    assert main.main(["policy", "status", "pol1"]) == 0
+    assert _out(capsys)["policy"]["id"] == "pol1"
+
+
+def test_policy_winning_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "policy_winning", lambda p, topic, project_id: {"policy": None})
+    assert main.main(["policy", "winning", "--topic", "t", "--project-id", "proj-a"]) == 0
+
+
+def test_policy_check_project_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "check-project", "pol1", "--project-id", "proj-a"]) == 0
+    assert captured["type"] == "policy.check_project"
+    assert captured["project_id"] == "proj-a"
+    assert captured["params"] == {"policy_id": "pol1"}
+
+
+def test_policy_check_all_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "succeeded"})
+    assert main.main(["policy", "check-all", "pol1"]) == 0
+
+
+def test_policy_results_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "policy_check_results", lambda p, policy_id, project_id: {"source": "daemon", "results": []})
+    assert main.main(["policy", "results"]) == 0
+
+
+def test_job_policy_confirm_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "policy_confirm_job", lambda p, job_id: {"confirmed": True, "job": {"id": job_id}})
+    assert main.main(["job", "policy-confirm", "j1"]) == 0
+
+
+def test_job_policy_confirm_timeout_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "policy_confirm_timeout_job", lambda p, job_id: {"timed_out": True})
+    assert main.main(["job", "policy-confirm-timeout", "j1"]) == 0

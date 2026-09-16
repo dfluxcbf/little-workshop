@@ -37,46 +37,7 @@ one instead").
 
 ## Open
 
-### OQ-12 — Do review-mode and action-gating compose on the same Job?
-
-**Where this comes from.** Surfaced while writing
-`docs/pillars/agentic_development.md` during a final import pass over the
-whole ecosystem — not a pre-existing gap, a new one caught in the act of
-writing, per this document's own "Claude CLI documents what it surfaces"
-convention.
-
-**What's actually being asked.** Agentic Development's review mode
-(manual vs. auto-approve) answers "is the agent's *own* work good enough
-to finish automatically." Policy & Compliance's action-gating
-(`pending_confirmation`) answers a different question: "does a *policy*
-allow this action to happen at all." Nothing says what happens when a
-single Job is subject to both — e.g. an auto-approved agentic task whose
-resulting action is also gated by a failing policy.
-
-**Why it matters.** These two mechanisms were designed independently, in
-different rounds, for different reasons, and were never checked against
-each other on a single Job. Without an answer, an implementer has to
-guess whether policy-gating happens before or after auto-approval
-resolves, or whether auto-approve should be allowed to skip gating
-entirely (it shouldn't, by every principle already established — a
-policy is never optional — but that needs to actually be stated, not
-assumed).
-
-**Possible interpretations.**
-- (a) Gating always resolves first, regardless of review mode —
-  auto-approve only ever governs the agent's own report/test-result
-  check, never a policy check. A gated Job stays gated no matter what
-  review mode it was submitted under.
-- (b) The two compose sequentially in a fixed order (e.g. policy gate,
-  then review-mode check) with each step's own confirmation window,
-  potentially stacking two human interactions for one Job.
-- (c) Auto-approve implicitly pre-answers a gate's confirmation (since
-  the human already said "proceed without me looking" at submission
-  time) — rejected on its face by (a)'s reasoning above, but worth ruling
-  out explicitly rather than leaving unstated.
-
-**Your answer:**
-
+_(none currently — see Resolved below)_
 
 ---
 
@@ -109,6 +70,7 @@ here.
 | OQ-10 | Per-pillar runtime dependencies confirmed deferred to implementation. | 2026-09-15 | `presentations/17-answering-the-first-round.md` |
 | OQ-11 | Per-pillar build targets: `//:build`, `//:install`, `//:test`, `//:server` (the last one new to this ecosystem, specific to a pillar's long-running-service artifact type). | 2026-09-15 | `presentations/17-answering-the-first-round.md` |
 | OQ-2 | Catalog reviewed directly by the user (not summarized) — confirmed good, no changes needed. | 2026-09-15 | `presentations/18-catalog-confirmed.md` |
+| OQ-12 | Interpretation (a): gating always resolves first, regardless of review mode. Confirmed by the actual M12 implementation's own shape — `orchestration/policy_gate.py`'s gate check lives entirely inside Orchestration's Job-creation/dispatch path, with zero awareness of Agentic Development's `review_mode` at all; a `deployment.deploy` Job created as the *result* of an auto-approved agentic task goes through the identical gate-check-then-`pending_confirmation` flow as one created by hand. Auto-approve governs only the agent's own report/test-result check inside Agentic Development's own flow (M6) and never reaches into, or is consulted by, Orchestration's policy gate — a policy is never optional, for either review mode. | 2026-09-16 | `docs/pillars/policy_compliance.md`'s "Action-gating checks," implemented as `docs/milestones.md` M12 |
 
 ## As a policy
 

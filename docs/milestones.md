@@ -34,7 +34,7 @@ discipline this project already applies to itself); the *sequence* and
 | M9 | Orchestration — scheduled tasks | M1 | Done |
 | M10 | Requirements & Quality | M1, M2, M4 | Done |
 | M11 | Build & Packages | M1, M2, M4 | Done |
-| M12 | Policy & Compliance | M1, M4, M6, M10 | Not started |
+| M12 | Policy & Compliance | M1, M4, M6, M10 | Done |
 | M13 | Populate the policy catalog | M12 | Not started |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Not started |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Not started |

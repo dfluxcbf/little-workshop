@@ -71,6 +71,28 @@ def cmd_job_stop(args: argparse.Namespace) -> int:
     return 0 if result.get("stopped") else 1
 
 
+def cmd_job_policy_confirm(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.policy_confirm_job(paths, args.job_id)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("confirmed") else 1
+
+
+def cmd_job_policy_confirm_timeout(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.policy_confirm_timeout_job(paths, args.job_id)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
 def cmd_schedule_add(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     params = json.loads(args.params) if args.params else {}
@@ -547,6 +569,80 @@ def cmd_build_package_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _policy_job(args: argparse.Namespace, job_type: str, params: dict, *, timeout: float = 300.0) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths, type=job_type, target_pillar="policy", project_id=getattr(args, "project_id", None),
+            params=params, queue_key=None, depends_on=[], created_by="lws", timeout=timeout,
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_policy_author(args: argparse.Namespace) -> int:
+    params = {
+        "ears_text": args.ears_text, "topic": args.topic, "target_pillar": args.target_pillar,
+        "scope_level": args.scope_level, "scope_target": args.scope_target, "created_by": args.created_by,
+    }
+    if args.policy_id:
+        params["policy_id"] = args.policy_id
+    return _policy_job(args, "policy.author", params)
+
+
+def cmd_policy_activate(args: argparse.Namespace) -> int:
+    draft = json.loads(Path(args.draft_json).read_text(encoding="utf-8"))
+    draft["approved"] = True
+    if args.policy_id:
+        draft["policy_id"] = args.policy_id
+    return _policy_job(args, "policy.activate", draft)
+
+
+def cmd_policy_remove(args: argparse.Namespace) -> int:
+    return _policy_job(args, "policy.remove", {"policy_id": args.policy_id})
+
+
+def cmd_policy_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    _print(client.policy_list(paths, args.topic))
+    return 0
+
+
+def cmd_policy_status(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    result = client.policy_get(paths, args.policy_id)
+    _print(result)
+    return 0 if result.get("policy") is not None else 1
+
+
+def cmd_policy_winning(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.policy_winning(paths, args.topic, args.project_id)
+    except client.PolicyPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_policy_check_project(args: argparse.Namespace) -> int:
+    return _policy_job(args, "policy.check_project", {"policy_id": args.policy_id}, timeout=1900.0)
+
+
+def cmd_policy_check_all(args: argparse.Namespace) -> int:
+    return _policy_job(args, "policy.check_all", {"policy_id": args.policy_id})
+
+
+def cmd_policy_results(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    _print(client.policy_check_results(paths, args.policy_id, args.project_id))
+    return 0
+
+
 def cmd_deployment_deploy(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -909,6 +1005,16 @@ def build_parser() -> argparse.ArgumentParser:
     job_stop.add_argument("job_id")
     job_stop.set_defaults(func=cmd_job_stop)
 
+    job_policy_confirm = job_sub.add_parser("policy-confirm", help="Confirm a policy-gated Job pending_confirmation, dispatching it")
+    job_policy_confirm.add_argument("job_id")
+    job_policy_confirm.set_defaults(func=cmd_job_policy_confirm)
+
+    job_policy_confirm_timeout = job_sub.add_parser(
+        "policy-confirm-timeout", help="Internal: the confirm-gate watchdog's own callback (never call by hand)"
+    )
+    job_policy_confirm_timeout.add_argument("job_id")
+    job_policy_confirm_timeout.set_defaults(func=cmd_job_policy_confirm_timeout)
+
     schedule = subparsers.add_parser("schedule", help="Orchestration scheduled-task commands")
     schedule_sub = schedule.add_subparsers(dest="schedule_command", required=True)
 
@@ -1270,6 +1376,55 @@ def build_parser() -> argparse.ArgumentParser:
     build_package_delete.add_argument("--project-id", required=True)
     build_package_delete.add_argument("package_id")
     build_package_delete.set_defaults(func=cmd_build_package_delete)
+
+    policy = subparsers.add_parser("policy", help="Policy & Compliance commands")
+    policy_sub = policy.add_subparsers(dest="policy_command", required=True)
+
+    policy_author = policy_sub.add_parser("author", help="Gates 1-3 + script drafting — never saves anything")
+    policy_author.add_argument("ears_text", help="The requirement, in plain language or EARS form")
+    policy_author.add_argument("--topic", required=True)
+    policy_author.add_argument("--target-pillar", required=True)
+    policy_author.add_argument("--scope-level", required=True, choices=["project", "project_set", "all_projects"])
+    policy_author.add_argument("--scope-target", default=None)
+    policy_author.add_argument("--created-by", default="user", choices=["user", "framework"])
+    policy_author.add_argument("--policy-id", default=None, help="Editing an existing policy: exclude it from conflict checks")
+    policy_author.set_defaults(func=cmd_policy_author)
+
+    policy_activate = policy_sub.add_parser("activate", help="Gate 4: save a policy.author draft after human approval")
+    policy_activate.add_argument("draft_json", help="Path to a JSON file holding policy.author's own result")
+    policy_activate.add_argument("--policy-id", default=None, help="Editing an existing policy in place")
+    policy_activate.set_defaults(func=cmd_policy_activate)
+
+    policy_remove = policy_sub.add_parser("remove", help="Delete a policy for good")
+    policy_remove.add_argument("policy_id")
+    policy_remove.set_defaults(func=cmd_policy_remove)
+
+    policy_list = policy_sub.add_parser("list", help="List policies")
+    policy_list.add_argument("--topic", default=None)
+    policy_list.set_defaults(func=cmd_policy_list)
+
+    policy_status = policy_sub.add_parser("status", help="Show one policy")
+    policy_status.add_argument("policy_id")
+    policy_status.set_defaults(func=cmd_policy_status)
+
+    policy_winning = policy_sub.add_parser("winning", help="Show which policy currently wins precedence on a topic, for a project")
+    policy_winning.add_argument("--topic", required=True)
+    policy_winning.add_argument("--project-id", required=True)
+    policy_winning.set_defaults(func=cmd_policy_winning)
+
+    policy_check_project = policy_sub.add_parser("check-project", help="Check one policy against one project")
+    policy_check_project.add_argument("policy_id")
+    policy_check_project.add_argument("--project-id", required=True)
+    policy_check_project.set_defaults(func=cmd_policy_check_project)
+
+    policy_check_all = policy_sub.add_parser("check-all", help="Check one policy against every project it applies to")
+    policy_check_all.add_argument("policy_id")
+    policy_check_all.set_defaults(func=cmd_policy_check_all)
+
+    policy_results = policy_sub.add_parser("results", help="List policy check results")
+    policy_results.add_argument("--policy-id", default=None)
+    policy_results.add_argument("--project-id", default=None)
+    policy_results.set_defaults(func=cmd_policy_results)
 
     deployment = subparsers.add_parser("deployment", help="Deployment & Servers commands")
     deployment_sub = deployment.add_subparsers(dest="deployment_command", required=True)

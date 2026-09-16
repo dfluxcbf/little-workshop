@@ -535,3 +535,111 @@ def test_build_package_delete_reports_error_when_daemon_unavailable(tmp_path, ca
     exit_code = main.main(["build", "package-delete", "--project-id", "little-widget", "pkg1"])
     assert exit_code == 1
     assert "error" in capsys.readouterr().err
+
+
+def test_policy_author_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main([
+        "policy", "author", "the system shall x", "--topic", "t", "--target-pillar", "deployment",
+        "--scope-level", "all_projects",
+    ])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_policy_list_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+    from policy import db as policy_db
+    from policy.models import CreatedBy, Policy, ScopeLevel
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    conn = policy_db.connect(paths.pillar_db_path("policy"))
+    policy_db.insert_policy(conn, Policy(
+        id="p1", topic="t", target_pillar="deployment", ears_text="shall x", test_script="def test_x(): pass",
+        scope_level=ScopeLevel.ALL_PROJECTS, created_by=CreatedBy.USER,
+    ))
+    conn.close()
+
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["policy", "list"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"] == "fallback"
+    assert len(output["policies"]) == 1
+
+
+def test_policy_status_falls_back_and_reports_missing_policy(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["policy", "status", "nonexistent"])
+    assert exit_code == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["policy"] is None
+
+
+def test_policy_winning_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["policy", "winning", "--topic", "t", "--project-id", "little-widget"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_policy_check_project_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["policy", "check-project", "p1", "--project-id", "little-widget"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_policy_results_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+    from policy import db as policy_db
+    from policy.models import CheckOutcome, PolicyCheckResult
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    conn = policy_db.connect(paths.pillar_db_path("policy"))
+    policy_db.insert_check_result(conn, PolicyCheckResult(id="r1", policy_id="p1", project_id="proj-a", outcome=CheckOutcome.PASS))
+    conn.close()
+
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["policy", "results"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"] == "fallback"
+    assert len(output["results"]) == 1
+
+
+def test_job_policy_confirm_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["job", "policy-confirm", "j1"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_job_policy_confirm_timeout_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["job", "policy-confirm-timeout", "j1"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err

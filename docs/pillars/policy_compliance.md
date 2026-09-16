@@ -13,24 +13,28 @@ Policy & Compliance is the pillar that guards every checkable rule this
 ecosystem has agreed to — the 8 root policy docs' checkable content,
 `doctor.py`, `branch_audit.py`, and the checklist skill's manual
 verification table, all absorbed into one mechanical enforcement path.
-**Not yet built** (`docs/milestones.md` M12, depending on M6 for every
-EARS-refinement/conflict-check/script-generation call and M4 for every
-test-script execution — this pillar is scheduled this late because those
-dependencies weren't ready earlier, not because its own design wasn't).
-It is, along with Agentic Development, one of only two pillars fully
-specified ahead of its own implementation; the rest of this document is
-that specification. A companion document,
-`docs/pillars/policy_catalog.md`, holds a candidate set of roughly 50
-policies mined from this ecosystem's existing tools — tier already
-decided, individual entries still pending the authoring pipeline
-described below (M13, run one entry at a time through the real pipeline).
+**Built** (`docs/milestones.md` M12, `src/policy`) — this document
+remains the authoritative design spec; `docs/requirements.md`'s own M12
+section records exactly what was implemented, including two deliberate,
+documented simplifications against the design below: the test-script
+sandbox's network isolation is `--network none` rather than the
+finer-grained "Pillar-Interface-only, safe-endpoints-only" proxy
+described in "Test-script execution sandbox," and which Job types
+declare which gating topics is a small, concrete, real proof
+(`deployment.deploy` on `deployment-policy`) rather than the full
+mapping `docs/open_questions.md`'s `OQ-3` always left to each pillar's
+own future work. A companion document, `docs/pillars/policy_catalog.md`,
+holds a candidate set of roughly 50 policies mined from this ecosystem's
+existing tools — tier already decided, individual entries still pending
+the authoring pipeline described below (M13, run one entry at a time
+through the real pipeline).
 
 ## Purpose & goal
 
 "Nothing drifts from the rules this ecosystem has already agreed to,
 without someone finding out" (`docs/architecture.md`).
 
-## Responsibilities (as designed)
+## Responsibilities
 
 - **Three tiers of rules** — hard-coded invariants (never expressed as
   policy at all; enforced by the pillar whose code they live in), framework
@@ -60,17 +64,23 @@ without someone finding out" (`docs/architecture.md`).
   Development's own proven capability for a second purpose (a
   time-sensitive policy notification), not a new mechanism.
 
-## Interfacing (as designed)
+## Interfacing
 
 - **Calls**: Registry & Portfolio — reads project-set membership through
   its Pillar Interface when resolving which projects a project-set-scoped
   policy covers, never storing that membership itself. Deployment &
   Servers — the worktree interface, for the test-script execution
   sandbox. Agentic Development — every EARS-refinement, conflict-check,
-  and test-script-generation step of the authoring pipeline is a real
-  `agent.run_task` call, not a separate mechanism. Whichever pillar a
-  policy's `target_pillar` names — to check its state as part of an
-  audit or an action-gate decision.
+  and test-script-generation step of the authoring pipeline calls its
+  Pillar Interface, never reimplemented locally. As actually implemented
+  this is `agent.query` — a new, narrowly-scoped, text-in/text-out Job
+  type, not a reuse of `agent.run_task` itself: `run_task`'s existing
+  flow always resolves a branching spec and prepares a real branch,
+  which can't satisfy this same document's own "no file writes, no
+  branch, no side effect of any kind" requirement for these calls (see
+  `docs/requirements.md`'s M12 section). Whichever pillar a policy's
+  `target_pillar` names — to check its state as part of an audit or an
+  action-gate decision.
 - **Called by**: Orchestration — every Job dispatch consults this pillar
   first for any Job type that declares a gated topic, before the Job
   ever reaches its real target pillar; this includes a `policy.check_all`
@@ -467,6 +477,15 @@ there's no determined violation there for a human to knowingly bypass;
 see that section for the full distinction.
 
 ## Informing the user immediately
+
+**Not yet implemented as of M12** — a real gap, not an oversight: the
+Dashboard doesn't exist yet (M14), and wiring Remote Control notification
+through Agentic Development's own capability is real work this pass
+didn't reach. Every failing/pending check is still fully queryable for
+real today (`GET /v1/policy_check_results`, `lws policy results`,
+`workshop_policy_results`, and a `pending_confirmation` Job's own status)
+— what's missing is *push*, not the underlying data. Left for a later
+pass, tracked here rather than silently dropped.
 
 A failing check is recorded the moment its Job completes, not batched.
 Three channels, reusing patterns already proven in this ecosystem rather

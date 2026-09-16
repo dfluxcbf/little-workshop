@@ -489,3 +489,83 @@ def test_build_list_packages_success(paths, monkeypatch):
 
     _rig(paths, monkeypatch, "build", app)
     assert client.build_list_packages(paths, "p1", "pypi") == [{"id": "pkg1", "kind": "pypi"}]
+
+
+def test_policy_list_raises_when_policy_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.policy_list(paths)
+
+
+def test_policy_get_raises_when_policy_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.policy_get(paths, "pol1")
+
+
+def test_policy_winning_raises_when_policy_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.policy_winning(paths, "t", "proj-a")
+
+
+def test_policy_check_results_raises_when_policy_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.policy_check_results(paths)
+
+
+def test_policy_confirm_job_raises_when_orchestration_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.policy_confirm_job(paths, "j1")
+
+
+def test_policy_list_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/policies")
+    def list_policies(topic: str | None = None) -> list[dict]:
+        return [{"id": "pol1", "topic": topic}]
+
+    _rig(paths, monkeypatch, "policy", app)
+    assert client.policy_list(paths, "t") == [{"id": "pol1", "topic": "t"}]
+
+
+def test_policy_get_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/policies/{policy_id}")
+    def get_policy(policy_id: str) -> dict:
+        return {"id": policy_id}
+
+    _rig(paths, monkeypatch, "policy", app)
+    assert client.policy_get(paths, "pol1") == {"id": "pol1"}
+
+
+def test_policy_winning_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/policies/winning")
+    def winning(topic: str, project_id: str) -> dict:
+        return {"topic": topic, "project_id": project_id, "policy": None}
+
+    _rig(paths, monkeypatch, "policy", app)
+    assert client.policy_winning(paths, "t", "proj-a") == {"topic": "t", "project_id": "proj-a", "policy": None}
+
+
+def test_policy_check_results_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/policy_check_results")
+    def results(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:
+        return [{"policy_id": policy_id}]
+
+    _rig(paths, monkeypatch, "policy", app)
+    assert client.policy_check_results(paths, "pol1") == [{"policy_id": "pol1"}]
+
+
+def test_policy_confirm_job_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.post("/v1/jobs/{job_id}/policy_confirm")
+    def confirm(job_id: str) -> dict:
+        return {"confirmed": True, "job_id": job_id}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.policy_confirm_job(paths, "j1") == {"confirmed": True, "job_id": "j1"}

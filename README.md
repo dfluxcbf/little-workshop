@@ -118,9 +118,33 @@ mapping from the tools it absorbs. Implementation is underway against the
   `lws build ...`, and matching `workshop_build_*` MCP tools. Periodic
   builds needed no mechanism of their own either: just a `ScheduledTask`
   naming `build.run`.
+- **M12 — Policy & Compliance**: three rule tiers (hard-coded invariants
+  stay code, never policy; framework policies always win, never user-
+  overridable; user policies scoped to a project/project-set/all-
+  projects), scope precedence resolved per topic, and topic ownership
+  (one `target_pillar` per topic, mechanically enforced). The four-gate
+  authoring pipeline — EARS-compliance, mechanical-enforceability,
+  non-conflict, then full human approval — as two Job types
+  (`policy.author` drafts and never saves; `policy.activate` is the only
+  path that ever writes a policy) calling a new, narrowly-scoped
+  `agent.query` Job type on Agentic Development (text-in/text-out, no
+  branch, no side effect — deliberately not a reuse of `agent.run_task`,
+  whose flow always prepares a real branch). Every check runs inside a
+  real Docker sandbox: a purpose-built image, read-only project-bound or
+  framework-bound mounts, and a 30-minute ceiling that reliably kills an
+  orphaned container. Action-gating extends the Job model with
+  `pending_confirmation`: a gated Job type (`deployment.deploy` on
+  `deployment-policy`, this pass's own concrete proof) doesn't dispatch
+  until its governing policy passes, fails closed with a real 10-minute
+  `systemd-run` watchdog (mirroring Deployment & Servers' own
+  confirm-gate pattern) on a `fail` verdict, and a script that never
+  completes is a framework fault, never routed through that window.
+  Two documented simplifications: the sandbox's network is `--network
+  none` rather than a Pillar-Interface-only proxy, and gated Job-type
+  declarations are a small, real start, not `OQ-3`'s full mapping.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1328 tests — 1219 unit, 109 real
+`bazel test //:coverage` all work today (1491 tests — 1378 unit, 113 real
 `systemd --user` end-to-end integration proofs — at 99% line coverage
 over `src/`, measured with `python3 -m pytest --cov=src`; see
 `scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific

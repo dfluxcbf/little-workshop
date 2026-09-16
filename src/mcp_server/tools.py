@@ -488,6 +488,72 @@ def _build_package_delete(paths: Paths, args: JSONDict) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Policy & Compliance
+# ---------------------------------------------------------------------------
+
+def _policy_job(paths: Paths, job_type: str, project_id: str | None, params: JSONDict) -> Any:
+    return client.create_job(
+        paths, type=job_type, target_pillar="policy", project_id=project_id,
+        params=params, queue_key=None, depends_on=[], created_by="mcp",
+    )
+
+
+def _policy_author(paths: Paths, args: JSONDict) -> Any:
+    params = {
+        "ears_text": args["ears_text"], "topic": args["topic"], "target_pillar": args["target_pillar"],
+        "scope_level": args["scope_level"], "scope_target": args.get("scope_target"),
+        "created_by": args.get("created_by", "user"),
+    }
+    if args.get("policy_id"):
+        params["policy_id"] = args["policy_id"]
+    return _policy_job(paths, "policy.author", None, params)
+
+
+def _policy_activate(paths: Paths, args: JSONDict) -> Any:
+    params = {
+        "ears_text": args["ears_text"], "test_script": args["test_script"], "topic": args["topic"],
+        "target_pillar": args["target_pillar"], "scope_level": args["scope_level"],
+        "scope_target": args.get("scope_target"), "created_by": args.get("created_by", "user"),
+        "approved": True,
+    }
+    if args.get("policy_id"):
+        params["policy_id"] = args["policy_id"]
+    return _policy_job(paths, "policy.activate", None, params)
+
+
+def _policy_remove(paths: Paths, args: JSONDict) -> Any:
+    return _policy_job(paths, "policy.remove", None, {"policy_id": args["policy_id"]})
+
+
+def _policy_list(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_list(paths, args.get("topic"))
+
+
+def _policy_get(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_get(paths, args["policy_id"])
+
+
+def _policy_winning(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_winning(paths, args["topic"], args["project_id"])
+
+
+def _policy_check_project(paths: Paths, args: JSONDict) -> Any:
+    return _policy_job(paths, "policy.check_project", args["project_id"], {"policy_id": args["policy_id"]})
+
+
+def _policy_check_all(paths: Paths, args: JSONDict) -> Any:
+    return _policy_job(paths, "policy.check_all", None, {"policy_id": args["policy_id"]})
+
+
+def _policy_results(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_check_results(paths, args.get("policy_id"), args.get("project_id"))
+
+
+def _policy_confirm(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_confirm_job(paths, args["job_id"])
+
+
+# ---------------------------------------------------------------------------
 # Agentic Development
 # ---------------------------------------------------------------------------
 
@@ -789,6 +855,55 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_build_package_delete", "Delete a published package for good.",
              _schema({"project_id": _PROJECT_ID, "package_id": _prop("string", "The package's id.")},
                      ["project_id", "package_id"]), _build_package_delete),
+
+    ToolSpec("workshop_policy_author", "Gates 1-3 of the policy authoring pipeline plus test-script drafting — "
+             "EARS-compliance, mechanical-enforceability, and non-conflict checks, then a drafted pytest script. "
+             "Never saves anything; the result is a proposal for a human to review and pass to "
+             "workshop_policy_activate.",
+             _schema({
+                 "ears_text": _prop("string", "The requirement, in plain language or EARS form already."),
+                 "topic": _prop("string", "A short, stable topic name, e.g. server-manifest-shape."),
+                 "target_pillar": _prop("string", "The one pillar this policy's subject governs."),
+                 "scope_level": _prop("string", "project|project_set|all_projects"),
+                 "scope_target": _prop("string", "A project id or project-set id. Omit for all_projects."),
+                 "created_by": _prop("string", "user|framework. Default: user."),
+                 "policy_id": _prop("string", "Editing an existing policy: exclude it from conflict checks."),
+             }, ["ears_text", "topic", "target_pillar", "scope_level"]), _policy_author),
+    ToolSpec("workshop_policy_activate", "Gate 4: save a workshop_policy_author draft as a real, active policy — "
+             "only after a human has reviewed both the EARS text and the generated test script. The only path "
+             "that ever writes a policies row.",
+             _schema({
+                 "ears_text": _prop("string", "The (possibly human-edited) EARS text from the draft."),
+                 "test_script": _prop("string", "The (possibly human-edited) test script from the draft."),
+                 "topic": _prop("string", "The topic from the draft."),
+                 "target_pillar": _prop("string", "The target_pillar from the draft."),
+                 "scope_level": _prop("string", "project|project_set|all_projects"),
+                 "scope_target": _prop("string", "A project id or project-set id. Omit for all_projects."),
+                 "created_by": _prop("string", "user|framework. Default: user."),
+                 "policy_id": _prop("string", "Editing an existing policy in place, rather than creating a new one."),
+             }, ["ears_text", "test_script", "topic", "target_pillar", "scope_level"]), _policy_activate),
+    ToolSpec("workshop_policy_remove", "Delete a policy for good.",
+             _schema({"policy_id": _prop("string", "The policy's id.")}, ["policy_id"]), _policy_remove),
+    ToolSpec("workshop_policy_list", "List policies, optionally filtered by topic.",
+             _schema({"topic": _prop("string", "Filter by topic.")}), _policy_list),
+    ToolSpec("workshop_policy_get", "Get one policy by id.",
+             _schema({"policy_id": _prop("string", "The policy's id.")}, ["policy_id"]), _policy_get),
+    ToolSpec("workshop_policy_winning", "Show which policy currently wins precedence on a topic, for a project "
+             "(framework > project-specific > project-set > all-projects).",
+             _schema({"topic": _prop("string", "The topic to resolve."), "project_id": _PROJECT_ID},
+                     ["topic", "project_id"]), _policy_winning),
+    ToolSpec("workshop_policy_check_project", "Check one policy against one project, sandboxed.",
+             _schema({"policy_id": _prop("string", "The policy's id."), "project_id": _PROJECT_ID},
+                     ["policy_id", "project_id"]), _policy_check_project),
+    ToolSpec("workshop_policy_check_all", "Check one policy against every project it applies to, fanned out as "
+             "real Jobs.",
+             _schema({"policy_id": _prop("string", "The policy's id.")}, ["policy_id"]), _policy_check_all),
+    ToolSpec("workshop_policy_results", "List policy check results, optionally filtered by policy and/or project.",
+             _schema({"policy_id": _prop("string", "Filter by policy."),
+                      "project_id": _prop("string", "Filter by project.")}), _policy_results),
+    ToolSpec("workshop_policy_confirm", "Confirm a policy-gated Job that's pending_confirmation, dispatching it "
+             "despite the policy failure — the 10-minute deliberate-bypass window.",
+             _schema({"job_id": _prop("string", "The gated Job's id.")}, ["job_id"]), _policy_confirm),
 
     ToolSpec("workshop_agent_run_task", "Run Claude Code on a project, on a real branch, under human review.",
              _schema({

@@ -16,6 +16,7 @@ set -euo pipefail
 TIERS=(
   $'pipx|Install with: sudo apt install -y pipx && pipx ensurepath'
   $'systemctl|systemd --user is required to run pillars; install/enable systemd-user-session support for this OS'
+  $'docker|Required for Policy & Compliance (M12): every policy check runs sandboxed in a real Docker container. Install with: https://docs.docker.com/engine/install/'
 )
 
 for tier in "${TIERS[@]}"; do
