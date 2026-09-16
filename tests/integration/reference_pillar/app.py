@@ -32,4 +32,14 @@ def build_app() -> FastAPI:
     def always_fail(request: JobRequest) -> dict:
         return {"outcome": "failed", "error": "reference pillar's deliberate failure job type"}
 
+    @app.post("/v1/jobs/slow")
+    def slow(request: JobRequest) -> dict:
+        # Accepted-but-not-done: stays RUNNING in Orchestration until a
+        # test calls `POST /v1/jobs/{id}/complete` itself — the one job
+        # type this reference pillar needs to let tests exercise the
+        # `queue_key` mutex/depends_on machinery for real, the same
+        # "accepted" async pattern M5/M6's self-redeploy and agent.run_task
+        # actually use in the real pillars.
+        return {"outcome": "accepted", "result": {"dispatched": True}}
+
     return app

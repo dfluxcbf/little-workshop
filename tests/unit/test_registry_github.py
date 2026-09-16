@@ -47,6 +47,44 @@ def test_create_repository_with_gh_returns_full_name(monkeypatch):
     assert result["full_name"] == "dfluxcbf/little-widget"
 
 
+def test_create_repository_with_gh_includes_description_flag_when_given(monkeypatch):
+    captured = {}
+
+    def fake_run(args, capture_output, text, check):
+        captured["args"] = args
+        return subprocess.CompletedProcess(args, returncode=0, stdout="https://github.com/dfluxcbf/little-widget\n")
+
+    monkeypatch.setattr(github.subprocess, "run", fake_run)
+    github.create_repository_with_gh("little-widget", "dfluxcbf", description="a widget")
+    assert "--description" in captured["args"]
+    assert "a widget" in captured["args"]
+
+
+def test_create_repository_with_gh_omits_description_flag_when_blank(monkeypatch):
+    captured = {}
+
+    def fake_run(args, capture_output, text, check):
+        captured["args"] = args
+        return subprocess.CompletedProcess(args, returncode=0, stdout="")
+
+    monkeypatch.setattr(github.subprocess, "run", fake_run)
+    github.create_repository_with_gh("little-widget", "dfluxcbf")
+    assert "--description" not in captured["args"]
+
+
+def test_create_repository_with_gh_public_flag(monkeypatch):
+    captured = {}
+
+    def fake_run(args, capture_output, text, check):
+        captured["args"] = args
+        return subprocess.CompletedProcess(args, returncode=0, stdout="")
+
+    monkeypatch.setattr(github.subprocess, "run", fake_run)
+    github.create_repository_with_gh("little-widget", "dfluxcbf", private=False)
+    assert "--public" in captured["args"]
+    assert "--private" not in captured["args"]
+
+
 def test_create_repository_with_gh_raises_on_failure(monkeypatch):
     def fake_run(args, capture_output, text, check):
         return subprocess.CompletedProcess(args, returncode=1, stdout="", stderr="already exists")

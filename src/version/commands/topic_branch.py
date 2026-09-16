@@ -53,6 +53,12 @@ def cmd_topic_finish(
         rebase_abort(repo_root)
         clear_finish_state(repo_root)
         work_branch = (finish_state or {}).get("work_branch", f"{prefix} branch")
+        # clear_finish_state rewrites .lvx/state.json but never committed
+        # it -- left dirty, this genuinely blocked switching away from the
+        # work branch right after an abort ("Repository restored" wasn't
+        # actually true). hotfix's own abort path already commits its
+        # equivalent cleanup; this one didn't.
+        commit_if_dirty(repo_root, f"chore(version): abort finish for {work_branch}")
         return CommandResult(success=True, message=f"Aborted finish for {work_branch!r}. Repository restored.")
 
     if action == "continue":

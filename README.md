@@ -67,15 +67,35 @@ mapping from the tools it absorbs. Implementation is underway against the
   launched — spawned on demand by whatever MCP client attaches it
   (`lws mcp serve`).
 
-`bazel build //:wheel`, `bazel run //:install`, and `bazel test //:test`
-all work today (352 tests: unit plus real `systemd --user` end-to-end
-proofs in `tests/integration`, including a genuine self-redeploy that
-stops and relaunches Deployment & Servers' own unit from a freshly
-checked-out commit of this repo, a full agent-task run with only the
-agent session itself stubbed, and a real MCP `tools/call` round trip
-that bootstraps and lists back a project through Registry & Portfolio).
-The self-redeploy integration test skips cleanly — it doesn't fail the
-suite — when `lws` isn't pipx-installed yet (`bazel run //:install`).
+`bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
+`bazel test //:coverage` all work today (944 tests — 879 unit, 65 real
+`systemd --user` end-to-end integration proofs — at 99% line coverage
+over `src/`, measured with `python3 -m pytest --cov=src`; see
+`scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific
+limitation in that target's own reported percentage). Integration
+coverage includes a genuine self-redeploy that stops and relaunches
+Deployment & Servers' own unit from a freshly checked-out commit of this
+repo, every agent review/branching-mode combination with only the agent
+session itself stubbed, real Gitflow conflict/continue/abort cycles, a
+cross-pillar cascading-removal check, and real MCP `tools/call` round
+trips against live pillars. Two integration tests skip cleanly — they
+don't fail the suite — when `lws` isn't pipx-installed yet (`bazel run
+//:install`).
+
+### Testing-fortification pass (2026-09-16)
+
+Beyond the milestone work above, a dedicated pass hardened test coverage
+across ten priority areas (ranked by complexity, security sensitivity,
+and prior coverage gaps — Version Control & Release's gitflow engine and
+Agentic Development's GitHub/Claude-subprocess surface ranked highest;
+Core supervision and process entrypoints lowest) and added 65 real
+integration tests. It found and fixed several genuine bugs along the way
+— a Registry validation error crashing instead of failing cleanly, a
+`version.feature_finish --abort` path leaving `.lvx/state.json` dirty,
+Orchestration's dispatch timeout being too tight for real subprocess-
+backed jobs under load — the same "real end-to-end tests are the actual
+arbiter of correctness" discipline every milestone above already
+followed.
 
 For the narrative version of the same decisions — cross-linked
 presentations — start at `presentations/README.md`.

@@ -62,3 +62,29 @@ def test_gitops_create_dev_branch_leaves_master_checked_out(tmp_path):
     assert "dev" in branches
     current = gitops.run(["git", "branch", "--show-current"], cwd=dest)
     assert current.stdout.strip() == "master"
+
+
+def test_module_name_for_replaces_hyphens_with_underscores():
+    assert scaffold.module_name_for("little-widget") == "little_widget"
+
+
+def test_gitops_add_remote_and_push_pushes_both_branches_to_a_real_remote(tmp_path):
+    # A real local bare repo stands in for GitHub here — no network, no
+    # token, but a genuine `git push` over a real remote, matching this
+    # area's "no fakes in common/registry plumbing" discipline.
+    bare = tmp_path / "remote.git"
+    gitops.run(["git", "init", "--bare", "-b", "master", str(bare)], cwd=tmp_path)
+
+    dest = tmp_path / "little-widget"
+    scaffold.create_project_tree(dest, "little-widget")
+    gitops.init_repo_and_commit(dest, author_email="dfluxcbf@users.noreply.github.com")
+    gitops.create_dev_branch(dest)
+
+    gitops.add_remote_and_push(dest, str(bare))
+
+    remote_branches = gitops.run(["git", "branch"], cwd=bare).stdout
+    assert "master" in remote_branches
+    assert "dev" in remote_branches
+
+    remotes = gitops.run(["git", "remote", "-v"], cwd=dest).stdout
+    assert str(bare) in remotes

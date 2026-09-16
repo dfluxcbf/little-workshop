@@ -45,7 +45,7 @@ def _core_status_fallback(paths: Paths) -> dict:
     return pillars
 
 
-def create_job(paths: Paths, *, timeout: float = 10.0, **fields) -> dict:
+def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
     try:
         with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
             response = client.post("/v1/jobs", json=fields)

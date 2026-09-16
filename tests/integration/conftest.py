@@ -1,31 +1,35 @@
-import subprocess
-import sys
+"""pytest's own per-directory hooks: sys.path setup and the `workshop_env`
+fixture. Everything reusable that a *test file* needs to import directly
+(not auto-injected by pytest) lives in `helpers.py` instead — see that
+module's docstring for why `from conftest import X` is the wrong pattern
+here, even though it looks natural and worked fine outside Bazel.
+"""
+
+from __future__ import annotations
+
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-SRC = ROOT / "src"
-INTEGRATION = ROOT / "tests" / "integration"
-
-for path in (SRC, INTEGRATION):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+from helpers import SRC, WorkshopEnv  # noqa: F401 (re-exported: sys.path setup runs on import)
 
 
-def _systemd_user_available() -> bool:
+@pytest.fixture
+def workshop_env(tmp_path):
+    """Unix-domain-socket paths are capped at ~108 bytes — pytest's own
+    nested `tmp_path` is often already too long once
+    "little-workshop/sockets/<pillar>.sock" is appended, so the XDG
+    *state* base gets its own short /tmp directory (docs: M2's original
+    finding) while config can stay under `tmp_path`."""
+    from common.paths import Paths
+
+    xdg_config = tmp_path / "xdgconfig"
+    xdg_state = Path(tempfile.mkdtemp(prefix="lwsit-"))
+    paths = Paths(config_home=xdg_config / "little-workshop", state_home=xdg_state / "little-workshop")
+    paths.ensure_layout()
     try:
-        result = subprocess.run(
-            ["systemctl", "--user", "is-system-running"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-    return result.stdout.strip() in ("running", "degraded")
-
-
-requires_systemd_user = pytest.mark.skipif(
-    not _systemd_user_available(), reason="systemd --user session not available"
-)
+        yield WorkshopEnv(paths=paths, xdg_config=xdg_config, xdg_state=xdg_state)
+    finally:
+        shutil.rmtree(xdg_state, ignore_errors=True)

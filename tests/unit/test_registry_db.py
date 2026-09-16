@@ -66,3 +66,25 @@ def test_ticket_status_update(conn):
 
     db.update_ticket_status(conn, ticket_id, TicketStatus.CLOSED)
     assert db.get_ticket(conn, ticket_id).status == TicketStatus.CLOSED
+
+
+def test_get_project_set_returns_none_for_unknown_set(conn):
+    assert db.get_project_set(conn, "ghost") is None
+
+
+def test_get_ticket_returns_none_for_unknown_id(conn):
+    assert db.get_ticket(conn, "ghost") is None
+
+
+def test_delete_project_on_unknown_name_is_a_noop(conn):
+    db.delete_project(conn, "ghost")  # must not raise
+
+
+def test_list_tickets_without_project_name_filter_returns_all_in_created_order(conn):
+    db.insert_project(conn, Project(name="a", path="/a"))
+    db.insert_project(conn, Project(name="b", path="/b"))
+    db.insert_ticket(conn, Ticket(id="t1", project_name="a", title="first"))
+    db.insert_ticket(conn, Ticket(id="t2", project_name="b", title="second"))
+
+    all_tickets = db.list_tickets(conn)
+    assert [t.title for t in all_tickets] == ["first", "second"]

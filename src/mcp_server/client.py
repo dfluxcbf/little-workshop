@@ -49,7 +49,7 @@ def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
         raise PillarUnavailable("Core daemon unreachable") from exc
 
 
-def create_job(paths: Paths, *, timeout: float = 10.0, **fields) -> dict:
+def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
     socket_path = resolve_pillar_socket(paths, "orchestration", timeout=timeout)
     if socket_path is None:
         raise PillarUnavailable("orchestration daemon unreachable — Core has no socket for it registered")

@@ -12,6 +12,8 @@ package(default_visibility = ["//visibility:public"])
 #   bazel test  //:test                 → the real pytest suite: unit tests
 #                                          plus tests/integration's real
 #                                          `systemd --user` end-to-end proof
+#   bazel test  //:coverage             → the same suite, gated at 90%
+#                                          line coverage (--cov-fail-under=90)
 #   bazel run   //:core_server          → run Core directly from source
 #   bazel run   //:orchestration_server → run Orchestration directly from source
 #   bazel run   //:registry_server      → run Registry & Portfolio directly from source
@@ -74,6 +76,26 @@ sh_binary(
 sh_test(
     name = "test",
     srcs = ["scripts/bazel/run_pytest.sh"],
+    args = ["$(location pyproject.toml)"],
+    data = glob([
+        "src/**",
+        "tests/**",
+    ]) + ["pyproject.toml"],
+    tags = ["local", "no-sandbox"],
+)
+
+# bazel test //:coverage — same suite as //:test, plus a 90% line-coverage
+# gate (--cov-fail-under=90) over every src/ module, including each
+# pillar's own __main__.py. KNOWN LIMITATION: under `bazel test` itself
+# the coverage percentage this target reports is not trustworthy (see
+# scripts/bazel/run_pytest_coverage.sh's comment) — every test still has
+# to pass, but for the real number, run that script directly:
+#   bash scripts/bazel/run_pytest_coverage.sh pyproject.toml
+# (99% measured that way as of the testing-fortification pass this target
+# was added in.)
+sh_test(
+    name = "coverage",
+    srcs = ["scripts/bazel/run_pytest_coverage.sh"],
     args = ["$(location pyproject.toml)"],
     data = glob([
         "src/**",

@@ -13,7 +13,7 @@ import threading
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from common.paths import Paths
 from registry import db
@@ -50,7 +50,10 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
 
     @app.post("/v1/jobs/project.bootstrap")
     def job_bootstrap(request: JobRequest) -> dict:
-        bootstrap_params = BootstrapParams(**request.params)
+        try:
+            bootstrap_params = BootstrapParams(**request.params)
+        except ValidationError as exc:
+            return {"outcome": "failed", "error": str(exc)}
         with lock:
             try:
                 result = bootstrap_project(conn, paths, bootstrap_params)

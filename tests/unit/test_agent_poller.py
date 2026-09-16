@@ -97,3 +97,20 @@ def test_poll_tick_missing_actor_resolves_to_none(conn):
 
     triggers = poll_tick(conn, adapter, "little-meals", "owner/little-meals", trigger_label="claude-task", claude_logins=[])
     assert triggers[0].sender is None
+
+
+class RaisingAdapter(GitHubAdapter):
+    def __init__(self):
+        super().__init__(runner=None)
+
+    def list_open_issues(self, repo, *, label=None):
+        from agent.github_adapter import GitHubError
+
+        raise GitHubError("rate limited")
+
+
+def test_poll_tick_returns_empty_on_github_error(conn):
+    from agent.poller import poll_tick
+
+    triggers = poll_tick(conn, RaisingAdapter(), "little-meals", "owner/little-meals", trigger_label="claude-task", claude_logins=[])
+    assert triggers == []

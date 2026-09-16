@@ -114,3 +114,111 @@ def test_ticket_lifecycle(client):
     listed = app_client.get("/v1/tickets", params={"project_name": "a"}).json()
     assert len(listed) == 1
     assert listed[0]["title"] == "fix the thing"
+
+
+def test_get_project_success_for_existing_project(client):
+    app_client, workdir = client
+    app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j1", "params": {"name": "little-widget", "dest_dir": str(workdir)}},
+    )
+    response = app_client.get("/v1/projects/little-widget")
+    assert response.status_code == 200
+    assert response.json()["name"] == "little-widget"
+
+
+def test_job_remove_missing_name_and_no_project_id_fails_gracefully(client):
+    app_client, _ = client
+    response = app_client.post("/v1/jobs/project.remove", json={"job_id": "j1", "params": {}})
+    assert response.status_code == 200
+    assert response.json()["outcome"] == "failed"
+    assert "missing project name" in response.json()["error"]
+
+
+def test_job_remove_falls_back_to_project_id_when_params_name_absent(client):
+    app_client, workdir = client
+    app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j1", "params": {"name": "little-widget", "dest_dir": str(workdir)}},
+    )
+    response = app_client.post(
+        "/v1/jobs/project.remove", json={"job_id": "j2", "project_id": "little-widget", "params": {}}
+    )
+    assert response.json()["outcome"] == "succeeded"
+
+
+def test_get_project_set_success(client):
+    app_client, workdir = client
+    app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j1", "params": {"name": "a", "dest_dir": str(workdir)}},
+    )
+    app_client.post("/v1/project_sets", json={"name": "household", "project_names": ["a"]})
+
+    response = app_client.get("/v1/project_sets/household")
+    assert response.status_code == 200
+    assert response.json()["project_names"] == ["a"]
+
+
+def test_get_project_set_404_for_unknown_set(client):
+    app_client, _ = client
+    response = app_client.get("/v1/project_sets/ghost")
+    assert response.status_code == 404
+
+
+def test_add_project_set_member_404_for_unknown_set(client):
+    app_client, workdir = client
+    app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j1", "params": {"name": "a", "dest_dir": str(workdir)}},
+    )
+    response = app_client.post("/v1/project_sets/ghost/members/a")
+    assert response.status_code == 404
+
+
+def test_remove_project_set_member_404_for_unknown_set(client):
+    app_client, _ = client
+    response = app_client.delete("/v1/project_sets/ghost/members/a")
+    assert response.status_code == 404
+
+
+def test_list_tickets_without_project_name_filter_returns_every_ticket(client):
+    app_client, workdir = client
+    app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j1", "params": {"name": "a", "dest_dir": str(workdir)}},
+    )
+    app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j2", "params": {"name": "b", "dest_dir": str(workdir)}},
+    )
+    app_client.post("/v1/tickets", json={"project_name": "a", "title": "fix a"})
+    app_client.post("/v1/tickets", json={"project_name": "b", "title": "fix b"})
+
+    listed = app_client.get("/v1/tickets").json()
+    assert {t["title"] for t in listed} == {"fix a", "fix b"}
+
+
+def test_add_project_set_member_is_idempotent(client):
+    app_client, workdir = client
+    app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j1", "params": {"name": "a", "dest_dir": str(workdir)}},
+    )
+    app_client.post("/v1/project_sets", json={"name": "household", "project_names": ["a"]})
+
+    first = app_client.post("/v1/project_sets/household/members/a")
+    second = app_client.post("/v1/project_sets/household/members/a")
+    assert first.json()["project_names"] == ["a"]
+    assert second.json()["project_names"] == ["a"]
+
+
+def test_job_bootstrap_missing_required_params_fails_cleanly_not_a_crash(client):
+    app_client, _ = client
+    response = app_client.post(
+        "/v1/jobs/project.bootstrap", json={"job_id": "j1", "params": {"name": "little-widget"}}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "failed"
+    assert "dest_dir" in body["error"]

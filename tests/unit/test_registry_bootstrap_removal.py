@@ -110,6 +110,34 @@ def test_bootstrap_project_creates_github_repo_via_mocked_rest(conn, paths, tmp_
     assert calls["push"][1] == "git@github.com:dfluxcbf/little-widget.git"
 
 
+def test_bootstrap_project_creates_github_repo_via_gh_cli_when_no_token(conn, paths, tmp_path, monkeypatch):
+    from registry import bootstrap as bootstrap_module
+
+    calls = {}
+
+    monkeypatch.setattr(bootstrap_module.github, "gh_available", lambda: True)
+
+    def fake_create_repository_with_gh(name, owner, *, private, description):
+        calls["create_gh"] = (name, owner, private, description)
+        return {"html_url": f"https://github.com/{owner}/{name}"}
+
+    def fake_add_remote_and_push(path, remote_url):
+        calls["push"] = (path, remote_url)
+
+    monkeypatch.setattr(bootstrap_module.github, "create_repository_with_gh", fake_create_repository_with_gh)
+    monkeypatch.setattr(bootstrap_module.gitops, "add_remote_and_push", fake_add_remote_and_push)
+
+    dest_dir = tmp_path / "workdir"
+    dest_dir.mkdir()
+    params = BootstrapParams(name="little-widget", dest_dir=str(dest_dir), create_github_repo=True, owner="dfluxcbf")
+
+    result = bootstrap_project(conn, paths, params)
+
+    assert result.github_created is True
+    assert calls["create_gh"] == ("little-widget", "dfluxcbf", True, "")
+    assert result.repo_url == "https://github.com/dfluxcbf/little-widget"
+
+
 def test_remove_project_deletes_registry_row_and_project_files(conn, paths, tmp_path):
     dest_dir = tmp_path / "workdir"
     dest_dir.mkdir()
