@@ -82,6 +82,61 @@ is already right-sized, and adding process would just be friction.
 
 ---
 
+### OQ-14 — `dispatch_job`'s fixed 20s timeout is too short for any Job type that genuinely calls the real Claude CLI
+
+**Where this comes from.** Surfaced 2026-09-16 running M15 (self-hosting)
+for real: authoring little-workshop's own first framework policy through
+`policy.author` against the *real* Claude CLI (not the fast, deterministic
+fake-`claude` stub every test suite uses) succeeded once, then failed
+twice more with `"target pillar unreachable: timed out"` on a
+resubmission of the identical request — never a Gate rejection, always a
+timeout. `orchestration/dispatch.py`'s `dispatch_job` hardcodes
+`timeout: float = 20.0`, and nothing in `POST /v1/jobs`'s request body
+or `dispatch_ready_jobs`'s call site currently forwards a caller-supplied
+value through to it — the `timeout` a caller like `cli.client.create_job`
+passes only bounds *that caller's own* wait for Orchestration's HTTP
+response, never Orchestration's own internal call to the target pillar.
+Every existing test passes because the fake `claude` stub responds in
+milliseconds; this is genuinely invisible until a real, slow LLM call
+sits behind a gated Job type.
+
+**What's actually being asked.** How should a Job type whose real
+implementation can legitimately take longer than 20 seconds (today:
+`policy.author`/`policy.activate`'s `agent.query` calls; potentially any
+future Job type that shells out to something slow) get a longer
+dispatch-side timeout, without just raising the global default and
+silently changing every other Job type's own failure-detection latency?
+
+**Why it matters.** Right now, the *only* two real end-to-end proofs of
+the authoring pipeline against a real Claude CLI (`docs/requirements.md`'s
+REQ-000000131/132, and this pass's own single successful M15 draft) each
+happened to complete inside 20 seconds by chance. A framework-policy
+authoring session that takes slightly longer — a slower API response, a
+longer prompt, a busier agent sandbox — fails with a misleading "pillar
+unreachable" rather than a real Gate rejection or a real success,
+indistinguishable from Agentic Development's own unit actually being
+down.
+
+**Possible interpretations.**
+- (a) A per-Job-type timeout table (mirroring `orchestration/
+  policy_gate.py`'s `JOB_TYPE_CATEGORIES` pattern) that `dispatch_ready_jobs`
+  consults before calling `dispatch_job`, so `policy.author`/`policy.
+  activate` (and any future slow type) get a longer ceiling without
+  touching the default for everything else.
+- (b) Let the original `POST /v1/jobs` request body carry an optional
+  `dispatch_timeout_seconds`, threaded through from Job creation to the
+  eventual `dispatch_job` call — caller-controlled, no hardcoded table to
+  keep in sync as new slow Job types appear.
+- (c) Leave the fixed default alone and treat this as confirmation that
+  `agent.query`-backed Job types need their own retry/resubmit story at
+  the caller level (a failed dispatch due to timeout is not currently
+  distinguished from a genuinely down pillar, so a caller can't tell
+  which one happened and react differently).
+
+**Your answer:**
+
+---
+
 ## Resolved
 
 Terse by design — full reasoning lives at the linked deck, never repeated
