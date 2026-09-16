@@ -7,6 +7,77 @@ before this pillar can check anything, it needs its own rules for what a
 rule *is*). See `docs/design.md`/`docs/architecture.md` for this pillar's
 place in the whole system; this document is everything specific to it.
 
+## Description
+
+Policy & Compliance is the pillar that guards every checkable rule this
+ecosystem has agreed to — the 8 root policy docs' checkable content,
+`doctor.py`, `branch_audit.py`, and the checklist skill's manual
+verification table, all absorbed into one mechanical enforcement path.
+**Not yet built** (`docs/milestones.md` M11, depending on M6 for every
+EARS-refinement/conflict-check/script-generation call and M4 for every
+test-script execution — this pillar is scheduled this late because those
+dependencies weren't ready earlier, not because its own design wasn't).
+It is, along with Agentic Development, one of only two pillars fully
+specified ahead of its own implementation; the rest of this document is
+that specification. A companion document,
+`docs/pillars/policy_catalog.md`, holds a candidate set of roughly 50
+policies mined from this ecosystem's existing tools — tier already
+decided, individual entries still pending the authoring pipeline
+described below (M12, run one entry at a time through the real pipeline).
+
+## Purpose & goal
+
+"Nothing drifts from the rules this ecosystem has already agreed to,
+without someone finding out" (`docs/architecture.md`).
+
+## Responsibilities (as designed)
+
+- **Three tiers of rules** — hard-coded invariants (never expressed as
+  policy at all; enforced by the pillar whose code they live in), framework
+  policies (authored by little-workshop's own maintainers, always
+  all-project scope, never overridable), and user policies (scoped to a
+  project, a project set, or all projects) — detailed below.
+- **Scope precedence and topic ownership** — a policy's `target_pillar`
+  names the one pillar whose behavior it governs; topics don't collide
+  across pillars, and framework beats project-specific beats project-set
+  beats all-projects, per topic.
+- **The four-gate authoring pipeline** — EARS-compliant, mechanically
+  enforceable, non-conflicting, fully human-approved — turning a
+  plain-language rule into a real policy row plus a real, sandboxed test
+  script.
+- **The test-script execution sandbox** — Docker-based, Pillar-Interface-
+  only network, allowlisted read-only filesystem — how a policy's own
+  check actually runs without trusting it.
+- **Action-gating** — extends Orchestration's Job model with a
+  `pending_confirmation` state: a Job whose type declares a gated topic
+  doesn't dispatch until the policy currently winning precedence on that
+  topic, for that project, passes. Fail-closed, with a 10-minute
+  human-override flow.
+- **Definition-of-done and policy-conflict resolution** — the multi-pillar
+  half of "is this actually done," paired with Requirements & Quality's
+  own M9 implementation of the same concept from its side.
+- **Remote Control as the notification channel** — reusing Agentic
+  Development's own proven capability for a second purpose (a
+  time-sensitive policy notification), not a new mechanism.
+
+## Interfacing (as designed)
+
+- **Calls**: Registry & Portfolio — reads project-set membership through
+  its Pillar Interface when resolving which projects a project-set-scoped
+  policy covers, never storing that membership itself. Deployment &
+  Servers — the worktree interface, for the test-script execution
+  sandbox. Agentic Development — every EARS-refinement, conflict-check,
+  and test-script-generation step of the authoring pipeline is a real
+  `agent.run_task` call, not a separate mechanism. Whichever pillar a
+  policy's `target_pillar` names — to check its state as part of an
+  audit or an action-gate decision.
+- **Called by**: Orchestration — every Job dispatch consults this pillar
+  first for any Job type that declares a gated topic, before the Job
+  ever reaches its real target pillar. `lws`, the MCP Server (once its
+  catalog covers this pillar), and Requirements & Quality (M9), for the
+  policy-conflict half of definition-of-done.
+- **Discovered through**: Core, like every pillar.
+
 ## Three tiers of rules, not one
 
 Getting this pillar right meant separating three things this project had

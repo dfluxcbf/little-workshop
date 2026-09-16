@@ -11,13 +11,69 @@ for its pillar. See `docs/design.md`/`docs/architecture.md` for this
 pillar's place in the whole system; this document is everything specific
 to it.
 
-## Purpose
+## Description
+
+Agentic Development is the pillar that runs a real Claude CLI session
+against a real branch of a real project, under a set of safety
+guarantees (branch isolation, a mandatory completion marker, a fixed
+change-report shape, one session per project at a time) proven by
+`little-runner` before this pillar existed. Implemented in M6, and one
+of only two pillars (alongside Policy & Compliance) with a full design
+specification of its own, separate from `docs/architecture.md`'s
+Components-table summary.
+
+## Purpose & goal
 
 "Claude does real implementation work on a real branch, safely, and the
 human stays in control of when it's finished" — unchanged from
 `docs/architecture.md`. What this document adds is *how*, inherited
 almost verbatim from `little-runner`'s own proven mechanism, generalized
 from GitHub-issue-only triggers to any Job source.
+
+## Responsibilities
+
+- **`agent.run_task`** — resolves a `BranchingSpec` (`new`/`existing`/
+  `auto`) against Version Control & Release's live branch-type policy,
+  prepares the branch, runs the agent session (a real `claude -p`
+  invocation), parses its completion marker and structured result file,
+  publishes (push + PR, when the project has a real `origin`), and
+  renders the seven-section change report. Runs in a background thread —
+  a real session can take up to an hour — reporting `accepted` to
+  Orchestration immediately and completing later via
+  `POST /v1/jobs/{id}/complete`.
+- **`agent.finish_task` / `agent.skip_task`** — the explicit actions that
+  settle a manual-review run awaiting a human decision.
+- **`agent_runs`** — this pillar's own table of every run and its state
+  (`running`/`awaiting_finish`/`finished`/`failed`/`skipped`), reachable
+  via `GET /v1/runs/{project_id}` and `GET /v1/runs/{project_id}/{run_id}`.
+- **The GitHub adapter and poller** — optional, per-project: actor lookup
+  via the issue timeline and cursor-based edge detection from polling
+  (detailed below), for projects that want issue-triggered runs.
+- Full detail on the `BranchingSpec`, the completion marker, review
+  modes, the change report, concurrency, and the GitHub adapter is in the
+  sections below — this pillar's actual design content, not summarized
+  twice.
+
+## Interfacing
+
+- **Calls**: Version Control & Release — `new`-mode branch creation
+  calls that pillar's own `version.<type>_start` Job directly over its
+  Pillar Interface (a synchronous subroutine call, not routed through
+  Orchestration a second time), and every branching mode validates
+  against that pillar's live `GET /v1/config`. Registry & Portfolio —
+  resolves a `project_id`'s repository path and `repo_url` via
+  `common.registry_client`. Orchestration — reports its own async
+  completion back via `POST /v1/jobs/{id}/complete`, the same pattern
+  M5's self-redeploy worker established first.
+- **Called by**: `lws`, the MCP Server, and Orchestration for
+  `agent.run_task`/`agent.finish_task`/`agent.skip_task`. Policy &
+  Compliance (M11) is planned to call into this pillar for every
+  EARS-refinement, conflict-check, and test-script-generation step of
+  its own four-gate policy-authoring pipeline — this pillar's `agent.run_task`
+  is the one mechanism that pipeline is built on top of, not a new one.
+- **Discovered through**: Core, like every pillar — including for
+  resolving Orchestration's own socket from inside this pillar's
+  background completion thread.
 
 ## Not every Job goes through this pillar
 
