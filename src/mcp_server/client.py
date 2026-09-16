@@ -39,6 +39,21 @@ def _get(paths: Paths, pillar: str, path: str, *, params: dict | None = None, ti
         raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
 
 
+def _mutate(
+    paths: Paths, pillar: str, method: str, path: str, *, json: dict | None = None, timeout: float = 10.0
+) -> dict:
+    socket_path = resolve_pillar_socket(paths, pillar, timeout=timeout)
+    if socket_path is None:
+        raise PillarUnavailable(f"{pillar} daemon unreachable — Core has no socket for it registered")
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.request(method, path, json=json or {})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
+
+
 def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
     try:
         with client_for_socket(paths.core_socket_path, timeout=timeout) as client:
@@ -112,3 +127,52 @@ def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, time
 
 def agent_run_status(paths: Paths, project_id: str, run_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "agent", f"/v1/runs/{project_id}/{run_id}", timeout=timeout)
+
+
+def stop_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/stop", timeout=timeout)
+
+
+def create_scheduled_task(paths: Paths, *, timeout: float = 10.0, **fields) -> dict:
+    return _mutate(paths, "orchestration", "POST", "/v1/scheduled_tasks", json=fields, timeout=timeout)
+
+
+def list_scheduled_tasks(paths: Paths, *, timeout: float = 5.0):
+    return _get(paths, "orchestration", "/v1/scheduled_tasks", timeout=timeout)
+
+
+def get_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 5.0) -> dict:
+    return _get(paths, "orchestration", f"/v1/scheduled_tasks/{task_id}", timeout=timeout)
+
+
+def edit_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 10.0, **fields) -> dict:
+    return _mutate(paths, "orchestration", "PATCH", f"/v1/scheduled_tasks/{task_id}", json=fields, timeout=timeout)
+
+
+def remove_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "orchestration", "DELETE", f"/v1/scheduled_tasks/{task_id}", timeout=timeout)
+
+
+def trigger_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 30.0) -> dict:
+    return _mutate(paths, "orchestration", "POST", f"/v1/scheduled_tasks/{task_id}/trigger", timeout=timeout)
+
+
+def cancel_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "orchestration", "POST", f"/v1/scheduled_tasks/{task_id}/cancel", timeout=timeout)
+
+
+def postpone_scheduled_task(paths: Paths, task_id: str, at: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(
+        paths, "orchestration", "POST", f"/v1/scheduled_tasks/{task_id}/postpone", json={"at": at}, timeout=timeout
+    )
+
+
+def get_queue_capacity(paths: Paths, queue_key: str, *, timeout: float = 5.0) -> dict:
+    return _get(paths, "orchestration", f"/v1/queue_keys/{queue_key}/capacity", timeout=timeout)
+
+
+def set_queue_capacity(paths: Paths, queue_key: str, capacity: int, *, timeout: float = 10.0) -> dict:
+    return _mutate(
+        paths, "orchestration", "POST", f"/v1/queue_keys/{queue_key}/capacity",
+        json={"capacity": capacity}, timeout=timeout,
+    )

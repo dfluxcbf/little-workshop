@@ -8,15 +8,26 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from orchestration import db
-from orchestration.dispatch import SocketLookup, complete_job, dispatch_ready_jobs
-from orchestration.models import Job, JobStatus, Pipeline, PipelineRun
+from orchestration.dispatch import SocketLookup, complete_job, dispatch_ready_jobs, stop_job
+from orchestration.models import (
+    Job,
+    JobStatus,
+    JobTemplate,
+    Pipeline,
+    PipelineRun,
+    Schedule,
+    ScheduledTask,
+)
 from orchestration.pipelines import trigger_pipeline
+from orchestration.schedule import first_occurrence
+from orchestration.scheduler import cancel_task, postpone_task, trigger_task
 
 
 class CreateJobRequest(BaseModel):
@@ -39,6 +50,26 @@ class TriggerPipelineRequest(BaseModel):
     project_id: str | None = None
     created_by: str = "unknown"
     version: int | None = None
+
+
+class CreateScheduledTaskRequest(BaseModel):
+    name: str
+    job_template: JobTemplate
+    schedule: Schedule
+
+
+class EditScheduledTaskRequest(BaseModel):
+    name: str | None = None
+    job_template: JobTemplate | None = None
+    schedule: Schedule | None = None
+
+
+class PostponeRequest(BaseModel):
+    at: datetime
+
+
+class SetQueueCapacityRequest(BaseModel):
+    capacity: int
 
 
 def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup) -> FastAPI:
@@ -89,6 +120,14 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup) -> FastAPI:
             dispatch_ready_jobs(conn, socket_lookup)
             return completed.model_dump(mode="json")
 
+    @app.post("/v1/jobs/{job_id}/stop")
+    def stop(job_id: str) -> dict:
+        with lock:
+            job = db.get_job(conn, job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="job not found")
+            return stop_job(conn, job, socket_lookup)
+
     @app.post("/v1/pump")
     def pump() -> list[dict]:
         with lock:
@@ -127,5 +166,104 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup) -> FastAPI:
         if run is None:
             raise HTTPException(status_code=404, detail="pipeline run not found")
         return run.model_dump(mode="json")
+
+    # -- Scheduled tasks (docs/milestones.md M9) --------------------------
+
+    @app.post("/v1/scheduled_tasks")
+    def create_scheduled_task(request: CreateScheduledTaskRequest) -> dict:
+        task = ScheduledTask(
+            name=request.name, job_template=request.job_template, schedule=request.schedule
+        )
+        task.next_run_at = first_occurrence(task.schedule, now=datetime.now())
+        with lock:
+            db.insert_scheduled_task(conn, task)
+        return task.model_dump(mode="json")
+
+    @app.get("/v1/scheduled_tasks")
+    def list_scheduled_tasks() -> list[dict]:
+        with lock:
+            return [t.model_dump(mode="json") for t in db.list_scheduled_tasks(conn)]
+
+    @app.get("/v1/scheduled_tasks/{task_id}")
+    def get_scheduled_task(task_id: str) -> dict:
+        with lock:
+            task = db.get_scheduled_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="scheduled task not found")
+        return task.model_dump(mode="json")
+
+    @app.patch("/v1/scheduled_tasks/{task_id}")
+    def edit_scheduled_task(task_id: str, request: EditScheduledTaskRequest) -> dict:
+        with lock:
+            task = db.get_scheduled_task(conn, task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail="scheduled task not found")
+            if request.name is not None:
+                task.name = request.name
+            if request.job_template is not None:
+                task.job_template = request.job_template
+            if request.schedule is not None:
+                task.schedule = request.schedule
+                # A changed schedule invalidates whatever was pending —
+                # recompute from now, the same arithmetic `add` uses.
+                task.next_run_at = first_occurrence(task.schedule, now=datetime.now())
+                task.missed_run_at = None
+            db.update_scheduled_task(conn, task)
+            return task.model_dump(mode="json")
+
+    @app.delete("/v1/scheduled_tasks/{task_id}")
+    def remove_scheduled_task(task_id: str) -> dict:
+        with lock:
+            task = db.get_scheduled_task(conn, task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail="scheduled task not found")
+            if task.last_job_id:
+                last_job = db.get_job(conn, task.last_job_id)
+                if last_job is not None and last_job.status == JobStatus.RUNNING:
+                    stop_job(conn, last_job, socket_lookup)
+            db.delete_scheduled_task(conn, task_id)
+            return {"id": task_id, "removed": True}
+
+    @app.post("/v1/scheduled_tasks/{task_id}/trigger")
+    def trigger(task_id: str) -> dict:
+        with lock:
+            task = db.get_scheduled_task(conn, task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail="scheduled task not found")
+            job = trigger_task(conn, task, socket_lookup)
+            return job.model_dump(mode="json")
+
+    @app.post("/v1/scheduled_tasks/{task_id}/cancel")
+    def cancel(task_id: str) -> dict:
+        with lock:
+            task = db.get_scheduled_task(conn, task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail="scheduled task not found")
+            return cancel_task(conn, task)
+
+    @app.post("/v1/scheduled_tasks/{task_id}/postpone")
+    def postpone(task_id: str, request: PostponeRequest) -> dict:
+        with lock:
+            task = db.get_scheduled_task(conn, task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail="scheduled task not found")
+            updated = postpone_task(conn, task, request.at)
+            return updated.model_dump(mode="json")
+
+    # -- Queue capacity (the `queue` operation) ---------------------------
+
+    @app.get("/v1/queue_keys/{queue_key}/capacity")
+    def get_queue_capacity(queue_key: str) -> dict:
+        with lock:
+            return {"queue_key": queue_key, "capacity": db.get_queue_capacity(conn, queue_key)}
+
+    @app.post("/v1/queue_keys/{queue_key}/capacity")
+    def set_queue_capacity(queue_key: str, request: SetQueueCapacityRequest) -> dict:
+        if request.capacity < 1:
+            raise HTTPException(status_code=422, detail="capacity must be at least 1")
+        with lock:
+            db.set_queue_capacity(conn, queue_key, request.capacity)
+            dispatch_ready_jobs(conn, socket_lookup)
+        return {"queue_key": queue_key, "capacity": request.capacity}
 
     return app

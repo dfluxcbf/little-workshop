@@ -77,9 +77,20 @@ mapping from the tools it absorbs. Implementation is underway against the
   later to Policy & Compliance (M12). No new Agentic Development
   machinery needed: once registered, a normal `workshop_agent_run_task`
   (M6/M7) is how any further conformance work actually gets done.
+- **M9 — Orchestration (scheduled tasks)**: a `ScheduledTask` that
+  produces an ordinary Job on its own timing (`once` or weekday-
+  `recurring`), with `add`/`edit`/`remove`/`trigger`/`cancel`/`stop`/
+  `postpone`/`queue` exposed identically on the Pillar Interface, `lws
+  schedule ...`/`lws job stop`, and matching `workshop_schedule_*`/
+  `workshop_job_stop` MCP tools. `stop` is declared-with-probing-
+  fallback; missed firings are detected only at process startup and
+  collapsed to the most recent occurrence; the routine tick runs on a
+  10-minute in-process thread. `queue_key` gained a configurable
+  concurrency capacity (default 1, unchanged from every prior caller's
+  mutex behavior) instead of a second concurrency mechanism.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (983 tests — 915 unit, 68 real
+`bazel test //:coverage` all work today (1086 tests — 1014 unit, 72 real
 `systemd --user` end-to-end integration proofs — at 99% line coverage
 over `src/`, measured with `python3 -m pytest --cov=src`; see
 `scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific

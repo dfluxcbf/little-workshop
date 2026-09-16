@@ -6,6 +6,7 @@ place a socket path is looked up" (docs/architecture.md's PI section).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import httpx
@@ -15,6 +16,7 @@ from common.paths import Paths
 from common.uds_client import client_for_socket
 from orchestration import db
 from orchestration.app import build_app
+from orchestration.scheduler import DEFAULT_TICK_INTERVAL_SECONDS, SchedulerThread
 
 # Registry statuses that mean "this pillar is enabled and has a socket
 # worth trying" — see core/registry.py's PillarStatus. FAULTED and
@@ -48,6 +50,17 @@ def main() -> None:
     conn = db.connect(paths.pillar_db_path("orchestration"))
     socket_lookup = make_core_socket_lookup(paths)
     app = build_app(conn, socket_lookup)
+
+    # docs/milestones.md M9: one tick loop per process, started here so
+    # its one-time startup check (a firing missed while little-workshop
+    # itself was down) runs before the socket is even opened for real
+    # traffic — see orchestration/scheduler.py. The env var override
+    # exists purely so integration tests can prove the tick loop fires
+    # for real without waiting the production 10-minute interval;
+    # production never sets it.
+    tick_interval = float(os.environ.get("LWS_SCHEDULER_TICK_SECONDS", DEFAULT_TICK_INTERVAL_SECONDS))
+    scheduler_thread = SchedulerThread(conn, socket_lookup, interval_seconds=tick_interval)
+    scheduler_thread.start()
 
     socket_path = paths.socket_path("orchestration")
     if socket_path.exists():

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from orchestration.db import get_job, list_jobs, update_job
+from orchestration.db import get_job, get_queue_capacity, list_jobs, update_job
 from orchestration.models import Job, JobStatus
 
 _LOCKING_STATUSES = (JobStatus.RUNNING.value, JobStatus.PENDING_CONFIRMATION.value)
@@ -25,11 +25,14 @@ def is_ready(conn: sqlite3.Connection, job: Job) -> bool:
 
     if job.queue_key:
         placeholders = ",".join("?" for _ in _LOCKING_STATUSES)
-        locked = conn.execute(
-            f"SELECT 1 FROM jobs WHERE queue_key = ? AND status IN ({placeholders}) AND id != ?",
+        (running_count,) = conn.execute(
+            f"SELECT COUNT(*) FROM jobs WHERE queue_key = ? AND status IN ({placeholders}) AND id != ?",
             (job.queue_key, *_LOCKING_STATUSES, job.id),
         ).fetchone()
-        if locked:
+        # docs/milestones.md M9's `queue` operation: queue_key gained a
+        # configurable capacity (default 1 — the original mutex) instead
+        # of a strict one-at-a-time-only rule.
+        if running_count >= get_queue_capacity(conn, job.queue_key):
             return False
 
     return True

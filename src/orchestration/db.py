@@ -11,7 +11,17 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from orchestration.models import Job, JobStatus, Pipeline, PipelineNode, PipelineRun
+from orchestration.models import (
+    Job,
+    JobStatus,
+    JobTemplate,
+    Pipeline,
+    PipelineNode,
+    PipelineRun,
+    Schedule,
+    ScheduledTask,
+    ScheduledTaskState,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -55,6 +65,28 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     created_by TEXT NOT NULL,
     job_ids TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    job_template TEXT NOT NULL,
+    schedule TEXT NOT NULL,
+    state TEXT NOT NULL,
+    next_run_at TEXT,
+    missed_run_at TEXT,
+    last_job_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- docs/milestones.md M9's `queue` operation: queue_key gains a
+-- configurable capacity (default 1, i.e. the original mutex) instead of
+-- a second, parallel concurrency mechanism. Absence of a row means
+-- capacity 1 — see queue.get_capacity.
+CREATE TABLE IF NOT EXISTS queue_capacities (
+    queue_key TEXT PRIMARY KEY,
+    capacity INTEGER NOT NULL
 );
 """
 
@@ -232,6 +264,111 @@ def insert_pipeline_run(conn: sqlite3.Connection, run: PipelineRun) -> None:
             json.dumps(run.job_ids),
             _iso(run.created_at),
         ),
+    )
+    conn.commit()
+
+
+def _iso_naive(dt: datetime | None) -> str | None:
+    """`ScheduledTask`'s own fields are naive, host-local-time datetimes
+    (`docs/pillars/orchestration.md`'s "Scheduled tasks") — never the
+    UTC-aware `_iso`/`_parse_iso` pair every other timestamp in this
+    module uses."""
+    return dt.isoformat() if dt is not None else None
+
+
+def _parse_iso_naive(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value is not None else None
+
+
+def scheduled_task_to_row(task: ScheduledTask) -> dict:
+    return {
+        "id": task.id,
+        "name": task.name,
+        "job_template": task.job_template.model_dump_json(),
+        "schedule": task.schedule.model_dump_json(),
+        "state": task.state.value,
+        "next_run_at": _iso_naive(task.next_run_at),
+        "missed_run_at": _iso_naive(task.missed_run_at),
+        "last_job_id": task.last_job_id,
+        "created_at": _iso(task.created_at),
+        "updated_at": _iso(task.updated_at),
+    }
+
+
+def row_to_scheduled_task(row: sqlite3.Row) -> ScheduledTask:
+    return ScheduledTask(
+        id=row["id"],
+        name=row["name"],
+        job_template=JobTemplate.model_validate_json(row["job_template"]),
+        schedule=Schedule.model_validate_json(row["schedule"]),
+        state=ScheduledTaskState(row["state"]),
+        next_run_at=_parse_iso_naive(row["next_run_at"]),
+        missed_run_at=_parse_iso_naive(row["missed_run_at"]),
+        last_job_id=row["last_job_id"],
+        created_at=_parse_iso(row["created_at"]),
+        updated_at=_parse_iso(row["updated_at"]),
+    )
+
+
+def insert_scheduled_task(conn: sqlite3.Connection, task: ScheduledTask) -> None:
+    row = scheduled_task_to_row(task)
+    conn.execute(
+        """INSERT INTO scheduled_tasks
+           (id, name, job_template, schedule, state, next_run_at, missed_run_at,
+            last_job_id, created_at, updated_at)
+           VALUES (:id, :name, :job_template, :schedule, :state, :next_run_at,
+            :missed_run_at, :last_job_id, :created_at, :updated_at)""",
+        row,
+    )
+    conn.commit()
+
+
+def update_scheduled_task(conn: sqlite3.Connection, task: ScheduledTask) -> None:
+    task.updated_at = datetime.now(timezone.utc)
+    row = scheduled_task_to_row(task)
+    conn.execute(
+        """UPDATE scheduled_tasks SET name=:name, job_template=:job_template,
+           schedule=:schedule, state=:state, next_run_at=:next_run_at,
+           missed_run_at=:missed_run_at, last_job_id=:last_job_id, updated_at=:updated_at
+           WHERE id=:id""",
+        row,
+    )
+    conn.commit()
+
+
+def get_scheduled_task(conn: sqlite3.Connection, task_id: str) -> ScheduledTask | None:
+    row = conn.execute("SELECT * FROM scheduled_tasks WHERE id = ?", (task_id,)).fetchone()
+    return row_to_scheduled_task(row) if row else None
+
+
+def list_scheduled_tasks(
+    conn: sqlite3.Connection, *, state: ScheduledTaskState | None = None
+) -> list[ScheduledTask]:
+    if state is None:
+        rows = conn.execute("SELECT * FROM scheduled_tasks ORDER BY created_at").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM scheduled_tasks WHERE state = ? ORDER BY created_at", (state.value,)
+        ).fetchall()
+    return [row_to_scheduled_task(row) for row in rows]
+
+
+def delete_scheduled_task(conn: sqlite3.Connection, task_id: str) -> None:
+    conn.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
+    conn.commit()
+
+
+def get_queue_capacity(conn: sqlite3.Connection, queue_key: str) -> int:
+    row = conn.execute(
+        "SELECT capacity FROM queue_capacities WHERE queue_key = ?", (queue_key,)
+    ).fetchone()
+    return row["capacity"] if row else 1
+
+
+def set_queue_capacity(conn: sqlite3.Connection, queue_key: str, capacity: int) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO queue_capacities (queue_key, capacity) VALUES (?, ?)",
+        (queue_key, capacity),
     )
     conn.commit()
 

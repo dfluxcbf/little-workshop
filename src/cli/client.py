@@ -74,6 +74,125 @@ def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0) 
         return {"source": "fallback", "jobs": [job.model_dump(mode="json") for job in jobs]}
 
 
+def stop_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post(f"/v1/jobs/{job_id}/stop")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable — stopping a job needs the daemon") from exc
+
+
+def create_scheduled_task(paths: Paths, *, timeout: float = 10.0, **fields) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post("/v1/scheduled_tasks", json=fields)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable — scheduling needs the daemon") from exc
+
+
+def list_scheduled_tasks(paths: Paths, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.get("/v1/scheduled_tasks")
+        response.raise_for_status()
+        return {"source": "daemon", "scheduled_tasks": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        conn = orchestration_db.connect(paths.pillar_db_path("orchestration"))
+        tasks = orchestration_db.list_scheduled_tasks(conn)
+        conn.close()
+        return {"source": "fallback", "scheduled_tasks": [t.model_dump(mode="json") for t in tasks]}
+
+
+def get_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.get(f"/v1/scheduled_tasks/{task_id}")
+        response.raise_for_status()
+        return {"source": "daemon", "scheduled_task": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        conn = orchestration_db.connect(paths.pillar_db_path("orchestration"))
+        task = orchestration_db.get_scheduled_task(conn, task_id)
+        conn.close()
+        return {"source": "fallback", "scheduled_task": task.model_dump(mode="json") if task else None}
+
+
+def edit_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 10.0, **fields) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.patch(f"/v1/scheduled_tasks/{task_id}", json=fields)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable — editing a schedule needs the daemon") from exc
+
+
+def remove_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.delete(f"/v1/scheduled_tasks/{task_id}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable — removing a schedule needs the daemon") from exc
+
+
+def trigger_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 30.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post(f"/v1/scheduled_tasks/{task_id}/trigger")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable — triggering a schedule needs the daemon") from exc
+
+
+def cancel_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post(f"/v1/scheduled_tasks/{task_id}/cancel")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable — cancelling a schedule needs the daemon") from exc
+
+
+def postpone_scheduled_task(paths: Paths, task_id: str, at: str, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post(f"/v1/scheduled_tasks/{task_id}/postpone", json={"at": at})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable — postponing a schedule needs the daemon") from exc
+
+
+def get_queue_capacity(paths: Paths, queue_key: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.get(f"/v1/queue_keys/{queue_key}/capacity")
+        response.raise_for_status()
+        return {"source": "daemon", **response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        conn = orchestration_db.connect(paths.pillar_db_path("orchestration"))
+        capacity = orchestration_db.get_queue_capacity(conn, queue_key)
+        conn.close()
+        return {"source": "fallback", "queue_key": queue_key, "capacity": capacity}
+
+
+def set_queue_capacity(paths: Paths, queue_key: str, capacity: int, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post(f"/v1/queue_keys/{queue_key}/capacity", json={"capacity": capacity})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable — setting queue capacity needs the daemon") from exc
+
+
 def job_status(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
     try:
         with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:

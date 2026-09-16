@@ -400,6 +400,84 @@ def test_agent_run_status_calls_client(paths, monkeypatch):
     assert calls[0] == ((paths, "little-meals", "r1"), {})
 
 
+def test_job_stop_calls_client_stop_job(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "stop_job", result={"stopped": True, "reason": None})
+    result = tools_mod.TOOLS_BY_NAME["workshop_job_stop"].handler(paths, {"job_id": "j1"})
+    assert calls[0] == ((paths, "j1"), {})
+    assert result["stopped"] is True
+
+
+def test_schedule_add_recurring_builds_the_right_payload(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "create_scheduled_task", result={"id": "s1"})
+    tools_mod.TOOLS_BY_NAME["workshop_schedule_add"].handler(paths, {
+        "name": "nightly", "type": "noop", "target_pillar": "reference",
+        "days_of_week": [0, 1, 2], "time_of_day": "02:00",
+    })
+    args, kwargs = calls[0]
+    assert kwargs["name"] == "nightly"
+    assert kwargs["schedule"] == {"kind": "recurring", "days_of_week": [0, 1, 2], "time_of_day": "02:00"}
+    assert kwargs["job_template"]["type"] == "noop"
+
+
+def test_schedule_add_once_builds_the_right_payload(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "create_scheduled_task", result={"id": "s1"})
+    tools_mod.TOOLS_BY_NAME["workshop_schedule_add"].handler(paths, {
+        "name": "one-off", "type": "noop", "target_pillar": "reference", "at": "2030-01-01T00:00:00",
+    })
+    _, kwargs = calls[0]
+    assert kwargs["schedule"] == {"kind": "once", "at": "2030-01-01T00:00:00"}
+
+
+def test_schedule_list_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "list_scheduled_tasks", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_schedule_list"].handler(paths, {})
+    assert calls[0] == ((paths,), {})
+
+
+def test_schedule_status_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "get_scheduled_task", result={"id": "s1"})
+    tools_mod.TOOLS_BY_NAME["workshop_schedule_status"].handler(paths, {"task_id": "s1"})
+    assert calls[0] == ((paths, "s1"), {})
+
+
+def test_schedule_remove_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "remove_scheduled_task", result={"removed": True})
+    tools_mod.TOOLS_BY_NAME["workshop_schedule_remove"].handler(paths, {"task_id": "s1"})
+    assert calls[0] == ((paths, "s1"), {})
+
+
+def test_schedule_trigger_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "trigger_scheduled_task", result={"id": "j1"})
+    tools_mod.TOOLS_BY_NAME["workshop_schedule_trigger"].handler(paths, {"task_id": "s1"})
+    assert calls[0] == ((paths, "s1"), {})
+
+
+def test_schedule_cancel_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "cancel_scheduled_task", result={"cancelled": "next_occurrence"})
+    tools_mod.TOOLS_BY_NAME["workshop_schedule_cancel"].handler(paths, {"task_id": "s1"})
+    assert calls[0] == ((paths, "s1"), {})
+
+
+def test_schedule_postpone_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "postpone_scheduled_task", result={"next_run_at": "2030-01-01T00:00:00"})
+    tools_mod.TOOLS_BY_NAME["workshop_schedule_postpone"].handler(
+        paths, {"task_id": "s1", "at": "2030-01-01T00:00:00"}
+    )
+    assert calls[0] == ((paths, "s1", "2030-01-01T00:00:00"), {})
+
+
+def test_schedule_queue_get_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "get_queue_capacity", result={"capacity": 1})
+    tools_mod.TOOLS_BY_NAME["workshop_schedule_queue_get"].handler(paths, {"queue_key": "little-meals"})
+    assert calls[0] == ((paths, "little-meals"), {})
+
+
+def test_schedule_queue_set_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "set_queue_capacity", result={"capacity": 3})
+    tools_mod.TOOLS_BY_NAME["workshop_schedule_queue_set"].handler(paths, {"queue_key": "little-meals", "capacity": 3})
+    assert calls[0] == ((paths, "little-meals", 3), {})
+
+
 def test_every_declared_tool_has_a_handler_test_or_is_exercised_elsewhere():
     """Guards against silently adding a new tool with no coverage at all:
     every name in TOOLS_BY_NAME must appear somewhere in this test file's
