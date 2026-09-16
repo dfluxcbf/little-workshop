@@ -31,28 +31,29 @@ discipline this project already applies to itself); the *sequence* and
 | M6 | Agentic Development | M1, M2, M3, M4 | Done |
 | M7 | MCP Server — minimal | M2, M3, M4, M6 | Done |
 | M8 | Registry & Portfolio — import path | M2, M6 | Done |
-| M9 | Requirements & Quality | M1, M2, M4 | Not started |
-| M10 | Build & Packages | M1, M2, M4 | Not started |
-| M11 | Policy & Compliance | M1, M4, M6, M9 | Not started |
-| M12 | Populate the policy catalog | M11 | Not started |
-| M13 | Dashboard | M2–M12 (whatever exists by then) | Not started |
-| M14 | Self-hosting / dogfooding | M2, M3, M9, M11 | Not started |
-| M15 | Compatibility shims | M1–M13 (whichever tool each shim forwards to) | Not started |
-| M16 | Ecosystem cutover | M14, M15 | Not started |
-| M17 | Retire the absorbed tools | M16 | Not started |
+| M9 | Orchestration — scheduled tasks | M1 | Not started |
+| M10 | Requirements & Quality | M1, M2, M4 | Not started |
+| M11 | Build & Packages | M1, M2, M4 | Not started |
+| M12 | Policy & Compliance | M1, M4, M6, M10 | Not started |
+| M13 | Populate the policy catalog | M12 | Not started |
+| M14 | Dashboard | M2–M13 (whatever exists by then) | Not started |
+| M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Not started |
+| M16 | Compatibility shims | M1–M14 (whichever tool each shim forwards to) | Not started |
+| M17 | Ecosystem cutover | M15, M16 | Not started |
+| M18 | Retire the absorbed tools | M17 | Not started |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
 dependency graph is visible up front, not discovered one milestone late.
-**M15–M17 were missing from the first pass entirely** — every milestone
-through M14 makes little-workshop internally complete, but none of them
+**M16–M18 were missing from the first pass entirely** — every milestone
+through M15 makes little-workshop internally complete, but none of them
 address the actual point of the project: the other real projects in this
 ecosystem still depend on `lreq`/`lvx`/`lrun`/`little-pypi` until
 something migrates them off. Caught on review, not found by re-reading
 `docs/design.md`'s own Purpose section closely enough the first time.
 
-### Cross-cutting, every pillar milestone (M2–M13)
+### Cross-cutting, every pillar milestone (M2–M14)
 
-Two things every one of M2 through M13 delivers, not called out
+Two things every one of M2 through M14 delivers, not called out
 per-milestone below to avoid repeating the same line thirteen times:
 
 - **Grows the `lws` CLI** with that pillar's own subcommands (see
@@ -148,7 +149,7 @@ deploys for anything that could remove access to the system itself,
 defence-in-depth stop. Also stands up **worktree provisioning as a
 shared capability** — the thing `docs/pillars/policy_compliance.md`'s
 test-script sandbox and Requirements & Quality's sandboxed test execution
-both call into later (M9, M11) rather than each building their own.
+both call into later (M10, M12) rather than each building their own.
 
 Reflexive self-redeploy (Core, or Deployment & Servers redeploying
 itself) is explicitly **not** in this milestone — see M5.
@@ -196,7 +197,7 @@ deliberately early — once this exists, further implementation work on
 this project can start using little-workshop's own tools reflexively
 instead of raw CLI/API calls, the same bootstrapping value this whole
 ecosystem already gets from `little-requirements`/`little-versions`'
-MCP surfaces. Its tool coverage grows automatically as M8–M13 ship; none
+MCP surfaces. Its tool coverage grows automatically as M8–M14 ship; none
 of those are a reason to revisit this milestone itself.
 
 ## M8 — Registry & Portfolio (import path)
@@ -209,7 +210,57 @@ repository, brings it into conformance, then registers it exactly the
 way `project.bootstrap` does. Depends on M6 for the agent execution
 itself and M2 for the registration half it completes.
 
-## M9 — Requirements & Quality
+## M9 — Orchestration (scheduled tasks)
+
+A `ScheduledTask` — a durable definition Orchestration owns, distinct
+from a `Job` — that produces a real Job on its own timing, using the
+identical creation shape (`type`, `target_pillar`, `project_id`,
+`params`, `queue_key`, `depends_on`) any caller already uses today, with
+`created_by: "scheduler"`. This is the "scheduler" caller role
+`docs/design.md`'s cross-pillar dispatch diagram already named as a
+placeholder, made real. Placed here, before Requirements & Quality,
+Build & Packages, and Policy & Compliance, precisely because those three
+pillars' own periodic-execution use cases (periodic tests, periodic
+builds, periodic policy verification) all assume this capability already
+exists — building it once in Orchestration means none of them need their
+own scheduling mechanism.
+
+**Two schedule kinds, deliberately not full cron**: `once` (a specific
+date/time) and `recurring` (a set of weekdays plus one time-of-day).
+
+**Eight operations**: `add`, `edit`, `remove` (hard-delete the
+definition; cancels a pending firing or stops a running one first; Jobs
+it already spawned stay in Orchestration's history, untouched), `trigger`
+(create a Job from the template right now, out of band — the schedule's
+own timing is unaffected), `cancel` (skip one specific pending, not-yet-
+triggered firing), `stop` (interrupt a Job that is currently *running*
+— scheduled-originated or not), `postpone` (retarget one pending firing
+to a different date/time, without moving the recurring baseline), and
+`queue` (bound how many Jobs run at once).
+
+**`stop` is opt-in per Job type**, the same pattern Policy & Compliance's
+action-gating already uses for topics: a Job type either declares a
+`stop` hook (`agent.run_task` → kill the `claude` subprocess and mark the
+run `stopped`; `deployment.deploy` → `systemctl stop` the in-progress
+unit) or doesn't, and calling `stop` on a non-interruptible type (most of
+Version Control & Release's fast, synchronous git sequences, for example)
+returns a clear "not stoppable" error rather than hanging or silently
+no-op'ing.
+
+**`queue` generalizes `queue_key`, rather than adding a second, parallel
+concurrency mechanism**: `queue_key` gains a configurable *capacity*
+(default 1, so every existing caller's behavior — and M1's original
+mutex semantics — is unchanged), instead of a strict one-at-a-time
+mutex only. Managing a schedule's concurrency is then just: set the
+capacity on the `queue_key` its Jobs use.
+
+Depends on M1 only — Orchestration itself, and nothing a scheduled Job's
+own target pillar needs to have already built, since a `ScheduledTask`
+just creates ordinary Jobs on a timer. Individual pillars opting into
+`stop` support is incremental per pillar, not a blocking prerequisite
+for this milestone itself.
+
+## M10 — Requirements & Quality
 
 `little-requirements`' full model, absorbed: Project→Suite→Requirement→
 TestResult, draft/published lifecycle, plus its own never-built M8 (a
@@ -220,18 +271,23 @@ interface (M4) rather than provisioning its own. Implements the
 multi-pillar definition-of-done concept from
 `docs/pillars/policy_compliance.md` ("Definition-of-done is multi-pillar,
 and can conflict with a request") on its own side — the *conflict-with-a-
-policy* half of that mechanism is M11's, once Policy & Compliance exists
-to be the other party in that conversation.
+policy* half of that mechanism is M12's, once Policy & Compliance exists
+to be the other party in that conversation. Periodic test execution
+("run this project's suite every night") is just an Orchestration
+`ScheduledTask` (M9) whose Job template names this pillar's own test-run
+Job type — nothing pillar-specific needed for that.
 
-## M10 — Build & Packages
+## M11 — Build & Packages
 
 `little-runner`'s disclaimed CI non-goal, made real: build/test Job
 execution via Deployment & Servers' worktrees (M4), fork-safety-gated PR
 testing. `little-pypi` absorbed wholesale for the package half: PEP 503 +
 `.vsix` hosting, always-on now that the daemon is already persistent (the
-5-minute-session compromise no longer applies).
+5-minute-session compromise no longer applies). Periodic builds are the
+same story as M10's periodic tests: an Orchestration `ScheduledTask` (M9)
+naming this pillar's build Job type, not a mechanism of this pillar's own.
 
-## M11 — Policy & Compliance
+## M12 — Policy & Compliance
 
 The full pillar, as already specified in
 `docs/pillars/policy_compliance.md`: three rule tiers, scope/precedence
@@ -242,7 +298,7 @@ PI-only network, allowlisted read-only filesystem), action-gating
 (extends Orchestration's Job model with the `pending_confirmation` state
 and the fail-closed/10-minute-override flow), Remote Control as the
 notification channel, and the definition-of-done/policy-conflict
-refinement flow's other half (paired with M9). Depends on M6 (every
+refinement flow's other half (paired with M10). Depends on M6 (every
 EARS-refinement, conflict-check, and script-generation call) and M4
 (every test-script execution) — this is why it's this late, not because
 the spec wasn't ready.
@@ -252,9 +308,15 @@ the spec wasn't ready.
 the same Job) needs an actual answer — this milestone is where the
 question stops being hypothetical.
 
-## M12 — Populate the policy catalog
+Periodic policy verification (`policy.check_all` on a recurring cadence,
+already named in `docs/pillars/policy_compliance.md`'s "on-demand/
+scheduled audit" language) is an Orchestration `ScheduledTask` (M9) once
+both pillars exist — not a scheduling mechanism this pillar builds for
+itself.
 
-Distinct from building the pillar (M11): running the ~50 entries in
+## M13 — Populate the policy catalog
+
+Distinct from building the pillar (M12): running the ~50 entries in
 `docs/pillars/policy_catalog.md` — confirmed good, tier already
 decided — through the real four-gate pipeline one at a time, including
 the two-part secret-detection mechanism
@@ -263,7 +325,7 @@ round. This is real, individual authoring work per entry, not a bulk
 import — each one earns its `policies` row the same way any future
 policy will.
 
-## M13 — Dashboard
+## M14 — Dashboard
 
 `little-runner`'s dashboard, generalized with panels for every pillar
 that exists by this point. Visual identity already decided and ready to
@@ -272,7 +334,7 @@ layout, Mission Control's exact color tokens, violet excluded). Placed
 late deliberately — its value scales with how much there already is to
 show, and none of the pillars above need it to function.
 
-## M14 — Self-hosting / dogfooding
+## M15 — Self-hosting / dogfooding
 
 The point where this project's own self-application principle
 (`docs/governance_policy.md`) stops being a stated intention and becomes
@@ -281,9 +343,9 @@ Registry & Portfolio (M2/M8), authors its first real framework policies
 through the "little-workshop itself" tab — formalizing
 `docs/governance_policy.md`'s independence/evolution/self-application
 principles as actual EARS-and-script policies rather than prose only its
-own maintainers read (M11/M12) — and migrates its own requirements from
+own maintainers read (M12/M13) — and migrates its own requirements from
 this file's interim `docs/requirements.md` markdown into its own
-Requirements & Quality pillar (M9), becoming that pillar's first real
+Requirements & Quality pillar (M10), becoming that pillar's first real
 user. Version tracking may migrate to its own Version Control & Release
 pillar (M3) at the same time, at the maintainers' discretion — plain
 `git` remains a legitimate choice per `docs/version_policy.md` even after
@@ -291,13 +353,13 @@ the pillar exists, since nothing in `docs/governance_policy.md` requires
 dogfooding a capability the moment it's available, only that it's
 available to dogfood.
 
-## M15 — Compatibility shims
+## M16 — Compatibility shims
 
 `docs/architecture.md`'s new CLI entry names this explicitly: once a
 pillar's `lws` subcommand exists, the tool it absorbed — `lreq`, `lvx`,
 `lrun`, `little-pypi`, or `bootstrap-little-project` — becomes a thin
 forwarder to it, one shim per tool, each shippable the moment its own
-pillar is far enough along (in practice, mostly after M2/M3/M4/M6/M9/M10
+pillar is far enough along (in practice, mostly after M2/M3/M4/M6/M10/M11
 individually, not all five at once). Existing scripts, muscle memory,
 and this very ecosystem's own root policies (which still say "every
 submodule uses `lreq`/`lvx`") keep working unmodified during the
@@ -308,7 +370,7 @@ Explicitly not a redesign of any of the five tools' command surfaces —
 a shim's whole job is behaving identically to the tool it replaces from
 the outside, while the real work happens in `lws` underneath.
 
-## M16 — Ecosystem cutover
+## M17 — Ecosystem cutover
 
 The actual point of this project, not just little-workshop's own
 internal completeness: every other project in this ecosystem
@@ -320,11 +382,11 @@ project at a time, verified against the same root policies before and
 after the switch, is what actually fulfills `docs/design.md`'s stated
 purpose ("governs the full software lifecycle... for every project in
 this ecosystem") rather than only proving little-workshop can govern
-itself (M14).
+itself (M15).
 
-Depends on M14 — self-hosting is little-workshop trusting itself with
+Depends on M15 — self-hosting is little-workshop trusting itself with
 its own repository before it's trusted with a household's actual running
-applications (`little-meals`, `little-mindcheck`) — and M15, since the
+applications (`little-meals`, `little-mindcheck`) — and M16, since the
 shims are what make each individual project's cutover a config change
 instead of a rewrite of that project's own tooling assumptions.
 
@@ -332,11 +394,11 @@ Sequencing within this milestone (project order, one at a time vs.
 batched, rollback plan per project) is implementation planning for when
 this milestone actually starts, not decided here.
 
-## M17 — Retire the absorbed tools
+## M18 — Retire the absorbed tools
 
 Once nothing in the ecosystem depends on `little-requirements`,
 `little-versions`, `little-runner`, `little-pypi`, or
-`bootstrap-little-project` — confirmed by M16 actually completing, not
+`bootstrap-little-project` — confirmed by M17 actually completing, not
 assumed — those five repositories' own active development ends. What
 happens to them physically (archived, marked read-only, deleted outright)
 is a decision for whoever owns them at the time, not fixed now, far in

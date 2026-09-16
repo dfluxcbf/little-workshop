@@ -1,6 +1,6 @@
 # Dashboard
 
-**Not yet built.** Scheduled as `docs/milestones.md`'s M13, deliberately
+**Not yet built.** Scheduled as `docs/milestones.md`'s M14, deliberately
 placed late — its value scales with how much there already is to show,
 and none of the pillars above need it to function. This document
 describes the design as currently specified — see `docs/architecture.md`

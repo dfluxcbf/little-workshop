@@ -57,6 +57,43 @@ dispatched.
   wired between them on trigger. Built as general-purpose infrastructure
   in M1; no pillar has a concrete use for it yet as of M8.
 
+## Scheduled tasks (not yet built — `docs/milestones.md` M9)
+
+A `ScheduledTask` is a durable definition, distinct from a `Job`, that
+produces a real Job on its own timing — the identical creation shape any
+caller uses today, with `created_by: "scheduler"`, the placeholder
+caller role `docs/design.md`'s dispatch diagram already named. No pillar
+needs its own scheduling mechanism for a periodic version of what it
+already does (periodic tests, periodic builds, periodic policy audits,
+periodic `dev`→`master` releases) — it's just a `ScheduledTask` naming
+that pillar's existing Job type.
+
+- **Schedule kinds**: `once` (a specific date/time) or `recurring` (a
+  set of weekdays plus one time-of-day) — deliberately not full cron.
+- **Eight operations**: `add`, `edit`, `remove` (hard-delete the
+  definition; cancels a pending firing or stops a running one first;
+  Jobs it already spawned stay in Orchestration's history, untouched),
+  `trigger` (create a Job from the template right now, out of band — the
+  schedule's own `next_run_at` is unaffected), `cancel` (skip one
+  specific pending, not-yet-triggered firing — for `recurring`, only
+  that one occurrence; for `once`, equivalent to `remove`), `stop`
+  (interrupt a Job that is currently *running*, scheduled-originated or
+  not), `postpone` (retarget one pending firing to a different
+  date/time, without moving the recurring baseline), and `queue` (bound
+  concurrency — see below).
+- **`stop` is opt-in per Job type**, the same pattern Policy &
+  Compliance's action-gating already uses for topics: a Job type either
+  declares a `stop` hook or doesn't, and calling `stop` on a
+  non-interruptible type (most of Version Control & Release's fast,
+  synchronous git sequences, for example) returns a clear "not
+  stoppable" error rather than hanging or silently no-op'ing.
+- **`queue` generalizes `queue_key`**, rather than adding a second,
+  parallel concurrency mechanism: `queue_key` gains a configurable
+  *capacity* (default 1, so every existing caller's behavior — and M1's
+  original mutex semantics — is unchanged), instead of a strict
+  one-at-a-time mutex only. Managing a schedule's concurrency is then
+  just: set the capacity on the `queue_key` its Jobs use.
+
 ## Interfacing
 
 Orchestration is the one pillar every mutating caller goes through — it
@@ -81,3 +118,7 @@ what every *other* pillar was asked to do.
   that's each *target* pillar's own job (`common.registry_client`),
   not something Orchestration does on a caller's behalf. Orchestration
   only ever forwards `project_id` as an opaque field in the Job payload.
+- **Calls, once M9 lands**: whichever pillar owns a `ScheduledTask`'s
+  `target_pillar`, on `stop`, if that pillar declares a `stop` hook for
+  the Job type in question — the same discovery-through-Core, no-shared-
+  import discipline as every other pillar-to-pillar call.

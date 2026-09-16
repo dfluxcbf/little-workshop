@@ -1,6 +1,6 @@
 # Requirements & Quality
 
-**Not yet built.** Scheduled as `docs/milestones.md`'s M9, depending on
+**Not yet built.** Scheduled as `docs/milestones.md`'s M10, depending on
 M1 (Core + Orchestration), M2 (Registry & Portfolio), and M4 (Deployment
 & Servers, for sandboxed test execution). This document describes the
 design as currently specified — see `docs/architecture.md` and
@@ -36,8 +36,8 @@ to 'is it done'" (`docs/architecture.md`).
   offer starting in M4.
 - **The multi-pillar definition-of-done concept**
   (`docs/pillars/policy_compliance.md`) — implemented on this pillar's
-  own side in M9; the *conflict-with-a-policy* half of that mechanism is
-  Policy & Compliance's (M11), once that pillar exists to be the other
+  own side in M10; the *conflict-with-a-policy* half of that mechanism is
+  Policy & Compliance's (M12), once that pillar exists to be the other
   party in the conversation.
 
 ## Interfacing (as designed)
@@ -48,7 +48,9 @@ to 'is it done'" (`docs/architecture.md`).
 - **Called by**: `lws`, the MCP Server (once its tool catalog is
   extended to cover this pillar — M7's own text notes tool coverage
   grows automatically as later pillars ship), and Orchestration for
-  every requirements-related Job type. Policy & Compliance (M11) is
-  planned to read this pillar's definition-of-done state as one input to
+  every requirements-related Job type — including, once M9 exists, a
+  recurring `ScheduledTask` for periodic test runs, no different from
+  any other caller of this pillar's own test-run Job type. Policy &
+  Compliance (M12) is planned to read this pillar's definition-of-done state as one input to
   its own conflict-check flow.
 - **Discovered through**: Core, like every pillar.

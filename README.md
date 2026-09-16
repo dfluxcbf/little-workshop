@@ -31,7 +31,7 @@ mapping from the tools it absorbs. Implementation is underway against the
   server-management mechanics: worktree-based build-before-stop
   deploys, defence-in-depth stop, Tailscale exposure, confirm-gated
   deploys with an independent watchdog timer, and worktree provisioning
-  exposed as a shared capability for later pillars (M9, M11) to call
+  exposed as a shared capability for later pillars (M10, M12) to call
   into.
 - **M5 — Self-redeploy (reflexive)**: `deployment.redeploy_pillar`
   generalizes M4's build-before-stop sequence to little-workshop's own
@@ -74,7 +74,7 @@ mapping from the tools it absorbs. Implementation is underway against the
   policy — that judgment belongs to whoever drives the import (a human
   Claude Code session, or Agentic Development's own dispatch, the
   identical `workshop_project_import` MCP entry point either way), and
-  later to Policy & Compliance (M11). No new Agentic Development
+  later to Policy & Compliance (M12). No new Agentic Development
   machinery needed: once registered, a normal `workshop_agent_run_task`
   (M6/M7) is how any further conformance work actually gets done.
 

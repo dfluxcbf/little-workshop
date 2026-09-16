@@ -1,6 +1,6 @@
 # Build & Packages
 
-**Not yet built.** Scheduled as `docs/milestones.md`'s M10, depending on
+**Not yet built.** Scheduled as `docs/milestones.md`'s M11, depending on
 M1 (Core + Orchestration), M2 (Registry & Portfolio), and M4 (Deployment
 & Servers, for worktree-based build execution). This document describes
 the design as currently specified — see `docs/architecture.md` and
@@ -47,5 +47,7 @@ that needs to install it" (`docs/architecture.md`).
   tagged/published under).
 - **Called by**: `lws`, the MCP Server, and Orchestration for every
   build/publish Job type — and, indirectly, whatever CI-trigger source
-  replaces GitHub Actions' role for a project using this pillar.
+  replaces GitHub Actions' role for a project using this pillar. Once
+  Orchestration's scheduled tasks (M9) exist, a periodic build is just a
+  recurring `ScheduledTask` naming this pillar's own build Job type.
 - **Discovered through**: Core, like every pillar.

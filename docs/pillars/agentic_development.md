@@ -67,7 +67,7 @@ from GitHub-issue-only triggers to any Job source.
   M5's self-redeploy worker established first.
 - **Called by**: `lws`, the MCP Server, and Orchestration for
   `agent.run_task`/`agent.finish_task`/`agent.skip_task`. Policy &
-  Compliance (M11) is planned to call into this pillar for every
+  Compliance (M12) is planned to call into this pillar for every
   EARS-refinement, conflict-check, and test-script-generation step of
   its own four-gate policy-authoring pipeline — this pillar's `agent.run_task`
   is the one mechanism that pipeline is built on top of, not a new one.

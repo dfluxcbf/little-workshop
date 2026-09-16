@@ -50,8 +50,8 @@ healthy, currently-running process down.
 - **Worktree provisioning as a shared capability** (`POST /v1/worktrees`,
   `DELETE /v1/worktrees/{id}`) — built in M4 explicitly for other pillars
   to call rather than each provisioning their own: Requirements &
-  Quality's sandboxed test execution (M9) and Policy & Compliance's
-  test-script sandbox (M11) are both meant to use it.
+  Quality's sandboxed test execution (M10) and Policy & Compliance's
+  test-script sandbox (M12) are both meant to use it.
 
 ## Interfacing
 
@@ -67,8 +67,8 @@ healthy, currently-running process down.
   `deployment.*` Job type. A confirm-gate watchdog timer calls
   `POST /v1/rollback-timeout/{project_id}` on this pillar's own socket
   directly (via `lws deployment rollback-timeout`), bypassing
-  Orchestration on purpose. Requirements & Quality (M9) and Policy &
-  Compliance (M11) are each planned to call `POST /v1/worktrees` for
+  Orchestration on purpose. Requirements & Quality (M10) and Policy &
+  Compliance (M12) are each planned to call `POST /v1/worktrees` for
   sandboxed execution once built.
 - **Discovered through**: Core, like every pillar — including for the
   self-redeploy path, where a dispatched worker resolves *this pillar's

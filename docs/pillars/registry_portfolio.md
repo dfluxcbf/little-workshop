@@ -42,7 +42,7 @@ Deployment & Servers, Agentic Development — needs somewhere to resolve
   That judgment belongs to whoever drives the import (a human Claude Code
   session, or Agentic Development's own dispatch — reaching this pillar
   through the identical `workshop_project_import` MCP tool either way)
-  and, later, to Policy & Compliance (M11).
+  and, later, to Policy & Compliance (M12).
 - **`project.remove`** — hard delete, immediate, cascading, no soft-delete,
   no undo (resolved 2026-09-15): purges this pillar's own `projects` row
   and project-files directory. The actual git repository on disk is left

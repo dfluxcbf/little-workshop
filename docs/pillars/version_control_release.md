@@ -10,7 +10,7 @@ holds no database of its own; git itself, in the target project's own
 repository, is the store. `.lvx/config.json`'s on-disk format is kept
 byte-compatible with the standalone tool it replaces on purpose, so every
 already-`lvx`-managed project in this ecosystem needs no migration once
-the ecosystem cutover (M16) happens.
+the ecosystem cutover (M17) happens.
 
 ## Purpose & goal
 
@@ -63,5 +63,8 @@ repository in a half-finished state.
   `lws`, the MCP Server, and Orchestration (dispatching every
   `version.*` Job type), and, in the future, Policy & Compliance
   (checking whether a proposed action's branch type is even eligible for
-  automation).
+  automation). Once Orchestration's scheduled tasks (`docs/milestones.md`
+  M9) exist, a recurring `ScheduledTask` naming `version.release_start`/
+  `version.release_finish` is how a periodic `dev`→`master` release gets
+  built — nothing in this pillar itself needs to change for that.
 - **Discovered through**: Core, like every pillar.
