@@ -211,21 +211,42 @@ supersede the first round's "Module" concept.
   now crossing a process boundary instead of staying in-process.
 - **ScheduledTask** (`docs/milestones.md` M9) — a durable definition,
   owned by Orchestration, distinct from a Job: `{id, name, job_template,
-  schedule, state, next_run_at}`. `job_template` is a Job's own creation
-  payload (`type`, `target_pillar`, `project_id`, `params`, `queue_key`,
-  `depends_on`); `schedule` is `once` (a specific date/time) or
-  `recurring` (a set of weekdays plus one time-of-day) — deliberately
-  not full cron. At `next_run_at`, Orchestration creates a real Job from
-  `job_template` with `created_by: "scheduler"`. Eight operations:
-  `add`/`edit`/`remove`/`trigger`/`cancel`/`stop`/`postpone`/`queue` —
-  see `docs/pillars/orchestration.md` for what each means precisely.
-  `stop` is opt-in per Job type (the same pattern Policy & Compliance's
-  action-gating uses for topics), since most Job types — a fast,
-  synchronous git sequence, say — have no safe mid-flight interruption
-  point. `queue` generalizes `queue_key` from a strict mutex into a
-  configurable-capacity pool (default 1, so every existing caller's
-  behavior is unchanged) rather than adding a second concurrency
-  mechanism alongside it.
+  schedule, state, next_run_at, missed_run_at}`. `job_template` is a
+  Job's own creation payload (`type`, `target_pillar`, `project_id`,
+  `params`, `queue_key`, `depends_on`); `schedule` is `once` (a specific
+  date/time) or `recurring` (a set of weekdays plus one time-of-day, in
+  the host's own local time — not stored per-task, since this system
+  runs on one household's machine) — deliberately not full cron. A
+  single in-process background thread inside Orchestration wakes every
+  10 minutes and dispatches anything due, creating a real Job from
+  `job_template` with `created_by: "scheduler"` — no per-task `systemd`
+  timer. Eight operations: `add`/`edit`/`remove`/`trigger`/`cancel`/
+  `stop`/`postpone`/`queue` — see `docs/pillars/orchestration.md` for
+  what each means precisely. `stop` is declared per Job type by the
+  owning pillar (the fast path — most Job types, a fast synchronous git
+  sequence say, have no safe mid-flight interruption point and are
+  correctly declared unstoppable), falling back to actually attempting
+  the call and trusting the target pillar's own answer for anything
+  left undeclared. `queue` generalizes `queue_key` from a strict mutex
+  into a configurable-capacity pool (default 1, so every existing
+  caller's behavior is unchanged) rather than adding a second
+  concurrency mechanism alongside it.
+
+  **Missed firings**: since little-workshop is locally hosted and can
+  legitimately be down, a `next_run_at` still in the past is only
+  possible at Orchestration's own *startup* (a live tick always catches
+  a due task within 10 minutes) — checked once there, never on the
+  routine tick. A `recurring` task that missed several occurrences during
+  a longer outage collapses to just the most recent one: `next_run_at`
+  advances to the correct next future occurrence, and that single most
+  recent miss is recorded as `missed_run_at`, a pending decision rather
+  than an automatic action either way. `trigger` resolves it by firing
+  the catch-up Job and clearing the field; `cancel` dismisses it without
+  firing; the task's own next *regular* occurrence firing for real also
+  clears it, unasked — a stale question is moot once this cycle's run
+  has already happened. A `once` task has no next occurrence to
+  supersede it this way, so its `missed_run_at`, if ever set, stays
+  pending until a human actually answers it.
 - **Pipeline / PipelineRun** — a named, versioned DAG of Job templates,
   expanded into concrete Jobs at trigger time. A node's target pillar and
   `project_id` can differ from other nodes in the same pipeline, which is
