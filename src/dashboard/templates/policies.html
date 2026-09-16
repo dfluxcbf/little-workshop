@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Policies{% endblock %}
+{% block sheet %}SHEET 12 — POLICY &amp; COMPLIANCE{% endblock %}
+{% block content %}
+<h1>Policies</h1>
+{% if message %}<p class="pill ok">{{ message }}</p>{% endif %}
+<table>
+  <thead><tr><th>Enabled</th><th>EARS text</th><th>Gate points</th><th>Scope</th><th></th></tr></thead>
+  <tbody>
+  {% for p in policies %}
+    <tr>
+      <td>
+        {% if p.enabled %}<span class="pill ok">enabled</span>
+        {% else %}<span class="pill warn">disabled</span>{% endif %}
+      </td>
+      <td>{{ p.ears_text }}</td>
+      <td>{{ p.gate_points | join(", ") if p.gate_points else "none" }}</td>
+      <td>{{ p.scope_level }}{% if p.scope_target %} ({{ p.scope_target }}){% endif %}</td>
+      <td><a href="/policies/{{ p.id }}">manage</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">No policies authored yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h1>Waivers</h1>
+<table>
+  <thead><tr><th>Policy</th><th>Project</th><th>Reason</th></tr></thead>
+  <tbody>
+  {% for w in waivers %}
+    <tr><td>{{ w.policy_id }}</td><td>{{ w.project_id }}</td><td>{{ w.reason }}</td></tr>
+  {% else %}
+    <tr><td colspan="3">No active waivers.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

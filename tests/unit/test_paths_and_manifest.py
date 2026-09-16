@@ -26,7 +26,7 @@ def test_default_manifest_matches_architecture_defaults():
     manifest = default_manifest()
     assert manifest.is_enabled("orchestration") is True
     assert manifest.is_enabled("build") is False
-    assert manifest.is_enabled("dashboard") is False
+    assert manifest.is_enabled("dashboard") is True
     assert set(manifest.pillars) == set(PILLARS)
 
 
@@ -48,7 +48,7 @@ def test_write_then_load_manifest_round_trips(tmp_path):
     assert loaded.is_enabled("build") is True
     assert loaded.crash_relaunch_max_attempts == 7
     assert loaded.health_probe_timeout_seconds == 2.5
-    assert loaded.is_enabled("dashboard") is False
+    assert loaded.is_enabled("dashboard") is True
 
 
 def test_manifest_defaults_carry_the_documented_numbers():
@@ -64,7 +64,7 @@ def test_enabled_pillars_returns_only_the_enabled_ones():
     enabled = manifest.enabled_pillars()
     assert "orchestration" in enabled
     assert "build" not in enabled
-    assert "dashboard" not in enabled
+    assert "dashboard" in enabled
 
 
 def test_is_enabled_false_for_unknown_pillar():

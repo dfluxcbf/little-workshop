@@ -36,7 +36,7 @@ discipline this project already applies to itself); the *sequence* and
 | M11 | Build & Packages | M1, M2, M4 | Done |
 | M12 | Policy & Compliance | M1, M4, M6, M10 | Done |
 | M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
-| M14 | Dashboard | M2–M13 (whatever exists by then) | Not started |
+| M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Not started |
 | M16 | Compatibility shims | M1–M14 (whichever tool each shim forwards to) | Not started |
 | M17 | Ecosystem cutover | M15, M16 | Not started |
@@ -370,6 +370,21 @@ entire backend for this (`policy.configure`, `policy.waiver_grant`/
 `revoke`, `GET /v1/policies/gating-for-job`) already exists as real
 Pillar Interface calls and `workshop_policy_*` MCP tools — this
 milestone is the UI surfacing what's already there, not new mechanism.
+
+**Delivered (2026-09-16)**: `src/dashboard/` — a real FastAPI app bound
+to a Unix domain socket like every other pillar, server-rendering
+Overview/Projects/Jobs panels plus the policy-management panel above in
+full (now ten gate-point categories, not six — this milestone landed
+after that expansion). The generated `test_script` is read-only in the
+panel itself (editing is still `lws policy activate`'s own job, per
+Gate 4); every other panel beyond these four is real future work, added
+the same additive way whenever a pillar's dashboard need becomes
+concrete — see `docs/pillars/dashboard.md`'s own "Left open." Proven
+end-to-end for real: the policy panel's enable/disable, gate-point, and
+waiver grant/revoke controls each drive a real Job against real
+Registry, Orchestration, Agentic Development, and Policy & Compliance
+units, and every panel degrades to a visible "unreachable" banner
+(never a 500) when the pillar behind it is down.
 
 ## M15 — Self-hosting / dogfooding
 

@@ -23,7 +23,10 @@ DEFAULT_ENABLED = {
     "build": False,
     "deployment": True,
     "agent": False,
-    "dashboard": False,
+    # docs/architecture.md's Components table: "Optional — a headless/
+    # automation-only setup can disable it" — on by default, unlike MCP
+    # Server below, once M14 actually built it (2026-09-16).
+    "dashboard": True,
     "mcp": False,
 }
 

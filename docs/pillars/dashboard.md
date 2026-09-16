@@ -1,57 +1,92 @@
-# Dashboard
-
-**Not yet built.** Scheduled as `docs/milestones.md`'s M14, deliberately
-placed late — its value scales with how much there already is to show,
-and none of the pillars above need it to function. This document
-describes the design as currently specified — see `docs/architecture.md`
-and `docs/milestones.md` for the authoritative source; nothing here has
-shipped code behind it yet.
+# Dashboard — pillar specification
 
 ## Description
 
-Dashboard is one of little-workshop's three thin, stateless proxies
-(alongside `lws` and the MCP Server) — it holds no domain data of its own,
-translating an HTTP request from a human's browser into a Pillar
-Interface call against whichever pillar actually owns the answer, the
-identical discipline the MCP Server already follows for an agent caller.
-Absorbs `little-runner`'s `web/`, generalized with a panel for every
-pillar that exists by the time it's built. Visual identity is already
-decided and ready to consume directly:
-`presentations/assets/identity-tokens.css` (Ledger's layout, Mission
-Control's exact color tokens).
-
-## Purpose & goal
-
 "A human can see and act on everything above, without a terminal"
-(`docs/architecture.md`) — the human-facing counterpart to what the MCP
-Server already gives an agent caller.
+(`docs/architecture.md`'s Components table). Generalizes `little-runner`'s
+own dashboard with a panel per pillar, consuming the already-decided
+visual identity directly (`presentations/assets/identity-tokens.css` —
+"Ledger" layout, Mission Control's color tokens, violet excluded; dark
+mode only, by explicit direction) rather than re-deriving it.
 
-## Responsibilities (as designed)
+Not a pillar with domain data of its own: every panel is a live read
+through `dashboard/client.py` against the owning pillar's Pillar
+Interface, and every mutation a Job submitted to Orchestration — the
+same discipline the CLI and MCP Server already follow (`docs/
+architecture.md`'s "Dashboard and MCP Server hold no domain data of
+their own — both are thin, stateless proxies"). Built in M14, once M12/
+M13 gave it something concrete and already-backed to surface first
+(policy management), per that milestone's own reasoning for landing
+last: "its value scales with how much there already is to show."
 
-- **One panel per pillar that exists** — since it's built last among the
-  required-by-default set, its panel coverage is meant to start complete
-  rather than grow incrementally the way the MCP Server's tool catalog
-  did.
-- **Read views and action triggers** — the same split every Pillar
-  Interface already makes between plain `GET`s and `POST /v1/jobs/<type>`
-  mutations, surfaced as pages and buttons instead of CLI subcommands or
-  MCP tool calls.
-- **Explicit review/finish actions** — Agentic Development's own design
-  already names "a dashboard button" as one of the equally-valid
-  explicit-finish triggers for a manual-review run, alongside an MCP call
-  or a comment-equivalent; this is where that button actually lives.
+## Responsibilities
 
-## Interfacing (as designed)
+- **Overview** (`/`): every pillar's live health, sourced from Core's
+  own `/v1/status` — the same status Core's crash-relaunch/reconcile
+  logic already tracks, not a separate probe.
+- **Projects** (`/projects`): every registered project and its status,
+  read from Registry & Portfolio.
+- **Jobs** (`/jobs`): the Orchestration queue, optionally filtered by
+  status — the same `GET /v1/jobs` the CLI's `lws job list` already
+  uses.
+- **Policy management** (`/policies`, `/policies/{id}`) — the concrete,
+  fully-specified panel `docs/milestones.md` M14 called out: every
+  policy in its natural-language `ears_text` form with a checkbox for
+  its `enabled` toggle, a per-policy gate-point selector (all ten
+  categories, multi-select or none), a read-only view of the generated
+  `test_script` (editing it is `lws policy activate`'s own job, Gate 4's
+  human-review step — never bypassed here), and a per-project waiver
+  grant/revoke view with its required `reason` shown inline. Backed
+  entirely by `policy.configure`/`policy.waiver_grant`/`policy.
+  waiver_revoke` Jobs and `GET /v1/policy_waivers` — no new pillar
+  mechanism, this milestone is the UI surfacing what M12/M13 already
+  built.
+- **Unreachable-pillar handling**: since this app holds no domain data
+  and applies no local fallback (unlike the CLI, which falls back to a
+  direct database read when a daemon is down — a Dashboard user is
+  already looking at a live page served by a live process, so "the
+  pillar behind this panel is down" is simply the real answer to show,
+  rendered as a visible banner, never a 500).
 
-- **Calls**: every pillar's Pillar Interface, the same way the MCP
-  Server does — a mutation becomes an Orchestration `POST /v1/jobs`, a
-  read becomes a direct `GET` on the owning pillar's socket, every socket
-  resolved through Core's registry, never hardcoded.
-- **Called by**: a human's browser, directly — no client-side daemon or
-  CLI involved, the way both `lws` and an MCP client are still separate
-  processes talking to this system.
-- **Discovered through**: Core, for every pillar it proxies into. Whether
-  Dashboard itself needs to be discoverable *by* another pillar (it's
-  optional — "a headless/automation-only setup can disable it") hasn't
-  come up as a real requirement, since nothing else in the system has a
-  reason to call into it.
+## Interfacing
+
+- **Calls**: every other pillar's Pillar Interface, read-only for
+  status/listing panels; Orchestration's `POST /v1/jobs` for every
+  mutation (`policy.configure`, `policy.waiver_grant`, `policy.
+  waiver_revoke` today — the same pattern any future panel's own
+  mutations would follow). `dashboard/client.py` is a deliberate
+  duplicate of `cli/client.py`'s and `mcp_server/client.py`'s HTTP glue,
+  never a shared import — the same "no shared Python import path
+  between two `src/` trees" rule every other pair of pillars in this
+  project already keeps, extended here to its third thin proxy.
+- **Called by**: a human's browser, through a reverse proxy in front of
+  this pillar's Unix domain socket — the identical `tailscale serve`
+  model `little-runner`'s own dashboard already uses today. Exposure
+  configuration (which reverse proxy, which Tailscale ACL) is a
+  deployment-time concern this app doesn't solve itself, the same way
+  `docs/architecture.md`'s PI section already treats "never a network
+  port" as an absolute rule with browser-facing exposure handled
+  entirely outside the pillar process.
+
+## Data model
+
+None. Dashboard has no database of its own (`docs/architecture.md`'s
+Data model section already lists it alongside MCP Server as holding "no
+persistent storage of their own").
+
+## Left open
+
+- **Per-pillar panel coverage is partial, deliberately**: Overview,
+  Projects, Jobs, and the fully-specified Policy panel are real and
+  working; Version Control & Release, Build & Packages, Requirements &
+  Quality, Deployment & Servers, and Agentic Development don't have
+  their own dedicated panels yet. `dashboard/client.py`'s HTTP glue
+  pattern makes adding one for any of them a small, additive change —
+  not a redesign — whenever that pillar's own dashboard need is
+  concrete enough to justify one, the same "value scales with what
+  there already is to show" reasoning that placed this milestone last.
+- **Browser-facing exposure** (which reverse proxy fronts the Unix
+  socket, Tailscale ACL specifics) is real future work for whoever
+  deploys this pillar for real, not solved by this pass — matching
+  `little-runner`'s own existing `tailscale serve` reliance, external to
+  its own app.

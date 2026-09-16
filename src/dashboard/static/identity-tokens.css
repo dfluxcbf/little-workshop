@@ -1,0 +1,64 @@
+/*
+ * little-workshop — visual identity design tokens
+ *
+ * Decided identity: "Ledger" layout (title blocks, sheet numbers,
+ * grid-ruled tables) carrying Mission Control's exact color tokens,
+ * violet omitted. See ../06-visual-identity.md for the full decision
+ * record and rationale. Dark mode only, by explicit direction — there is
+ * no light variant to define.
+ *
+ * These values are authoritative. When the Dashboard pillar is actually
+ * implemented, its stylesheet should consume these tokens directly rather
+ * than re-deriving them.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ground */
+  --bg:        oklch(16% 0.02 260); /* page background */
+  --surface:   oklch(21% 0.02 260); /* cards, panels, frames */
+  --surface-2: oklch(25% 0.02 260); /* table headers, nested chips */
+  --border:    oklch(32% 0.02 260); /* card/table borders, rules */
+
+  /* ink */
+  --ink:       oklch(94% 0.01 260); /* primary text, headings */
+  --ink-soft:  oklch(74% 0.02 260); /* labels, secondary text */
+  --ink-faint: oklch(54% 0.02 260); /* muted/disabled text */
+
+  /* accent — cyan only; Mission Control's violet is deliberately not
+     carried into this identity (see 06-visual-identity.md) */
+  --accent:    oklch(78% 0.15 200); /* links, the one primary action, project names */
+
+  /* semantic status */
+  --ok:   oklch(78% 0.19 152); /* passing / running / healthy */
+  --warn: oklch(80% 0.16 80);  /* degraded, needs attention */
+  --fail: oklch(68% 0.21 25);  /* failing / disabled-as-error */
+
+  /* status-pill backgrounds: same hue at low alpha, full-strength ink for text */
+  --ok-bg:   oklch(78% 0.19 152 / .15);
+  --warn-bg: oklch(80% 0.16 80 / .15);
+  --fail-bg: oklch(68% 0.21 25 / .15);
+
+  /* type */
+  --font-display: 'Big Shoulders', ui-sans-serif, system-ui, sans-serif; /* 700, uppercase, tight tracking */
+  --font-body:    'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
+}
+
+/*
+ * Layout conventions this identity commits to (see 06-visual-identity.md
+ * for the full rationale) — not exhaustive component CSS, just the rules
+ * that make something recognizably "Ledger":
+ *
+ *   - Every screen's top bar is a title block: wordmark left, a small
+ *     right-aligned var(--font-mono) metadata block right (sheet name,
+ *     revision/scale), separated by a 1.5px solid var(--ink) rule.
+ *   - Tables are grid-ruled, not row-divider: every cell gets a full
+ *     1px solid var(--border), header row on var(--surface-2).
+ *   - Anything enumerable gets a literal sheet number (var(--font-mono),
+ *     var(--ink-faint)) — only when the count is real and fixed, e.g. the
+ *     pillar list (Sheet 00 = Core, 01-10 = the ten pillars).
+ *   - Status is never color alone: a dot (var(--ok|warn|fail)) plus an
+ *     uppercase text label together, every time.
+ */
