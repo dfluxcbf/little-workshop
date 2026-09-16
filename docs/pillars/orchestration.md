@@ -81,18 +81,61 @@ that pillar's existing Job type.
   not), `postpone` (retarget one pending firing to a different
   date/time, without moving the recurring baseline), and `queue` (bound
   concurrency — see below).
-- **`stop` is opt-in per Job type**, the same pattern Policy &
-  Compliance's action-gating already uses for topics: a Job type either
-  declares a `stop` hook or doesn't, and calling `stop` on a
-  non-interruptible type (most of Version Control & Release's fast,
-  synchronous git sequences, for example) returns a clear "not
-  stoppable" error rather than hanging or silently no-op'ing.
+- **`stop`: declared, with a probing fallback.** A pillar's own code is
+  the primary source of truth for which of its Job types support a
+  `stop` hook — the fast path: Orchestration can reject a `stop` call
+  against an undeclared-as-stoppable type immediately, no network round
+  trip, and report a task's stoppability in listings without asking
+  anyone. A Job type that was never declared either way is *not*
+  therefore assumed unstoppable, though — Orchestration still attempts
+  the real `POST /v1/jobs/{id}/stop` call, and the target pillar's own
+  response (stopped, or "not stoppable") is authoritative. Declaration
+  is the fast, common path; probing is the correctness fallback for
+  anything a pillar's author didn't get around to declaring.
 - **`queue` generalizes `queue_key`**, rather than adding a second,
   parallel concurrency mechanism: `queue_key` gains a configurable
   *capacity* (default 1, so every existing caller's behavior — and M1's
   original mutex semantics — is unchanged), instead of a strict
   one-at-a-time mutex only. Managing a schedule's concurrency is then
   just: set the capacity on the `queue_key` its Jobs use.
+- **The tick**: one in-process background thread inside Orchestration,
+  waking every 10 minutes to dispatch anything due — not a per-task
+  `systemd` timer. `recurring` schedules are interpreted in the host's
+  own local time; little-workshop runs on one household's machine, not
+  across timezones, so there's no per-task timezone field to get wrong.
+
+### Missed firings — little-workshop is locally hosted, and can be down
+
+A live tick always fires a due task within 10 minutes, so a
+`next_run_at` still in the past is only possible right at Orchestration's
+own **startup** — proof the process was down through the moment it
+should have fired, not a bug in the tick itself. This check happens
+once, at startup, never on the routine 10-minute tick.
+
+A `recurring` task can have missed several occurrences during a longer
+outage (three days down is three missed nightly runs) — only the most
+recent one is worth anything; running all three back to back is never
+useful. On startup, a task found overdue has its `next_run_at` advanced
+to the correct next *future* occurrence per its own recurrence rule, and
+the single most recent missed timestamp is recorded as
+`missed_run_at` — a pending decision, not an automatic action either
+way.
+
+Resolving it reuses the same two verbs already defined above, rather
+than inventing new ones: `trigger` fires the missed run's Job right now
+and clears `missed_run_at`; `cancel` dismisses it without firing.
+Whichever pillar/UI surfaces this (`lws schedule list` for now; Dashboard
+once M14 exists) shows `missed_run_at` as a pending question, not a
+silent gap.
+
+If neither happens before the task's own next *regular* occurrence
+fires for real, that firing clears `missed_run_at` on its way — a stale
+question about a run from days ago is moot the moment this cycle's own
+run actually happens, exactly as if the question had been answered "no."
+A `once` task has no next occurrence to supersede it this way, so a
+missed `once` task's `missed_run_at` stays pending indefinitely until a
+human actually answers it — there is no automatic path that ever clears
+it on its own.
 
 ## Interfacing
 

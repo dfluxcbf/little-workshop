@@ -238,14 +238,18 @@ triggered firing), `stop` (interrupt a Job that is currently *running*
 to a different date/time, without moving the recurring baseline), and
 `queue` (bound how many Jobs run at once).
 
-**`stop` is opt-in per Job type**, the same pattern Policy & Compliance's
-action-gating already uses for topics: a Job type either declares a
-`stop` hook (`agent.run_task` → kill the `claude` subprocess and mark the
-run `stopped`; `deployment.deploy` → `systemctl stop` the in-progress
-unit) or doesn't, and calling `stop` on a non-interruptible type (most of
-Version Control & Release's fast, synchronous git sequences, for example)
-returns a clear "not stoppable" error rather than hanging or silently
-no-op'ing.
+**`stop`: declared, with a probing fallback.** A Job type's owning
+pillar is the primary source of truth for whether it declares a `stop`
+hook (`agent.run_task` → kill the `claude` subprocess and mark the run
+`stopped`; `deployment.deploy` → `systemctl stop` the in-progress unit)
+— the fast path, letting Orchestration reject an undeclared-as-stoppable
+type immediately, no network round trip. A type that was never declared
+either way isn't therefore assumed unstoppable: Orchestration still
+attempts the real call, and the target pillar's own response ("not
+stoppable" or actually stopped) is authoritative. Most of Version
+Control & Release's fast, synchronous git sequences have no safe
+mid-flight interruption point and are correctly declared unstoppable
+from the start.
 
 **`queue` generalizes `queue_key`, rather than adding a second, parallel
 concurrency mechanism**: `queue_key` gains a configurable *capacity*
@@ -253,6 +257,28 @@ concurrency mechanism**: `queue_key` gains a configurable *capacity*
 mutex semantics — is unchanged), instead of a strict one-at-a-time
 mutex only. Managing a schedule's concurrency is then just: set the
 capacity on the `queue_key` its Jobs use.
+
+**The tick**: one in-process background thread inside Orchestration,
+waking every 10 minutes to dispatch anything due — not a per-task
+`systemd` timer. `recurring` schedules are interpreted in the host's own
+local time, with no per-task timezone field — this runs on one
+household's machine, not across timezones.
+
+**Missed firings, since little-workshop is locally hosted and can be
+down**: a live tick always fires a due task within 10 minutes, so a
+`next_run_at` still in the past is only possible at Orchestration's own
+*startup* — checked once there, never on the routine tick. A `recurring`
+task that missed several occurrences during a longer outage (three days
+down is three missed nightly runs) collapses to just the most recent
+one: `next_run_at` advances to the correct next future occurrence, and
+that single most recent miss is recorded as `missed_run_at`, a pending
+decision, never an automatic action either way. `trigger` resolves it
+(fires the catch-up Job, clears the field); `cancel` dismisses it
+without firing; the task's own next *regular* occurrence firing for real
+also clears it, unasked. A `once` task has no next occurrence to
+supersede it this way, so a missed one stays pending until a human
+actually answers it — there's no automatic path that ever clears it on
+its own.
 
 Depends on M1 only — Orchestration itself, and nothing a scheduled Job's
 own target pillar needs to have already built, since a `ScheduledTask`
