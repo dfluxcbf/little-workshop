@@ -66,9 +66,20 @@ mapping from the tools it absorbs. Implementation is underway against the
   `bazel run //:install`, per the root MCP policy. Never Core/systemd-
   launched — spawned on demand by whatever MCP client attaches it
   (`lws mcp serve`).
+- **M8 — Registry & Portfolio (import path)**: `project.import` —
+  the other half of M2, for an existing, already-checked-out repository.
+  Deliberately mechanical, the same as `project.bootstrap`'s own
+  registration step: it validates only that there's something real to
+  register (a real git repository), never whether it conforms to
+  policy — that judgment belongs to whoever drives the import (a human
+  Claude Code session, or Agentic Development's own dispatch, the
+  identical `workshop_project_import` MCP entry point either way), and
+  later to Policy & Compliance (M11). No new Agentic Development
+  machinery needed: once registered, a normal `workshop_agent_run_task`
+  (M6/M7) is how any further conformance work actually gets done.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (944 tests — 879 unit, 65 real
+`bazel test //:coverage` all work today (983 tests — 915 unit, 68 real
 `systemd --user` end-to-end integration proofs — at 99% line coverage
 over `src/`, measured with `python3 -m pytest --cov=src`; see
 `scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific
@@ -78,7 +89,7 @@ Deployment & Servers' own unit from a freshly checked-out commit of this
 repo, every agent review/branching-mode combination with only the agent
 session itself stubbed, real Gitflow conflict/continue/abort cycles, a
 cross-pillar cascading-removal check, and real MCP `tools/call` round
-trips against live pillars. Two integration tests skip cleanly — they
+trips against live pillars. Three integration tests skip cleanly — they
 don't fail the suite — when `lws` isn't pipx-installed yet (`bazel run
 //:install`).
 

@@ -34,3 +34,16 @@ def add_remote_and_push(path: Path, remote_url: str) -> None:
     run(["git", "remote", "add", "origin", remote_url], cwd=path)
     run(["git", "push", "-u", "origin", "master:master"], cwd=path)
     run(["git", "push", "-u", "origin", "dev:dev"], cwd=path)
+
+
+def remote_url(path: Path) -> str | None:
+    """The `origin` remote's URL, or None if there isn't one — an
+    imported project (M8) is real, pre-existing state to read, not
+    something to require or synthesize the way `project.bootstrap`
+    creates it."""
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"], cwd=path, capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None

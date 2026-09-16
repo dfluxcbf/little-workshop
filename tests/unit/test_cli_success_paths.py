@@ -134,6 +134,20 @@ def test_project_bootstrap_passes_all_flags_through_as_params(paths, monkeypatch
     assert params["github_token"] == "tok"
 
 
+def test_project_import_success_exits_0(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["project", "import", "little-widget", "--path", "/repos/little-widget"]) == 0
+    assert captured["type"] == "project.import"
+    assert captured["target_pillar"] == "registry"
+    assert captured["params"] == {"name": "little-widget", "path": "/repos/little-widget"}
+
+
+def test_project_import_failed_exits_1(paths, monkeypatch):
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "failed", "error": "not a git repository"})
+    assert main.main(["project", "import", "little-widget", "--path", "/repos/little-widget"]) == 1
+
+
 def test_project_list_success(paths, capsys, monkeypatch):
     monkeypatch.setattr(main.client, "list_projects", lambda p, **kw: {"source": "daemon", "projects": []})
     assert main.main(["project", "list"]) == 0

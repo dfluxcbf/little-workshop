@@ -88,6 +88,26 @@ def cmd_project_bootstrap(args: argparse.Namespace) -> int:
     return 0 if result.get("status") == "succeeded" else 1
 
 
+def cmd_project_import(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths,
+            type="project.import",
+            target_pillar="registry",
+            project_id=args.name,
+            params={"name": args.name, "path": args.path},
+            queue_key=None,
+            depends_on=[],
+            created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
 def cmd_project_list(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     _print(client.list_projects(paths, status=args.status))
@@ -562,6 +582,11 @@ def build_parser() -> argparse.ArgumentParser:
     project_bootstrap.add_argument("--remote-host", default="github.com")
     project_bootstrap.add_argument("--github-token", default=None)
     project_bootstrap.set_defaults(func=cmd_project_bootstrap)
+
+    project_import = project_sub.add_parser("import", help="Register an existing, already-conformant repository")
+    project_import.add_argument("name")
+    project_import.add_argument("--path", required=True)
+    project_import.set_defaults(func=cmd_project_import)
 
     project_list = project_sub.add_parser("list", help="List registered projects")
     project_list.add_argument("--status", default=None)
