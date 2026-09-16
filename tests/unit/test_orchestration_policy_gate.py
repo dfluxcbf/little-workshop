@@ -37,37 +37,37 @@ def _policy_socket_lookup(app, monkeypatch):
     return socket_lookup
 
 
-def test_resolve_winning_policy_id_returns_none_when_socket_lookup_has_no_policy_entry():
-    assert policy_gate.resolve_winning_policy_id(lambda p: None, "t", "proj-a") is None
+def test_resolve_gating_policy_ids_returns_empty_when_socket_lookup_has_no_policy_entry():
+    assert policy_gate.resolve_gating_policy_ids(lambda p: None, "proj-a", {"server_launch"}) == []
 
 
-def test_resolve_winning_policy_id_returns_none_on_connect_error():
-    assert policy_gate.resolve_winning_policy_id(lambda p: "/nonexistent/socket.sock", "t", "proj-a", timeout=0.5) is None
+def test_resolve_gating_policy_ids_returns_empty_on_connect_error():
+    assert policy_gate.resolve_gating_policy_ids(lambda p: "/nonexistent/socket.sock", "proj-a", {"server_launch"}, timeout=0.5) == []
 
 
-def test_resolve_winning_policy_id_parses_a_real_response(monkeypatch):
+def test_resolve_gating_policy_ids_parses_a_real_response(monkeypatch):
     app = FastAPI()
 
-    @app.get("/v1/policies/winning")
-    def winning(topic: str, project_id: str) -> dict:
-        return {"topic": topic, "project_id": project_id, "policy": {"id": "pol1"}}
+    @app.get("/v1/policies/gating-for-job")
+    def gating(project_id: str, categories: str) -> list[dict]:
+        return [{"id": "pol1"}, {"id": "pol2"}]
 
     socket_lookup = _policy_socket_lookup(app, monkeypatch)
-    assert policy_gate.resolve_winning_policy_id(socket_lookup, "t", "proj-a") == "pol1"
+    assert policy_gate.resolve_gating_policy_ids(socket_lookup, "proj-a", {"server_launch"}) == ["pol1", "pol2"]
 
 
-def test_resolve_winning_policy_id_none_when_nothing_governs(monkeypatch):
+def test_resolve_gating_policy_ids_empty_when_nothing_governs(monkeypatch):
     app = FastAPI()
 
-    @app.get("/v1/policies/winning")
-    def winning(topic: str, project_id: str) -> dict:
-        return {"topic": topic, "project_id": project_id, "policy": None}
+    @app.get("/v1/policies/gating-for-job")
+    def gating(project_id: str, categories: str) -> list[dict]:
+        return []
 
     socket_lookup = _policy_socket_lookup(app, monkeypatch)
-    assert policy_gate.resolve_winning_policy_id(socket_lookup, "t", "proj-a") is None
+    assert policy_gate.resolve_gating_policy_ids(socket_lookup, "proj-a", {"server_launch"}) == []
 
 
-def test_attach_policy_gate_is_a_noop_for_an_ungated_job_type(conn):
+def test_attach_policy_gate_is_a_noop_for_an_uncategorized_job_type(conn):
     job = Job(type="deployment.stop", target_pillar="deployment", project_id="proj-a")
     db.insert_job(conn, job)
     policy_gate.attach_policy_gate(conn, lambda p: None, job)
@@ -84,9 +84,9 @@ def test_attach_policy_gate_is_a_noop_without_a_project_id(conn):
 def test_attach_policy_gate_is_a_noop_when_no_policy_governs(conn, monkeypatch):
     app = FastAPI()
 
-    @app.get("/v1/policies/winning")
-    def winning(topic: str, project_id: str) -> dict:
-        return {"topic": topic, "project_id": project_id, "policy": None}
+    @app.get("/v1/policies/gating-for-job")
+    def gating(project_id: str, categories: str) -> list[dict]:
+        return []
 
     socket_lookup = _policy_socket_lookup(app, monkeypatch)
     job = Job(type="deployment.deploy", target_pillar="deployment", project_id="proj-a")
@@ -98,9 +98,9 @@ def test_attach_policy_gate_is_a_noop_when_no_policy_governs(conn, monkeypatch):
 def test_attach_policy_gate_creates_a_real_check_dependency(conn, monkeypatch):
     app = FastAPI()
 
-    @app.get("/v1/policies/winning")
-    def winning(topic: str, project_id: str) -> dict:
-        return {"topic": topic, "project_id": project_id, "policy": {"id": "pol1"}}
+    @app.get("/v1/policies/gating-for-job")
+    def gating(project_id: str, categories: str) -> list[dict]:
+        return [{"id": "pol1"}]
 
     socket_lookup = _policy_socket_lookup(app, monkeypatch)
     job = Job(type="deployment.deploy", target_pillar="deployment", project_id="proj-a")
@@ -114,6 +114,40 @@ def test_attach_policy_gate_creates_a_real_check_dependency(conn, monkeypatch):
     assert check_job.params == {"policy_id": "pol1"}
     # persisted, not just held on the in-memory object
     assert db.get_job(conn, job.id).depends_on == job.depends_on
+
+
+def test_attach_policy_gate_creates_one_dependency_per_gating_policy(conn, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/policies/gating-for-job")
+    def gating(project_id: str, categories: str) -> list[dict]:
+        return [{"id": "pol1"}, {"id": "pol2"}]
+
+    socket_lookup = _policy_socket_lookup(app, monkeypatch)
+    job = Job(type="deployment.deploy", target_pillar="deployment", project_id="proj-a")
+    db.insert_job(conn, job)
+    policy_gate.attach_policy_gate(conn, socket_lookup, job)
+
+    assert len(job.depends_on) == 2
+    policy_ids = {db.get_job(conn, dep_id).params["policy_id"] for dep_id in job.depends_on}
+    assert policy_ids == {"pol1", "pol2"}
+
+
+def test_attach_policy_gate_sends_the_jobs_own_categories(conn, monkeypatch):
+    captured = {}
+    app = FastAPI()
+
+    @app.get("/v1/policies/gating-for-job")
+    def gating(project_id: str, categories: str) -> list[dict]:
+        captured["categories"] = categories
+        return []
+
+    socket_lookup = _policy_socket_lookup(app, monkeypatch)
+    job = Job(type="deployment.deploy", target_pillar="deployment", project_id="proj-a")
+    db.insert_job(conn, job)
+    policy_gate.attach_policy_gate(conn, socket_lookup, job)
+
+    assert set(captured["categories"].split(",")) == {"server_launch", "deploy_redeploy"}
 
 
 def test_maybe_gate_false_for_an_ungated_job_type(conn):
@@ -154,6 +188,21 @@ def test_maybe_gate_false_for_not_applicable_verdict(conn):
     job = Job(type="deployment.deploy", target_pillar="deployment", project_id="proj-a", depends_on=[check.id])
     db.insert_job(conn, job)
     assert policy_gate.maybe_gate(conn, job) is False
+
+
+def test_maybe_gate_true_when_any_of_several_gating_policies_fails(conn):
+    """A Job can now be gated by more than one policy at once (one per
+    topic) — any single failure is enough to hold it, even if every
+    other gating policy passed."""
+    passing = Job(type="policy.check_project", target_pillar="policy", project_id="proj-a", status=JobStatus.SUCCEEDED, result={"outcome": "pass"})
+    failing = Job(type="policy.check_project", target_pillar="policy", project_id="proj-a", status=JobStatus.SUCCEEDED, result={"outcome": "fail"})
+    db.insert_job(conn, passing)
+    db.insert_job(conn, failing)
+    job = Job(type="deployment.deploy", target_pillar="deployment", project_id="proj-a", depends_on=[passing.id, failing.id])
+    db.insert_job(conn, job)
+
+    assert policy_gate.maybe_gate(conn, job, runner=FakeRunner()) is True
+    assert db.get_job(conn, job.id).status == JobStatus.PENDING_CONFIRMATION
 
 
 def test_arm_confirm_timeout_shells_systemd_run_with_the_right_unit_and_callback():

@@ -858,3 +858,61 @@ def test_policy_catalog_run_unknown_topic_fails_cleanly(paths, capsys, monkeypat
     monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "succeeded"})
     assert main.main(["policy", "catalog", "run", "ghost-topic", "--target-pillar", "version"]) == 1
     assert "error" in capsys.readouterr().err
+
+
+def test_policy_author_includes_gate_points_when_given(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main([
+        "policy", "author", "the system shall x", "--topic", "t", "--target-pillar", "deployment",
+        "--scope-level", "all_projects", "--gate-points", "server_launch,release",
+    ]) == 0
+    assert captured["params"]["gate_points"] == ["server_launch", "release"]
+
+
+def test_policy_configure_disable_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "configure", "pol1", "--disable"]) == 0
+    assert captured["type"] == "policy.configure"
+    assert captured["params"] == {"policy_id": "pol1", "enabled": False}
+
+
+def test_policy_configure_gate_points_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "configure", "pol1", "--enable", "--gate-points", "build_install"]) == 0
+    assert captured["params"] == {"policy_id": "pol1", "enabled": True, "gate_points": ["build_install"]}
+
+
+def test_policy_configure_empty_gate_points_clears_them(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "configure", "pol1", "--gate-points", ""]) == 0
+    assert captured["params"]["gate_points"] == []
+
+
+def test_policy_waiver_grant_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "waiver", "grant", "pol1", "--project-id", "proj-a", "--reason", "cannot comply"]) == 0
+    assert captured["type"] == "policy.waiver_grant"
+    assert captured["project_id"] == "proj-a"
+    assert captured["params"] == {"policy_id": "pol1", "reason": "cannot comply"}
+
+
+def test_policy_waiver_revoke_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "waiver", "revoke", "w1"]) == 0
+    assert captured["params"] == {"waiver_id": "w1"}
+
+
+def test_policy_waiver_list_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "policy_list_waivers", lambda p, policy_id, project_id: {"source": "daemon", "waivers": []})
+    assert main.main(["policy", "waiver", "list"]) == 0
+
+
+def test_policy_gating_for_job_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "policy_gating_for_job", lambda p, project_id, categories: {"policies": []})
+    assert main.main(["policy", "gating-for-job", "--project-id", "proj-a", "--categories", "server_launch"]) == 0

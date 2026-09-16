@@ -22,7 +22,7 @@ from common.paths import Paths
 from common.registry_client import ProjectResolutionError, resolve_project
 from policy import agent_client, db, gates, registry_client, sandbox
 from policy.agent_client import AgentClientError
-from policy.models import CheckOutcome, CreatedBy, Policy, PolicyCheckResult, ScopeLevel
+from policy.models import CheckOutcome, CreatedBy, GatePoint, Policy, PolicyCheckResult, PolicyWaiver, ScopeLevel
 from policy.precedence import resolve_winning_policy
 from policy.registry_client import RegistryReadError
 from policy.sandbox import SandboxUnavailable
@@ -54,6 +54,21 @@ def _parse_scope(params: dict) -> tuple[ScopeLevel, str | None, str | None]:
     if scope_level == ScopeLevel.ALL_PROJECTS:
         scope_target = None
     return scope_level, scope_target, None
+
+
+def _parse_gate_points(raw: object) -> tuple[list[GatePoint], str | None]:
+    """Which categories does this policy gate — never required (a
+    policy that gates nothing is the default, matching every existing
+    policy created before this existed); invalid category names are
+    rejected outright, never silently dropped."""
+    if raw is None:
+        return [], None
+    if not isinstance(raw, list):
+        return [], "'gate_points' must be a list"
+    try:
+        return [GatePoint(g) for g in raw], None
+    except ValueError as exc:
+        return [], f"invalid gate_point: {exc}"
 
 
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
@@ -131,6 +146,10 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 "error": f"Gate 3b rejected: conflicts with existing topic {gate3b.conflicting_topic!r} — {gate3b.detail}",
             }
 
+        gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
+        if gate_points_error:
+            return {"outcome": "failed", "error": gate_points_error}
+
         project_bound = target_pillar != PILLAR_ITSELF
         try:
             test_script = gates.generate_test_script(query_fn, gate1.ears_text, project_bound=project_bound)
@@ -143,6 +162,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 "ears_text": gate1.ears_text, "ears_refined": gate1.refined, "test_script": test_script,
                 "topic": topic, "target_pillar": target_pillar,
                 "scope_level": scope_level.value, "scope_target": scope_target, "created_by": created_by.value,
+                "gate_points": [g.value for g in gate_points],
             },
         }
 
@@ -175,8 +195,19 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         topic = request.params["topic"]
 
         with lock:
-            if policy_id is not None and db.get_policy(conn, policy_id) is None:
+            existing = db.get_policy(conn, policy_id) if policy_id is not None else None
+            if policy_id is not None and existing is None:
                 return {"outcome": "failed", "error": f"policy {policy_id!r} not found — cannot edit"}
+
+            if "gate_points" in request.params:
+                gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
+                if gate_points_error:
+                    return {"outcome": "failed", "error": gate_points_error}
+            else:
+                # An EARS-text/script edit never silently strips an
+                # already-configured gating behavior — only
+                # policy.configure changes gate_points on its own.
+                gate_points = existing.gate_points if existing is not None else []
 
             structural = db.find_by_scope(conn, topic=topic, scope_level=scope_level, scope_target=scope_target, exclude_id=policy_id)
             if structural is not None:
@@ -192,6 +223,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 id=policy_id or db.new_id(), topic=topic, target_pillar=target_pillar,
                 ears_text=request.params["ears_text"], test_script=request.params["test_script"],
                 scope_level=scope_level, scope_target=scope_target, created_by=created_by,
+                gate_points=gate_points,
             )
             if policy_id is not None:
                 db.replace_policy(conn, policy)
@@ -210,6 +242,62 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
             db.delete_policy(conn, policy_id)
         return {"outcome": "succeeded", "result": {"policy_id": policy_id}}
+
+    # -- usability: enable/disable and gating behavior, without re-authoring ----
+
+    @app.post("/v1/jobs/policy.configure")
+    def job_configure(request: JobRequest) -> dict:
+        """Toggling `enabled` or choosing `gate_points` — deliberately
+        never re-runs any gate: neither field is about the requirement's
+        meaning, so nothing here touches `ears_text`/`test_script`/`topic`."""
+        policy_id = request.params.get("policy_id")
+        if not policy_id:
+            return {"outcome": "failed", "error": "missing 'policy_id'"}
+        with lock:
+            policy = db.get_policy(conn, policy_id)
+            if policy is None:
+                return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
+
+            enabled = request.params.get("enabled")
+            gate_points = None
+            if "gate_points" in request.params:
+                gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
+                if gate_points_error:
+                    return {"outcome": "failed", "error": gate_points_error}
+
+            db.set_policy_configuration(conn, policy_id, enabled=enabled, gate_points=gate_points)
+            updated = db.get_policy(conn, policy_id)
+        return {"outcome": "succeeded", "result": updated.model_dump(mode="json")}
+
+    @app.post("/v1/jobs/policy.waiver_grant")
+    def job_waiver_grant(request: JobRequest) -> dict:
+        """An explicit, auditable exception — never a silent bypass.
+        `reason` is required: a waiver with no stated reason is exactly
+        the kind of casual runtime toggle this pillar's whole design
+        exists to avoid."""
+        error = _require(request.params, "policy_id", "reason") or (None if request.project_id else "missing project_id")
+        if error:
+            return {"outcome": "failed", "error": error}
+        policy_id = request.params["policy_id"]
+        with lock:
+            if db.get_policy(conn, policy_id) is None:
+                return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
+            if db.find_waiver(conn, policy_id=policy_id, project_id=request.project_id) is not None:
+                return {"outcome": "failed", "error": f"project {request.project_id!r} already holds a waiver against policy {policy_id!r}"}
+            waiver = PolicyWaiver(id=db.new_id(), policy_id=policy_id, project_id=request.project_id, reason=request.params["reason"])
+            db.insert_waiver(conn, waiver)
+        return {"outcome": "succeeded", "result": waiver.model_dump(mode="json")}
+
+    @app.post("/v1/jobs/policy.waiver_revoke")
+    def job_waiver_revoke(request: JobRequest) -> dict:
+        waiver_id = request.params.get("waiver_id")
+        if not waiver_id:
+            return {"outcome": "failed", "error": "missing 'waiver_id'"}
+        with lock:
+            if db.get_waiver(conn, waiver_id) is None:
+                return {"outcome": "failed", "error": f"waiver {waiver_id!r} not found"}
+            db.delete_waiver(conn, waiver_id)
+        return {"outcome": "succeeded", "result": {"waiver_id": waiver_id}}
 
     # -- enforcement ------------------------------------------------------------
 
@@ -316,6 +404,27 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             )
         return {"topic": topic, "project_id": project_id, "policy": policy.model_dump(mode="json") if policy else None}
 
+    @app.get("/v1/policies/gating-for-job")
+    def get_gating_for_job(project_id: str, categories: str) -> list[dict]:
+        """Every currently-winning policy, for this project, whose own
+        `gate_points` intersects the requested categories — Orchestration's
+        own entry point for "which policies, if any, gate this Job."
+        Disabled and waived policies are already excluded by
+        `resolve_winning_policy` itself; a Job can now be gated by more
+        than one policy at once (one per topic), never just the single
+        fixed mapping the original design had."""
+        requested = {GatePoint(c) for c in categories.split(",") if c}
+        with lock:
+            topics = {p.topic for p in db.list_policies(conn) if requested & set(p.gate_points)}
+            winners = []
+            for topic in sorted(topics):
+                winner = resolve_winning_policy(
+                    conn, topic=topic, project_id=project_id, project_sets_for_project=project_sets_for_project,
+                )
+                if winner is not None and requested & set(winner.gate_points):
+                    winners.append(winner)
+        return [w.model_dump(mode="json") for w in winners]
+
     @app.get("/v1/policies/{policy_id}")
     def get_policy(policy_id: str) -> dict:
         with lock:
@@ -323,6 +432,19 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         if policy is None:
             raise HTTPException(status_code=404, detail="policy not found")
         return policy.model_dump(mode="json")
+
+    @app.get("/v1/policy_waivers")
+    def list_waivers(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:
+        with lock:
+            return [w.model_dump(mode="json") for w in db.list_waivers(conn, policy_id=policy_id, project_id=project_id)]
+
+    @app.get("/v1/policy_waivers/{waiver_id}")
+    def get_waiver(waiver_id: str) -> dict:
+        with lock:
+            waiver = db.get_waiver(conn, waiver_id)
+        if waiver is None:
+            raise HTTPException(status_code=404, detail="waiver not found")
+        return waiver.model_dump(mode="json")
 
     @app.get("/v1/policy_check_results")
     def list_check_results(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:

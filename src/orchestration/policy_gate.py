@@ -1,15 +1,24 @@
 """Action-gating — extends the Job model with `pending_confirmation`
-(`docs/pillars/policy_compliance.md`'s "Action-gating checks"). A Job
-type declaring a gated topic doesn't dispatch until the policy currently
-winning precedence on that topic, for that project, passes — checked
-via a `policy.check_project` Job attached as an ordinary dependency,
-never a synchronous blocking call.
+(`docs/pillars/policy_compliance.md`'s "Action-gating checks"). Refined:
+gating is a per-*policy*, user-chosen set of `GatePoint` categories
+(`policy/models.py`), not a fixed Job-type-to-topic table — a Job type
+just declares which categories it belongs to (`JOB_TYPE_CATEGORIES`
+below), and *any* currently-winning, enabled, non-waived policy that
+gates one of those categories, for that project, gets checked. A Job can
+now be gated by more than one policy at once (one `policy.check_project`
+dependency per gating policy), never just a single fixed one.
 
-Which Job types declare which gating topics is deliberately small here
-— `docs/open_questions.md`'s `OQ-3` leaves the full mapping to each
-pillar's own future implementation work; `deployment.deploy` on
-`deployment-policy` is this pass's own concrete, real proof of the
-mechanism, not a claim every gated Job type is enumerated yet.
+Category strings are a shared vocabulary through the Pillar Interface's
+own JSON, matching `policy.models.GatePoint`'s values exactly — never a
+Python import of that pillar's own code, the same "no shared import
+between two pillars' `src/` trees" rule every other cross-pillar call in
+this project already follows.
+
+Which Job types declare which categories is deliberately partial here —
+`docs/open_questions.md`'s `OQ-3` leaves the full mapping to each
+pillar's own future implementation work; the entries below are this
+pass's own concrete, real coverage, not a claim every Job type
+everywhere is categorized yet.
 """
 
 from __future__ import annotations
@@ -28,8 +37,23 @@ from orchestration.queue import cascade_dependency_failures
 
 SocketLookup = Callable[[str], object]
 
-GATED_JOB_TOPICS: dict[str, str] = {
-    "deployment.deploy": "deployment-policy",
+# Mirrors policy.models.GatePoint's own string values — kept as plain
+# strings here rather than importing that enum, since Orchestration and
+# Policy & Compliance never share a Python import.
+JOB_TYPE_CATEGORIES: dict[str, set[str]] = {
+    "build.run": {"build_install"},
+    "build.publish_pypi": {"release"},
+    "build.publish_vsix": {"release"},
+    "deployment.deploy": {"server_launch", "deploy_redeploy"},
+    "project.remove": {"project_removal"},
+    "version.release_start": {"release"},
+    "version.release_candidate_cut": {"release"},
+    "version.release_candidate_promote": {"release"},
+    "version.release_finish": {"release", "branch_finish"},
+    "version.feature_finish": {"branch_finish"},
+    "version.improvement_finish": {"branch_finish"},
+    "version.hotfix_finish": {"branch_finish"},
+    "version.support_finish": {"branch_finish"},
 }
 
 # Matching little-runner's own existing confirm_timeout_seconds default
@@ -37,60 +61,61 @@ GATED_JOB_TOPICS: dict[str, str] = {
 CONFIRM_TIMEOUT_SECONDS = 600
 
 
-def resolve_winning_policy_id(socket_lookup: SocketLookup, topic: str, project_id: str, *, timeout: float = 10.0) -> str | None:
+def resolve_gating_policy_ids(socket_lookup: SocketLookup, project_id: str, categories: set[str], *, timeout: float = 10.0) -> list[str]:
     socket_path = socket_lookup("policy")
     if socket_path is None:
-        return None
+        return []
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.get("/v1/policies/winning", params={"topic": topic, "project_id": project_id})
+            response = client.get("/v1/policies/gating-for-job", params={"project_id": project_id, "categories": ",".join(sorted(categories))})
         response.raise_for_status()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
         # Policy & Compliance unreachable right now: this pass treats
-        # that the same as "no policy currently governs this topic" —
+        # that the same as "no policy currently governs this Job" —
         # dispatch proceeds ungated rather than blocking indefinitely.
         # A documented simplification (docs/requirements.md's M12
         # section), not the spec's full fail-closed-on-unreachable
         # behavior.
-        return None
-    policy = response.json().get("policy")
-    return policy["id"] if policy else None
+        return []
+    return [p["id"] for p in response.json()]
 
 
 def attach_policy_gate(conn: sqlite3.Connection, socket_lookup: SocketLookup, job: Job) -> Job:
-    """Called once, at Job creation — resolves the winning policy (if
-    any) for this Job type's gated topic and this Job's project, and, if
-    one exists, creates the `policy.check_project` Job and wires it into
-    `depends_on`, exactly the ordinary dependency mechanism every other
-    Job already uses."""
-    topic = GATED_JOB_TOPICS.get(job.type)
-    if topic is None or not job.project_id:
+    """Called once, at Job creation — resolves every currently-winning
+    policy (if any) gating one of this Job type's categories, for this
+    Job's project, and creates one `policy.check_project` Job per gating
+    policy, wired into `depends_on` — exactly the ordinary dependency
+    mechanism every other Job already uses, just possibly more than one
+    of them now."""
+    categories = JOB_TYPE_CATEGORIES.get(job.type)
+    if not categories or not job.project_id:
         return job
-    policy_id = resolve_winning_policy_id(socket_lookup, topic, job.project_id)
-    if policy_id is None:
+    policy_ids = resolve_gating_policy_ids(socket_lookup, job.project_id, categories)
+    if not policy_ids:
         return job
-    check_job = Job(
-        type="policy.check_project", target_pillar="policy", project_id=job.project_id,
-        params={"policy_id": policy_id}, created_by="orchestration-gate",
-    )
-    insert_job(conn, check_job)
-    job.depends_on = [*job.depends_on, check_job.id]
+    for policy_id in policy_ids:
+        check_job = Job(
+            type="policy.check_project", target_pillar="policy", project_id=job.project_id,
+            params={"policy_id": policy_id}, created_by="orchestration-gate",
+        )
+        insert_job(conn, check_job)
+        job.depends_on = [*job.depends_on, check_job.id]
     update_job(conn, job)
     return job
 
 
-def _policy_check_verdict(conn: sqlite3.Connection, job: Job) -> str | None:
-    """The outcome ('pass'/'fail'/'not_applicable') of the first
-    `policy.check_project` Job among this Job's dependencies, or None if
-    it has none — a Job's own gate gets exactly one governing check at
-    creation time, so "first" is also "only" in practice."""
+def _policy_check_verdicts(conn: sqlite3.Connection, job: Job) -> list[str]:
+    """The outcome ('pass'/'fail'/'not_applicable') of every
+    `policy.check_project` Job among this Job's dependencies — a gated
+    Job can now hold more than one, one per gating policy."""
+    verdicts = []
     for dep_id in job.depends_on:
         dep = get_job(conn, dep_id)
         if dep is not None and dep.type == "policy.check_project" and dep.status == JobStatus.SUCCEEDED and dep.result:
             outcome = dep.result.get("outcome")
             if outcome is not None:
-                return outcome
-    return None
+                verdicts.append(outcome)
+    return verdicts
 
 
 def enter_pending_confirmation(
@@ -124,10 +149,10 @@ def maybe_gate(
     (every dependency succeeded). Returns True if this call handled the
     Job itself (flipped it to `pending_confirmation`) — the caller must
     not also dispatch it normally."""
-    if job.type not in GATED_JOB_TOPICS:
+    if job.type not in JOB_TYPE_CATEGORIES:
         return False
-    verdict = _policy_check_verdict(conn, job)
-    if verdict != "fail":
+    verdicts = _policy_check_verdicts(conn, job)
+    if "fail" not in verdicts:
         return False
     enter_pending_confirmation(conn, job, timeout_seconds=timeout_seconds, runner=runner)
     return True

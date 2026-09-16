@@ -527,6 +527,35 @@ def policy_check_results(paths: Paths, policy_id: str | None = None, project_id:
         return {"source": "fallback", "results": [r.model_dump(mode="json") for r in results]}
 
 
+def policy_list_waivers(paths: Paths, policy_id: str | None = None, project_id: str | None = None, *, timeout: float = 5.0) -> dict:
+    params = {k: v for k, v in {"policy_id": policy_id, "project_id": project_id}.items() if v}
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.get("/v1/policy_waivers", params=params)
+        response.raise_for_status()
+        return {"source": "daemon", "waivers": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from policy import db as policy_db
+
+        conn = policy_db.connect(paths.pillar_db_path("policy"))
+        waivers = policy_db.list_waivers(conn, policy_id=policy_id, project_id=project_id)
+        conn.close()
+        return {"source": "fallback", "waivers": [w.model_dump(mode="json") for w in waivers]}
+
+
+def policy_gating_for_job(paths: Paths, project_id: str, categories: list[str], *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.get("/v1/policies/gating-for-job", params={"project_id": project_id, "categories": ",".join(categories)})
+        response.raise_for_status()
+        return {"project_id": project_id, "categories": categories, "policies": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise PolicyPillarUnavailable(
+            "Policy & Compliance daemon unreachable — gating resolution needs project-set membership "
+            "live from Registry & Portfolio, and has no local fallback"
+        ) from exc
+
+
 class DeploymentPillarUnavailable(Exception):
     pass
 

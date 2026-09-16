@@ -232,6 +232,7 @@ def test_gated_deploy_reaches_pending_confirmation_and_a_real_confirm_dispatches
         author = _author(
             workshop_env, ears_text="ALWAYS_FAIL: deploys are always blocked for this test",
             topic="deployment-policy", target_pillar="deployment", scope_level="all_projects",
+            gate_points=["server_launch", "deploy_redeploy"],
         )
         _activate(workshop_env, author["result"])
 
@@ -277,6 +278,7 @@ def test_gated_deploy_times_out_unconfirmed_and_the_action_never_happens(tmp_pat
         author = _author(
             workshop_env, ears_text="ALWAYS_FAIL: deploys are always blocked for this test too",
             topic="deployment-policy", target_pillar="deployment", scope_level="all_projects",
+            gate_points=["server_launch", "deploy_redeploy"],
         )
         _activate(workshop_env, author["result"])
 
@@ -311,3 +313,114 @@ stop_timeout_seconds = 15
         assert settled["job"]["status"] == "failed"
         assert settled["job"]["error"] == "policy check unconfirmed"
         assert not port_is_listening(port)
+
+
+@requires_systemd_user
+def test_disabling_a_gating_policy_lets_a_previously_blocked_deploy_through(tmp_path, workshop_env, monkeypatch):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        project_id = "little-widget"
+        _bootstrap(tmp_path, workshop_env, project_id)
+
+        author = _author(
+            workshop_env, ears_text="ALWAYS_FAIL: deploys are always blocked for this test",
+            topic="deployment-policy-disable-test", target_pillar="deployment", scope_level="all_projects",
+            gate_points=["server_launch", "deploy_redeploy"],
+        )
+        policy_id = _activate(workshop_env, author["result"])["result"]["id"]
+
+        port = PORT + 2
+        manifest_toml = f"""
+[server]
+name = "{project_id}"
+command = "python3 -m http.server {port}"
+port = {port}
+match = "http.server {port}"
+install = ["true"]
+ready_timeout_seconds = 15
+stop_timeout_seconds = 15
+"""
+        ProjectFilesClient(workshop_env.paths, caller_pillar="deployment").write(project_id, "manifest.deployment.toml", manifest_toml)
+
+        # Confirm it really would have gated, first.
+        gating = cli_client.policy_gating_for_job(workshop_env.paths, project_id, ["server_launch"])
+        assert policy_id in [p["id"] for p in gating["policies"]]
+
+        disabled = cli_client.create_job(
+            workshop_env.paths, type="policy.configure", target_pillar="policy",
+            params={"policy_id": policy_id, "enabled": False}, queue_key=None, depends_on=[],
+            created_by="integration-test",
+        )
+        assert disabled["status"] == "succeeded", disabled
+
+        gating_after = cli_client.policy_gating_for_job(workshop_env.paths, project_id, ["server_launch"])
+        assert policy_id not in [p["id"] for p in gating_after["policies"]]
+
+        deploy = cli_client.create_job(
+            workshop_env.paths, type="deployment.deploy", target_pillar="deployment", project_id=project_id,
+            params={"branch": "master"}, queue_key=project_id, depends_on=[], created_by="integration-test",
+        )
+        assert deploy["status"] == "succeeded", deploy  # never gated: the policy is disabled
+        assert port_is_listening(port)
+
+        systemd.stop(f"deploy-{project_id}", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_waiving_a_project_lets_its_deploy_through_while_others_stay_gated(tmp_path, workshop_env, monkeypatch):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        waived_project = "little-widget"
+        gated_project = "little-gadget"
+        _bootstrap(tmp_path, workshop_env, waived_project)
+        _bootstrap(tmp_path, workshop_env, gated_project)
+
+        author = _author(
+            workshop_env, ears_text="ALWAYS_FAIL: deploys are always blocked for this test",
+            topic="deployment-policy-waiver-test", target_pillar="deployment", scope_level="all_projects",
+            gate_points=["server_launch", "deploy_redeploy"],
+        )
+        policy_id = _activate(workshop_env, author["result"])["result"]["id"]
+
+        waived = cli_client.create_job(
+            workshop_env.paths, type="policy.waiver_grant", target_pillar="policy", project_id=waived_project,
+            params={"policy_id": policy_id, "reason": "this project genuinely cannot comply"},
+            queue_key=None, depends_on=[], created_by="integration-test",
+        )
+        assert waived["status"] == "succeeded", waived
+
+        waived_port = PORT + 3
+        for project_id, port in ((waived_project, waived_port), (gated_project, PORT + 4)):
+            manifest_toml = f"""
+[server]
+name = "{project_id}"
+command = "python3 -m http.server {port}"
+port = {port}
+match = "http.server {port}"
+install = ["true"]
+ready_timeout_seconds = 15
+stop_timeout_seconds = 15
+"""
+            ProjectFilesClient(workshop_env.paths, caller_pillar="deployment").write(project_id, "manifest.deployment.toml", manifest_toml)
+
+        waived_deploy = cli_client.create_job(
+            workshop_env.paths, type="deployment.deploy", target_pillar="deployment", project_id=waived_project,
+            params={"branch": "master"}, queue_key=waived_project, depends_on=[], created_by="integration-test",
+        )
+        assert waived_deploy["status"] == "succeeded", waived_deploy  # never gated: waived
+        assert port_is_listening(waived_port)
+
+        gated_deploy = cli_client.create_job(
+            workshop_env.paths, type="deployment.deploy", target_pillar="deployment", project_id=gated_project,
+            params={"branch": "master"}, queue_key=gated_project, depends_on=[], created_by="integration-test",
+        )
+        _pump(workshop_env)
+        assert _wait_until(lambda: cli_client.job_status(workshop_env.paths, gated_deploy["id"])["job"]["status"] == "pending_confirmation")
+
+        systemd.stop(f"deploy-{waived_project}", runner=DEFAULT_RUNNER)

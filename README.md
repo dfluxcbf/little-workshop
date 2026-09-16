@@ -157,8 +157,31 @@ mapping from the tools it absorbs. Implementation is underway against the
   check even for a compliant project. The other 58 catalog entries stay
   queued as real future work through this same tool.
 
+### Policy usability refinement (2026-09-16)
+
+Requested directly, after M12/M13: individual projects may need
+different policies, or may genuinely be unable to fulfill one — users
+need real control without weakening the framework tier's core
+guarantee into a casual toggle. Every policy gains a real `enabled`
+toggle (`policy.configure`, no re-authoring — neither field is about
+the requirement's own meaning) and **per-project waivers**
+(`policy.waiver_grant`/`revoke`, a required `reason`, a new
+`policy_waivers` table) — an explicit, auditable, reversible exception,
+deliberately distinct from scope-shadowing: a framework policy still
+can never be silently overridden by a lower-scope policy. Gating
+behavior itself moved from a fixed Job-type-to-topic table to a
+per-policy, user-chosen set of six gate points (`build_install`,
+`server_launch`, `deploy_redeploy`, `release`, `branch_finish`,
+`project_removal`) — a Job can now be gated by more than one policy at
+once, resolved through a new `GET /v1/policies/gating-for-job`
+endpoint. Proven end-to-end for real: a `gate_points`-configured policy
+gates a real deploy exactly as the original single-topic mechanism did;
+disabling it lets a previously-blocked deploy through; and a waiver
+lets one project's deploy through while a second, non-waived project on
+the identical policy still genuinely blocks.
+
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1509 tests — 1394 unit, 115 real
+`bazel test //:coverage` all work today (1578 tests — 1461 unit, 117 real
 `systemd --user` end-to-end integration proofs — at 99% line coverage
 over `src/`, measured with `python3 -m pytest --cov=src`; see
 `scripts/bazel/run_pytest_coverage.sh` for a known Bazel-specific

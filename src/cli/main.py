@@ -590,6 +590,8 @@ def cmd_policy_author(args: argparse.Namespace) -> int:
     }
     if args.policy_id:
         params["policy_id"] = args.policy_id
+    if args.gate_points:
+        params["gate_points"] = args.gate_points.split(",")
     return _policy_job(args, "policy.author", params)
 
 
@@ -598,7 +600,45 @@ def cmd_policy_activate(args: argparse.Namespace) -> int:
     draft["approved"] = True
     if args.policy_id:
         draft["policy_id"] = args.policy_id
+    if args.gate_points is not None:
+        draft["gate_points"] = args.gate_points.split(",") if args.gate_points else []
     return _policy_job(args, "policy.activate", draft)
+
+
+def cmd_policy_configure(args: argparse.Namespace) -> int:
+    params: dict = {"policy_id": args.policy_id}
+    if args.enable:
+        params["enabled"] = True
+    if args.disable:
+        params["enabled"] = False
+    if args.gate_points is not None:
+        params["gate_points"] = args.gate_points.split(",") if args.gate_points else []
+    return _policy_job(args, "policy.configure", params)
+
+
+def cmd_policy_waiver_grant(args: argparse.Namespace) -> int:
+    return _policy_job(args, "policy.waiver_grant", {"policy_id": args.policy_id, "reason": args.reason})
+
+
+def cmd_policy_waiver_revoke(args: argparse.Namespace) -> int:
+    return _policy_job(args, "policy.waiver_revoke", {"waiver_id": args.waiver_id})
+
+
+def cmd_policy_waiver_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    _print(client.policy_list_waivers(paths, args.policy_id, args.project_id))
+    return 0
+
+
+def cmd_policy_gating_for_job(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.policy_gating_for_job(paths, args.project_id, args.categories.split(","))
+    except client.PolicyPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
 
 
 def cmd_policy_catalog_list(args: argparse.Namespace) -> int:
@@ -1414,12 +1454,45 @@ def build_parser() -> argparse.ArgumentParser:
     policy_author.add_argument("--scope-target", default=None)
     policy_author.add_argument("--created-by", default="user", choices=["user", "framework"])
     policy_author.add_argument("--policy-id", default=None, help="Editing an existing policy: exclude it from conflict checks")
+    policy_author.add_argument("--gate-points", default=None, help="Comma-separated: build_install,server_launch,deploy_redeploy,release,branch_finish,project_removal")
     policy_author.set_defaults(func=cmd_policy_author)
 
     policy_activate = policy_sub.add_parser("activate", help="Gate 4: save a policy.author draft after human approval")
     policy_activate.add_argument("draft_json", help="Path to a JSON file holding policy.author's own result")
     policy_activate.add_argument("--policy-id", default=None, help="Editing an existing policy in place")
+    policy_activate.add_argument("--gate-points", default=None, help="Override the draft's own gate_points (comma-separated, or '' for none)")
     policy_activate.set_defaults(func=cmd_policy_activate)
+
+    policy_configure = policy_sub.add_parser("configure", help="Enable/disable a policy or change its gating behavior — no re-authoring")
+    policy_configure.add_argument("policy_id")
+    enable_group = policy_configure.add_mutually_exclusive_group()
+    enable_group.add_argument("--enable", action="store_true")
+    enable_group.add_argument("--disable", action="store_true")
+    policy_configure.add_argument("--gate-points", default=None, help="Comma-separated (or '' for none): which action categories this policy gates on failure")
+    policy_configure.set_defaults(func=cmd_policy_configure)
+
+    policy_waiver = policy_sub.add_parser("waiver", help="Per-project exceptions to a policy — explicit and auditable, never silent")
+    policy_waiver_sub = policy_waiver.add_subparsers(dest="policy_waiver_command", required=True)
+
+    policy_waiver_grant = policy_waiver_sub.add_parser("grant", help="Exempt one project from one policy")
+    policy_waiver_grant.add_argument("policy_id")
+    policy_waiver_grant.add_argument("--project-id", required=True)
+    policy_waiver_grant.add_argument("--reason", required=True)
+    policy_waiver_grant.set_defaults(func=cmd_policy_waiver_grant)
+
+    policy_waiver_revoke = policy_waiver_sub.add_parser("revoke", help="Remove a waiver")
+    policy_waiver_revoke.add_argument("waiver_id")
+    policy_waiver_revoke.set_defaults(func=cmd_policy_waiver_revoke)
+
+    policy_waiver_list = policy_waiver_sub.add_parser("list", help="List waivers")
+    policy_waiver_list.add_argument("--policy-id", default=None)
+    policy_waiver_list.add_argument("--project-id", default=None)
+    policy_waiver_list.set_defaults(func=cmd_policy_waiver_list)
+
+    policy_gating_for_job = policy_sub.add_parser("gating-for-job", help="Which policies currently gate a project for a given set of action categories")
+    policy_gating_for_job.add_argument("--project-id", required=True)
+    policy_gating_for_job.add_argument("--categories", required=True, help="Comma-separated: build_install,server_launch,deploy_redeploy,release,branch_finish,project_removal")
+    policy_gating_for_job.set_defaults(func=cmd_policy_gating_for_job)
 
     policy_catalog = policy_sub.add_parser("catalog", help="docs/pillars/policy_catalog.md's ~50 candidate framework policies (M13)")
     policy_catalog_sub = policy_catalog.add_subparsers(dest="policy_catalog_command", required=True)
