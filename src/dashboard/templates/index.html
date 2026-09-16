@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block sheet %}SHEET 00 — CORE{% endblock %}
+{% block content %}
+<h1>Pillars</h1>
+<table>
+  <thead><tr><th>Sheet</th><th>Pillar</th><th>Status</th><th>Crash count</th></tr></thead>
+  <tbody>
+  {% for name, entry in pillars.items() %}
+    <tr>
+      <td class="sheet-no">{{ "%02d" % loop.index }}</td>
+      <td>{{ name }}</td>
+      <td>
+        {% if entry.status == "active" %}<span class="pill ok">active</span>
+        {% elif entry.status in ("disabled",) %}<span class="pill warn">disabled</span>
+        {% else %}<span class="pill fail">{{ entry.status }}</span>{% endif %}
+      </td>
+      <td>{{ entry.crash_count }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

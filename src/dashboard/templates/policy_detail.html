@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Policy {{ policy.id if policy else "" }}{% endblock %}
+{% block sheet %}SHEET 12 — POLICY &amp; COMPLIANCE{% endblock %}
+{% block content %}
+{% if policy %}
+<h1>{{ policy.ears_text }}</h1>
+<p class="sheet-no">{{ policy.id }} — {{ policy.topic }} — target: {{ policy.target_pillar }}</p>
+
+<form method="post" action="/policies/{{ policy.id }}/configure">
+  <fieldset>
+    <legend>Configuration — never re-runs the four authoring gates</legend>
+    <label>
+      <input type="checkbox" name="enabled" value="true" {% if policy.enabled %}checked{% endif %}>
+      Enabled
+    </label>
+    <label>Gate points (any subset, or none)</label>
+    {% for gp in gate_point_values %}
+      <label>
+        <input type="checkbox" name="gate_points" value="{{ gp }}"
+               {% if gp in policy.gate_points %}checked{% endif %}>
+        {{ gp }}
+      </label>
+    {% endfor %}
+    <button type="submit">Save configuration</button>
+  </fieldset>
+</form>
+
+<fieldset>
+  <legend>Test script (generated at authoring time, read-only here — edit via `lws policy activate`)</legend>
+  <textarea readonly>{{ policy.test_script }}</textarea>
+</fieldset>
+
+<fieldset>
+  <legend>Waivers — explicit, auditable, per-project exceptions</legend>
+  <table>
+    <thead><tr><th>Project</th><th>Reason</th><th></th></tr></thead>
+    <tbody>
+    {% for w in waivers %}
+      <tr>
+        <td>{{ w.project_id }}</td>
+        <td>{{ w.reason }}</td>
+        <td>
+          <form method="post" action="/policies/{{ policy.id }}/waivers/{{ w.id }}/revoke">
+            <button type="submit">Revoke</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3">No waivers granted.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <form method="post" action="/policies/{{ policy.id }}/waivers/grant">
+    <label>Project ID <input type="text" name="project_id" required></label>
+    <label>Reason (required — an explicit, auditable exception) <input type="text" name="reason" required></label>
+    <button type="submit">Grant waiver</button>
+  </form>
+</fieldset>
+{% else %}
+<p>Policy not found.</p>
+{% endif %}
+{% endblock %}

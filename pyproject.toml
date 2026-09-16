@@ -14,6 +14,8 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "pydantic>=2.0",
     "httpx>=0.25",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -27,10 +29,11 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["common*", "core*", "orchestration*", "registry*", "requirements*", "version*", "build*", "policy*", "deployment*", "agent*", "cli*", "mcp_server*"]
+include = ["common*", "core*", "orchestration*", "registry*", "requirements*", "version*", "build*", "policy*", "deployment*", "agent*", "cli*", "mcp_server*", "dashboard*"]
 
 [tool.setuptools.package-data]
 agent = ["templates/prompts/*.md"]
+dashboard = ["templates/*.html", "static/*.css"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

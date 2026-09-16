@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Jobs{% endblock %}
+{% block sheet %}SHEET 01 — ORCHESTRATION{% endblock %}
+{% block content %}
+<h1>Jobs{% if status %} — {{ status }}{% endif %}</h1>
+<table>
+  <thead><tr><th>Type</th><th>Target pillar</th><th>Project</th><th>Status</th><th>ID</th></tr></thead>
+  <tbody>
+  {% for j in jobs %}
+    <tr>
+      <td>{{ j.type }}</td>
+      <td>{{ j.target_pillar }}</td>
+      <td>{{ j.project_id or "—" }}</td>
+      <td>
+        {% if j.status == "succeeded" %}<span class="pill ok">succeeded</span>
+        {% elif j.status in ("failed",) %}<span class="pill fail">failed</span>
+        {% elif j.status == "pending_confirmation" %}<span class="pill warn">pending confirmation</span>
+        {% else %}<span class="pill warn">{{ j.status }}</span>{% endif %}
+      </td>
+      <td class="sheet-no">{{ j.id }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5">No jobs.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

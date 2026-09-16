@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}little-workshop{% endblock %} — Dashboard</title>
+  <link rel="stylesheet" href="/static/identity-tokens.css">
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="titleblock">
+    <div class="wordmark">little-workshop</div>
+    <nav>
+      <a href="/">overview</a>
+      <a href="/projects">projects</a>
+      <a href="/jobs">jobs</a>
+      <a href="/policies">policies</a>
+    </nav>
+    <div class="meta">{% block sheet %}{% endblock %}</div>
+  </header>
+  <main>
+    {% if error %}<p class="pill fail">UNREACHABLE — {{ error }}</p>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

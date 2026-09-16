@@ -140,6 +140,37 @@ def test_agent_main_builds_app_and_serves_on_its_socket(paths, monkeypatch):
     assert captured["app"] is not None
 
 
+def test_dashboard_main_builds_app_and_serves_on_its_socket(paths, monkeypatch):
+    import dashboard.__main__ as dashboard_main
+
+    monkeypatch.setattr(dashboard_main.Paths, "from_env", staticmethod(lambda: paths))
+
+    captured = {}
+    monkeypatch.setattr(
+        dashboard_main.uvicorn, "run", lambda app, uds, log_level: captured.update(app=app, uds=uds)
+    )
+
+    dashboard_main.main()
+
+    assert captured["uds"] == str(paths.socket_path("dashboard"))
+    assert captured["app"] is not None
+
+
+def test_dashboard_main_removes_a_stale_socket_file_first(paths, monkeypatch):
+    import dashboard.__main__ as dashboard_main
+
+    monkeypatch.setattr(dashboard_main.Paths, "from_env", staticmethod(lambda: paths))
+    stale = paths.socket_path("dashboard")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("stale", encoding="utf-8")
+
+    monkeypatch.setattr(dashboard_main.uvicorn, "run", lambda app, uds, log_level: None)
+
+    dashboard_main.main()
+
+    assert not stale.exists() or stale.read_text() != "stale"
+
+
 def test_mcp_server_main_delegates_to_server_main_and_returns_its_exit_code(monkeypatch):
     import mcp_server.__main__ as mcp_main
 
