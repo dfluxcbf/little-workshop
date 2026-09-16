@@ -263,3 +263,43 @@ def test_deploying_a_nonexistent_branch_fails_cleanly(deployment_env, tmp_path):
     result = _deploy(deployment_env, branch="does-not-exist")
     assert result["status"] == "failed"
     assert "does-not-exist" in result["error"]
+
+
+@requires_systemd_user
+def test_deployment_stop_makes_the_server_stop_listening(deployment_env, tmp_path):
+    _bootstrap(deployment_env, tmp_path)
+    _write_manifest(deployment_env, "little-meals")
+
+    deployed = _deploy(deployment_env)
+    assert deployed["status"] == "succeeded", deployed
+    assert port_is_listening(PORT)
+
+    stopped = cli_client.create_job(
+        deployment_env.paths, type="deployment.stop", target_pillar="deployment", project_id="little-meals",
+        params={}, queue_key="little-meals", depends_on=[], created_by="integration-test",
+    )
+    assert stopped["status"] == "succeeded", stopped
+    assert not port_is_listening(PORT)
+
+    with client_for_socket(deployment_env.paths.socket_path("deployment"), timeout=5.0) as http:
+        status = http.get("/v1/status/little-meals").json()
+    assert status["listening"] is False
+
+
+@requires_systemd_user
+def test_deployment_status_reports_not_listening_before_any_deploy(deployment_env, tmp_path):
+    _bootstrap(deployment_env, tmp_path)
+    _write_manifest(deployment_env, "little-meals")
+
+    with client_for_socket(deployment_env.paths.socket_path("deployment"), timeout=5.0) as http:
+        status = http.get("/v1/status/little-meals").json()
+    assert status["listening"] is False
+
+
+@requires_systemd_user
+def test_deployment_confirmation_is_not_yet_recorded_before_any_seed_or_gated_deploy(deployment_env, tmp_path):
+    _bootstrap(deployment_env, tmp_path)
+
+    with client_for_socket(deployment_env.paths.socket_path("deployment"), timeout=5.0) as http:
+        response = http.get("/v1/confirmations/little-meals")
+    assert response.status_code == 404

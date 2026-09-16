@@ -20,8 +20,9 @@ from core.supervisor import Supervisor
 from common.manifest import Manifest
 from orchestration.app import build_app as build_orchestration_app
 from orchestration import db as orchestration_db
+from reference_pillar.app import build_app as build_reference_app
 
-from helpers import UvicornThread, requires_systemd_user
+from helpers import INTEGRATION, UvicornThread, requires_systemd_user
 
 
 @requires_systemd_user
@@ -161,3 +162,97 @@ def test_lws_core_status_and_job_list_report_daemon_source_when_live(workshop_en
             conn.close()
     finally:
         systemd.stop("registry", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_lws_schedule_add_and_trigger_fires_a_real_job(workshop_env, capsys, monkeypatch):
+    env = {"PYTHONPATH": str(INTEGRATION)}
+    reference_command = [sys.executable, "-m", "reference_pillar", str(workshop_env.paths.socket_path("reference"))]
+    systemd.start("reference", reference_command, environment=env, runner=DEFAULT_RUNNER)
+    try:
+        probe = probe_health(workshop_env.paths.socket_path("reference"), timeout=5.0, max_retries=10)
+        assert probe.ok, probe.error
+
+        conn = orchestration_db.connect(workshop_env.paths.pillar_db_path("orchestration"))
+
+        def socket_lookup(pillar: str):
+            return workshop_env.paths.socket_path("reference") if pillar == "reference" else None
+
+        orch_server = UvicornThread(build_orchestration_app(conn, socket_lookup), workshop_env.paths.socket_path("orchestration"))
+        orch_server.start()
+        try:
+            monkeypatch.setattr(cli_main.Paths, "from_env", staticmethod(lambda: workshop_env.paths))
+
+            exit_code = cli_main.main([
+                "schedule", "add", "nightly-noop", "--type", "noop", "--target-pillar", "reference",
+                "--days", "0,1,2,3,4,5,6", "--time-of-day", "09:00",
+            ])
+            assert exit_code == 0
+            created = json.loads(capsys.readouterr().out)
+            task_id = created["id"]
+            assert created["schedule"]["kind"] == "recurring"
+
+            assert cli_main.main(["schedule", "list"]) == 0
+            listed = json.loads(capsys.readouterr().out)
+            assert [t["id"] for t in listed["scheduled_tasks"]] == [task_id]
+
+            exit_code = cli_main.main(["schedule", "trigger", task_id])
+            assert exit_code == 0
+            job = json.loads(capsys.readouterr().out)
+            assert job["status"] == "succeeded"
+            assert job["created_by"] == "scheduler"
+
+            assert cli_main.main(["schedule", "status", task_id]) == 0
+            status = json.loads(capsys.readouterr().out)
+            assert status["scheduled_task"]["last_job_id"] == job["id"]
+
+            assert cli_main.main(["schedule", "remove", task_id]) == 0
+            removed = json.loads(capsys.readouterr().out)
+            assert removed == {"id": task_id, "removed": True}
+        finally:
+            orch_server.stop()
+            conn.close()
+    finally:
+        systemd.stop("reference", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_lws_job_stop_interrupts_a_real_running_job(workshop_env, capsys, monkeypatch):
+    env = {"PYTHONPATH": str(INTEGRATION)}
+    reference_command = [sys.executable, "-m", "reference_pillar", str(workshop_env.paths.socket_path("reference"))]
+    systemd.start("reference", reference_command, environment=env, runner=DEFAULT_RUNNER)
+    try:
+        probe = probe_health(workshop_env.paths.socket_path("reference"), timeout=5.0, max_retries=10)
+        assert probe.ok, probe.error
+
+        conn = orchestration_db.connect(workshop_env.paths.pillar_db_path("orchestration"))
+
+        def socket_lookup(pillar: str):
+            return workshop_env.paths.socket_path("reference") if pillar == "reference" else None
+
+        orch_server = UvicornThread(build_orchestration_app(conn, socket_lookup), workshop_env.paths.socket_path("orchestration"))
+        orch_server.start()
+        try:
+            monkeypatch.setattr(cli_main.Paths, "from_env", staticmethod(lambda: workshop_env.paths))
+
+            from cli import client as cli_client
+
+            created = cli_client.create_job(
+                workshop_env.paths, type="slow", target_pillar="reference", params={},
+                queue_key=None, depends_on=[], created_by="integration-test",
+            )
+            assert created["status"] == "running"
+
+            exit_code = cli_main.main(["job", "stop", created["id"]])
+            assert exit_code == 0
+            result = json.loads(capsys.readouterr().out)
+            assert result == {"stopped": True, "reason": None}
+
+            assert cli_main.main(["job", "status", created["id"]]) == 0
+            status = json.loads(capsys.readouterr().out)
+            assert status["job"]["status"] == "stopped"
+        finally:
+            orch_server.stop()
+            conn.close()
+    finally:
+        systemd.stop("reference", runner=DEFAULT_RUNNER)

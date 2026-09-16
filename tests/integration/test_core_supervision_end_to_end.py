@@ -134,3 +134,50 @@ def test_crash_relaunch_recovers_a_unit_stopped_out_from_under_core(workshop_env
         assert systemd.is_active("reference", runner=DEFAULT_RUNNER)
     finally:
         systemd.stop("reference", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_a_disabled_pillar_is_never_launched_by_startup(workshop_env):
+    reference_command = [sys.executable, "-m", "reference_pillar", str(workshop_env.paths.socket_path("reference"))]
+    manifest = Manifest()
+    manifest.pillars = {
+        "reference": PillarEntry(name="reference", enabled=False, command=reference_command, environment={"PYTHONPATH": str(INTEGRATION)}),
+    }
+    supervisor = Supervisor(paths=workshop_env.paths, manifest=manifest, runner=DEFAULT_RUNNER)
+    try:
+        supervisor.startup()
+        assert not systemd.is_active("reference", runner=DEFAULT_RUNNER)
+        assert supervisor.registry.get("reference").status == PillarStatus.DISABLED
+    finally:
+        systemd.stop("reference", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_reconcile_once_is_a_clean_no_op_when_everything_is_already_healthy(workshop_env):
+    reference_command = [sys.executable, "-m", "reference_pillar", str(workshop_env.paths.socket_path("reference"))]
+    manifest = Manifest()
+    manifest.pillars = {
+        "reference": PillarEntry(name="reference", enabled=True, command=reference_command, environment={"PYTHONPATH": str(INTEGRATION)}),
+    }
+    supervisor = Supervisor(paths=workshop_env.paths, manifest=manifest, runner=DEFAULT_RUNNER)
+    try:
+        supervisor.startup()
+        assert supervisor.registry.get("reference").status == PillarStatus.HEALTHY
+
+        for _ in range(3):
+            supervisor.reconcile_once()
+        still_healthy = supervisor.registry.get("reference")
+        assert still_healthy.status == PillarStatus.HEALTHY
+        assert still_healthy.crash_count == 0
+        assert systemd.is_active("reference", runner=DEFAULT_RUNNER)
+    finally:
+        systemd.stop("reference", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_registry_reports_none_for_a_pillar_that_was_never_configured(workshop_env):
+    manifest = Manifest()
+    manifest.pillars = {}
+    supervisor = Supervisor(paths=workshop_env.paths, manifest=manifest, runner=DEFAULT_RUNNER)
+    supervisor.startup()  # nothing to start; must not raise
+    assert supervisor.registry.get("reference") is None

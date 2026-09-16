@@ -343,6 +343,64 @@ def test_version_status_reports_metadata_for_each_branch_kind(tmp_path, workshop
 
 
 @requires_systemd_user
+def test_full_improvement_cycle_start_then_finish(tmp_path, workshop_env):
+    with _Session(workshop_env):
+        project_dir = _bootstrap_and_init(tmp_path, workshop_env)
+
+        start = _job(workshop_env, "version.improvement_start", "little-widget", {"name": "cleanup"})
+        assert start["status"] == "succeeded", start
+        branches = subprocess.run(["git", "branch"], cwd=project_dir, capture_output=True, text=True).stdout
+        assert "improvement/cleanup" in branches
+
+        (project_dir / "cleanup.py").write_text("tidied = True\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
+        subprocess.run(["git", "commit", "-m", "tidy up"], cwd=project_dir, check=True, capture_output=True)
+
+        finish = _job(workshop_env, "version.improvement_finish", "little-widget", {})
+        assert finish["status"] == "succeeded", finish
+
+        subprocess.run(["git", "checkout", "dev"], cwd=project_dir, check=True, capture_output=True)
+        assert (project_dir / "cleanup.py").exists()
+
+
+@requires_systemd_user
+def test_multiple_release_candidates_are_all_listed_until_promotion(tmp_path, workshop_env):
+    with _Session(workshop_env):
+        _bootstrap_and_init(tmp_path, workshop_env)
+
+        start = _job(workshop_env, "version.release_start", "little-widget", {})
+        assert start["status"] == "succeeded", start
+
+        first_cut = _job(workshop_env, "version.release_candidate_cut", "little-widget", {})
+        assert first_cut["status"] == "succeeded", first_cut
+        assert first_cut["result"]["tag"] == "v0.1.0-rc.1"
+
+        second_cut = _job(workshop_env, "version.release_candidate_cut", "little-widget", {})
+        assert second_cut["status"] == "succeeded", second_cut
+        assert second_cut["result"]["tag"] == "v0.1.0-rc.2"
+
+        listed = cli_client.version_release_candidates(workshop_env.paths, "little-widget")
+        assert {"v0.1.0-rc.1", "v0.1.0-rc.2"}.issubset(set(listed["tags"]))
+
+        promote = _job(workshop_env, "version.release_candidate_promote", "little-widget", {"rc_number": 2})
+        assert promote["status"] == "succeeded", promote
+        assert promote["result"]["rc_number"] == 2
+
+
+@requires_systemd_user
+def test_release_candidate_promote_of_an_unknown_rc_number_fails_cleanly(tmp_path, workshop_env):
+    with _Session(workshop_env):
+        _bootstrap_and_init(tmp_path, workshop_env)
+
+        start = _job(workshop_env, "version.release_start", "little-widget", {})
+        assert start["status"] == "succeeded", start
+
+        promote = _job(workshop_env, "version.release_candidate_promote", "little-widget", {"rc_number": 7})
+        assert promote["status"] == "failed", promote
+        assert "does not exist" in promote["error"]
+
+
+@requires_systemd_user
 def test_force_flag_overrides_a_dirty_working_tree_that_would_otherwise_block_a_start(tmp_path, workshop_env):
     with _Session(workshop_env):
         project_dir = _bootstrap_and_init(tmp_path, workshop_env)

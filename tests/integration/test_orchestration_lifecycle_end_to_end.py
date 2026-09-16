@@ -151,3 +151,45 @@ def test_job_result_and_params_round_trip_through_a_real_dispatch(orch_env):
     result = _create(orch_env, type="noop", params={"greeting": "hi"}, project_id="little-meals")
     assert result["result"] == {"echoed_params": {"greeting": "hi"}}
     assert result["project_id"] == "little-meals"
+
+
+def test_default_queue_capacity_is_one_preserving_original_mutex_semantics(orch_env):
+    fetched = cli_client.get_queue_capacity(orch_env.paths, "never-configured-key")
+    assert fetched["capacity"] == 1
+
+
+def test_queue_capacity_of_two_allows_two_jobs_under_the_same_key_to_run_concurrently(orch_env):
+    set_result = cli_client.set_queue_capacity(orch_env.paths, "little-meals", 2)
+    assert set_result == {"queue_key": "little-meals", "capacity": 2}
+
+    first = _create(orch_env, type="slow", queue_key="little-meals")
+    assert first["status"] == "running"
+
+    second = _create(orch_env, type="slow", queue_key="little-meals")
+    assert second["status"] == "running"  # capacity 2: both run at once, neither queues
+
+    third = _create(orch_env, type="noop", queue_key="little-meals")
+    assert third["status"] == "queued"  # capacity exhausted by the two RUNNING slow jobs
+
+
+def test_raising_capacity_immediately_pumps_a_previously_queued_job(orch_env):
+    first = _create(orch_env, type="slow", queue_key="little-meals")
+    assert first["status"] == "running"
+
+    second = _create(orch_env, type="noop", queue_key="little-meals")
+    assert second["status"] == "queued"  # default capacity 1: blocked behind the first
+
+    # Setting capacity dispatches ready jobs immediately, without needing
+    # a separate job creation to "pump" it.
+    cli_client.set_queue_capacity(orch_env.paths, "little-meals", 2)
+
+    settled = cli_client.job_status(orch_env.paths, second["id"])
+    assert settled["job"]["status"] == "succeeded"
+
+
+def test_setting_capacity_below_one_is_rejected(orch_env):
+    from common.uds_client import client_for_socket
+
+    with client_for_socket(orch_env.paths.socket_path("orchestration"), timeout=5.0) as http:
+        response = http.post("/v1/queue_keys/little-meals/capacity", json={"capacity": 0})
+    assert response.status_code == 422
