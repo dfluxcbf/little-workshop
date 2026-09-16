@@ -556,12 +556,36 @@ they apply to everything else it manages, not as a special case.
 
 Distinct from the on-demand/scheduled audit above (`policy.check_all`,
 checking everywhere a policy applies, at leisure): some Jobs must not run
-at all until the policy governing their action passes. A Job *type*
-declares which topic(s), if any, gate it — most declare none, and dispatch
-with no policy involvement whatsoever, sparse and opt-in rather than a
-blanket check on everything. `server.launch` and `server.deploy`, for
-example, are gated by whichever policy currently wins (the usual
-precedence resolution) on a server-related topic, for the target project.
+at all until the policy governing their action passes.
+
+**Refined 2026-09-16** (`docs/requirements.md`'s own follow-up section
+has the concrete implementation): gating moved from a fixed, code-level
+Job-type→topic table to a per-*policy*, user-chosen set of **gate
+points** — `build_install`, `server_launch`, `deploy_redeploy`,
+`release`, `branch_finish`, `project_removal` — chosen at authoring or
+reconfiguration time, independent of the policy's own EARS text and
+script. A Job *type* still declares which of these categories it
+belongs to (most declare none, dispatching with no policy involvement
+whatsoever — sparse and opt-in, never a blanket check on everything),
+but a policy now opts into gating zero, one, or several of those
+categories on its own, and any currently-winning policy whose own gate
+points intersect a Job's categories gets checked — a Job can be gated by
+more than one policy at once. `deployment.deploy`, for example, belongs
+to both `server_launch` and `deploy_redeploy`; any enabled, non-waived
+policy gating either category, and currently winning precedence for the
+target project, becomes one of its governing checks.
+
+This also resolved the usability gap the original all-or-nothing
+"framework policies are never overridden" design left open: **a policy
+can now be disabled** (`enabled: bool`, toggled without re-running any
+gate — neither field is about the requirement's own meaning) and **a
+project can be granted an explicit, auditable waiver** against a
+specific policy (a reason is required; never a silent bypass, and never
+a change to the policy for any other project). Both are skipped by
+precedence resolution and fall through to whatever the next-lower-
+precedence policy on that topic is — framework tier still means "can't
+be shadowed by a lower-scope policy"; a waiver is a distinct, explicit
+act, not a scope-precedence outcome.
 
 ### Deciding whether a Job type is gated
 
@@ -733,7 +757,7 @@ points in a Job's life, so they stay two named things with two owners:
 | Owner | Deployment & Servers | Orchestration |
 | Arms | *After* the new version is already running | *Before* the action has started at all |
 | Timeout default | Roll back to the last confirmed commit | Never start — there's nothing to roll back |
-| Scope | Server/pillar redeploys only | Any Job type that declares a gating topic |
+| Scope | Server/pillar redeploys only | Any Job type that declares a gate-point category |
 
 A gated `server.deploy` Job can pass through both in sequence: first
 policy confirmation (proceed despite the failure, or never start), then —
@@ -744,9 +768,10 @@ each is a separate question about a separate moment in the same Job.
 ### Left open
 
 Tracked as `OQ-3` in [`../open_questions.md`](../open_questions.md): which
-Job types declare which gating topics isn't enumerated here — that
-mapping is each pillar's own implementation work as its Job types get
-defined. (The two items this section used to list alongside it — check
+Job types declare which gate-point categories isn't enumerated here —
+that mapping is each pillar's own implementation work as its Job types
+get defined (`orchestration/policy_gate.py`'s `JOB_TYPE_CATEGORIES` has
+this pass's own real, partial coverage). (The two items this section used to list alongside it — check
 execution as an async Job with a 30-minute ceiling, and Gate 4 making a
 separate allowlist-declaration step unnecessary — are resolved; see
 "Test-script execution sandbox" and "Authoring a policy" above.)
@@ -760,10 +785,16 @@ Supersedes the placeholder `policy_rules`, `policy_check_results` pair in
   subject governs — see "Policy ownership" above), ears_text,
   test_script_ref (1:1), scope_level (`project` | `project_set` |
   `all_projects`), scope_target (a project id, a project-set id, or null
-  for all-projects), created_by (`user` | `framework`), status,
-  created_at, amended_at.
+  for all-projects), created_by (`user` | `framework`), **enabled**
+  (bool, default true — refined 2026-09-16, see "Action-gating checks"),
+  **gate_points** (a set of the six gate-point categories this policy
+  gates on failure, default empty — refined 2026-09-16), created_at,
+  amended_at.
 - `policy_check_results` — policy id, project id, outcome (`pass` | `fail`
   | `not_applicable`), checked_at, job id.
+- `policy_waivers` (added 2026-09-16) — id, policy id, project id,
+  reason, created_at. An explicit, auditable per-project exception —
+  see "Action-gating checks."
 
 `project_sets` is **not** this pillar's table — it lives in Registry &
 Portfolio (`docs/architecture.md`'s Data model), reached through that

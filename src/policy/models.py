@@ -34,6 +34,22 @@ class CheckOutcome(str, Enum):
     NOT_APPLICABLE = "not_applicable"
 
 
+class GatePoint(str, Enum):
+    """Where a policy's failure can block a Job from ever running —
+    docs/pillars/policy_compliance.md's "Action-gating checks", refined:
+    gating is a per-policy, user-chosen set of these, not a fixed
+    Job-type table. A Job type belongs to zero or more categories
+    (declared by the pillar that owns it); a policy gates zero or more
+    categories (chosen at authoring/configuration time, independent of
+    its EARS text and script)."""
+    BUILD_INSTALL = "build_install"
+    SERVER_LAUNCH = "server_launch"
+    DEPLOY_REDEPLOY = "deploy_redeploy"
+    RELEASE = "release"
+    BRANCH_FINISH = "branch_finish"
+    PROJECT_REMOVAL = "project_removal"
+
+
 class Policy(BaseModel):
     id: str
     topic: str
@@ -43,8 +59,24 @@ class Policy(BaseModel):
     scope_level: ScopeLevel
     scope_target: str | None = None
     created_by: CreatedBy
+    enabled: bool = True
+    gate_points: list[GatePoint] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now)
     amended_at: datetime = Field(default_factory=_now)
+
+
+class PolicyWaiver(BaseModel):
+    """An explicit, auditable exception: this one project doesn't have
+    to comply with this one policy — never a silent bypass, and never a
+    change to the policy itself (which stays exactly what it is for
+    every other project). Framework tier still means "can't be shadowed
+    by a lower-scope policy" — a waiver is a different, explicit act,
+    granted per project, not a scope-precedence outcome."""
+    id: str
+    policy_id: str
+    project_id: str
+    reason: str
+    created_at: datetime = Field(default_factory=_now)
 
 
 class PolicyCheckResult(BaseModel):

@@ -83,3 +83,47 @@ def test_different_topics_never_interfere(conn):
     db.insert_policy(conn, _policy(id="p1", topic="topic-a", scope_level=ScopeLevel.ALL_PROJECTS))
     winner = resolve_winning_policy(conn, topic="topic-b", project_id="proj-a", project_sets_for_project=lambda p: [])
     assert winner is None
+
+
+def test_disabled_policy_is_skipped_and_falls_through(conn):
+    db.insert_policy(conn, _policy(id="p1", scope_level=ScopeLevel.ALL_PROJECTS, enabled=False))
+    db.insert_policy(conn, _policy(id="p2", scope_level=ScopeLevel.PROJECT, scope_target="proj-a", enabled=True))
+    winner = resolve_winning_policy(conn, topic="t", project_id="proj-a", project_sets_for_project=lambda p: [])
+    assert winner.id == "p2"
+
+
+def test_disabled_policy_with_nothing_else_governing_resolves_to_none(conn):
+    db.insert_policy(conn, _policy(id="p1", scope_level=ScopeLevel.ALL_PROJECTS, enabled=False))
+    assert resolve_winning_policy(conn, topic="t", project_id="proj-a", project_sets_for_project=lambda p: []) is None
+
+
+def test_waived_policy_falls_through_to_the_next_one_for_that_project_only(conn):
+    from policy.models import PolicyWaiver
+
+    db.insert_policy(conn, _policy(id="p1", scope_level=ScopeLevel.ALL_PROJECTS, created_by=CreatedBy.FRAMEWORK))
+    db.insert_policy(conn, _policy(id="p2", scope_level=ScopeLevel.PROJECT, scope_target="proj-a"))
+    db.insert_waiver(conn, PolicyWaiver(id="w1", policy_id="p1", project_id="proj-a", reason="can't comply"))
+
+    # proj-a holds a waiver against the framework policy p1 -- but p1
+    # isn't project-a-specific, and p2 (proj-a's own policy) still
+    # governs proj-a regardless, since it was already winning anyway.
+    winner = resolve_winning_policy(conn, topic="t", project_id="proj-a", project_sets_for_project=lambda p: [])
+    assert winner.id == "p2"
+
+    # a different project, with no policy of its own and no waiver,
+    # still gets the framework policy.
+    other = resolve_winning_policy(conn, topic="t", project_id="proj-b", project_sets_for_project=lambda p: [])
+    assert other.id == "p1"
+
+
+def test_waiver_against_the_actual_winning_policy_falls_through(conn):
+    from policy.models import PolicyWaiver
+
+    db.insert_policy(conn, _policy(id="p1", scope_level=ScopeLevel.ALL_PROJECTS, created_by=CreatedBy.FRAMEWORK))
+    db.insert_waiver(conn, PolicyWaiver(id="w1", policy_id="p1", project_id="proj-a", reason="can't comply"))
+
+    winner = resolve_winning_policy(conn, topic="t", project_id="proj-a", project_sets_for_project=lambda p: [])
+    assert winner is None
+
+    other = resolve_winning_policy(conn, topic="t", project_id="proj-b", project_sets_for_project=lambda p: [])
+    assert other.id == "p1"

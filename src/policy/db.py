@@ -5,12 +5,13 @@ model). WAL mode, one file, opened only by this pillar.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from policy.models import CheckOutcome, CreatedBy, Policy, PolicyCheckResult, ScopeLevel
+from policy.models import CheckOutcome, CreatedBy, GatePoint, Policy, PolicyCheckResult, PolicyWaiver, ScopeLevel
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS policies (
@@ -22,6 +23,8 @@ CREATE TABLE IF NOT EXISTS policies (
     scope_level TEXT NOT NULL,
     scope_target TEXT,
     created_by TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    gate_points TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     amended_at TEXT NOT NULL
 );
@@ -34,6 +37,14 @@ CREATE TABLE IF NOT EXISTS policy_check_results (
     detail TEXT NOT NULL DEFAULT '',
     job_id TEXT,
     checked_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS policy_waivers (
+    id TEXT PRIMARY KEY,
+    policy_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 """
 
@@ -66,11 +77,13 @@ def new_id() -> str:
 def insert_policy(conn: sqlite3.Connection, policy: Policy) -> None:
     conn.execute(
         """INSERT INTO policies
-           (id, topic, target_pillar, ears_text, test_script, scope_level, scope_target, created_by, created_at, amended_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (id, topic, target_pillar, ears_text, test_script, scope_level, scope_target, created_by,
+            enabled, gate_points, created_at, amended_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             policy.id, policy.topic, policy.target_pillar, policy.ears_text, policy.test_script,
             policy.scope_level.value, policy.scope_target, policy.created_by.value,
+            int(policy.enabled), json.dumps([g.value for g in policy.gate_points]),
             _iso(policy.created_at), _iso(policy.amended_at),
         ),
     )
@@ -83,12 +96,35 @@ def replace_policy(conn: sqlite3.Connection, policy: Policy) -> None:
     policy.amended_at = datetime.now(timezone.utc)
     conn.execute(
         """UPDATE policies SET topic = ?, target_pillar = ?, ears_text = ?, test_script = ?,
-           scope_level = ?, scope_target = ?, created_by = ?, amended_at = ? WHERE id = ?""",
+           scope_level = ?, scope_target = ?, created_by = ?, enabled = ?, gate_points = ?, amended_at = ? WHERE id = ?""",
         (
             policy.topic, policy.target_pillar, policy.ears_text, policy.test_script,
             policy.scope_level.value, policy.scope_target, policy.created_by.value,
+            int(policy.enabled), json.dumps([g.value for g in policy.gate_points]),
             _iso(policy.amended_at), policy.id,
         ),
+    )
+    conn.commit()
+
+
+def set_policy_configuration(
+    conn: sqlite3.Connection, policy_id: str, *, enabled: bool | None = None, gate_points: list[GatePoint] | None = None,
+) -> None:
+    """Toggling `enabled` or choosing `gate_points` never touches
+    `ears_text`/`test_script`/`topic` and never re-runs any gate — the
+    EARS-compliance/enforceability/conflict checks are about the
+    requirement's *meaning*, which this doesn't change."""
+    policy = get_policy(conn, policy_id)
+    if policy is None:
+        return
+    if enabled is not None:
+        policy.enabled = enabled
+    if gate_points is not None:
+        policy.gate_points = gate_points
+    policy.amended_at = datetime.now(timezone.utc)
+    conn.execute(
+        "UPDATE policies SET enabled = ?, gate_points = ?, amended_at = ? WHERE id = ?",
+        (int(policy.enabled), json.dumps([g.value for g in policy.gate_points]), _iso(policy.amended_at), policy_id),
     )
     conn.commit()
 
@@ -97,8 +133,9 @@ def _row_to_policy(row: sqlite3.Row) -> Policy:
     return Policy(
         id=row["id"], topic=row["topic"], target_pillar=row["target_pillar"], ears_text=row["ears_text"],
         test_script=row["test_script"], scope_level=ScopeLevel(row["scope_level"]), scope_target=row["scope_target"],
-        created_by=CreatedBy(row["created_by"]), created_at=_parse_iso(row["created_at"]),
-        amended_at=_parse_iso(row["amended_at"]),
+        created_by=CreatedBy(row["created_by"]), enabled=bool(row["enabled"]),
+        gate_points=[GatePoint(g) for g in json.loads(row["gate_points"])],
+        created_at=_parse_iso(row["created_at"]), amended_at=_parse_iso(row["amended_at"]),
     )
 
 
@@ -147,6 +184,58 @@ def find_topic_owner_conflict(
 def delete_policy(conn: sqlite3.Connection, policy_id: str) -> None:
     conn.execute("DELETE FROM policies WHERE id = ?", (policy_id,))
     conn.execute("DELETE FROM policy_check_results WHERE policy_id = ?", (policy_id,))
+    conn.execute("DELETE FROM policy_waivers WHERE policy_id = ?", (policy_id,))
+    conn.commit()
+
+
+# -- policy waivers ------------------------------------------------------------
+
+
+def insert_waiver(conn: sqlite3.Connection, waiver: PolicyWaiver) -> None:
+    conn.execute(
+        "INSERT INTO policy_waivers (id, policy_id, project_id, reason, created_at) VALUES (?, ?, ?, ?, ?)",
+        (waiver.id, waiver.policy_id, waiver.project_id, waiver.reason, _iso(waiver.created_at)),
+    )
+    conn.commit()
+
+
+def _row_to_waiver(row: sqlite3.Row) -> PolicyWaiver:
+    return PolicyWaiver(
+        id=row["id"], policy_id=row["policy_id"], project_id=row["project_id"], reason=row["reason"],
+        created_at=_parse_iso(row["created_at"]),
+    )
+
+
+def get_waiver(conn: sqlite3.Connection, waiver_id: str) -> PolicyWaiver | None:
+    row = conn.execute("SELECT * FROM policy_waivers WHERE id = ?", (waiver_id,)).fetchone()
+    return _row_to_waiver(row) if row else None
+
+
+def find_waiver(conn: sqlite3.Connection, *, policy_id: str, project_id: str) -> PolicyWaiver | None:
+    row = conn.execute(
+        "SELECT * FROM policy_waivers WHERE policy_id = ? AND project_id = ?", (policy_id, project_id)
+    ).fetchone()
+    return _row_to_waiver(row) if row else None
+
+
+def list_waivers(
+    conn: sqlite3.Connection, *, policy_id: str | None = None, project_id: str | None = None
+) -> list[PolicyWaiver]:
+    query = "SELECT * FROM policy_waivers WHERE 1=1"
+    params: list[str] = []
+    if policy_id is not None:
+        query += " AND policy_id = ?"
+        params.append(policy_id)
+    if project_id is not None:
+        query += " AND project_id = ?"
+        params.append(project_id)
+    query += " ORDER BY created_at"
+    rows = conn.execute(query, params).fetchall()
+    return [_row_to_waiver(row) for row in rows]
+
+
+def delete_waiver(conn: sqlite3.Connection, waiver_id: str) -> None:
+    conn.execute("DELETE FROM policy_waivers WHERE id = ?", (waiver_id,))
     conn.commit()
 
 

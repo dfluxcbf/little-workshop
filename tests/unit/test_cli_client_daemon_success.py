@@ -200,6 +200,10 @@ def _make_stub_app(paths: Paths | None = None) -> FastAPI:
     def policy_winning(topic: str, project_id: str):
         return {"topic": topic, "project_id": project_id, "policy": None}
 
+    @app.get("/v1/policies/gating-for-job")
+    def gating_for_job(project_id: str, categories: str):
+        return [{"id": "pol1", "categories": categories}]
+
     @app.get("/v1/policies/{policy_id}")
     def get_policy(policy_id: str):
         return {"id": policy_id}
@@ -215,6 +219,10 @@ def _make_stub_app(paths: Paths | None = None) -> FastAPI:
     @app.post("/v1/jobs/{job_id}/policy_confirm_timeout")
     def policy_confirm_timeout(job_id: str):
         return {"timed_out": True, "job_id": job_id}
+
+    @app.get("/v1/policy_waivers")
+    def list_waivers(policy_id: str | None = None, project_id: str | None = None):
+        return [{"id": "w1", "policy_id": policy_id}]
 
     return app
 
@@ -404,6 +412,18 @@ def test_policy_confirm_job_hits_the_real_orchestration_socket(paths_with_live_d
 def test_policy_confirm_timeout_job_hits_the_real_orchestration_socket(paths_with_live_daemons):
     result = client.policy_confirm_timeout_job(paths_with_live_daemons, "j1")
     assert result["timed_out"] is True
+
+
+def test_policy_list_waivers_reports_daemon_source(paths_with_live_daemons):
+    result = client.policy_list_waivers(paths_with_live_daemons, "pol1")
+    assert result["source"] == "daemon"
+    assert result["waivers"][0]["policy_id"] == "pol1"
+
+
+def test_policy_gating_for_job_hits_the_real_policy_socket(paths_with_live_daemons):
+    result = client.policy_gating_for_job(paths_with_live_daemons, "proj-a", ["server_launch"])
+    assert result["project_id"] == "proj-a"
+    assert result["policies"][0]["id"] == "pol1"
 
 
 def test_deployment_status_hits_the_real_deployment_socket(paths_with_live_daemons):

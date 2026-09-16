@@ -249,8 +249,10 @@ creates the registry row, never the other way around.
 
 - **Orchestration** — `jobs`, `job_runs`, `pipelines`, `pipeline_runs`.
 - **Policy & Compliance** — `policies`, `policy_check_results`
-  (three-outcome: pass/fail/not-applicable). Fully specified, including the
-  scope/precedence model and the EARS-based authoring pipeline:
+  (three-outcome: pass/fail/not-applicable), `policy_waivers` (an
+  explicit, auditable per-project exception, added 2026-09-16). Fully
+  specified, including the scope/precedence model and the EARS-based
+  authoring pipeline:
   `docs/pillars/policy_compliance.md` — the schema there supersedes the
   placeholder shape this list originally gave this pillar. Reads
   `project_sets` via Registry & Portfolio's Pillar Interface when

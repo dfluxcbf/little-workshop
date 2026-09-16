@@ -48,6 +48,11 @@ _PROJECT_ID = _prop("string", "The project's registered id/name in Registry & Po
 _FORCE = _prop("boolean", "Proceed even if the working tree is dirty. Default: false.")
 _ACTION = _prop("string", "Resume ('continue') or cancel ('abort') a finish paused by a conflict.", enum=["continue", "abort"])
 _ISSUE = _prop("integer", "Tracker issue number to link to this branch.")
+_GATE_POINTS = _prop(
+    "array", "Which action categories this policy gates on failure. Any subset, or omit/empty for none: "
+    "build_install, server_launch, deploy_redeploy, release, branch_finish, project_removal.",
+    items={"type": "string", "enum": ["build_install", "server_launch", "deploy_redeploy", "release", "branch_finish", "project_removal"]},
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -506,6 +511,8 @@ def _policy_author(paths: Paths, args: JSONDict) -> Any:
     }
     if args.get("policy_id"):
         params["policy_id"] = args["policy_id"]
+    if "gate_points" in args:
+        params["gate_points"] = args["gate_points"]
     return _policy_job(paths, "policy.author", None, params)
 
 
@@ -518,11 +525,38 @@ def _policy_activate(paths: Paths, args: JSONDict) -> Any:
     }
     if args.get("policy_id"):
         params["policy_id"] = args["policy_id"]
+    if "gate_points" in args:
+        params["gate_points"] = args["gate_points"]
     return _policy_job(paths, "policy.activate", None, params)
 
 
 def _policy_remove(paths: Paths, args: JSONDict) -> Any:
     return _policy_job(paths, "policy.remove", None, {"policy_id": args["policy_id"]})
+
+
+def _policy_configure(paths: Paths, args: JSONDict) -> Any:
+    params: JSONDict = {"policy_id": args["policy_id"]}
+    if "enabled" in args:
+        params["enabled"] = args["enabled"]
+    if "gate_points" in args:
+        params["gate_points"] = args["gate_points"]
+    return _policy_job(paths, "policy.configure", None, params)
+
+
+def _policy_waiver_grant(paths: Paths, args: JSONDict) -> Any:
+    return _policy_job(paths, "policy.waiver_grant", args["project_id"], {"policy_id": args["policy_id"], "reason": args["reason"]})
+
+
+def _policy_waiver_revoke(paths: Paths, args: JSONDict) -> Any:
+    return _policy_job(paths, "policy.waiver_revoke", None, {"waiver_id": args["waiver_id"]})
+
+
+def _policy_waiver_list(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_list_waivers(paths, args.get("policy_id"), args.get("project_id"))
+
+
+def _policy_gating_for_job(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_gating_for_job(paths, args["project_id"], args["categories"])
 
 
 def _policy_list(paths: Paths, args: JSONDict) -> Any:
@@ -889,6 +923,7 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "scope_target": _prop("string", "A project id or project-set id. Omit for all_projects."),
                  "created_by": _prop("string", "user|framework. Default: user."),
                  "policy_id": _prop("string", "Editing an existing policy: exclude it from conflict checks."),
+                 "gate_points": _GATE_POINTS,
              }, ["ears_text", "topic", "target_pillar", "scope_level"]), _policy_author),
     ToolSpec("workshop_policy_activate", "Gate 4: save a workshop_policy_author draft as a real, active policy — "
              "only after a human has reviewed both the EARS text and the generated test script. The only path "
@@ -902,6 +937,7 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "scope_target": _prop("string", "A project id or project-set id. Omit for all_projects."),
                  "created_by": _prop("string", "user|framework. Default: user."),
                  "policy_id": _prop("string", "Editing an existing policy in place, rather than creating a new one."),
+                 "gate_points": _GATE_POINTS,
              }, ["ears_text", "test_script", "topic", "target_pillar", "scope_level"]), _policy_activate),
     ToolSpec("workshop_policy_remove", "Delete a policy for good.",
              _schema({"policy_id": _prop("string", "The policy's id.")}, ["policy_id"]), _policy_remove),
@@ -925,6 +961,28 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_policy_confirm", "Confirm a policy-gated Job that's pending_confirmation, dispatching it "
              "despite the policy failure — the 10-minute deliberate-bypass window.",
              _schema({"job_id": _prop("string", "The gated Job's id.")}, ["job_id"]), _policy_confirm),
+    ToolSpec("workshop_policy_configure", "Enable/disable a policy, or change which action categories it gates "
+             "on failure — never re-runs any gate, since neither changes the requirement's own meaning.",
+             _schema({
+                 "policy_id": _prop("string", "The policy's id."),
+                 "enabled": _prop("boolean", "Turn the policy on or off. Omit to leave unchanged."),
+                 "gate_points": _GATE_POINTS,
+             }, ["policy_id"]), _policy_configure),
+    ToolSpec("workshop_policy_waiver_grant", "Grant one project an explicit, auditable exception to one policy "
+             "— never a silent bypass, and never a change to the policy itself for any other project.",
+             _schema({
+                 "policy_id": _prop("string", "The policy's id."), "project_id": _PROJECT_ID,
+                 "reason": _prop("string", "Why this project can't comply — required, never blank."),
+             }, ["policy_id", "project_id", "reason"]), _policy_waiver_grant),
+    ToolSpec("workshop_policy_waiver_revoke", "Remove a waiver, restoring normal precedence for that project.",
+             _schema({"waiver_id": _prop("string", "The waiver's id.")}, ["waiver_id"]), _policy_waiver_revoke),
+    ToolSpec("workshop_policy_waiver_list", "List waivers, optionally filtered by policy and/or project.",
+             _schema({"policy_id": _prop("string", "Filter by policy."),
+                      "project_id": _prop("string", "Filter by project.")}), _policy_waiver_list),
+    ToolSpec("workshop_policy_gating_for_job", "Which currently-winning policies gate a project for a given set "
+             "of action categories — what Orchestration itself consults before dispatching a Job.",
+             _schema({"project_id": _PROJECT_ID, "categories": _GATE_POINTS}, ["project_id", "categories"]),
+             _policy_gating_for_job),
     ToolSpec("workshop_policy_catalog_list", "List every candidate framework policy in "
              "docs/pillars/policy_catalog.md (M13) — none is active until authored and activated.",
              _schema(), _policy_catalog_list),

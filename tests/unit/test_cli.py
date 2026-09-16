@@ -643,3 +643,54 @@ def test_job_policy_confirm_timeout_reports_error_when_daemon_unavailable(tmp_pa
     exit_code = main.main(["job", "policy-confirm-timeout", "j1"])
     assert exit_code == 1
     assert "error" in capsys.readouterr().err
+
+
+def test_policy_configure_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["policy", "configure", "pol1", "--disable"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_policy_waiver_grant_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["policy", "waiver", "grant", "pol1", "--project-id", "p1", "--reason", "x"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err
+
+
+def test_policy_waiver_list_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+    from policy import db as policy_db
+    from policy.models import PolicyWaiver
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    conn = policy_db.connect(paths.pillar_db_path("policy"))
+    policy_db.insert_waiver(conn, PolicyWaiver(id="w1", policy_id="pol1", project_id="proj-a", reason="x"))
+    conn.close()
+
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    exit_code = main.main(["policy", "waiver", "list"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"] == "fallback"
+    assert len(output["waivers"]) == 1
+
+
+def test_policy_gating_for_job_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+
+    exit_code = main.main(["policy", "gating-for-job", "--project-id", "p1", "--categories", "server_launch"])
+    assert exit_code == 1
+    assert "error" in capsys.readouterr().err

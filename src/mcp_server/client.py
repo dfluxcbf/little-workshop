@@ -176,6 +176,15 @@ def policy_confirm_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> d
     return _mutate(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/policy_confirm", timeout=timeout)
 
 
+def policy_list_waivers(paths: Paths, policy_id: str | None = None, project_id: str | None = None, *, timeout: float = 5.0):
+    params = {k: v for k, v in {"policy_id": policy_id, "project_id": project_id}.items() if v}
+    return _get(paths, "policy", "/v1/policy_waivers", params=params or None, timeout=timeout)
+
+
+def policy_gating_for_job(paths: Paths, project_id: str, categories: list[str], *, timeout: float = 10.0):
+    return _get(paths, "policy", "/v1/policies/gating-for-job", params={"project_id": project_id, "categories": ",".join(categories)}, timeout=timeout)
+
+
 def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> dict:
     return _get(paths, "agent", f"/v1/runs/{project_id}", params={"status": status} if status else None, timeout=timeout)
 
