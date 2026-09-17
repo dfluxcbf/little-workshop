@@ -296,6 +296,10 @@ def _version_branch_audit(paths: Paths, args: JSONDict) -> Any:
     return _version_job(paths, "version.branch_audit", args["project_id"], {})
 
 
+def _version_stabilize(paths: Paths, args: JSONDict) -> Any:
+    return _version_job(paths, "version.stabilize", args["project_id"], {"execute": args.get("execute", False)})
+
+
 def _version_config(paths: Paths, args: JSONDict) -> Any:
     return client.version_config(paths, args["project_id"])
 
@@ -836,6 +840,14 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_version_branch_audit", "Read-only branch-hygiene audit for one project (naming, stale-merged, "
              "abandoned, detached-HEAD, stray-worktree violations). Never merges, deletes, commits, or pushes anything.",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _version_branch_audit),
+    ToolSpec("workshop_version_stabilize", "Bring the integration branch up to date, commit pending changes, finish "
+             "the currently-checked-out feature/improvement/hotfix branch, push, and delete already-merged branches "
+             "for one project. Dry run by default (execute=false) -- every step is planned and reported, nothing "
+             "mutates until execute=true is passed explicitly.",
+             _schema({
+                 "project_id": _PROJECT_ID,
+                 "execute": _prop("boolean", "Actually perform mutations (default: false, a dry run)."),
+             }, ["project_id"]), _version_stabilize),
     ToolSpec("workshop_version_status", "Return metadata for the current feature/improvement/hotfix/release branch.",
              _schema({"project_id": _PROJECT_ID, "kind": _prop("string", "feature|improvement|hotfix|release", enum=["feature", "improvement", "hotfix", "release"])},
                       ["project_id", "kind"]), _version_status),

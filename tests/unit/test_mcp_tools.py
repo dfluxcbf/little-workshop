@@ -412,6 +412,20 @@ def test_version_branch_audit_builds_version_job(paths, fake_create_job):
     assert call["queue_key"] == "little-widget"
 
 
+def test_version_stabilize_defaults_execute_to_false(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_version_stabilize"].handler(paths, {"project_id": "little-widget"})
+    call = fake_create_job[0]
+    assert call["type"] == "version.stabilize"
+    assert call["params"] == {"execute": False}
+    assert call["queue_key"] == "little-widget"
+
+
+def test_version_stabilize_passes_execute_true(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_version_stabilize"].handler(paths, {"project_id": "little-widget", "execute": True})
+    call = fake_create_job[0]
+    assert call["params"] == {"execute": True}
+
+
 def test_deployment_status_calls_client(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "deployment_status", result={"name": "little-meals"})
     tools_mod.TOOLS_BY_NAME["workshop_deployment_status"].handler(paths, {"project_id": "little-meals"})

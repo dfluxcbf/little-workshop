@@ -6,6 +6,7 @@ own interface already makes.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,6 +32,7 @@ from version.branch_audit import audit_as_dicts
 from version.common import CommandResult
 from version.gitops import GitError
 from version.resolve import ProjectResolutionError, resolve_project_path
+from version.stabilize import stabilize
 
 
 class JobRequest(BaseModel):
@@ -116,6 +118,12 @@ def _branch_audit(repo_root: Path, params: dict) -> CommandResult:
     return CommandResult(success=True, message=f"{len(violations)} violation(s)", data={"status": status, "violations": violations})
 
 
+def _stabilize(repo_root: Path, params: dict) -> CommandResult:
+    result = stabilize(repo_root, execute=params.get("execute", False))
+    success = result.status in ("stabilized", "skipped")
+    return CommandResult(success=success, message=result.message or result.status, data=asdict(result))
+
+
 JOB_HANDLERS: dict[str, JobHandler] = {
     "version.init": _init,
     "version.feature_start": _feature_start,
@@ -135,6 +143,7 @@ JOB_HANDLERS: dict[str, JobHandler] = {
     "version.issue_set": _issue_set,
     "version.issue_unset": _issue_unset,
     "version.branch_audit": _branch_audit,
+    "version.stabilize": _stabilize,
 }
 
 STATUS_HANDLERS: dict[str, Callable[[Path], CommandResult]] = {

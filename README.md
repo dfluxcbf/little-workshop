@@ -247,12 +247,19 @@ stray-worktree classification over a project's real branches, reusing
 that pillar's own branch-type taxonomy and git primitives, `lws version
 branch-audit --all` looping over Registry's own project list for the
 old tool's ecosystem-wide sweep, never merging/deleting/pushing anything.
-Only its ad-hoc `session start/stop/list` (host-process `dtach`/PTY
-machinery with no daemon equivalent) and `stabilize run` (a repeat-
-until-green agent-driven CI-fix loop) remain open.
+`stabilize run` is also closed, as a new `version.stabilize` Job — the
+first Job on that pillar that pushes to a remote at all: fetch, bring
+the integration branch up to date, commit pending changes, finish the
+checked-out topic branch (delegating to this pillar's own already-
+existing finish commands), push, and delete already-merged branches.
+Dry run by default, matching the old tool's own design — nothing
+mutates until `--execute` is passed explicitly. Only `session
+start/stop/list`'s ad-hoc, human-driven half (host-process `dtach`/PTY
+machinery with no daemon equivalent) remains open — the last M16 gap,
+deliberately deferred.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1776 tests — 1631 unit, 145 real
+`bazel test //:coverage` all work today (1797 tests — 1651 unit, 146 real
 `systemd --user` end-to-end integration proofs (a deliberate +15%
 expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
 three of four newly-added gate-point categories that don't hit a

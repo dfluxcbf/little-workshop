@@ -213,6 +213,43 @@ def test_branch_audit_job_reports_a_real_violation_over_the_pillar_interface(pat
     assert body["result"]["violations"][0]["kind"] == "stale_merged"
 
 
+def test_stabilize_job_skips_when_no_remote_over_the_pillar_interface(paths, tmp_path):
+    repo = make_repo(tmp_path)  # version_repo_helper's own make_repo has no remote
+    client = make_client(paths, repo)
+    result = _job(client, "version.stabilize")
+    body = result.json()
+    assert body["outcome"] == "succeeded"  # skipped is a successful outcome, not a failure
+    assert body["result"]["status"] == "skipped"
+    assert "fetch failed" in body["result"]["message"]
+
+
+def test_stabilize_job_dry_run_over_the_pillar_interface_with_a_real_remote(paths, tmp_path):
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-b", "master", str(bare)], check=True, capture_output=True)
+    repo = make_repo(tmp_path)
+    _git(["remote", "add", "origin", str(bare)], repo)
+    _git(["push", "-u", "origin", "master"], repo)
+    _git(["checkout", "dev"], repo)
+    _git(["push", "-u", "origin", "dev"], repo)
+    _git(["checkout", "master"], repo)
+    _git(["checkout", "dev"], repo)
+
+    client = make_client(paths, repo)
+    result = _job(client, "version.stabilize", {"execute": False})
+    body = result.json()
+    assert body["outcome"] == "succeeded"
+    assert body["result"]["status"] == "stabilized"
+    assert body["result"]["branch_before"] == "dev"
+    assert body["result"]["pushed"] == ["dev"]
+
+
+def test_stabilize_job_fails_cleanly_on_unresolvable_project(paths, tmp_path):
+    repo = make_repo(tmp_path)
+    client = make_client(paths, repo)
+    response = client.post("/v1/jobs/version.stabilize", json={"job_id": "j1", "project_id": "ghost", "params": {}})
+    assert response.json()["outcome"] == "failed"
+
+
 def test_branch_audit_job_fails_cleanly_on_unresolvable_project(paths, tmp_path):
     repo = make_repo(tmp_path)
     client = make_client(paths, repo)
