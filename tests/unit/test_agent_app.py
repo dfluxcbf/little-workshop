@@ -483,3 +483,123 @@ def test_ci_checks_list_empty_for_unknown_project(paths, conn):
     app = build_app(paths, conn, flow=AgentFlow(paths=paths, github=FakeCIGitHub()))
     client = TestClient(app)
     assert client.get("/v1/ci_checks/never-checked").json() == []
+
+
+# -- agent.session_start/stop (M16 little-runner parity) --------------------
+
+
+class FakeSessionFlow:
+    def __init__(self, *, running=False, start_error=None):
+        self.running = running
+        self.start_error = start_error
+        self.started: list[str] = []
+        self.stopped: list[str] = []
+
+    def start(self, project_id, project_dir):
+        if self.start_error:
+            from agent.session_flow import SessionError
+
+            raise SessionError(self.start_error)
+        self.started.append(project_id)
+        self.running = True
+        return f"lws-{project_id}-session"
+
+    def stop(self, project_id):
+        if not self.running:
+            return False
+        self.stopped.append(project_id)
+        self.running = False
+        return True
+
+    def is_running(self, project_id):
+        return self.running
+
+
+def test_session_start_succeeds(paths, conn, monkeypatch):
+    monkeypatch.setattr(
+        "agent.app.resolve_project",
+        lambda paths_, project_id, **kw: {"name": project_id, "path": "/tmp/x", "repo_url": None, "status": "active"},
+    )
+    session_flow = FakeSessionFlow()
+    app = build_app(paths, conn, session_flow=session_flow)
+    client = TestClient(app)
+    response = client.post("/v1/jobs/agent.session_start", json={"job_id": "j1", "project_id": "little-widget", "params": {}})
+    body = response.json()
+    assert body["outcome"] == "succeeded"
+    assert body["result"]["session_name"] == "lws-little-widget-session"
+    assert session_flow.started == ["little-widget"]
+
+
+def test_session_start_missing_project_id_fails_cleanly(paths, conn):
+    app = build_app(paths, conn, session_flow=FakeSessionFlow())
+    client = TestClient(app)
+    response = client.post("/v1/jobs/agent.session_start", json={"job_id": "j1", "params": {}})
+    assert response.json()["outcome"] == "failed"
+
+
+def test_session_start_unresolvable_project_fails_cleanly(paths, conn, monkeypatch):
+    from common.registry_client import ProjectResolutionError
+
+    def raising_resolve(paths_, project_id, **kw):
+        raise ProjectResolutionError(f"no such project {project_id!r}")
+
+    monkeypatch.setattr("agent.app.resolve_project", raising_resolve)
+    app = build_app(paths, conn, session_flow=FakeSessionFlow())
+    client = TestClient(app)
+    response = client.post("/v1/jobs/agent.session_start", json={"job_id": "j1", "project_id": "ghost", "params": {}})
+    assert response.json()["outcome"] == "failed"
+
+
+def test_session_start_surfaces_a_session_error(paths, conn, monkeypatch):
+    monkeypatch.setattr(
+        "agent.app.resolve_project",
+        lambda paths_, project_id, **kw: {"name": project_id, "path": "/tmp/x", "repo_url": None, "status": "active"},
+    )
+    session_flow = FakeSessionFlow(start_error="not trusted")
+    app = build_app(paths, conn, session_flow=session_flow)
+    client = TestClient(app)
+    response = client.post("/v1/jobs/agent.session_start", json={"job_id": "j1", "project_id": "little-widget", "params": {}})
+    body = response.json()
+    assert body["outcome"] == "failed"
+    assert "not trusted" in body["error"]
+
+
+def test_session_stop_when_running(paths, conn):
+    session_flow = FakeSessionFlow(running=True)
+    app = build_app(paths, conn, session_flow=session_flow)
+    client = TestClient(app)
+    response = client.post("/v1/jobs/agent.session_stop", json={"job_id": "j1", "project_id": "little-widget", "params": {}})
+    body = response.json()
+    assert body["outcome"] == "succeeded"
+    assert body["result"]["stopped"] is True
+    assert session_flow.stopped == ["little-widget"]
+
+
+def test_session_stop_when_not_running(paths, conn):
+    app = build_app(paths, conn, session_flow=FakeSessionFlow(running=False))
+    client = TestClient(app)
+    response = client.post("/v1/jobs/agent.session_stop", json={"job_id": "j1", "project_id": "little-widget", "params": {}})
+    assert response.json()["result"]["stopped"] is False
+
+
+def test_session_stop_missing_project_id_fails_cleanly(paths, conn):
+    app = build_app(paths, conn, session_flow=FakeSessionFlow())
+    client = TestClient(app)
+    response = client.post("/v1/jobs/agent.session_stop", json={"job_id": "j1", "params": {}})
+    assert response.json()["outcome"] == "failed"
+
+
+def test_session_status_running(paths, conn):
+    app = build_app(paths, conn, session_flow=FakeSessionFlow(running=True))
+    client = TestClient(app)
+    response = client.get("/v1/sessions/little-widget")
+    body = response.json()
+    assert body == {"project_id": "little-widget", "running": True, "session_name": "lws-little-widget-session"}
+
+
+def test_session_status_idle(paths, conn):
+    app = build_app(paths, conn, session_flow=FakeSessionFlow(running=False))
+    client = TestClient(app)
+    response = client.get("/v1/sessions/little-widget")
+    body = response.json()
+    assert body == {"project_id": "little-widget", "running": False, "session_name": None}

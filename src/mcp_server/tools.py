@@ -700,6 +700,24 @@ def _agent_ci_status(paths: Paths, args: JSONDict) -> Any:
     return client.agent_latest_ci_check(paths, args["project_id"], branch=args.get("branch"))
 
 
+def _agent_session_start(paths: Paths, args: JSONDict) -> Any:
+    return client.create_job(
+        paths, type="agent.session_start", target_pillar="agent", project_id=args["project_id"],
+        params={}, queue_key=None, depends_on=[], created_by="mcp",
+    )
+
+
+def _agent_session_stop(paths: Paths, args: JSONDict) -> Any:
+    return client.create_job(
+        paths, type="agent.session_stop", target_pillar="agent", project_id=args["project_id"],
+        params={}, queue_key=None, depends_on=[], created_by="mcp",
+    )
+
+
+def _agent_session_status(paths: Paths, args: JSONDict) -> Any:
+    return client.agent_session_status(paths, args["project_id"])
+
+
 # ---------------------------------------------------------------------------
 # Tool catalog
 # ---------------------------------------------------------------------------
@@ -1097,6 +1115,14 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _agent_ci_list),
     ToolSpec("workshop_agent_ci_status", "Get the last recorded CI check, optionally for one branch.",
              _schema({"project_id": _PROJECT_ID, "branch": _prop("string", "Limit to one branch.")}, ["project_id"]), _agent_ci_status),
+    ToolSpec("workshop_agent_session_start", "Open an ad-hoc, human-driven interactive Remote Control session for a "
+             "project (a real PTY via dtach, independent of any Job) -- for a human to then open in the Claude app. "
+             "Refused if the project's working tree isn't trusted by Claude Code yet, or a session is already running.",
+             _schema({"project_id": _PROJECT_ID}, ["project_id"]), _agent_session_start),
+    ToolSpec("workshop_agent_session_stop", "Close the ad-hoc session running against a project, if any.",
+             _schema({"project_id": _PROJECT_ID}, ["project_id"]), _agent_session_stop),
+    ToolSpec("workshop_agent_session_status", "Whether an ad-hoc session is currently running for a project.",
+             _schema({"project_id": _PROJECT_ID}, ["project_id"]), _agent_session_status),
 )
 
 TOOLS_BY_NAME: dict[str, ToolSpec] = {tool.name: tool for tool in TOOLS}

@@ -38,7 +38,7 @@ discipline this project already applies to itself); the *sequence* and
 | M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
-| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions`, `little-pypi`, `bootstrap-little-project`, and `little-requirements` gaps closed 2026-09-17; every real `little-runner` gap (`ci run/status`, `queue show/release`, `branch-audit run`, `stabilize run`) also closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up) — only its ad-hoc `session start/stop/list` (host-process `dtach`/PTY machinery, no daemon equivalent) stays open, deliberately deferred |
+| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | Done (2026-09-17) — every real gap in all five absorbed tools closed (`docs/requirements.md`'s M16 follow-up); the handful of items left un-ported (`.lrun/config.toml`, `little-requirements`' client-config model, `lock`/`unlock`) are documented, deliberate architectural non-gaps, not deferred work |
 | M17 | Ecosystem cutover | M15, M16 | Not started |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
@@ -500,11 +500,23 @@ merged branches. `execute=false` (the default, matching the original
 tool) is a dry run — every step planned and reported, nothing on disk or
 `origin` actually changes; `lws version stabilize --all` loops the Job
 over Registry & Portfolio's own project list for the old tool's
-ecosystem-wide sweep. The only real gap left open is `session
-start/stop/list`'s *ad-hoc, human-driven* half — host-process machinery
-(a real PTY, `dtach`, a dedicated systemd unit) with no equivalent in
-this daemon's own Job model, the same category as
-`bootstrap-little-project`'s `.lrun/config.toml`.
+ecosystem-wide sweep.
+
+`session start/stop/list`'s ad-hoc, human-driven half — the very last
+open item across all five tools — is also closed (2026-09-17), as
+`agent.session_start`/`session_stop` on Agentic Development. It had
+been deferred on the reasoning that it was "host-process machinery ...
+with no equivalent in this daemon's own Job model" — that didn't hold
+up once actually attempted: Deployment & Servers already launches and
+tracks long-running background processes started once and stopped
+later, and M5's self-redeploy worker already established the
+`systemd-run --user --collect` detached-dispatch pattern this reuses.
+The genuinely new piece was only the PTY itself — `agent.run_task`'s own
+Remote Control usage is headless — which `dtach` supplies, kept alive
+in its own `systemd --user` *scope* so it survives this pillar's own
+unit restarting, `little-runner`'s own hard-earned finding ported
+directly. **Every real gap across all five absorbed tools is now
+closed** — M16 is done.
 
 Each tool's gaps are closed independently, one pillar's worth of real
 implementation work at a time, never a redesign of what `lws`'s own
