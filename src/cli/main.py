@@ -420,6 +420,37 @@ def cmd_version_branch_audit(args: argparse.Namespace) -> int:
     return 1 if any_violations else 0
 
 
+def cmd_version_stabilize(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    if args.all:
+        project_ids = [p["name"] for p in client.list_projects(paths)["projects"]]
+    else:
+        project_ids = [args.project_id]
+
+    reports = []
+    any_failed = False
+    for project_id in project_ids:
+        try:
+            result = client.create_job(
+                paths, type="version.stabilize", target_pillar="version", project_id=project_id,
+                params={"execute": args.execute}, queue_key=project_id, depends_on=[], created_by="lws",
+            )
+        except client.DaemonUnavailable as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if result.get("status") != "succeeded":
+            any_failed = True
+            reports.append({"project_id": project_id, "status": "failed", "error": result.get("error")})
+            continue
+        data = result["result"]
+        if data["status"] in ("failed", "needs_manual_resolution"):
+            any_failed = True
+        reports.append({"project_id": project_id, **data})
+
+    _print({"mode": "EXECUTE" if args.execute else "DRY RUN", "reports": reports})
+    return 1 if any_failed else 0
+
+
 def _requirements_job(args: argparse.Namespace, job_type: str, params: dict, *, timeout: float = 30.0) -> int:
     paths = Paths.from_env()
     try:
@@ -1726,6 +1757,15 @@ def build_parser() -> argparse.ArgumentParser:
     branch_audit_group.add_argument("--project-id")
     branch_audit_group.add_argument("--all", action="store_true", help="Audit every registered project")
     branch_audit.set_defaults(func=cmd_version_branch_audit)
+
+    stabilize = version_sub.add_parser(
+        "stabilize", help="Bring dev up to date, finish the checked-out branch, push, delete merged branches (dry run unless --execute)"
+    )
+    stabilize_group = stabilize.add_mutually_exclusive_group(required=True)
+    stabilize_group.add_argument("--project-id")
+    stabilize_group.add_argument("--all", action="store_true", help="Stabilize every registered project")
+    stabilize.add_argument("--execute", action="store_true", help="Actually perform mutations (default: dry run)")
+    stabilize.set_defaults(func=cmd_version_stabilize)
 
     requirements = subparsers.add_parser("requirements", help="Requirements & Quality commands")
     requirements_sub = requirements.add_subparsers(dest="requirements_command", required=True)

@@ -72,6 +72,28 @@ repository in a half-finished state.
   only, matching this Job's own read-only scope — automating a GitHub
   side effect from a read-only audit was judged a separate decision, not
   bundled into closing the parity gap.
+- **`version.stabilize`** (`version/stabilize.py`) — added 2026-09-17
+  closing M16's last real `little-runner` parity gap (`lrun stabilize
+  run`), ported from the ecosystem's own root `stabilize_branches.py`.
+  Unlike `branch_audit`, this genuinely mutates: fetches `origin`, brings
+  the integration branch up to date via a real fast-forward-only merge
+  (a genuine divergence reports `needs_manual_resolution`, never a
+  force-merge), commits pending changes, finishes the currently-checked-
+  out feature/improvement/hotfix branch by calling this pillar's own
+  already-existing `cmd_topic_finish`/`cmd_hotfix_finish` directly
+  (never a second implementation), pushes, and deletes already-merged
+  remote/local branches (skipping `dev`/`develop`/`master`/`main` and
+  `release/*`/`support/*`, exactly like the original). `execute=false`
+  is the default, a dry run — every step planned and reported, nothing
+  mutates until `execute=true` is passed explicitly, matching the
+  original tool's own dry-run-first design. `lws version stabilize
+  --all` loops the Job over Registry & Portfolio's own project list, the
+  same pattern `branch_audit` already established. This is the first Job
+  on this pillar that pushes to a remote at all — every other Job here
+  deals in local git state only, leaving publishing to whichever caller
+  owns that concern elsewhere (Agentic Development's own `_publish`); a
+  narrow, deliberate exception scoped to this one Job, not a general new
+  capability.
 
 ## Interfacing
 

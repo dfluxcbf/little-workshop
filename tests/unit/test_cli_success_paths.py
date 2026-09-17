@@ -465,6 +465,55 @@ def test_version_branch_audit_reports_a_failed_project_without_aborting(paths, m
     assert reports[1]["project_id"] == "b"
 
 
+def test_version_stabilize_dry_run_by_default(paths, monkeypatch, capsys):
+    captured = {}
+
+    def fake_create_job(p, **kw):
+        captured.update(kw)
+        return {"status": "succeeded", "result": {"status": "stabilized", "branch_before": "dev", "pushed": ["dev"]}}
+
+    monkeypatch.setattr(main.client, "create_job", fake_create_job)
+    assert main.main(["version", "stabilize", "--project-id", "little-widget"]) == 0
+    assert captured["params"] == {"execute": False}
+    out = _out(capsys)
+    assert out["mode"] == "DRY RUN"
+    assert out["reports"] == [{"project_id": "little-widget", "status": "stabilized", "branch_before": "dev", "pushed": ["dev"]}]
+
+
+def test_version_stabilize_execute_flag_passed_through(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        main.client, "create_job",
+        lambda p, **kw: (captured.update(kw), {"status": "succeeded", "result": {"status": "stabilized"}})[1],
+    )
+    main.main(["version", "stabilize", "--project-id", "little-widget", "--execute"])
+    assert captured["params"] == {"execute": True}
+
+
+def test_version_stabilize_needs_manual_resolution_returns_1(paths, monkeypatch, capsys):
+    monkeypatch.setattr(
+        main.client, "create_job",
+        lambda p, **kw: {"status": "succeeded", "result": {"status": "needs_manual_resolution", "message": "diverged"}},
+    )
+    assert main.main(["version", "stabilize", "--project-id", "little-widget", "--execute"]) == 1
+
+
+def test_version_stabilize_all_projects_loops_registry(paths, monkeypatch, capsys):
+    monkeypatch.setattr(
+        main.client, "list_projects",
+        lambda p, **kw: {"projects": [{"name": "little-widget"}, {"name": "little-gadget"}]},
+    )
+    captured = []
+
+    def fake_create_job(p, **kw):
+        captured.append(kw["project_id"])
+        return {"status": "succeeded", "result": {"status": "stabilized"}}
+
+    monkeypatch.setattr(main.client, "create_job", fake_create_job)
+    assert main.main(["version", "stabilize", "--all"]) == 0
+    assert captured == ["little-widget", "little-gadget"]
+
+
 # ---------------------------------------------------------------------------
 # deployment
 # ---------------------------------------------------------------------------

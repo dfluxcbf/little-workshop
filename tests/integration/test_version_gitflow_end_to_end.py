@@ -468,3 +468,62 @@ def test_branch_audit_finds_a_real_stale_merged_branch_over_real_registry_and_ve
 
         unresolvable = _job(workshop_env, "version.branch_audit", "no-such-project", {})
         assert unresolvable["status"] == "failed", unresolvable
+
+
+@requires_systemd_user
+def test_stabilize_really_finishes_pushes_and_cleans_up_over_real_registry_and_version_units(tmp_path, workshop_env):
+    """M16 `little-runner` parity: `lrun stabilize run --execute`, as
+    `version.stabilize` -- a real feature branch, really finished,
+    really pushed, and a real already-merged leftover branch really
+    deleted, all against a real registry+version pair."""
+    with _Session(workshop_env):
+        project_dir = _bootstrap_and_init(tmp_path, workshop_env, "little-widget")
+
+        bare = tmp_path / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-b", "master", str(bare)], check=True, capture_output=True)
+        subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "push", "-u", "origin", "master"], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "dev"], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "push", "-u", "origin", "dev"], cwd=project_dir, check=True, capture_output=True)
+
+        # A leftover, already-merged-and-pushed branch stabilize should clean up.
+        subprocess.run(["git", "checkout", "-b", "feature/old"], cwd=project_dir, check=True, capture_output=True)
+        (project_dir / "old.txt").write_text("old\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "old work"], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "push", "-u", "origin", "feature/old"], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "dev"], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "merge", "--no-ff", "feature/old"], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "push", "origin", "dev"], cwd=project_dir, check=True, capture_output=True)
+
+        # The branch actually checked out when stabilize runs.
+        subprocess.run(["git", "checkout", "-b", "feature/widgets"], cwd=project_dir, check=True, capture_output=True)
+        (project_dir / "widget.txt").write_text("widget\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "add widget"], cwd=project_dir, check=True, capture_output=True)
+
+        result = _job(workshop_env, "version.stabilize", "little-widget", {"execute": True})
+        assert result["status"] == "succeeded", result
+        data = result["result"]
+        assert data["status"] == "stabilized"
+        assert data["finished"] is True
+        assert data["branch_after"] == "dev"
+        assert data["pushed"] == ["dev"]
+        assert "feature/old" in data["deleted_remote_branches"]
+
+        current = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=project_dir, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert current == "dev"
+        assert (project_dir / "widget.txt").exists()
+
+        remote_branches = subprocess.run(
+            ["git", "branch", "-r"], cwd=project_dir, capture_output=True, text=True, check=True,
+        ).stdout
+        assert "origin/feature/old" not in remote_branches
+        assert "origin/feature/widgets" not in remote_branches  # never pushed in the first place
+
+        bare_log = subprocess.run(
+            ["git", "log", "--oneline", "dev"], cwd=bare, capture_output=True, text=True, check=True,
+        ).stdout
+        assert "widgets" in bare_log

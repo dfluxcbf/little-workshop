@@ -38,7 +38,7 @@ discipline this project already applies to itself); the *sequence* and
 | M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
-| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions`, `little-pypi`, `bootstrap-little-project`, and `little-requirements` gaps closed 2026-09-17; `little-runner`'s `ci run/status`, `queue show/release`, and `branch-audit run` all also closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up) — only its ad-hoc `session start/stop/list` (host-process `dtach`/PTY machinery, no daemon equivalent) and `stabilize run` (a repeat-until-green agent-driven CI-fix loop) stay open |
+| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions`, `little-pypi`, `bootstrap-little-project`, and `little-requirements` gaps closed 2026-09-17; every real `little-runner` gap (`ci run/status`, `queue show/release`, `branch-audit run`, `stabilize run`) also closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up) — only its ad-hoc `session start/stop/list` (host-process `dtach`/PTY machinery, no daemon equivalent) stays open, deliberately deferred |
 | M17 | Ecosystem cutover | M15, M16 | Not started |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
@@ -487,13 +487,24 @@ reimplementing them; `lws version branch-audit --all` loops the Job over
 Registry & Portfolio's own project list for the old tool's ecosystem-wide
 sweep, since that's this daemon's actual authority for "every project" —
 never merges, deletes, commits, or pushes, per the original tool's own
-rule). Two real gaps stay open: `session start/stop/list`'s *ad-hoc,
-human-driven* half (host-process machinery — a real PTY, `dtach`, a
-dedicated systemd unit — with no equivalent in this daemon's own Job
-model, the same category as `bootstrap-little-project`'s
-`.lrun/config.toml`), and `stabilize run` (a repeat-until-green agent-
-driven CI-fix loop, real future work in its own right, not attempted
-here).
+rule). `stabilize run` is also closed (2026-09-17), as a new, genuinely
+mutating `version.stabilize` Job — **correcting an earlier
+mischaracterization**: this document previously described it as "a
+repeat-until-green agent-driven CI-fix loop," which was wrong; the real
+tool's own docstring says outright what it does — commit pending
+changes, bring the integration branch up to date with `origin`, finish
+the currently-checked-out feature/improvement/hotfix branch (delegating
+to this pillar's own already-existing `version.<type>_finish` Job
+handlers, never a second implementation), push, and delete already-
+merged branches. `execute=false` (the default, matching the original
+tool) is a dry run — every step planned and reported, nothing on disk or
+`origin` actually changes; `lws version stabilize --all` loops the Job
+over Registry & Portfolio's own project list for the old tool's
+ecosystem-wide sweep. The only real gap left open is `session
+start/stop/list`'s *ad-hoc, human-driven* half — host-process machinery
+(a real PTY, `dtach`, a dedicated systemd unit) with no equivalent in
+this daemon's own Job model, the same category as
+`bootstrap-little-project`'s `.lrun/config.toml`.
 
 Each tool's gaps are closed independently, one pillar's worth of real
 implementation work at a time, never a redesign of what `lws`'s own
