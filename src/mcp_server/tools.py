@@ -671,6 +671,27 @@ def _agent_run_status(paths: Paths, args: JSONDict) -> Any:
     return client.agent_run_status(paths, args["project_id"], args["run_id"])
 
 
+def _agent_ci_check(paths: Paths, args: JSONDict) -> Any:
+    params = {
+        "pr_number": args["pr_number"], "suite_id": args["suite_id"],
+        "context": args.get("context", "little-workshop/ci"),
+    }
+    if args.get("test_command"):
+        params["test_command"] = args["test_command"].split()
+    return client.create_job(
+        paths, type="agent.ci_check", target_pillar="agent", project_id=args["project_id"],
+        params=params, queue_key=args["project_id"], depends_on=[], created_by="mcp", timeout=600.0,
+    )
+
+
+def _agent_ci_list(paths: Paths, args: JSONDict) -> Any:
+    return client.agent_ci_checks(paths, args["project_id"])
+
+
+def _agent_ci_status(paths: Paths, args: JSONDict) -> Any:
+    return client.agent_latest_ci_check(paths, args["project_id"], branch=args.get("branch"))
+
+
 # ---------------------------------------------------------------------------
 # Tool catalog
 # ---------------------------------------------------------------------------
@@ -1044,6 +1065,19 @@ TOOLS: tuple[ToolSpec, ...] = (
                       ["project_id"]), _agent_runs),
     ToolSpec("workshop_agent_run_status", "Get one agent run's full status and result by id.",
              _schema({"project_id": _PROJECT_ID, "run_id": _prop("string", "The run's id.")}, ["project_id", "run_id"]), _agent_run_status),
+    ToolSpec("workshop_agent_ci_check", "Test a pull request's real head branch in an isolated worktree and post "
+             "the result as a GitHub commit status.",
+             _schema({
+                 "project_id": _PROJECT_ID,
+                 "pr_number": _prop("integer", "The pull request number."),
+                 "suite_id": _prop("string", "The test suite id to run."),
+                 "context": _prop("string", "Commit status context name (default: little-workshop/ci)."),
+                 "test_command": _prop("string", "Space-separated command, default: python3 -m pytest."),
+             }, ["project_id", "pr_number", "suite_id"]), _agent_ci_check),
+    ToolSpec("workshop_agent_ci_list", "List every recorded CI check for a project.",
+             _schema({"project_id": _PROJECT_ID}, ["project_id"]), _agent_ci_list),
+    ToolSpec("workshop_agent_ci_status", "Get the last recorded CI check, optionally for one branch.",
+             _schema({"project_id": _PROJECT_ID, "branch": _prop("string", "Limit to one branch.")}, ["project_id"]), _agent_ci_status),
 )
 
 TOOLS_BY_NAME: dict[str, ToolSpec] = {tool.name: tool for tool in TOOLS}

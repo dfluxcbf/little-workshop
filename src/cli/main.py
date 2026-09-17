@@ -1302,6 +1302,89 @@ def cmd_agent_run_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_agent_ci_check(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    params = {"pr_number": args.pr_number, "suite_id": args.suite_id, "context": args.context}
+    if args.test_command:
+        params["test_command"] = args.test_command.split()
+    try:
+        result = client.create_job(
+            paths, type="agent.ci_check", target_pillar="agent", project_id=args.project_id,
+            params=params, queue_key=args.project_id, depends_on=[], created_by="lws", timeout=600.0,
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") in ("succeeded", "running") else 1
+
+
+def cmd_agent_ci_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.agent_ci_checks(paths, args.project_id)
+    except client.AgentPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_agent_ci_status(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.agent_latest_ci_check(paths, args.project_id, branch=args.branch)
+    except client.AgentPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("ci_check") is not None else 1
+
+
+def cmd_job_queue_show(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        running = client.list_jobs(paths, status="running")["jobs"]
+        queued = client.list_jobs(paths, status="queued")["jobs"]
+    except Exception as exc:  # noqa: BLE001 — surfaced as a plain CLI error
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    queues: dict[str, dict] = {}
+    for job in running:
+        key = job.get("queue_key")
+        if key and (not args.queue_key or key == args.queue_key):
+            queues.setdefault(key, {"queue_key": key, "running": None, "queued": []})["running"] = job
+    for job in queued:
+        key = job.get("queue_key")
+        if key and (not args.queue_key or key == args.queue_key):
+            queues.setdefault(key, {"queue_key": key, "running": None, "queued": []})["queued"].append(job)
+
+    _print({"queues": list(queues.values())})
+    return 0
+
+
+def cmd_job_queue_release(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        running = client.list_jobs(paths, status="running")["jobs"]
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    holder = next((job for job in running if job.get("queue_key") == args.queue_key), None)
+    if holder is None:
+        print(f"error: no running job holds queue_key {args.queue_key!r}", file=sys.stderr)
+        return 1
+    try:
+        stopped = client.stop_job(paths, holder["id"])
+        dispatched = client.pump(paths)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print({"stopped_job_id": holder["id"], **stopped, **dispatched})
+    return 0 if stopped.get("stopped") else 1
+
+
 def cmd_mcp_serve(args: argparse.Namespace) -> int:
     """The command `claude mcp add` registers at user scope (docs/policies/
     mcp_policy.md): a stdio MCP server proxying every pillar's Pillar
@@ -1395,6 +1478,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     job_policy_confirm_timeout.add_argument("job_id")
     job_policy_confirm_timeout.set_defaults(func=cmd_job_policy_confirm_timeout)
+
+    job_queue = job_sub.add_parser("queue", help="Inspect or recover a queue_key's running/queued Jobs")
+    job_queue_sub = job_queue.add_subparsers(dest="job_queue_command", required=True)
+
+    job_queue_show = job_queue_sub.add_parser("show", help="Show the running Job and queue for every queue_key (or one)")
+    job_queue_show.add_argument("--queue-key", default=None)
+    job_queue_show.set_defaults(func=cmd_job_queue_show)
+
+    job_queue_release = job_queue_sub.add_parser("release", help="Stop the Job holding a queue_key so the next queued one starts")
+    job_queue_release.add_argument("queue_key")
+    job_queue_release.set_defaults(func=cmd_job_queue_release)
 
     schedule = subparsers.add_parser("schedule", help="Orchestration scheduled-task commands")
     schedule_sub = schedule.add_subparsers(dest="schedule_command", required=True)
@@ -2025,6 +2119,23 @@ def build_parser() -> argparse.ArgumentParser:
     a_status.add_argument("--project-id", required=True)
     a_status.add_argument("run_id")
     a_status.set_defaults(func=cmd_agent_run_status)
+
+    a_ci_check = agent_sub.add_parser("ci-check", help="Test a pull request's head branch and post a commit status")
+    a_ci_check.add_argument("--project-id", required=True)
+    a_ci_check.add_argument("--pr-number", type=int, required=True)
+    a_ci_check.add_argument("--suite-id", required=True)
+    a_ci_check.add_argument("--context", default="little-workshop/ci", help="Commit status context name")
+    a_ci_check.add_argument("--test-command", default=None, help="Space-separated command, default: python3 -m pytest")
+    a_ci_check.set_defaults(func=cmd_agent_ci_check)
+
+    a_ci_list = agent_sub.add_parser("ci-list", help="List recorded CI checks for a project")
+    a_ci_list.add_argument("--project-id", required=True)
+    a_ci_list.set_defaults(func=cmd_agent_ci_list)
+
+    a_ci_status = agent_sub.add_parser("ci-status", help="Show the last recorded CI check for a branch")
+    a_ci_status.add_argument("--project-id", required=True)
+    a_ci_status.add_argument("--branch", default=None)
+    a_ci_status.set_defaults(func=cmd_agent_ci_status)
 
     worktree = subparsers.add_parser("worktree", help="Shared worktree-provisioning capability")
     worktree_sub = worktree.add_subparsers(dest="worktree_command", required=True)

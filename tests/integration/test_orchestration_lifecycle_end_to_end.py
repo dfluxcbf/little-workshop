@@ -193,3 +193,41 @@ def test_setting_capacity_below_one_is_rejected(orch_env):
     with client_for_socket(orch_env.paths.socket_path("orchestration"), timeout=5.0) as http:
         response = http.post("/v1/queue_keys/little-meals/capacity", json={"capacity": 0})
     assert response.status_code == 422
+
+
+# -- `lws job queue show/release` (M16 little-runner parity: `lrun queue show/release`) --
+
+
+def test_lws_job_queue_show_reports_the_running_job_and_its_queue(orch_env, monkeypatch, capsys):
+    import json
+
+    from cli import main as cli_main
+
+    monkeypatch.setattr(cli_main.Paths, "from_env", staticmethod(lambda: orch_env.paths))
+
+    first = _create(orch_env, type="slow", queue_key="project-x")
+    assert first["status"] == "running"
+    second = _create(orch_env, type="noop", queue_key="project-x")
+    assert second["status"] == "queued"
+
+    assert cli_main.main(["job", "queue", "show"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    queue = next(q for q in out["queues"] if q["queue_key"] == "project-x")
+    assert queue["running"]["id"] == first["id"]
+    assert [j["id"] for j in queue["queued"]] == [second["id"]]
+
+
+def test_lws_job_queue_release_stops_the_running_job_and_starts_the_next(orch_env, monkeypatch):
+    from cli import main as cli_main
+
+    monkeypatch.setattr(cli_main.Paths, "from_env", staticmethod(lambda: orch_env.paths))
+
+    first = _create(orch_env, type="slow", queue_key="project-x")
+    assert first["status"] == "running"
+    second = _create(orch_env, type="noop", queue_key="project-x")
+    assert second["status"] == "queued"
+
+    assert cli_main.main(["job", "queue", "release", "project-x"]) == 0
+
+    assert cli_client.job_status(orch_env.paths, first["id"])["job"]["status"] == "stopped"
+    assert cli_client.job_status(orch_env.paths, second["id"])["job"]["status"] == "succeeded"

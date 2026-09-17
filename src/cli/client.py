@@ -664,6 +664,38 @@ def agent_run_status(paths: Paths, project_id: str, run_id: str, *, timeout: flo
         raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
 
 
+def agent_ci_checks(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("agent"), timeout=timeout) as client:
+            response = client.get(f"/v1/ci_checks/{project_id}")
+        response.raise_for_status()
+        return {"ci_checks": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
+
+
+def agent_latest_ci_check(paths: Paths, project_id: str, *, branch: str | None = None, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("agent"), timeout=timeout) as client:
+            response = client.get(f"/v1/ci_checks/{project_id}/latest", params={"branch": branch} if branch else {})
+        if response.status_code == 404:
+            return {"ci_check": None}
+        response.raise_for_status()
+        return {"ci_check": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
+
+
+def pump(paths: Paths, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post("/v1/pump")
+        response.raise_for_status()
+        return {"dispatched": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable("Orchestration daemon unreachable") from exc
+
+
 def deployment_rollback_timeout(paths: Paths, project_id: str, deploy_id: str, *, timeout: float = 3600.0) -> dict:
     """Calls Deployment & Servers' PI directly — never through Orchestration
     — so the confirm-gate watchdog's rollback fires even if Orchestration

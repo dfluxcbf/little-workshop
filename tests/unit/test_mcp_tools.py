@@ -439,6 +439,36 @@ def test_agent_run_status_calls_client(paths, monkeypatch):
     assert calls[0] == ((paths, "little-meals", "r1"), {})
 
 
+def test_agent_ci_check_builds_agent_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_agent_ci_check"].handler(
+        paths, {"project_id": "little-widget", "pr_number": 5, "suite_id": "s1"}
+    )
+    call = fake_create_job[0]
+    assert call["type"] == "agent.ci_check"
+    assert call["params"] == {"pr_number": 5, "suite_id": "s1", "context": "little-workshop/ci"}
+    assert call["queue_key"] == "little-widget"
+
+
+def test_agent_ci_check_with_test_command(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_agent_ci_check"].handler(
+        paths, {"project_id": "little-widget", "pr_number": 5, "suite_id": "s1", "test_command": "python3 -m pytest tests/unit"}
+    )
+    call = fake_create_job[0]
+    assert call["params"]["test_command"] == ["python3", "-m", "pytest", "tests/unit"]
+
+
+def test_agent_ci_list_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "agent_ci_checks", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_agent_ci_list"].handler(paths, {"project_id": "little-widget"})
+    assert calls[0] == ((paths, "little-widget"), {})
+
+
+def test_agent_ci_status_calls_client_with_branch(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "agent_latest_ci_check", result={"state": "success"})
+    tools_mod.TOOLS_BY_NAME["workshop_agent_ci_status"].handler(paths, {"project_id": "little-widget", "branch": "dev"})
+    assert calls[0] == ((paths, "little-widget"), {"branch": "dev"})
+
+
 def test_job_stop_calls_client_stop_job(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "stop_job", result={"stopped": True, "reason": None})
     result = tools_mod.TOOLS_BY_NAME["workshop_job_stop"].handler(paths, {"job_id": "j1"})

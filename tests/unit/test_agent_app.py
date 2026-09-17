@@ -389,3 +389,97 @@ def test_agent_query_never_creates_a_run_record(paths, conn):
 
     client.post("/v1/jobs/agent.query", json={"job_id": "j1", "params": {"prompt": "x"}})
     assert db.list_runs(conn, "any-project") == []
+
+
+# -- agent.ci_check (M16 little-runner parity) ------------------------------
+
+
+class FakeCIGitHub:
+    def __init__(self, *, pr=None, raise_on_pr=False):
+        self.pr = pr if pr is not None else {"headRefName": "feature/widgets", "headRefOid": "abc123"}
+        self.raise_on_pr = raise_on_pr
+        self.statuses: list[dict] = []
+
+    def pull_request(self, repo, number):
+        if self.raise_on_pr:
+            from agent.github_adapter import GitHubError
+
+            raise GitHubError("no such PR")
+        return self.pr
+
+    def post_status(self, repo, sha, *, state, context, description=""):
+        self.statuses.append({"state": state})
+
+
+def _wait_for_ci_check(client, project_id, *, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        response = client.get(f"/v1/ci_checks/{project_id}")
+        if response.status_code == 200 and response.json():
+            return response.json()
+        time.sleep(0.02)
+    raise AssertionError(f"no ci_check recorded for {project_id!r} within {timeout}s")
+
+
+def test_ci_check_job_is_accepted_and_completes_in_the_background(paths, conn, monkeypatch):
+    import agent.flow as flow_module
+
+    monkeypatch.setattr(
+        flow_module.requirements_client, "run_job",
+        lambda *a, **kw: {"ran": 1, "results": [{"verdict": "passed"}]},
+    )
+    monkeypatch.setattr(
+        "agent.app.resolve_project",
+        lambda paths_, project_id, **kw: {"name": project_id, "path": "/tmp/x", "repo_url": "git@github.com:o/n.git", "status": "active"},
+    )
+    flow = AgentFlow(paths=paths, github=FakeCIGitHub())
+    app = build_app(paths, conn, flow=flow)
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/jobs/agent.ci_check",
+        json={"job_id": "j1", "project_id": "little-widget", "params": {"pr_number": 5, "suite_id": "s1"}},
+    )
+    assert response.json()["outcome"] == "accepted"
+
+    checks = _wait_for_ci_check(client, "little-widget")
+    assert len(checks) == 1
+    assert checks[0]["state"] == "success"
+
+    latest = client.get("/v1/ci_checks/little-widget/latest").json()
+    assert latest["state"] == "success"
+
+
+def test_ci_check_missing_project_id_fails_cleanly(paths, conn):
+    app = build_app(paths, conn, flow=AgentFlow(paths=paths, github=FakeCIGitHub()))
+    client = TestClient(app)
+    response = client.post("/v1/jobs/agent.ci_check", json={"job_id": "j1", "params": {}})
+    assert response.json()["outcome"] == "failed"
+
+
+def test_ci_check_unresolvable_project_fails_cleanly(paths, conn, monkeypatch):
+    from common.registry_client import ProjectResolutionError
+
+    def raising_resolve(paths_, project_id, **kw):
+        raise ProjectResolutionError(f"no such project {project_id!r}")
+
+    monkeypatch.setattr("agent.app.resolve_project", raising_resolve)
+    app = build_app(paths, conn, flow=AgentFlow(paths=paths, github=FakeCIGitHub()))
+    client = TestClient(app)
+    response = client.post(
+        "/v1/jobs/agent.ci_check", json={"job_id": "j1", "project_id": "ghost", "params": {"pr_number": 1, "suite_id": "s1"}},
+    )
+    assert response.json()["outcome"] == "failed"
+
+
+def test_ci_checks_latest_404_when_none_recorded(paths, conn):
+    app = build_app(paths, conn, flow=AgentFlow(paths=paths, github=FakeCIGitHub()))
+    client = TestClient(app)
+    response = client.get("/v1/ci_checks/never-checked/latest")
+    assert response.status_code == 404
+
+
+def test_ci_checks_list_empty_for_unknown_project(paths, conn):
+    app = build_app(paths, conn, flow=AgentFlow(paths=paths, github=FakeCIGitHub()))
+    client = TestClient(app)
+    assert client.get("/v1/ci_checks/never-checked").json() == []

@@ -745,3 +745,124 @@ def test_skip_task_raises_when_not_awaiting_finish(paths, conn):
     flow = AgentFlow(paths=paths)
     with pytest.raises(AgentFlowError, match="not awaiting finish"):
         flow.skip_task(conn, run_id)
+
+
+# -- run_ci_check (M16 little-runner parity: `lrun ci run/status`) ---------
+
+
+class FakeCIGitHub:
+    def __init__(self, *, pr=None, raise_on_pr=False):
+        self.pr = pr if pr is not None else {"headRefName": "feature/widgets", "headRefOid": "abc123"}
+        self.raise_on_pr = raise_on_pr
+        self.statuses: list[dict] = []
+
+    def pull_request(self, repo, number):
+        if self.raise_on_pr:
+            from agent.github_adapter import GitHubError
+
+            raise GitHubError("no such PR")
+        return self.pr
+
+    def post_status(self, repo, sha, *, state, context, description=""):
+        self.statuses.append({"repo": repo, "sha": sha, "state": state, "context": context, "description": description})
+
+
+def test_run_ci_check_requires_a_github_remote(paths, conn):
+    flow = AgentFlow(paths=paths, github=FakeCIGitHub())
+    with pytest.raises(AgentFlowError, match="no GitHub remote"):
+        flow.run_ci_check(conn, "p1", None, {"pr_number": 5, "suite_id": "s1"})
+
+
+def test_run_ci_check_requires_pr_number_and_suite_id(paths, conn):
+    flow = AgentFlow(paths=paths, github=FakeCIGitHub())
+    with pytest.raises(AgentFlowError, match="pr_number"):
+        flow.run_ci_check(conn, "p1", "git@github.com:o/n.git", {})
+
+
+def test_run_ci_check_raises_when_pull_request_unreadable(paths, conn):
+    flow = AgentFlow(paths=paths, github=FakeCIGitHub(raise_on_pr=True))
+    with pytest.raises(AgentFlowError, match="no such PR"):
+        flow.run_ci_check(conn, "p1", "git@github.com:o/n.git", {"pr_number": 5, "suite_id": "s1"})
+
+
+def test_run_ci_check_success_posts_success_status_and_records_check(paths, conn, monkeypatch):
+    import agent.flow as flow_module
+
+    monkeypatch.setattr(
+        flow_module.requirements_client, "run_job",
+        lambda *a, **kw: {"ran": 2, "results": [{"verdict": "passed"}, {"verdict": "passed"}]},
+    )
+    github = FakeCIGitHub()
+    flow = AgentFlow(paths=paths, github=github)
+    result = flow.run_ci_check(conn, "p1", "git@github.com:o/n.git", {"pr_number": 5, "suite_id": "s1"})
+
+    assert result["state"] == db.CI_SUCCESS
+    assert result["ran"] == 2
+    assert [s["state"] for s in github.statuses] == [db.CI_PENDING, db.CI_SUCCESS]
+    checks = db.list_ci_checks(conn, "p1")
+    assert len(checks) == 1
+    assert checks[0]["state"] == db.CI_SUCCESS
+    assert checks[0]["branch"] == "feature/widgets"
+
+
+def test_run_ci_check_failure_posts_failure_status(paths, conn, monkeypatch):
+    import agent.flow as flow_module
+
+    monkeypatch.setattr(
+        flow_module.requirements_client, "run_job",
+        lambda *a, **kw: {"ran": 2, "results": [{"verdict": "passed"}, {"verdict": "failed"}]},
+    )
+    github = FakeCIGitHub()
+    flow = AgentFlow(paths=paths, github=github)
+    result = flow.run_ci_check(conn, "p1", "git@github.com:o/n.git", {"pr_number": 5, "suite_id": "s1"})
+
+    assert result["state"] == db.CI_FAILURE
+    assert [s["state"] for s in github.statuses] == [db.CI_PENDING, db.CI_FAILURE]
+
+
+def test_run_ci_check_no_tests_ran_is_an_error(paths, conn, monkeypatch):
+    import agent.flow as flow_module
+
+    monkeypatch.setattr(flow_module.requirements_client, "run_job", lambda *a, **kw: {"ran": 0, "results": []})
+    flow = AgentFlow(paths=paths, github=FakeCIGitHub())
+    result = flow.run_ci_check(conn, "p1", "git@github.com:o/n.git", {"pr_number": 5, "suite_id": "s1"})
+    assert result["state"] == db.CI_ERROR
+
+
+def test_run_ci_check_infra_failure_posts_error_status_and_raises(paths, conn, monkeypatch):
+    import agent.flow as flow_module
+    from agent.requirements_client import RequirementsClientError
+
+    def raising_run_job(*a, **kw):
+        raise RequirementsClientError("Requirements & Quality pillar is unavailable")
+
+    monkeypatch.setattr(flow_module.requirements_client, "run_job", raising_run_job)
+    github = FakeCIGitHub()
+    flow = AgentFlow(paths=paths, github=github)
+    with pytest.raises(AgentFlowError, match="unavailable"):
+        flow.run_ci_check(conn, "p1", "git@github.com:o/n.git", {"pr_number": 5, "suite_id": "s1"})
+
+    assert [s["state"] for s in github.statuses] == [db.CI_PENDING, db.CI_ERROR]
+    checks = db.list_ci_checks(conn, "p1")
+    assert checks[0]["state"] == db.CI_ERROR
+
+
+def test_run_ci_check_passes_through_test_command_and_timeout(paths, conn, monkeypatch):
+    import agent.flow as flow_module
+
+    captured = {}
+
+    def fake_run_job(paths_, project_id, job_type, params, **kw):
+        captured["params"] = params
+        captured["timeout"] = kw.get("timeout")
+        return {"ran": 1, "results": [{"verdict": "passed"}]}
+
+    monkeypatch.setattr(flow_module.requirements_client, "run_job", fake_run_job)
+    flow = AgentFlow(paths=paths, github=FakeCIGitHub())
+    flow.run_ci_check(conn, "p1", "git@github.com:o/n.git", {
+        "pr_number": 5, "suite_id": "s1", "test_command": "python3 -m pytest tests/unit", "timeout_seconds": 42.0,
+    })
+
+    assert captured["params"]["test_command"] == "python3 -m pytest tests/unit"
+    assert captured["params"]["commitish"] == "abc123"
+    assert captured["timeout"] == 42.0

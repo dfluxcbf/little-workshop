@@ -197,6 +197,14 @@ def agent_run_status(paths: Paths, project_id: str, run_id: str, *, timeout: flo
     return _get(paths, "agent", f"/v1/runs/{project_id}/{run_id}", timeout=timeout)
 
 
+def agent_ci_checks(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
+    return _get(paths, "agent", f"/v1/ci_checks/{project_id}", timeout=timeout)
+
+
+def agent_latest_ci_check(paths: Paths, project_id: str, *, branch: str | None = None, timeout: float = 5.0) -> dict:
+    return _get(paths, "agent", f"/v1/ci_checks/{project_id}/latest", params={"branch": branch} if branch else None, timeout=timeout)
+
+
 def stop_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> dict:
     return _mutate(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/stop", timeout=timeout)
 
