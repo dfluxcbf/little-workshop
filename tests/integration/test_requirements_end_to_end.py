@@ -10,10 +10,12 @@ that produces. The definition-of-done report reflects all of it.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 
 from cli import client as cli_client
+from cli import main as cli_main
 from common import systemd
 from common.manifest import Manifest
 from common.shell import DEFAULT_RUNNER
@@ -248,3 +250,86 @@ def test_unlinking_a_requirement_from_a_suite_removes_it_from_the_report(tmp_pat
 
         unlinked_report = cli_client.requirements_report(workshop_env.paths, project_id)
         assert unlinked_report["requirements"][0]["suite_ids"] == []
+
+
+@requires_systemd_user
+def test_lws_requirements_import_export_report_and_test_structure_against_real_pillars(
+    tmp_path, workshop_env, capsys, monkeypatch
+):
+    """M16 `little-requirements` parity gap: `lws requirements
+    import/export/report --md/--csv/--json-file/test-structure-create`
+    are pure CLI-side additions (no new Pillar Interface route beyond
+    what M10's own `create_requirement`/`link_requirement_to_suite`
+    already exposed) -- proven here driven exactly as a user would type
+    them, against a real Requirements & Quality `systemd --user` unit,
+    not just the monkeypatched-client unit tests in
+    tests/unit/test_cli_success_paths.py."""
+    with _Session(workshop_env):
+        monkeypatch.setattr(cli_main.Paths, "from_env", staticmethod(lambda: workshop_env.paths))
+        project_id = "little-widget"
+        _bootstrap(tmp_path, workshop_env, project_id)
+
+        suite = _job(workshop_env, "requirements.create_test_suite", project_id, {"name": "core"})
+        suite_id = suite["result"]["id"]
+
+        payload_path = tmp_path / "import.json"
+        payload_path.write_text(json.dumps({
+            "list": [
+                {"key": "REQ-1", "title": "widget works", "description": "d1", "suite_id": suite_id},
+                {"key": "REQ-2", "title": "widget ships", "description": "d2"},
+            ],
+        }), encoding="utf-8")
+        assert cli_main.main([
+            "requirements", "import", "--project-id", project_id, "--json", str(payload_path),
+        ]) == 0
+        capsys.readouterr()
+
+        listed = cli_client.requirements_list_requirements(workshop_env.paths, project_id)
+        assert sorted(r["key"] for r in listed["requirements"]) == ["REQ-1", "REQ-2"]
+        req1 = next(r for r in listed["requirements"] if r["key"] == "REQ-1")
+        req1_detail = cli_client.requirements_get_requirement(workshop_env.paths, req1["id"])
+        assert req1_detail["requirement"]["suite_ids"] == [suite_id]
+
+        # Re-importing the same key without --edit is a no-op conflict,
+        # not a duplicate.
+        assert cli_main.main([
+            "requirements", "import", "--project-id", project_id, "--json", str(payload_path),
+        ]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert sorted(out["skipped_conflicts"]) == ["REQ-1", "REQ-2"]
+
+        export_dir = tmp_path / "export"
+        assert cli_main.main([
+            "requirements", "export", "--project-id", project_id, "--path", str(export_dir),
+        ]) == 0
+        capsys.readouterr()
+        assert (export_dir / "requirement_export.json").exists()
+        exported = json.loads((export_dir / "requirement_export.json").read_text())
+        assert sorted(r["key"] for r in exported["requirements"]) == ["REQ-1", "REQ-2"]
+
+        record = _job(workshop_env, "requirements.record_test_result", project_id, {
+            "suite_id": suite_id, "test_name": "test_widget_works", "verdict": "passed",
+        })
+        assert record["status"] == "succeeded", record
+        publish = _job(workshop_env, "requirements.publish_requirement", project_id, {"requirement_id": req1["id"]})
+        assert publish["status"] == "succeeded", publish
+
+        report_dir = tmp_path / "report"
+        assert cli_main.main([
+            "requirements", "report", "--project-id", project_id, "--md", "--csv", "--json-file",
+            "--suite", suite_id, "--path", str(report_dir),
+        ]) == 0
+        capsys.readouterr()
+        md_text = (report_dir / f"requirements_report-{suite_id}.md").read_text()
+        assert req1["id"] in md_text
+        assert "Done: True" in md_text
+        assert (report_dir / f"requirements_report-{suite_id}.csv").exists()
+        assert (report_dir / f"requirements_report-{suite_id}.json").exists()
+
+        tests_root = tmp_path / "workdir" / project_id
+        assert cli_main.main([
+            "requirements", "test-structure-create", "--project-id", project_id,
+            "--tests-root", str(tests_root), "--force",
+        ]) == 0
+        capsys.readouterr()
+        assert (tests_root / "tests" / "core" / "__init__.py").exists()

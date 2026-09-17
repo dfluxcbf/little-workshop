@@ -38,7 +38,7 @@ discipline this project already applies to itself); the *sequence* and
 | M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
-| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions`, `little-pypi`, and `bootstrap-little-project` gaps closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up); `little-requirements`, `little-runner` gaps still open |
+| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions`, `little-pypi`, `bootstrap-little-project`, and `little-requirements` gaps closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up); `little-runner`'s gap (the highest blast-radius one) still open |
 | M17 | Ecosystem cutover | M15, M16 | Not started |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
@@ -455,14 +455,24 @@ closed: `.lrun/config.toml` is a host-local file (never committed,
 written under `~/.config/little-runner/`) with no clear pillar owner and
 no clear future pillar-equivalent yet — a low-value, awkward fit that
 doesn't belong to `project.bootstrap`'s own job. `little-requirements`
-and `little-runner` are not close — both have real, load-bearing concepts
-(a client-side
-workspace config; GitHub-issue-triggered polling, per-repo issue queues,
-session management, branch stabilization, cross-project branch
-auditing) with no equivalent anywhere in little-workshop yet, and
-`little-runner` is the one every other real project in this ecosystem
-currently depends on for actual CI — the highest blast-radius gap to
-close.
+is closed (2026-09-17): `export`, `import`, `report --md/--csv/--json-file`,
+and `test-structure-create` — all four pure CLI-side additions, no new
+Pillar Interface route. `set-verdict` needed no new code: `result
+record` already writes `source="manual"`, giving it full parity
+already. Three real gaps stay deliberately un-ported, each for its own
+architectural reason: `workspace`/`install`/`update` (a client-side
+`.reqs`/`database.conf` config-file model with no equivalent in a
+server-authoritative daemon — the same shape of gap as
+`bootstrap-little-project`'s own `.lrun/config.toml`); `project`
+create/delete/list/get (superseded outright — this pillar never owned
+"project," Registry & Portfolio already does); `lock`/`unlock`/
+`unlock-server` (moot once a single daemon process is the only writer).
+`little-runner` is the one tool left, and it is not close — real,
+load-bearing concepts (GitHub-issue-triggered polling, per-repo issue
+queues, session management, branch stabilization, cross-project branch
+auditing) with no equivalent anywhere in little-workshop yet, and it is
+the one every other real project in this ecosystem currently depends on
+for actual CI — the highest blast-radius gap to close.
 
 Each tool's gaps are closed independently, one pillar's worth of real
 implementation work at a time, never a redesign of what `lws`'s own

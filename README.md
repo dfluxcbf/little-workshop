@@ -226,11 +226,21 @@ add/commit/checkout-dev/merge dance a caller previously had to run by
 hand), leaving a freshly bootstrapped project on `dev` and gitflow-ready
 — matching what the old tool's own `create` always did via `lvx init`.
 Its `.lrun/config.toml` gap is deliberately deferred: a host-local file
-with no clear pillar owner yet. `little-requirements` and
-`little-runner`'s gaps remain open.
+with no clear pillar owner yet. `little-requirements`'s gaps are also
+closed: `lws requirements export`/`import`/`report --md/--csv/--json-file`/
+`test-structure-create`, all pure CLI-side additions matching the old
+tool's own equivalents — `set-verdict` needed no new code at all, since
+`result record` already writes manual results. Three of its commands
+stay deliberately un-ported (a client-side `.reqs` config-file model
+with no equivalent in a server-authoritative daemon; `project`
+create/delete/list/get, superseded outright by Registry & Portfolio;
+file-level `lock`/`unlock`, moot with one daemon process as the only
+writer). `little-runner`'s gap — the highest blast-radius one, since
+every other real project in this ecosystem currently depends on it for
+CI — remains open.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1702 tests — 1562 unit, 140 real
+`bazel test //:coverage` all work today (1715 tests — 1574 unit, 141 real
 `systemd --user` end-to-end integration proofs (a deliberate +15%
 expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
 three of four newly-added gate-point categories that don't hit a
