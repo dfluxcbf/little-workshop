@@ -16,6 +16,7 @@ from common.paths import Paths
 from version.commands.config import cmd_config_add_hook, cmd_config_list, cmd_config_remove_hook
 from version.commands.hotfix import cmd_hotfix_finish, cmd_hotfix_start, cmd_hotfix_status
 from version.commands.init import cmd_init
+from version.commands.issue import cmd_issue_list, cmd_issue_set, cmd_issue_unset
 from version.commands.release import (
     cmd_release_candidate_cut,
     cmd_release_candidate_list,
@@ -100,6 +101,14 @@ def _config_remove_hook(repo_root: Path, params: dict) -> CommandResult:
     return cmd_config_remove_hook(repo_root, params["hook_path"])
 
 
+def _issue_set(repo_root: Path, params: dict) -> CommandResult:
+    return cmd_issue_set(repo_root, params["issue_number"], branch=params.get("branch"))
+
+
+def _issue_unset(repo_root: Path, params: dict) -> CommandResult:
+    return cmd_issue_unset(repo_root, branch=params.get("branch"))
+
+
 JOB_HANDLERS: dict[str, JobHandler] = {
     "version.init": _init,
     "version.feature_start": _feature_start,
@@ -116,6 +125,8 @@ JOB_HANDLERS: dict[str, JobHandler] = {
     "version.support_finish": _support_finish,
     "version.config_add_hook": _config_add_hook,
     "version.config_remove_hook": _config_remove_hook,
+    "version.issue_set": _issue_set,
+    "version.issue_unset": _issue_unset,
 }
 
 STATUS_HANDLERS: dict[str, Callable[[Path], CommandResult]] = {
@@ -173,6 +184,15 @@ def build_app(paths: Paths, resolve: Callable[[Paths, str | None], Path] = resol
             raise HTTPException(status_code=404, detail=str(exc))
         result = cmd_config_list(repo_root)
         return result.data["config"]
+
+    @app.get("/v1/issues")
+    def issues(project_id: str) -> dict:
+        try:
+            repo_root = resolve(paths, project_id)
+        except ProjectResolutionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        result = cmd_issue_list(repo_root)
+        return result.data
 
     @app.get("/v1/release/candidates")
     def release_candidates(project_id: str) -> dict:

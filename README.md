@@ -199,8 +199,25 @@ gained `verify_after_completion` — the category is verified *after* a
 real `project.bootstrap`/`project.import` succeeds, fire-and-forget,
 never gated before it.
 
+### M16 — full functional parity with the absorbed tools (in progress)
+
+Rejected compatibility shims outright, by direct decision: the five old
+tools (`lreq`, `lvx`, `lrun`, `little-pypi`, `bootstrap-little-project`)
+keep running their own original code for the whole transition, and
+never call into `lws` or vice versa — see `docs/milestones.md` M16/M17
+and `docs/architecture.md`'s CLI section for the corrected design. A
+real, command-by-command survey of all ~90 subcommands across the five
+tools found `little-versions` closest to full parity; its one gap
+(standalone issue↔branch linking, previously only settable once at a
+topic branch's own start time) is now closed: `version.issue_set`/
+`issue_unset` and `GET /v1/issues`, reusing `branches.py`'s own
+`issue_automation` flag as the single source of truth for which branch
+types are linkable. The other four tools' gaps (see the published
+parity ledger referenced from `docs/requirements.md`'s M16 section)
+remain open.
+
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1651 tests — 1513 unit, 138 real
+`bazel test //:coverage` all work today (1679 tests — 1540 unit, 139 real
 `systemd --user` end-to-end integration proofs (a deliberate +15%
 expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
 three of four newly-added gate-point categories that don't hit a

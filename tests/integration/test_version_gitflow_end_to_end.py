@@ -414,3 +414,33 @@ def test_force_flag_overrides_a_dirty_working_tree_that_would_otherwise_block_a_
 
         branches = subprocess.run(["git", "branch"], cwd=project_dir, capture_output=True, text=True).stdout
         assert "feature/widgets" in branches
+
+
+@requires_systemd_user
+def test_standalone_issue_set_unset_and_list_over_real_registry_and_version_units(tmp_path, workshop_env):
+    """M16's little-versions parity gap, closed 2026-09-17: standalone
+    issue<->branch linking, previously only settable once at a topic
+    branch's own start time with no way to view or change it afterward."""
+    with _Session(workshop_env):
+        project_dir = _bootstrap_and_init(tmp_path, workshop_env)
+        subprocess.run(["git", "checkout", "-b", "feature/widgets"], cwd=project_dir, check=True, capture_output=True)
+
+        listed_empty = cli_client.version_issues(workshop_env.paths, "little-widget")
+        assert listed_empty == {"links": {}}
+
+        set_result = _job(workshop_env, "version.issue_set", "little-widget", {"issue_number": 42})
+        assert set_result["status"] == "succeeded", set_result
+        assert set_result["result"] == {"branch": "feature/widgets", "issue": 42}
+
+        listed = cli_client.version_issues(workshop_env.paths, "little-widget")
+        assert listed == {"links": {"feature/widgets": 42}}
+
+        rejected = _job(workshop_env, "version.issue_set", "little-widget", {"issue_number": 1, "branch": "support/1.0"})
+        assert rejected["status"] == "failed", rejected
+        assert "does not support issue linkage" in rejected["error"]
+
+        unset_result = _job(workshop_env, "version.issue_unset", "little-widget", {"branch": "feature/widgets"})
+        assert unset_result["status"] == "succeeded", unset_result
+
+        listed_after = cli_client.version_issues(workshop_env.paths, "little-widget")
+        assert listed_after == {"links": {}}

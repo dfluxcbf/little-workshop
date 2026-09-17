@@ -116,6 +116,10 @@ def _make_stub_app(paths: Paths | None = None) -> FastAPI:
     def release_candidates():
         return {"candidates": [1, 2]}
 
+    @app.get("/v1/issues")
+    def issues():
+        return {"links": {"feature/widgets": 42}}
+
     @app.get("/v1/deployments/{project_id}")
     def deployments(project_id: str):
         return [{"project_id": project_id}]
@@ -309,6 +313,11 @@ def test_version_status_hits_the_real_version_socket(paths_with_live_daemons):
 def test_version_config_hits_the_real_version_socket(paths_with_live_daemons):
     result = client.version_config(paths_with_live_daemons, "little-widget")
     assert result["production_branch"] == "master"
+
+
+def test_version_issues_hits_the_real_version_socket(paths_with_live_daemons):
+    result = client.version_issues(paths_with_live_daemons, "little-widget")
+    assert result["links"] == {"feature/widgets": 42}
 
 
 def test_version_release_candidates_hits_the_real_version_socket(paths_with_live_daemons):

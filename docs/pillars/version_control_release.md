@@ -46,6 +46,14 @@ repository in a half-finished state.
   hooks run after every bump.
 - **`GET /v1/status/{kind}`** — metadata for whichever branch kind
   (`feature`/`improvement`/`hotfix`/`release`) is currently checked out.
+- **Standalone issue linking** (`version.issue_set`/`issue_unset`,
+  `GET /v1/issues`) — added 2026-09-17 closing M16's `little-versions`
+  parity gap: view or change a branch's linked issue number after the
+  fact, not just once at its own `*_start` time. Reuses the same
+  `issue_automation` flag `branch_type_policy()` already carries per
+  branch type (`feature`/`improvement`/`hotfix`) as the single source of
+  truth for which branch types can be linked at all, rather than a
+  second, separately maintained list.
 
 ## Interfacing
 

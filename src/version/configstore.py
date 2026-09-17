@@ -58,6 +58,17 @@ def get_issue_link(repo_root: Path, branch: str) -> int | None:
     return state.get("issue_links", {}).get(branch)
 
 
+def remove_issue_link(repo_root: Path, branch: str) -> None:
+    state = load_state(repo_root)
+    state.get("issue_links", {}).pop(branch, None)
+    write_state(repo_root, state)
+
+
+def list_issue_links(repo_root: Path) -> dict[str, int]:
+    state = load_state(repo_root)
+    return dict(state.get("issue_links", {}))
+
+
 def set_promoted_rc(repo_root: Path, release_branch: str, rc_number: int) -> None:
     state = load_state(repo_root)
     state.setdefault("promoted_rcs", {})[release_branch] = rc_number

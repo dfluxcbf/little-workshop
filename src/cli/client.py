@@ -270,6 +270,16 @@ def version_config(paths: Paths, project_id: str, *, timeout: float = 5.0) -> di
         raise VersionPillarUnavailable("Version Control & Release daemon unreachable") from exc
 
 
+def version_issues(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("version"), timeout=timeout) as client:
+            response = client.get("/v1/issues", params={"project_id": project_id})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise VersionPillarUnavailable("Version Control & Release daemon unreachable") from exc
+
+
 def version_release_candidates(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
     try:
         with client_for_socket(paths.socket_path("version"), timeout=timeout) as client:

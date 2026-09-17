@@ -368,6 +368,25 @@ def cmd_version_config_remove_hook(args: argparse.Namespace) -> int:
     return _version_job(args, "version.config_remove_hook", {"hook_path": args.hook_path})
 
 
+def cmd_version_issue_set(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.issue_set", {"issue_number": args.issue_number, "branch": args.branch})
+
+
+def cmd_version_issue_unset(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.issue_unset", {"branch": args.branch})
+
+
+def cmd_version_issue_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.version_issues(paths, args.project_id)
+    except client.VersionPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
 def _requirements_job(args: argparse.Namespace, job_type: str, params: dict, *, timeout: float = 30.0) -> int:
     paths = Paths.from_env()
     try:
@@ -1265,6 +1284,21 @@ def build_parser() -> argparse.ArgumentParser:
     config_remove_hook.add_argument("--project-id", required=True)
     config_remove_hook.add_argument("hook_path")
     config_remove_hook.set_defaults(func=cmd_version_config_remove_hook)
+
+    issue_set = version_sub.add_parser("issue-set", help="Link an issue number to a branch (default: current)")
+    issue_set.add_argument("--project-id", required=True)
+    issue_set.add_argument("issue_number", type=int)
+    issue_set.add_argument("branch", nargs="?", default=None)
+    issue_set.set_defaults(func=cmd_version_issue_set)
+
+    issue_unset = version_sub.add_parser("issue-unset", help="Remove the issue link from a branch (default: current)")
+    issue_unset.add_argument("--project-id", required=True)
+    issue_unset.add_argument("branch", nargs="?", default=None)
+    issue_unset.set_defaults(func=cmd_version_issue_unset)
+
+    issue_list = version_sub.add_parser("issue-list", help="List every branch with a linked issue")
+    issue_list.add_argument("--project-id", required=True)
+    issue_list.set_defaults(func=cmd_version_issue_list)
 
     requirements = subparsers.add_parser("requirements", help="Requirements & Quality commands")
     requirements_sub = requirements.add_subparsers(dest="requirements_command", required=True)

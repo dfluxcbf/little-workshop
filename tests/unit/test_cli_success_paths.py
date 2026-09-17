@@ -376,6 +376,35 @@ def test_version_config_add_and_remove_hook(paths, monkeypatch):
     assert captured["type"] == "version.config_remove_hook"
 
 
+def test_version_issue_set_with_explicit_branch(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    main.main(["version", "issue-set", "--project-id", "little-widget", "42", "feature/widgets"])
+    assert captured["type"] == "version.issue_set"
+    assert captured["params"] == {"issue_number": 42, "branch": "feature/widgets"}
+
+
+def test_version_issue_set_defaults_branch_to_none(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    main.main(["version", "issue-set", "--project-id", "little-widget", "42"])
+    assert captured["params"] == {"issue_number": 42, "branch": None}
+
+
+def test_version_issue_unset(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    main.main(["version", "issue-unset", "--project-id", "little-widget", "feature/widgets"])
+    assert captured["type"] == "version.issue_unset"
+    assert captured["params"] == {"branch": "feature/widgets"}
+
+
+def test_version_issue_list_success(paths, monkeypatch, capsys):
+    monkeypatch.setattr(main.client, "version_issues", lambda p, project_id, **kw: {"links": {"feature/widgets": 42}})
+    assert main.main(["version", "issue-list", "--project-id", "little-widget"]) == 0
+    assert _out(capsys)["links"] == {"feature/widgets": 42}
+
+
 # ---------------------------------------------------------------------------
 # deployment
 # ---------------------------------------------------------------------------

@@ -173,6 +173,22 @@ def test_version_release_candidates_success(paths, monkeypatch):
     assert client.version_release_candidates(paths, "little-widget") == {"candidates": [1, 2]}
 
 
+def test_version_issues_success(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/issues")
+    def issues(project_id: str) -> dict:
+        return {"links": {"feature/widgets": 42}}
+
+    _rig(paths, monkeypatch, "version", app)
+    assert client.version_issues(paths, "little-widget") == {"links": {"feature/widgets": 42}}
+
+
+def test_version_issues_raises_when_version_unreachable(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.version_issues(paths, "little-widget")
+
+
 def test_deployment_status_success(paths, monkeypatch):
     app = FastAPI()
 
