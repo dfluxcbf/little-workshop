@@ -1085,6 +1085,21 @@ def cmd_policy_results(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_deployment_set_manifest(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    toml_text = Path(args.file).read_text(encoding="utf-8")
+    try:
+        result = client.create_job(
+            paths, type="deployment.set_manifest", target_pillar="deployment", project_id=args.project_id,
+            params={"toml": toml_text}, queue_key=None, depends_on=[], created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
 def cmd_deployment_deploy(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -1097,6 +1112,7 @@ def cmd_deployment_deploy(args: argparse.Namespace) -> int:
             queue_key=args.project_id,
             depends_on=[],
             created_by="lws",
+            timeout=300.0,
         )
     except client.DaemonUnavailable as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -2142,6 +2158,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     deployment = subparsers.add_parser("deployment", help="Deployment & Servers commands")
     deployment_sub = deployment.add_subparsers(dest="deployment_command", required=True)
+
+    d_set_manifest = deployment_sub.add_parser("set-manifest", help="Upload a project's [server] manifest (manifest.deployment.toml)")
+    d_set_manifest.add_argument("--project-id", required=True)
+    d_set_manifest.add_argument("--file", required=True, help="Path to a local TOML file with a [server] table")
+    d_set_manifest.set_defaults(func=cmd_deployment_set_manifest)
 
     d_deploy = deployment_sub.add_parser("deploy", help="Stop if running, install+launch from a throwaway worktree of the branch")
     d_deploy.add_argument("--project-id", required=True)

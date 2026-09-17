@@ -296,3 +296,82 @@ def test_redeploy_pillar_job_dispatches_when_self_targeting(paths, conn, tmp_pat
     assert "dispatched" in body["result"]["dispatched"]
     dispatch_calls = [c for c in runner.calls if c and c[0] == "systemd-run"]
     assert any("redeploy-pillar-worker" in c for c in dispatch_calls)
+
+
+# -- deployment.set_manifest (M17 ecosystem-cutover finding: nothing --------
+# exposed a way to write a project's own manifest.deployment.toml before)
+
+
+VALID_MANIFEST_TOML = """
+[server]
+name = "little-gadget"
+command = "run.sh"
+port = 9000
+match = "run.sh"
+"""
+
+
+def test_set_manifest_writes_a_valid_manifest(paths, conn):
+    app = build_app(paths, conn)
+    client = TestClient(app)
+    response = client.post(
+        "/v1/jobs/deployment.set_manifest",
+        json={"job_id": "j1", "project_id": "little-gadget", "params": {"toml": VALID_MANIFEST_TOML}},
+    )
+    body = response.json()
+    assert body["outcome"] == "succeeded", body
+    assert body["result"] == {"name": "little-gadget", "port": 9000}
+
+    stored = ProjectFilesClient(paths, caller_pillar="deployment").read("little-gadget", "manifest.deployment.toml")
+    assert stored == VALID_MANIFEST_TOML
+
+    fetched = client.get("/v1/manifest/little-gadget")
+    assert fetched.json()["name"] == "little-gadget"
+    assert fetched.json()["port"] == 9000
+
+
+def test_set_manifest_rejects_invalid_toml(paths, conn):
+    app = build_app(paths, conn)
+    client = TestClient(app)
+    response = client.post(
+        "/v1/jobs/deployment.set_manifest",
+        json={"job_id": "j1", "project_id": "little-gadget", "params": {"toml": "not valid toml ["}},
+    )
+    body = response.json()
+    assert body["outcome"] == "failed"
+    assert "invalid manifest" in body["error"]
+
+
+def test_set_manifest_rejects_missing_required_field(paths, conn):
+    app = build_app(paths, conn)
+    client = TestClient(app)
+    response = client.post(
+        "/v1/jobs/deployment.set_manifest",
+        json={"job_id": "j1", "project_id": "little-gadget", "params": {"toml": "[server]\nname = \"x\"\n"}},
+    )
+    body = response.json()
+    assert body["outcome"] == "failed"
+    assert "invalid manifest" in body["error"]
+
+
+def test_set_manifest_missing_project_id_fails_cleanly(paths, conn):
+    app = build_app(paths, conn)
+    client = TestClient(app)
+    response = client.post("/v1/jobs/deployment.set_manifest", json={"job_id": "j1", "params": {"toml": VALID_MANIFEST_TOML}})
+    assert response.json()["outcome"] == "failed"
+
+
+def test_set_manifest_missing_toml_fails_cleanly(paths, conn):
+    app = build_app(paths, conn)
+    client = TestClient(app)
+    response = client.post(
+        "/v1/jobs/deployment.set_manifest", json={"job_id": "j1", "project_id": "little-gadget", "params": {}},
+    )
+    assert response.json()["outcome"] == "failed"
+
+
+def test_get_manifest_404_when_not_set(paths, conn):
+    app = build_app(paths, conn)
+    client = TestClient(app)
+    response = client.get("/v1/manifest/never-configured")
+    assert response.status_code == 404

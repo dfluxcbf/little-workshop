@@ -39,7 +39,7 @@ discipline this project already applies to itself); the *sequence* and
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
 | M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | Done (2026-09-17) — every real gap in all five absorbed tools closed (`docs/requirements.md`'s M16 follow-up); the handful of items left un-ported (`.lrun/config.toml`, `little-requirements`' client-config model, `lock`/`unlock`) are documented, deliberate architectural non-gaps, not deferred work |
-| M17 | Ecosystem cutover | M15, M16 | Not started |
+| M17 | Ecosystem cutover | M15, M16 | In progress — `little-mindcheck` is the pilot (registered, requirements data migrated, real `deploy`/`stop`/`status` verified against the actual app, 2026-09-17); a new `deployment.set_manifest` capability and a real dispatch-timeout fix were required along the way (`docs/requirements.md`'s M17 section) |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
 dependency graph is visible up front, not discovered one milestone late.
@@ -557,3 +557,35 @@ maintainers to make once every milestone is done, a first release
 exists, and `lws` has been personally validated through real use — never
 an automated step this project's own tooling performs on its own
 (`docs/architecture.md`'s CLI section).
+
+**Started 2026-09-17, pilot: `little-mindcheck`** (chosen for having the
+most complete existing setup — `.lvx`, `.reqs`, and `.lrun/config.toml`
+all present — the fullest test of the parity surface at once). Registered
+via a real `project.import` against its real, untouched checkout;
+existing `little-requirements` data (23 published requirements, all
+passing) migrated into Requirements & Quality, `done_count` matching the
+old tool's own computed state exactly; real `deploy`/`stop`/`status`
+verified against the actual app (a real build, a real listening server,
+a real Tailscale mapping, then a real, clean teardown back to not-
+running). Getting this far required little-workshop's own first real
+production bootstrap on this machine (Core had only ever run inside test
+fixtures before) and surfaced two real gaps closed along the way, not
+planned for in advance: `deployment.set_manifest` (nothing could
+previously write a project's own server manifest at all) and a dispatch-
+timeout fix for `deployment.deploy` (the same `OQ-14` class of defect —
+a real `bazel run //:install` genuinely exceeds the 20-second default on
+a cold cache). Full detail: `docs/requirements.md`'s M17 section.
+
+Still open for `little-mindcheck`'s own cutover: switching its daily-use
+scripts (README's `lrun server up/down/status` lines, `tools/report_test_results.sh`,
+and `pyproject.toml`'s `little-requirements` pytest-plugin dependency,
+which actively auto-records requirement test results on every real test
+run today — replacing that live mechanism needs a real plan, not just a
+rename, since the tests use `@pytest.mark.requirement(...)` markers
+rather than requirement IDs embedded in test names, and `lws
+requirements import-junit`'s own regex-based correlation doesn't see
+markers at all without a generated test-node-id-to-requirement mapping
+file). Work for this happens on a dedicated branch in `little-mindcheck`'s
+own repo, merged to `dev` then `master` only once confirmed working —
+never in place, per this milestone's own explicit instruction for the
+pilot.

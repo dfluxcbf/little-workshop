@@ -263,8 +263,26 @@ have a home in this daemon's own model (Deployment & Servers already
 launches and tracks long-running background processes the same shape).
 **Every real gap across all five absorbed tools is now closed.**
 
+### M17 — ecosystem cutover (in progress)
+
+`little-mindcheck` is the pilot: registered via a real `project.import`,
+its 23 existing `little-requirements` records migrated into Requirements
+& Quality (`done_count` matching the old tool's own computed state
+exactly), and its real `deploy`/`stop`/`status` verified against the
+actual running app — a real build, a real listening server, a real
+Tailscale mapping, then a clean teardown back to not-running. Getting
+this far surfaced two real gaps, closed along the way:
+`deployment.set_manifest` (nothing could previously write a project's
+own server manifest at all — every existing test had bypassed the gap
+by writing it directly) and a dispatch-timeout fix for
+`deployment.deploy` (the same `OQ-14` class of defect: a real `bazel run
+//:install` genuinely exceeds the 20-second default on a cold cache).
+Still open: switching `little-mindcheck`'s own daily-use scripts and
+docs, on a dedicated branch, merged only once confirmed working. See
+`docs/milestones.md`'s M17 section.
+
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1828 tests — 1681 unit, 147 real
+`bazel test //:coverage` all work today (1838 tests — 1691 unit, 147 real
 `systemd --user` end-to-end integration proofs (a deliberate +15%
 expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
 three of four newly-added gate-point categories that don't hit a

@@ -109,6 +109,39 @@ def build_app(
             },
         }
 
+    @app.post("/v1/jobs/deployment.set_manifest")
+    def job_set_manifest(request: JobRequest) -> dict:
+        """The one write path for a project's own `manifest.deployment.toml`
+        — M17 ecosystem-cutover finding: nothing exposed one before this,
+        so a real project being cut over had no way to configure its own
+        server manifest at all. Validated via `parse_manifest` before
+        being written, so a malformed manifest is rejected outright rather
+        than silently stored and only discovered at the next real deploy."""
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        text = request.params.get("toml")
+        if not text:
+            return {"outcome": "failed", "error": "missing params.toml"}
+        try:
+            manifest = parse_manifest(text)
+        except ManifestError as exc:
+            return {"outcome": "failed", "error": f"invalid manifest: {exc}"}
+        files = ProjectFilesClient(paths, caller_pillar="deployment")
+        files.write(request.project_id, MANIFEST_FILENAME, text)
+        return {"outcome": "succeeded", "result": {"name": manifest.name, "port": manifest.port}}
+
+    @app.get("/v1/manifest/{project_id}")
+    def get_manifest(project_id: str) -> dict:
+        try:
+            manifest = _load_manifest(paths, project_id)
+        except DeploymentError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        return {
+            "name": manifest.name, "command": manifest.command, "port": manifest.port, "match": manifest.match,
+            "install": manifest.install, "ready_timeout_seconds": manifest.ready_timeout_seconds,
+            "stop_timeout_seconds": manifest.stop_timeout_seconds, "confirm_timeout_seconds": manifest.confirm_timeout_seconds,
+        }
+
     @app.post("/v1/jobs/deployment.seed_confirmation")
     def job_seed_confirmation(request: JobRequest) -> dict:
         if not request.project_id:

@@ -105,6 +105,15 @@ def test_version_feature_finish_defaults_action_to_none(paths, fake_create_job):
     assert call["params"] == {"force": False, "action": None}
 
 
+def test_deployment_set_manifest_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_deployment_set_manifest"].handler(
+        paths, {"project_id": "little-gadget", "toml": "[server]\nname=\"x\"\n"}
+    )
+    call = fake_create_job[0]
+    assert call["type"] == "deployment.set_manifest"
+    assert call["params"] == {"toml": "[server]\nname=\"x\"\n"}
+
+
 def test_deployment_deploy_defaults_branch_to_dev(paths, fake_create_job):
     tools_mod.TOOLS_BY_NAME["workshop_deployment_deploy"].handler(paths, {"project_id": "little-meals"})
     call = fake_create_job[0]

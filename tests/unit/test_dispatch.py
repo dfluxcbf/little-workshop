@@ -126,13 +126,20 @@ def test_dispatch_ready_jobs_cascades_and_dispatches(monkeypatch, tmp_path, conn
 
 def test_dispatch_timeout_for_returns_the_default_for_an_unlisted_job_type():
     assert dispatch.dispatch_timeout_for("noop") == dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS
-    assert dispatch.dispatch_timeout_for("deployment.deploy") == dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS
 
 
 def test_dispatch_timeout_for_returns_the_longer_ceiling_for_the_two_agent_backed_policy_types():
     assert dispatch.dispatch_timeout_for("policy.author") == 120.0
     assert dispatch.dispatch_timeout_for("policy.activate") == 60.0
     assert dispatch.dispatch_timeout_for("policy.author") > dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS
+
+
+def test_dispatch_timeout_for_returns_the_longer_ceiling_for_a_real_deploy():
+    """M17 ecosystem-cutover finding: a real `deployment.deploy` shells
+    out to a real `bazel run //:install` from a freshly provisioned
+    worktree, genuinely slower than the 20s default on a cold cache."""
+    assert dispatch.dispatch_timeout_for("deployment.deploy") == 300.0
+    assert dispatch.dispatch_timeout_for("deployment.deploy") > dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS
 
 
 def test_dispatch_ready_jobs_gives_policy_author_its_own_longer_timeout(monkeypatch, tmp_path, conn):

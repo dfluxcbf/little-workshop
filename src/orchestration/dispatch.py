@@ -58,6 +58,12 @@ DEFAULT_DISPATCH_TIMEOUT_SECONDS = 20.0
 JOB_TYPE_TIMEOUTS: dict[str, float] = {
     "policy.author": 120.0,
     "policy.activate": 60.0,
+    # M17 ecosystem-cutover finding, the same OQ-14 class of defect: a
+    # real `deployment.deploy` shells out to a real `bazel run
+    # //:install` from a freshly provisioned worktree — genuinely slower
+    # than the 20s default on a cold cache, misreporting "target pillar
+    # unreachable" for a deploy that actually succeeds moments later.
+    "deployment.deploy": 300.0,
 }
 
 
