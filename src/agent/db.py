@@ -50,7 +50,23 @@ CREATE TABLE IF NOT EXISTS poll_cursors (
     comment_cursor_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS ci_checks (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    branch TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    state TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    ran_at TEXT NOT NULL
+);
 """
+
+CI_PENDING = "pending"
+CI_SUCCESS = "success"
+CI_FAILURE = "failure"
+CI_ERROR = "error"
 
 RUNNING = "running"
 AWAITING_FINISH = "awaiting_finish"
@@ -163,3 +179,39 @@ def save_poll_cursor(conn: sqlite3.Connection, project_id: str, *, labeled: list
         (project_id, json.dumps(labeled), json.dumps(assigned), json.dumps(comment_cursor), _now()),
     )
     conn.commit()
+
+
+# -- ci_checks --------------------------------------------------------------
+
+
+def record_ci_check(
+    conn: sqlite3.Connection, project_id: str, *, pr_number: int, branch: str, sha: str, state: str, summary: str = "",
+) -> str:
+    check_id = uuid.uuid4().hex
+    conn.execute(
+        """INSERT INTO ci_checks (id, project_id, pr_number, branch, sha, state, summary, ran_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (check_id, project_id, pr_number, branch, sha, state, summary, _now()),
+    )
+    conn.commit()
+    return check_id
+
+
+def latest_ci_check(conn: sqlite3.Connection, project_id: str, *, branch: str | None = None) -> dict | None:
+    if branch is None:
+        row = conn.execute(
+            "SELECT * FROM ci_checks WHERE project_id = ? ORDER BY ran_at DESC LIMIT 1", (project_id,)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM ci_checks WHERE project_id = ? AND branch = ? ORDER BY ran_at DESC LIMIT 1",
+            (project_id, branch),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_ci_checks(conn: sqlite3.Connection, project_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM ci_checks WHERE project_id = ? ORDER BY ran_at DESC", (project_id,)
+    ).fetchall()
+    return [dict(row) for row in rows]

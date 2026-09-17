@@ -18,10 +18,11 @@ from typing import Callable
 
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
-from agent import db, gitutil, report, templates_util, version_client
+from agent import db, gitutil, report, requirements_client, templates_util, version_client
 from agent.branching import BranchingError, BranchingSpec, MODE_AUTO, MODE_EXISTING, MODE_NEW, resolve as resolve_branching
 from agent.claude_invoke import claude_argv, parse_claude_output, parse_status
 from agent.github_adapter import GitHubAdapter, GitHubError, parse_github_slug
+from agent.requirements_client import RequirementsClientError
 from agent.screenshots import Screenshotter
 from agent.version_client import VersionClientError
 
@@ -338,3 +339,61 @@ class AgentFlow:
             raise AgentFlowError(f"run {run_id!r} is not awaiting finish (status={run['status']!r})")
         db.update_run(conn, run_id, status=db.SKIPPED)
         return f"skipped {run['branch']!r}; the branch was left as-is for manual handling"
+
+    # -- entry point: ci_check ----------------------------------------------
+
+    def run_ci_check(self, conn: sqlite3.Connection, project_id: str, repo_url: str | None, params: dict) -> dict:
+        """M16 `little-runner` parity: `lrun ci run` (REQ-000000035) —
+        resolve a pull request's head, run the real sandboxed suite
+        Requirements & Quality already provisions for any commitish, and
+        post the outcome back as a GitHub commit status. A status is
+        reporting, never the job itself (`GitHubAdapter.post_status`'s
+        own docstring) — only a genuine infra failure (no GitHub remote,
+        an unreadable PR, Requirements & Quality unreachable) raises."""
+        github_repo = parse_github_slug(repo_url)
+        if not github_repo:
+            raise AgentFlowError(f"project {project_id!r} has no GitHub remote to check a pull request against")
+        pr_number = params.get("pr_number")
+        suite_id = params.get("suite_id")
+        if not pr_number or not suite_id:
+            raise AgentFlowError("agent.ci_check requires params.pr_number and params.suite_id")
+
+        try:
+            pr = self.github.pull_request(github_repo, pr_number)
+        except GitHubError as exc:
+            raise AgentFlowError(str(exc)) from exc
+        branch = pr.get("headRefName")
+        sha = pr.get("headRefOid")
+        if not branch or not sha:
+            raise AgentFlowError(f"could not resolve head branch/sha for pull request #{pr_number}")
+
+        context = params.get("context", "little-workshop/ci")
+        self.github.post_status(github_repo, sha, state=db.CI_PENDING, context=context, description="running tests")
+
+        run_params = {"suite_id": suite_id, "commitish": sha}
+        if params.get("test_command"):
+            run_params["test_command"] = params["test_command"]
+
+        try:
+            result = requirements_client.run_job(
+                self.paths, project_id, "requirements.run_tests", run_params,
+                timeout=params.get("timeout_seconds", 600.0),
+            )
+        except RequirementsClientError as exc:
+            self.github.post_status(github_repo, sha, state=db.CI_ERROR, context=context, description=str(exc)[:139])
+            db.record_ci_check(conn, project_id, pr_number=pr_number, branch=branch, sha=sha, state=db.CI_ERROR, summary=str(exc))
+            raise AgentFlowError(str(exc)) from exc
+
+        results = result.get("results", [])
+        ran = result.get("ran", 0)
+        failed = [r for r in results if r.get("verdict") in ("failed", "error")]
+        if ran == 0:
+            state, summary = db.CI_ERROR, "no tests ran"
+        elif failed:
+            state, summary = db.CI_FAILURE, f"{len(failed)} of {ran} tests failed"
+        else:
+            state, summary = db.CI_SUCCESS, f"all {ran} tests passed"
+
+        self.github.post_status(github_repo, sha, state=state, context=context, description=summary)
+        db.record_ci_check(conn, project_id, pr_number=pr_number, branch=branch, sha=sha, state=state, summary=summary)
+        return {"pr_number": pr_number, "branch": branch, "sha": sha, "state": state, "summary": summary, "ran": ran, "results": results}

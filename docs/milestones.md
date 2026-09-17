@@ -38,7 +38,7 @@ discipline this project already applies to itself); the *sequence* and
 | M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
-| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions`, `little-pypi`, `bootstrap-little-project`, and `little-requirements` gaps closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up); `little-runner`'s gap (the highest blast-radius one) still open |
+| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions`, `little-pypi`, `bootstrap-little-project`, and `little-requirements` gaps closed 2026-09-17; `little-runner`'s two real remaining gaps (`ci run/status`, `queue show/release`) also closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up) — its ad-hoc `session start/stop/list`, `stabilize run`, and `branch-audit run` stay open, each real future work in its own right |
 | M17 | Ecosystem cutover | M15, M16 | Not started |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
@@ -467,12 +467,28 @@ server-authoritative daemon — the same shape of gap as
 create/delete/list/get (superseded outright — this pillar never owned
 "project," Registry & Portfolio already does); `lock`/`unlock`/
 `unlock-server` (moot once a single daemon process is the only writer).
-`little-runner` is the one tool left, and it is not close — real,
-load-bearing concepts (GitHub-issue-triggered polling, per-repo issue
-queues, session management, branch stabilization, cross-project branch
-auditing) with no equivalent anywhere in little-workshop yet, and it is
-the one every other real project in this ecosystem currently depends on
-for actual CI — the highest blast-radius gap to close.
+`little-runner` was the one tool left, and the original survey
+(`docs/requirements.md`'s REQ-000000161) called it "not close" — true
+for two of its concepts, but it undercounted the rest: `docs/pillars/agentic_development.md`'s
+own poller/GitHub-adapter/session-tracking machinery already gave
+`issue run/finish` and the actor-lookup-and-dispatch half of `session
+start/stop/list` full parity by the time this pass ran, simply never
+checked off. What this pass (2026-09-17) actually closed: `ci
+run/status` as a new `agent.ci_check` Job (resolve a pull request's real
+head, run the real sandboxed suite Requirements & Quality already
+provisions for any commitish, post the outcome as a real GitHub commit
+status), and `queue show/release` as pure `lws`-side additions over
+Orchestration's own existing primitives, no new pillar code. Three real
+gaps stay open, each genuinely bigger future work: `session
+start/stop/list`'s *ad-hoc, human-driven* half (host-process machinery —
+a real PTY, `dtach`, a dedicated systemd unit — with no equivalent in
+this daemon's own Job model, the same category as `bootstrap-little-project`'s
+`.lrun/config.toml`), `stabilize run` (a repeat-until-green agent-driven
+CI-fix loop), and `branch-audit run` (a cross-project stale/orphaned-
+branch report) — this last pair the actual reason `little-runner` was
+called the highest blast-radius gap, since every other real project in
+this ecosystem currently depends on it for actual CI, and neither is
+attempted here.
 
 Each tool's gaps are closed independently, one pillar's worth of real
 implementation work at a time, never a redesign of what `lws`'s own

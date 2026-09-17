@@ -277,3 +277,41 @@ def test_actor_for_event_picks_most_recent_matching_event():
 def test_actor_for_event_returns_none_when_actor_missing():
     adapter = TimelineAdapter([{"event": "labeled", "label": {"name": "claude-task"}}])
     assert actor_for_event(adapter, "o/n", 1, "labeled", "claude-task") is None
+
+
+# -- pull_request / post_status (M16 little-runner parity: `lrun ci`) ------
+
+
+def test_pull_request_parses_gh_pr_view_json():
+    runner = FakeRunner(result=ok({"headRefName": "feature/widgets", "headRefOid": "abc123", "state": "OPEN", "url": "https://github.com/o/n/pull/5"}))
+    adapter = GitHubAdapter(runner=runner)
+    pr = adapter.pull_request("o/n", 5)
+    assert pr["headRefName"] == "feature/widgets"
+    assert pr["headRefOid"] == "abc123"
+    assert runner.calls[0][:4] == ["gh", "pr", "view", "5"]
+
+
+def test_pull_request_raises_on_gh_failure():
+    adapter = GitHubAdapter(runner=FakeRunner(result=failed("no such PR")))
+    with pytest.raises(GitHubError):
+        adapter.pull_request("o/n", 999)
+
+
+def test_pull_request_raises_on_unreadable_json():
+    adapter = GitHubAdapter(runner=FakeRunner(result=CommandResult(0, "not json", "")))
+    with pytest.raises(GitHubError):
+        adapter.pull_request("o/n", 5)
+
+
+def test_post_status_posts_via_gh_api():
+    runner = FakeRunner(result=ok({}))
+    adapter = GitHubAdapter(runner=runner)
+    adapter.post_status("o/n", "abc123", state="success", context="ci", description="all tests passed")
+    argv = runner.calls[0]
+    assert argv[:3] == ["gh", "api", "repos/o/n/statuses/abc123"]
+    assert "-f" in argv and "state=success" in argv
+
+
+def test_post_status_is_best_effort_and_never_raises():
+    adapter = GitHubAdapter(runner=FakeRunner(result=failed("rate limited")))
+    adapter.post_status("o/n", "abc123", state="failure", context="ci", description="boom")  # must not raise

@@ -193,6 +193,52 @@ than rediscovering:
   ports, no stored token" — outbound-only polling can still behave like
   event delivery.
 
+## `agent.ci_check`: M16 `little-runner` parity (2026-09-17)
+
+`little-runner`'s M16 survey (`docs/requirements.md`'s M16 follow-up
+section) flagged this tool as "not close" to the absorbed tools'
+functional parity — true for its two genuinely load-bearing, no-
+equivalent-anywhere concepts (branch stabilization, cross-project branch
+auditing; both still open), but the survey undercounted: by the time
+this pass ran, this pillar's own `poller.py`/`github_adapter.py`/`db.py`
+session tracking already gave `lrun issue run/finish` and `lrun session
+start/stop/list`'s *actor-lookup-and-dispatch* half full parity, just
+never checked off explicitly. What this pass actually closed was the one
+real remaining gap: `lrun ci run/status` (REQ-000000035's original test-
+run-plus-commit-status idea), as a new `agent.ci_check` Job. Given a
+`pr_number` and `suite_id`, it resolves the pull request's real head
+(`GitHubAdapter.pull_request`, a `gh pr view` wrapper), posts a `pending`
+commit status, calls Requirements & Quality's own `requirements.run_tests`
+directly (a synchronous cross-pillar Pillar Interface call, the same
+pattern `agent/version_client.py` already established, applied to a
+second pillar via `agent/requirements_client.py`) against that head sha,
+and posts the final `success`/`failure`/`error` status back —
+`GitHubAdapter.post_status`'s own docstring states the principle
+directly: a status is reporting, never the job itself, so only a genuine
+infra failure (no GitHub remote, an unreadable PR, Requirements &
+Quality unreachable) fails the Job; a real test failure is a `failure`
+status on an otherwise-`succeeded` Job, mirroring how `run_tests` itself
+already treats a failing test as data, not an error. Recorded in this
+pillar's own new `ci_checks` table (`GET /v1/ci_checks/{project_id}`,
+`GET /v1/ci_checks/{project_id}/latest`), queued on the same
+`queue_key=project_id` mutex `agent.run_task` already uses, since both
+share the same worktree-provisioning path.
+
+`lws job queue show/release`, matching `lrun queue show/release`
+(REQ-000000040's status/queue visibility), needed no new pillar code at
+all — it is a pure `lws`-side convenience over Orchestration's own
+existing `GET /v1/jobs?status=`/`POST /v1/jobs/{id}/stop` (`show` lists
+and groups by `queue_key`; `release` stops the running holder so the
+next queued Job dispatches).
+
+`lrun session start/stop/list`'s other half — an ad-hoc, human-driven,
+`dtach`-backed interactive terminal session, independent of any Job —
+stays deliberately un-ported: it is host-process machinery (a real PTY,
+a per-repo `dtach` socket, a dedicated systemd unit, `~/.claude.json`
+trust-dialog probing) with no clean equivalent in this daemon's own
+Job/Pillar-Interface model, the same category of gap as
+`bootstrap-little-project`'s `.lrun/config.toml`.
+
 ## Left open
 
 - Whether Agentic Development's own review-mode parameter (manual vs.

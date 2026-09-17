@@ -92,6 +92,28 @@ class GitHubAdapter:
             raise GitHubError(f"could not create PR: {(result.stderr or result.stdout).strip()}")
         return result.stdout.strip()
 
+    def pull_request(self, repo: str, number: int) -> dict[str, Any]:
+        result = self.runner.run([
+            "gh", "pr", "view", str(number), "--repo", repo, "--json", "headRefName,headRefOid,state,url",
+        ])
+        if not result.ok:
+            raise GitHubError(f"could not read pull request #{number} of {repo}: {(result.stderr or result.stdout).strip()}")
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise GitHubError(f"unreadable pull request data for #{number}: {exc}") from exc
+
+    def post_status(self, repo: str, sha: str, *, state: str, context: str, description: str = "") -> None:
+        """Best-effort — REQ-000000035's own note applies here too: a
+        status is reporting, never the job itself, so a failure to post
+        it is never allowed to fail the run that produced it."""
+        try:
+            self.api(f"repos/{repo}/statuses/{sha}", method="POST", fields={
+                "state": state, "context": context, "description": description[:139],
+            })
+        except GitHubError:
+            pass
+
 
 def actor_for_event(adapter: GitHubAdapter, repo: str, number: int, event_type: str, match: str) -> str | None:
     """Who actually performed a labeled/assigned event, from the issue's

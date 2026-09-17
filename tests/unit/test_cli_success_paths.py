@@ -531,6 +531,90 @@ def test_agent_run_status_success(paths, monkeypatch, capsys):
     assert _out(capsys)["id"] == "run-1"
 
 
+def test_agent_ci_check_success(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main([
+        "agent", "ci-check", "--project-id", "little-widget", "--pr-number", "5", "--suite-id", "s1",
+    ]) == 0
+    assert captured["type"] == "agent.ci_check"
+    assert captured["params"] == {"pr_number": 5, "suite_id": "s1", "context": "little-workshop/ci"}
+    assert captured["queue_key"] == "little-widget"
+
+
+def test_agent_ci_check_with_test_command(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    main.main([
+        "agent", "ci-check", "--project-id", "little-widget", "--pr-number", "5", "--suite-id", "s1",
+        "--test-command", "python3 -m pytest tests/unit",
+    ])
+    assert captured["params"]["test_command"] == ["python3", "-m", "pytest", "tests/unit"]
+
+
+def test_agent_ci_list_success(paths, monkeypatch):
+    monkeypatch.setattr(main.client, "agent_ci_checks", lambda p, project_id, **kw: {"ci_checks": []})
+    assert main.main(["agent", "ci-list", "--project-id", "little-widget"]) == 0
+
+
+def test_agent_ci_status_success(paths, monkeypatch, capsys):
+    monkeypatch.setattr(main.client, "agent_latest_ci_check", lambda p, project_id, **kw: {"ci_check": {"state": "success"}})
+    assert main.main(["agent", "ci-status", "--project-id", "little-widget"]) == 0
+    assert _out(capsys)["ci_check"]["state"] == "success"
+
+
+def test_agent_ci_status_none_recorded_returns_1(paths, monkeypatch):
+    monkeypatch.setattr(main.client, "agent_latest_ci_check", lambda p, project_id, **kw: {"ci_check": None})
+    assert main.main(["agent", "ci-status", "--project-id", "little-widget"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# job queue
+
+
+def test_job_queue_show_groups_by_queue_key(paths, monkeypatch, capsys):
+    def fake_list_jobs(p, *, status=None):
+        if status == "running":
+            return {"jobs": [{"id": "j1", "queue_key": "little-widget", "type": "agent.run_task"}]}
+        return {"jobs": [{"id": "j2", "queue_key": "little-widget", "type": "agent.ci_check"}]}
+
+    monkeypatch.setattr(main.client, "list_jobs", fake_list_jobs)
+    assert main.main(["job", "queue", "show"]) == 0
+    out = _out(capsys)
+    assert out["queues"] == [{"queue_key": "little-widget", "running": {"id": "j1", "queue_key": "little-widget", "type": "agent.run_task"}, "queued": [{"id": "j2", "queue_key": "little-widget", "type": "agent.ci_check"}]}]
+
+
+def test_job_queue_show_filters_by_queue_key(paths, monkeypatch, capsys):
+    def fake_list_jobs(p, *, status=None):
+        if status == "running":
+            return {"jobs": [
+                {"id": "j1", "queue_key": "a", "type": "x"}, {"id": "j3", "queue_key": "b", "type": "x"},
+            ]}
+        return {"jobs": []}
+
+    monkeypatch.setattr(main.client, "list_jobs", fake_list_jobs)
+    assert main.main(["job", "queue", "show", "--queue-key", "a"]) == 0
+    out = _out(capsys)
+    assert [q["queue_key"] for q in out["queues"]] == ["a"]
+
+
+def test_job_queue_release_stops_and_pumps(paths, monkeypatch, capsys):
+    monkeypatch.setattr(
+        main.client, "list_jobs",
+        lambda p, *, status=None: {"jobs": [{"id": "j1", "queue_key": "little-widget", "type": "agent.run_task"}]},
+    )
+    captured = {}
+    monkeypatch.setattr(main.client, "stop_job", lambda p, job_id, **kw: (captured.update(job_id=job_id), {"stopped": True, "reason": None})[1])
+    monkeypatch.setattr(main.client, "pump", lambda p, **kw: {"dispatched": []})
+    assert main.main(["job", "queue", "release", "little-widget"]) == 0
+    assert captured["job_id"] == "j1"
+
+
+def test_job_queue_release_errors_when_no_holder(paths, monkeypatch):
+    monkeypatch.setattr(main.client, "list_jobs", lambda p, *, status=None: {"jobs": []})
+    assert main.main(["job", "queue", "release", "little-widget"]) == 1
+
+
 # ---------------------------------------------------------------------------
 # worktree / mcp
 # ---------------------------------------------------------------------------

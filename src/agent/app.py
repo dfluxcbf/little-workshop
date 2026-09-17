@@ -135,6 +135,32 @@ def build_app(paths: Paths, conn: sqlite3.Connection, flow: AgentFlow | None = N
                 return {"outcome": "failed", "error": str(exc)}
         return {"outcome": "succeeded", "result": {"summary": summary}}
 
+    @app.post("/v1/jobs/agent.ci_check")
+    def job_ci_check(request: JobRequest) -> dict:
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        try:
+            project = resolve_project(paths, request.project_id)
+        except ProjectResolutionError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+
+        params = dict(request.params)
+        repo_url = project.get("repo_url")
+        project_id = request.project_id
+        job_id = request.job_id
+
+        def worker() -> None:
+            with lock:
+                try:
+                    result = flow.run_ci_check(conn, project_id, repo_url, params)
+                except AgentFlowError as exc:
+                    _complete_orchestration_job(paths, job_id, succeeded=False, result=None, error=str(exc))
+                    return
+            _complete_orchestration_job(paths, job_id, succeeded=True, result=result, error=None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"outcome": "accepted", "result": {"dispatched": True}}
+
     @app.get("/v1/runs/{project_id}")
     def list_runs(project_id: str, status: str | None = None) -> list[dict]:
         with lock:
@@ -147,5 +173,18 @@ def build_app(paths: Paths, conn: sqlite3.Connection, flow: AgentFlow | None = N
         if run is None or run["project_id"] != project_id:
             raise HTTPException(status_code=404, detail="run not found")
         return run
+
+    @app.get("/v1/ci_checks/{project_id}")
+    def list_ci_checks(project_id: str) -> list[dict]:
+        with lock:
+            return db.list_ci_checks(conn, project_id)
+
+    @app.get("/v1/ci_checks/{project_id}/latest")
+    def latest_ci_check(project_id: str, branch: str | None = None) -> dict:
+        with lock:
+            check = db.latest_ci_check(conn, project_id, branch=branch)
+        if check is None:
+            raise HTTPException(status_code=404, detail="no CI check recorded yet")
+        return check
 
     return app
