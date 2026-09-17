@@ -55,6 +55,21 @@ that needs to install it" (`docs/architecture.md`).
   matching `little-pypi`'s own real behavior.
 - **`build.delete_package`** — removes the database row and the on-disk
   blob together, always both, never one without the other.
+- **`lws build print-pip-config`/`write-pip-config`/`pip`/
+  `print-vsix-urls`** — added 2026-09-17, closing M16's `little-pypi`
+  parity gap. Pure CLI-side dev conveniences, not new pillar mechanism
+  (the first three never call this pillar's PI at all; the fourth is a
+  plain `GET /v1/packages?kind=vsix` read): a pip.conf snippet, a real
+  `pip install --extra-index-url` shell-out, and vsix direct-download
+  URLs. All four assume a real HTTP reverse proxy already sits in front
+  of this pillar's own Unix-socket-only Pillar Interface at the given
+  `--host`/`--port` — the same deployment-time-concern split
+  `docs/pillars/dashboard.md`'s own browser-exposure section already
+  documents; nothing here builds that proxy. **Deliberately not
+  closed**: `little-pypi`'s own `publish`/`upload` auto-detect a
+  wheel's project/version from its filename; `build.publish_pypi` still
+  requires them as explicit params — an ergonomic gap, not a functional
+  one (the capability exists, just not the auto-detection).
 
 ## Interfacing
 

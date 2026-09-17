@@ -214,10 +214,16 @@ topic branch's own start time) is now closed: `version.issue_set`/
 `issue_automation` flag as the single source of truth for which branch
 types are linkable. The other four tools' gaps (see the published
 parity ledger referenced from `docs/requirements.md`'s M16 section)
-remain open.
+remain open. `little-pypi`'s dev-convenience gaps are also closed —
+`lws build print-pip-config`/`write-pip-config`/`pip`/`print-vsix-urls`
+match `little-pypi`'s own equivalents, all four pure CLI-side additions
+assuming a real reverse proxy fronts Build & Packages' Unix-socket-only
+Pillar Interface, the same deployment-time-concern split Dashboard's
+own docs already establish. `bootstrap-little-project`,
+`little-requirements`, and `little-runner`'s gaps remain open.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1679 tests — 1540 unit, 139 real
+`bazel test //:coverage` all work today (1684 tests — 1545 unit, 139 real
 `systemd --user` end-to-end integration proofs (a deliberate +15%
 expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
 three of four newly-added gate-point categories that don't hit a
