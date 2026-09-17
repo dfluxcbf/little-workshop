@@ -239,16 +239,20 @@ writer). `little-runner`'s two remaining real gaps are also closed:
 `ci run/status` as a new `agent.ci_check` Job (resolve a pull request's
 real head, run the real sandboxed suite Requirements & Quality already
 provisions for any commitish, post the outcome as a real GitHub commit
-status) and `queue show/release` as `lws job queue show/release`, pure
-CLI-side additions over Orchestration's own existing primitives. Its
-ad-hoc `session start/stop/list` (host-process `dtach`/PTY machinery
-with no daemon equivalent), `stabilize run`, and `branch-audit run`
-remain open — the latter two the real reason `little-runner` was called
-the highest blast-radius gap, since every other real project in this
-ecosystem currently depends on it for CI.
+status), `queue show/release` as `lws job queue show/release` (pure
+CLI-side additions over Orchestration's own existing primitives), and
+`branch-audit run` as a new read-only `version.branch_audit` Job on
+Version Control & Release — naming/stale-merged/abandoned/detached-HEAD/
+stray-worktree classification over a project's real branches, reusing
+that pillar's own branch-type taxonomy and git primitives, `lws version
+branch-audit --all` looping over Registry's own project list for the
+old tool's ecosystem-wide sweep, never merging/deleting/pushing anything.
+Only its ad-hoc `session start/stop/list` (host-process `dtach`/PTY
+machinery with no daemon equivalent) and `stabilize run` (a repeat-
+until-green agent-driven CI-fix loop) remain open.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1756 tests — 1612 unit, 144 real
+`bazel test //:coverage` all work today (1776 tests — 1631 unit, 145 real
 `systemd --user` end-to-end integration proofs (a deliberate +15%
 expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
 three of four newly-added gate-point categories that don't hit a

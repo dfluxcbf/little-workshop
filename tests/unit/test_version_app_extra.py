@@ -185,6 +185,43 @@ def test_issue_set_job_fails_cleanly_for_a_non_linkable_branch(paths, tmp_path):
     assert "does not support issue linkage" in result.json()["error"]
 
 
+def test_branch_audit_job_reports_clean_over_the_pillar_interface(paths, tmp_path):
+    repo = make_repo(tmp_path)
+    client = make_client(paths, repo)
+    result = _job(client, "version.branch_audit")
+    body = result.json()
+    assert body["outcome"] == "succeeded"
+    assert body["result"] == {"status": "clean", "violations": []}
+
+
+def test_branch_audit_job_reports_a_real_violation_over_the_pillar_interface(paths, tmp_path):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    _git(["checkout", "-b", "feature/done"], repo)
+    (repo / "x.txt").write_text("x", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "finish it"], repo)
+    _git(["checkout", "dev"], repo)
+    _git(["merge", "--no-ff", "feature/done"], repo)
+    _git(["checkout", "master"], repo)
+
+    client = make_client(paths, repo)
+    result = _job(client, "version.branch_audit")
+    body = result.json()
+    assert body["outcome"] == "succeeded"
+    assert body["result"]["status"] == "violations"
+    assert body["result"]["violations"][0]["kind"] == "stale_merged"
+
+
+def test_branch_audit_job_fails_cleanly_on_unresolvable_project(paths, tmp_path):
+    repo = make_repo(tmp_path)
+    client = make_client(paths, repo)
+    response = client.post(
+        "/v1/jobs/version.branch_audit", json={"job_id": "j1", "project_id": "ghost", "params": {}},
+    )
+    assert response.json()["outcome"] == "failed"
+
+
 def test_issues_endpoint_404s_on_unresolvable_project(paths, tmp_path):
     repo = make_repo(tmp_path)
     client = make_client(paths, repo)

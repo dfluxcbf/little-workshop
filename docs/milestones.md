@@ -38,7 +38,7 @@ discipline this project already applies to itself); the *sequence* and
 | M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
-| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions`, `little-pypi`, `bootstrap-little-project`, and `little-requirements` gaps closed 2026-09-17; `little-runner`'s two real remaining gaps (`ci run/status`, `queue show/release`) also closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up) — its ad-hoc `session start/stop/list`, `stabilize run`, and `branch-audit run` stay open, each real future work in its own right |
+| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions`, `little-pypi`, `bootstrap-little-project`, and `little-requirements` gaps closed 2026-09-17; `little-runner`'s `ci run/status`, `queue show/release`, and `branch-audit run` all also closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up) — only its ad-hoc `session start/stop/list` (host-process `dtach`/PTY machinery, no daemon equivalent) and `stabilize run` (a repeat-until-green agent-driven CI-fix loop) stay open |
 | M17 | Ecosystem cutover | M15, M16 | Not started |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
@@ -477,18 +477,23 @@ checked off. What this pass (2026-09-17) actually closed: `ci
 run/status` as a new `agent.ci_check` Job (resolve a pull request's real
 head, run the real sandboxed suite Requirements & Quality already
 provisions for any commitish, post the outcome as a real GitHub commit
-status), and `queue show/release` as pure `lws`-side additions over
-Orchestration's own existing primitives, no new pillar code. Three real
-gaps stay open, each genuinely bigger future work: `session
-start/stop/list`'s *ad-hoc, human-driven* half (host-process machinery —
-a real PTY, `dtach`, a dedicated systemd unit — with no equivalent in
-this daemon's own Job model, the same category as `bootstrap-little-project`'s
-`.lrun/config.toml`), `stabilize run` (a repeat-until-green agent-driven
-CI-fix loop), and `branch-audit run` (a cross-project stale/orphaned-
-branch report) — this last pair the actual reason `little-runner` was
-called the highest blast-radius gap, since every other real project in
-this ecosystem currently depends on it for actual CI, and neither is
-attempted here.
+status), `queue show/release` as pure `lws`-side additions over
+Orchestration's own existing primitives (no new pillar code), and
+`branch-audit run` as a new read-only `version.branch_audit` Job on
+Version Control & Release (naming/stale-merged/abandoned/detached-HEAD/
+stray-worktree classification over one project's real branches, reusing
+that pillar's own branch-type taxonomy and git primitives rather than
+reimplementing them; `lws version branch-audit --all` loops the Job over
+Registry & Portfolio's own project list for the old tool's ecosystem-wide
+sweep, since that's this daemon's actual authority for "every project" —
+never merges, deletes, commits, or pushes, per the original tool's own
+rule). Two real gaps stay open: `session start/stop/list`'s *ad-hoc,
+human-driven* half (host-process machinery — a real PTY, `dtach`, a
+dedicated systemd unit — with no equivalent in this daemon's own Job
+model, the same category as `bootstrap-little-project`'s
+`.lrun/config.toml`), and `stabilize run` (a repeat-until-green agent-
+driven CI-fix loop, real future work in its own right, not attempted
+here).
 
 Each tool's gaps are closed independently, one pillar's worth of real
 implementation work at a time, never a redesign of what `lws`'s own

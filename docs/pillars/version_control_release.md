@@ -54,6 +54,24 @@ repository in a half-finished state.
   branch type (`feature`/`improvement`/`hotfix`) as the single source of
   truth for which branch types can be linked at all, rather than a
   second, separately maintained list.
+- **`version.branch_audit`** (`version/branch_audit.py`) — added
+  2026-09-17 closing M16's `little-runner` parity gap (`lrun branch-audit
+  run`): a read-only branch-hygiene classifier over one project's real
+  branches, ported from the ecosystem's own root `branch_audit.py`
+  (naming, stale-merged, abandoned, detached-HEAD, stray-worktree
+  violations). Never merges, deletes, commits, or pushes anything — the
+  same `docs/policies/branching_policy.md` rule the original tool states
+  outright ("Automation never merges, deletes, or force-pushes a branch
+  on its own initiative"). Scoped to one project's own checkout, unlike
+  the original tool's own ecosystem-wide sweep — this daemon's actual
+  authority for "every project" is Registry & Portfolio's project list,
+  so `lws version branch-audit --all` loops this Job over it client-side
+  rather than this pillar walking every submodule directly. The old
+  tool's GitHub tracking-issue sync (opening/closing a persistent
+  `branch-hygiene`-labeled issue per repo) is left un-ported: reporting
+  only, matching this Job's own read-only scope — automating a GitHub
+  side effect from a read-only audit was judged a separate decision, not
+  bundled into closing the parity gap.
 
 ## Interfacing
 
