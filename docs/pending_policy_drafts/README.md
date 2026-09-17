@@ -24,6 +24,10 @@ since nothing was ever saved.
 
 ## Current drafts
 
-| File | EARS text | Topic | Status |
+_(none currently)_
+
+## Rejected drafts
+
+| File (removed) | Topic | Rejected | Why |
 |---|---|---|---|
-| `independence-no-lvx-config.json` | The little-workshop repository shall not contain a `.lvx/config.json` file. | `independence-no-lvx-config` | Awaiting review (drafted 2026-09-16, `docs/requirements.md` REQ-000000150) |
+| `independence-no-lvx-config.json` | `independence-no-lvx-config` | 2026-09-17 | Not a policy candidate at all, by direct decision: "no `.lvx/config.json`" was a one-time fact about the `little-versions` migration, not an ongoing invariant to check — `docs/governance_policy.md`'s independence principle means "not required to depend on," never "must never contain." Once the migration is complete, whether `.lvx` exists is simply irrelevant — nothing reads it either way. See `docs/requirements.md`'s M15 follow-up section and `docs/governance_policy.md`'s own 2026-09-17 amendment. |

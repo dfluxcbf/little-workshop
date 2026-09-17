@@ -132,3 +132,15 @@ tool that first implemented them:
   never auto-approved on their behalf — see `docs/requirements.md`'s M15
   section) — the first framework policy this project has ever drafted
   against itself, not a hypothetical example.
+- **2026-09-17** — The 2026-09-16 draft above was reviewed and rejected,
+  not activated: "no `.lvx/config.json`" was never meant as an ongoing
+  invariant to check, only a fact about the state of the
+  `little-versions` migration at the time this document was written.
+  The independence principle's own next sentence already says why a
+  policy enforcing it would have been a category error —
+  "'Independent' means *not required to depend on*, not *forbidden from
+  using*" — and once the migration this document describes is complete,
+  whether a stray `.lvx` directory exists or not is simply irrelevant,
+  since nothing in little-workshop reads it either way. See
+  `docs/requirements.md`'s M15 follow-up section and
+  `docs/pending_policy_drafts/README.md`'s "Rejected drafts."
