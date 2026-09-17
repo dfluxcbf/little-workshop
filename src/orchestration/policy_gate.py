@@ -19,6 +19,14 @@ Which Job types declare which categories is deliberately partial here —
 pillar's own future implementation work; the entries below are this
 pass's own concrete, real coverage, not a claim every Job type
 everywhere is categorized yet.
+
+`project_registration` is deliberately *not* in `JOB_TYPE_CATEGORIES`
+below — `OQ-15` (resolved 2026-09-17): the project a `project.bootstrap`/
+`project.import` Job would register doesn't exist in the registry yet,
+so there is nothing for a pre-dispatch, project-bound check to mount.
+It's verified instead, in `verify_after_completion`, once the real
+registration has already succeeded — a recorded outcome, never a block,
+since blocking an action that already happened is meaningless.
 """
 
 from __future__ import annotations
@@ -48,8 +56,6 @@ JOB_TYPE_CATEGORIES: dict[str, set[str]] = {
     "deployment.stop": {"server_stop"},
     "deployment.redeploy_pillar": {"self_redeploy"},
     "project.remove": {"project_removal"},
-    "project.bootstrap": {"project_registration"},
-    "project.import": {"project_registration"},
     "version.release_start": {"release"},
     "version.release_candidate_cut": {"release"},
     "version.release_candidate_promote": {"release"},
@@ -63,6 +69,16 @@ JOB_TYPE_CATEGORIES: dict[str, set[str]] = {
 # Matching little-runner's own existing confirm_timeout_seconds default
 # exactly, reused rather than picked fresh (docs/pillars/policy_compliance.md).
 CONFIRM_TIMEOUT_SECONDS = 600
+
+# `project_registration`'s own post-completion category — checked once
+# the real registration has already succeeded, never before (OQ-15).
+# A separate table from JOB_TYPE_CATEGORIES on purpose: these two Job
+# types are never pre-dispatch-gated, so mixing them into that table
+# would make `maybe_gate` try (and fail) to gate them the normal way.
+POST_COMPLETION_VERIFY_JOB_TYPES: dict[str, set[str]] = {
+    "project.bootstrap": {"project_registration"},
+    "project.import": {"project_registration"},
+}
 
 
 def resolve_gating_policy_ids(socket_lookup: SocketLookup, project_id: str, categories: set[str], *, timeout: float = 10.0) -> list[str]:
@@ -105,6 +121,29 @@ def attach_policy_gate(conn: sqlite3.Connection, socket_lookup: SocketLookup, jo
         insert_job(conn, check_job)
         job.depends_on = [*job.depends_on, check_job.id]
     update_job(conn, job)
+    return job
+
+
+def verify_after_completion(conn: sqlite3.Connection, socket_lookup: SocketLookup, job: Job) -> Job:
+    """Called once a `project.bootstrap`/`project.import` Job has
+    genuinely succeeded — resolves every currently-winning,
+    framework-bound policy gating `project_registration` for the
+    project that just got registered, and creates one
+    `policy.check_project` Job per policy, fire-and-forget: no
+    `depends_on` wiring back to this Job (it already succeeded; nothing
+    to hold), no `pending_confirmation` on a `fail` verdict (the action
+    it would have gated already happened). The result is a real,
+    recorded `PolicyCheckResult` — verification, not a gate."""
+    if job.status != JobStatus.SUCCEEDED or job.type not in POST_COMPLETION_VERIFY_JOB_TYPES or not job.project_id:
+        return job
+    categories = POST_COMPLETION_VERIFY_JOB_TYPES[job.type]
+    policy_ids = resolve_gating_policy_ids(socket_lookup, job.project_id, categories)
+    for policy_id in policy_ids:
+        check_job = Job(
+            type="policy.check_project", target_pillar="policy", project_id=job.project_id,
+            params={"policy_id": policy_id}, created_by="orchestration-post-registration-verify",
+        )
+        insert_job(conn, check_job)
     return job
 
 
@@ -165,9 +204,9 @@ def maybe_gate(
 def confirm(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup) -> dict:
     if job.status != JobStatus.PENDING_CONFIRMATION:
         return {"confirmed": False, "reason": f"job is {job.status.value}, not pending confirmation"}
-    from orchestration.dispatch import dispatch_job
+    from orchestration.dispatch import dispatch_job, dispatch_timeout_for
 
-    dispatched = dispatch_job(conn, job, socket_lookup)
+    dispatched = dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type))
     return {"confirmed": True, "job": dispatched.model_dump(mode="json")}
 
 

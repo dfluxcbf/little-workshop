@@ -42,8 +42,30 @@ DECLARED_UNSTOPPABLE_JOB_TYPES: frozenset[str] = frozenset({
     "version.config_add_hook", "version.config_remove_hook",
 })
 
+# Per-Job-type dispatch timeout overrides — `docs/open_questions.md`'s
+# `OQ-14` (resolved 2026-09-17): the 20s default was never chosen with a
+# real, slow Job type in mind, and a Job type whose real implementation
+# genuinely calls the Claude CLI (`agent.query`, itself real-network,
+# non-deterministic latency) can legitimately take longer than that. A
+# table here, mirroring `orchestration/policy_gate.py`'s
+# `JOB_TYPE_CATEGORIES` pattern, gives those specific types a longer
+# ceiling without moving `DEFAULT_DISPATCH_TIMEOUT_SECONDS` itself and
+# silently changing every other Job type's own failure-detection
+# latency. `dispatch_ready_jobs` consults this before calling
+# `dispatch_job`; a direct `dispatch_job` call (e.g. `policy_gate.
+# confirm`) still defaults to the plain 20s unless it looks this up too.
+DEFAULT_DISPATCH_TIMEOUT_SECONDS = 20.0
+JOB_TYPE_TIMEOUTS: dict[str, float] = {
+    "policy.author": 120.0,
+    "policy.activate": 60.0,
+}
 
-def dispatch_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 20.0) -> Job:
+
+def dispatch_timeout_for(job_type: str) -> float:
+    return JOB_TYPE_TIMEOUTS.get(job_type, DEFAULT_DISPATCH_TIMEOUT_SECONDS)
+
+
+def dispatch_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = DEFAULT_DISPATCH_TIMEOUT_SECONDS) -> Job:
     socket_path = socket_lookup(job.target_pillar)
     if socket_path is None:
         job.status = JobStatus.FAILED
@@ -71,6 +93,9 @@ def dispatch_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup
             if outcome == "succeeded":
                 job.status = JobStatus.SUCCEEDED
                 job.result = body.get("result")
+                from orchestration import policy_gate
+
+                policy_gate.verify_after_completion(conn, socket_lookup, job)
             elif outcome == "accepted":
                 # Long-running: stays RUNNING, completed later via
                 # Orchestration's own callback endpoint.
@@ -110,7 +135,7 @@ def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup) -
         if policy_gate.maybe_gate(conn, job):
             dispatched.append(job)
             continue
-        dispatched.append(dispatch_job(conn, job, socket_lookup))
+        dispatched.append(dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type)))
     return dispatched
 
 

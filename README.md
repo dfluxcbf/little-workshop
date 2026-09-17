@@ -183,8 +183,24 @@ disabling it lets a previously-blocked deploy through; and a waiver
 lets one project's deploy through while a second, non-waived project on
 the identical policy still genuinely blocks.
 
+### Answering OQ-13/14/15 (2026-09-17)
+
+`OQ-13` (waiver review) stays exactly as built — no code change; the
+single-user household trust model already covers it. `OQ-14` (a real
+Claude-CLI-backed `policy.author`/`policy.activate` call occasionally
+timing out at the fixed 20s dispatch ceiling) gets a per-Job-type
+timeout table (`orchestration/dispatch.py`'s `JOB_TYPE_TIMEOUTS`),
+consulted before every dispatch, leaving every other Job type's own
+20s default untouched. `OQ-15` (`project_registration` can't be checked
+against a project that doesn't exist yet) resolves in two parts:
+gate-time validation now rejects a project-bound policy that tries to
+gate `project_registration` outright, and `orchestration/policy_gate.py`
+gained `verify_after_completion` — the category is verified *after* a
+real `project.bootstrap`/`project.import` succeeds, fire-and-forget,
+never gated before it.
+
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1636 tests — 1499 unit, 137 real
+`bazel test //:coverage` all work today (1651 tests — 1513 unit, 138 real
 `systemd --user` end-to-end integration proofs (a deliberate +15%
 expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
 three of four newly-added gate-point categories that don't hit a

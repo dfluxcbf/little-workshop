@@ -427,24 +427,27 @@ stop_timeout_seconds = 15
 
 
 @requires_systemd_user
-def test_project_registration_gate_point_blocks_a_real_bootstrap_until_confirmed(tmp_path, workshop_env, monkeypatch):
-    """2026-09-16's gate-point expansion added `project_registration`,
-    previously ungated — this is its first real end-to-end proof (the
-    unit-level tests only assert the `JOB_TYPE_CATEGORIES` mapping, never
-    a real blocked-then-confirmed Job)."""
+def test_project_registration_is_verified_after_a_real_bootstrap_completes_not_before(tmp_path, workshop_env, monkeypatch):
+    """`OQ-15`, resolved 2026-09-17: `project_registration` can't be
+    checked *before* the project exists (a project-bound check has
+    nothing to mount), so it's framework-bound only, and verified once
+    the real registration has already succeeded — never a block. This
+    replaces the pre-2026-09-17 proof that it blocked-then-confirmed
+    like every other gate point; that was never actually achievable for
+    this one category (see `docs/open_questions.md`)."""
     fake_bin = tmp_path / "fakebin"
     fake_bin.mkdir()
     _write_fake_claude(fake_bin)
 
     with _Session(workshop_env, fake_bin, monkeypatch):
         author = _author(
-            workshop_env, ears_text="ALWAYS_FAIL: project registration is always blocked for this test",
+            workshop_env, ears_text="ALWAYS_FAIL: this framework check always fails",
             topic="project-registration-policy", target_pillar="policy", scope_level="all_projects",
             gate_points=["project_registration"], created_by="framework",
         )
-        _activate(workshop_env, author["result"])
+        policy_id = _activate(workshop_env, author["result"])["result"]["id"]
 
-        project_id = "gated-new-project"
+        project_id = "verified-new-project"
         dest_dir = tmp_path / "workdir"
         dest_dir.mkdir()
         bootstrap = cli_client.create_job(
@@ -452,14 +455,37 @@ def test_project_registration_gate_point_blocks_a_real_bootstrap_until_confirmed
             params={"name": project_id, "dest_dir": str(dest_dir)}, queue_key=None, depends_on=[],
             created_by="integration-test",
         )
-        _pump(workshop_env)
-        assert _wait_until(lambda: cli_client.job_status(workshop_env.paths, bootstrap["id"])["job"]["status"] == "pending_confirmation")
-        assert not (dest_dir / project_id).exists()
-
-        confirmed = cli_client.policy_confirm_job(workshop_env.paths, bootstrap["id"])
-        assert confirmed["confirmed"] is True
-        assert confirmed["job"]["status"] == "succeeded"
+        # Never gated: the real registration happens immediately, even
+        # though a policy exists that would have failed its own check.
+        assert bootstrap["status"] == "succeeded", bootstrap
         assert (dest_dir / project_id).is_dir()
+
+        # The verification Job this triggers runs on the *next* pump —
+        # fire-and-forget, never wired as this Job's own dependency.
+        _pump(workshop_env)
+        assert _wait_until(lambda: cli_client.policy_check_results(workshop_env.paths, policy_id, project_id)["results"])
+
+        results = cli_client.policy_check_results(workshop_env.paths, policy_id, project_id)["results"]
+        assert results[0]["outcome"] == "fail"
+        # Recorded, never enforced — the project is still genuinely there.
+        assert (dest_dir / project_id).is_dir()
+
+
+@requires_systemd_user
+def test_authoring_a_project_bound_project_registration_policy_is_rejected(tmp_path, workshop_env, monkeypatch):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    _write_fake_claude(fake_bin)
+
+    with _Session(workshop_env, fake_bin, monkeypatch):
+        author = _author(
+            workshop_env, ears_text="EARS_OK: an incoming project must be a git repo",
+            topic="project-bound-registration-attempt", target_pillar="registry", scope_level="all_projects",
+            gate_points=["project_registration"],
+        )
+        assert author["status"] == "failed", author
+        assert "project_registration" in author["error"]
+        assert "framework-bound" in author["error"]
 
 
 @requires_systemd_user
