@@ -38,7 +38,7 @@ discipline this project already applies to itself); the *sequence* and
 | M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
-| M16 | Compatibility shims | M1–M14 (whichever tool each shim forwards to) | Not started |
+| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | Not started — see `docs/requirements.md`'s M16 follow-up for the full 2026-09-17 parity survey |
 | M17 | Ecosystem cutover | M15, M16 | Not started |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
@@ -428,22 +428,39 @@ previously-invisible defect surfaced along the way and is tracked as
 Claude CLI calls, intermittently misreporting a real Gate-pipeline call
 as "pillar unreachable."
 
-## M16 — Compatibility shims
+## M16 — Full functional parity with the absorbed tools
 
-`docs/architecture.md`'s new CLI entry names this explicitly: once a
-pillar's `lws` subcommand exists, the tool it absorbed — `lreq`, `lvx`,
-`lrun`, `little-pypi`, or `bootstrap-little-project` — becomes a thin
-forwarder to it, one shim per tool, each shippable the moment its own
-pillar is far enough along (in practice, mostly after M2/M3/M4/M6/M10/M11
-individually, not all five at once). Existing scripts, muscle memory,
-and this very ecosystem's own root policies (which still say "every
-submodule uses `lreq`/`lvx`") keep working unmodified during the
-transition instead of every caller needing to switch the moment a
-pillar ships.
+**Corrected 2026-09-17** (this section previously described "compatibility
+shims" — a thin forwarder per tool, kept for backward-compatible command
+names). That approach is rejected: the five absorbed tools (`lreq`,
+`lvx`, `lrun`, `little-pypi`, `bootstrap-little-project`) are never made
+to forward into `lws`, and `lws` never calls into them. Each stays
+exactly what it already is, running its own original, unmodified code,
+for the entire transition — no shim, no shared code path, no command
+name kept alive as a pass-through.
 
-Explicitly not a redesign of any of the five tools' command surfaces —
-a shim's whole job is behaving identically to the tool it replaces from
-the outside, while the real work happens in `lws` underneath.
+What M16 actually is: closing the real functional gaps a direct,
+command-by-command survey found between each old tool's own CLI surface
+and what its corresponding pillar(s) implement today (the full survey:
+`docs/requirements.md`'s M16 follow-up section). `little-versions` is
+closest — one small gap (standalone `issue list/set/unset`).
+`little-pypi` is close on its storage half; only dev-convenience commands
+(`pip`/config-file helpers) are missing. `bootstrap-little-project` needs
+three real features added to `project.bootstrap` (GitHub-automation init,
+`lvx init`, label creation). `little-requirements` and `little-runner`
+are not close — both have real, load-bearing concepts (a client-side
+workspace config; GitHub-issue-triggered polling, per-repo issue queues,
+session management, branch stabilization, cross-project branch
+auditing) with no equivalent anywhere in little-workshop yet, and
+`little-runner` is the one every other real project in this ecosystem
+currently depends on for actual CI — the highest blast-radius gap to
+close.
+
+Each tool's gaps are closed independently, one pillar's worth of real
+implementation work at a time, never a redesign of what `lws`'s own
+subcommands already look like — the goal is that `lws` can do everything
+the old tool could, not that it mimics the old tool's own command
+spelling.
 
 ## M17 — Ecosystem cutover
 
@@ -461,10 +478,20 @@ itself (M15).
 
 Depends on M15 — self-hosting is little-workshop trusting itself with
 its own repository before it's trusted with a household's actual running
-applications (`little-meals`, `little-mindcheck`) — and M16, since the
-shims are what make each individual project's cutover a config change
-instead of a rewrite of that project's own tooling assumptions.
+applications (`little-meals`, `little-mindcheck`) — and M16: cutover
+means a project's owner actually switches what they type/script (the old
+command, then the equivalent `lws` one), which only makes sense once
+`lws` genuinely does everything the old tool did for that project's own
+usage. The old tool keeps running, untouched, alongside `lws` for as
+long as its owner wants — cutover is "we now use `lws` for this," never
+"the old tool stopped working."
 
 Sequencing within this milestone (project order, one at a time vs.
 batched, rollback plan per project) is implementation planning for when
-this milestone actually starts, not decided here.
+this milestone actually starts, not decided here. **Explicitly not part
+of this milestone, or any milestone**: uninstalling the five old tools.
+That's a manual, confidence-gated decision for little-workshop's own
+maintainers to make once every milestone is done, a first release
+exists, and `lws` has been personally validated through real use — never
+an automated step this project's own tooling performs on its own
+(`docs/architecture.md`'s CLI section).
