@@ -81,7 +81,7 @@ def test_bootstrap_project_without_github_or_token_but_flag_set_raises(conn, pat
 def test_bootstrap_project_creates_github_repo_via_mocked_rest(conn, paths, tmp_path, monkeypatch):
     from registry import bootstrap as bootstrap_module
 
-    calls = {}
+    calls = {"labels": []}
 
     def fake_create_repository(name, token, *, private, description):
         calls["create"] = (name, token, private, description)
@@ -90,8 +90,12 @@ def test_bootstrap_project_creates_github_repo_via_mocked_rest(conn, paths, tmp_
     def fake_add_remote_and_push(path, remote_url):
         calls["push"] = (path, remote_url)
 
+    def fake_ensure_label(repo, token, name, color, description):
+        calls["labels"].append((repo, token, name))
+
     monkeypatch.setattr(bootstrap_module.github, "create_repository", fake_create_repository)
     monkeypatch.setattr(bootstrap_module.gitops, "add_remote_and_push", fake_add_remote_and_push)
+    monkeypatch.setattr(bootstrap_module.github, "ensure_label", fake_ensure_label)
 
     dest_dir = tmp_path / "workdir"
     dest_dir.mkdir()
@@ -108,6 +112,29 @@ def test_bootstrap_project_creates_github_repo_via_mocked_rest(conn, paths, tmp_
     assert result.repo_url == "https://github.com/dfluxcbf/little-widget"
     assert calls["create"] == ("little-widget", "fake-token", True, "")
     assert calls["push"][1] == "git@github.com:dfluxcbf/little-widget.git"
+    assert result.labels_created == [name for name, _, _ in bootstrap_module.github.BOOTSTRAP_LABELS]
+    assert len(calls["labels"]) == len(bootstrap_module.github.BOOTSTRAP_LABELS)
+    assert all(repo == "dfluxcbf/little-widget" for repo, _, _ in calls["labels"])
+
+
+def test_bootstrap_project_skips_labels_when_ensure_labels_is_false(conn, paths, tmp_path, monkeypatch):
+    from registry import bootstrap as bootstrap_module
+
+    calls = {"labels": []}
+    monkeypatch.setattr(bootstrap_module.github, "create_repository", lambda *a, **k: {"html_url": "https://github.com/dfluxcbf/little-widget"})
+    monkeypatch.setattr(bootstrap_module.gitops, "add_remote_and_push", lambda *a, **k: None)
+    monkeypatch.setattr(bootstrap_module.github, "ensure_label", lambda *a, **k: calls["labels"].append(a))
+
+    dest_dir = tmp_path / "workdir"
+    dest_dir.mkdir()
+    params = BootstrapParams(
+        name="little-widget", dest_dir=str(dest_dir), create_github_repo=True,
+        github_token="fake-token", ensure_labels=False,
+    )
+    result = bootstrap_project(conn, paths, params)
+
+    assert result.labels_created == []
+    assert calls["labels"] == []
 
 
 def test_bootstrap_project_creates_github_repo_via_gh_cli_when_no_token(conn, paths, tmp_path, monkeypatch):

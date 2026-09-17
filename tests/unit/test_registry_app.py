@@ -48,6 +48,55 @@ def test_job_bootstrap_creates_project_and_registers(client):
     assert [p["name"] for p in listed] == ["little-widget"]
 
 
+def test_job_bootstrap_version_initialized_false_when_version_pillar_unreachable(client):
+    """No real Version Control & Release unit is running in this test's
+    own paths — `version_initialized` must degrade to False, never fail
+    the bootstrap itself (M16's own documented simplification)."""
+    app_client, workdir = client
+    response = app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j1", "params": {"name": "little-widget", "dest_dir": str(workdir)}},
+    )
+    assert response.json()["result"]["version_initialized"] is False
+
+
+def test_job_bootstrap_runs_the_real_git_dance_when_version_pillar_reachable(client, monkeypatch):
+    """Mocks only the cross-pillar boundary (version_client itself) --
+    the git add/commit/checkout/merge sequence that follows is real, run
+    against the real scaffolded repo `bootstrap_project` just created."""
+    import registry.app as app_module
+
+    def fake_init(paths, project_id):
+        # The real version.init Job would have written this file via a
+        # genuine cross-pillar call; write it directly here so the git
+        # add/commit that follows has something real to commit.
+        (workdir / project_id / ".lvx").mkdir(exist_ok=True)
+        (workdir / project_id / ".lvx" / "config.json").write_text("{}\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(app_module.version_client, "init_version_tracking", fake_init)
+
+    app_client, workdir = client
+    response = app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j1", "params": {"name": "little-widget", "dest_dir": str(workdir)}},
+    )
+    result = response.json()["result"]
+    assert result["version_initialized"] is True
+
+    import subprocess
+
+    project_dir = workdir / "little-widget"
+    log = subprocess.run(
+        ["git", "log", "--all", "--oneline"], cwd=project_dir, capture_output=True, text=True, check=True,
+    ).stdout
+    assert "chore: version init" in log
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=project_dir, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert branch == "dev"  # ends on dev, the ready-to-work gitflow state
+
+
 def test_job_bootstrap_duplicate_fails_with_outcome_not_http_error(client):
     app_client, workdir = client
     params = {"name": "little-widget", "dest_dir": str(workdir)}

@@ -219,11 +219,18 @@ remain open. `little-pypi`'s dev-convenience gaps are also closed —
 match `little-pypi`'s own equivalents, all four pure CLI-side additions
 assuming a real reverse proxy fronts Build & Packages' Unix-socket-only
 Pillar Interface, the same deployment-time-concern split Dashboard's
-own docs already establish. `bootstrap-little-project`,
-`little-requirements`, and `little-runner`'s gaps remain open.
+own docs already establish. `bootstrap-little-project`'s gaps are also
+closed: `project.bootstrap` now creates the old tool's real GitHub
+labels and runs a real cross-pillar `version.init` call (the same git
+add/commit/checkout-dev/merge dance a caller previously had to run by
+hand), leaving a freshly bootstrapped project on `dev` and gitflow-ready
+— matching what the old tool's own `create` always did via `lvx init`.
+Its `.lrun/config.toml` gap is deliberately deferred: a host-local file
+with no clear pillar owner yet. `little-requirements` and
+`little-runner`'s gaps remain open.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1684 tests — 1545 unit, 139 real
+`bazel test //:coverage` all work today (1702 tests — 1562 unit, 140 real
 `systemd --user` end-to-end integration proofs (a deliberate +15%
 expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
 three of four newly-added gate-point categories that don't hit a

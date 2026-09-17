@@ -151,6 +151,7 @@ def _project_bootstrap(paths: Paths, args: JSONDict) -> Any:
         "public": args.get("public", False),
         "remote_host": args.get("remote_host", "github.com"),
         "github_token": args.get("github_token"),
+        "ensure_labels": args.get("ensure_labels", True),
     }
     return client.create_job(
         paths, type="project.bootstrap", target_pillar="registry", project_id=args["name"],
@@ -737,6 +738,7 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "public": _prop("boolean", "Make the GitHub repo public. Default: false."),
                  "remote_host": _prop("string", "Git remote host. Default: github.com."),
                  "github_token": _prop("string", "GitHub token, if create_github_repo is true."),
+                 "ensure_labels": _prop("boolean", "Ensure the seven little-runner trigger/intent GitHub labels exist. Default: true."),
              }, ["name", "dest_dir"]), _project_bootstrap),
     ToolSpec("workshop_project_import", "Register an existing, already-checked-out repository — the other half of "
              "project.bootstrap (docs/milestones.md M8). Deliberately mechanical: it only registers what's there "

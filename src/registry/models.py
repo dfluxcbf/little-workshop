@@ -62,6 +62,7 @@ class BootstrapParams(BaseModel):
     public: bool = False
     remote_host: str = "github.com"
     github_token: str | None = None
+    ensure_labels: bool = True
 
 
 class BootstrapResult(BaseModel):
@@ -70,6 +71,8 @@ class BootstrapResult(BaseModel):
     repo_url: str | None = None
     github_created: bool = False
     pushed: bool = False
+    version_initialized: bool = False
+    labels_created: list[str] = Field(default_factory=list)
 
 
 class ImportParams(BaseModel):

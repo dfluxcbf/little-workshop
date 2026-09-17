@@ -1,7 +1,11 @@
 """Thin wrappers around the git commands used to bring up a new repo —
-ported from `bootstrap-little-project`'s `gitops.py`, minus `lvx init`:
-Version Control & Release doesn't exist yet (M3), and a little-workshop-
-bootstrapped project has no reason to depend on the tool it replaces.
+ported from `bootstrap-little-project`'s `gitops.py`. `lvx init`'s own
+equivalent (writing `.lvx/config.json`) is no longer missing (M16,
+2026-09-17): it's a real cross-pillar call to Version Control &
+Release, made from `registry/app.py`'s own `job_bootstrap` endpoint via
+`registry/version_client.py` — never a Python import of `version`'s
+own code, and never a dependency on the real `lvx` tool this pillar is
+absorbing.
 """
 
 from __future__ import annotations

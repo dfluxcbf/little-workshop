@@ -297,18 +297,12 @@ def test_project_remove_does_not_yet_cascade_to_other_pillars_data(tmp_path, wor
                 created_by="integration-test",
             )
             assert bootstrap["status"] == "succeeded", bootstrap
+            # M16 (2026-09-17): job_bootstrap now runs this itself, real
+            # Version pillar and all — the manual version.init + commit +
+            # dev-merge dance this test used to do by hand is exactly what
+            # bootstrap already did (see result["version_initialized"]).
+            assert bootstrap["result"]["version_initialized"] is True
             project_dir = dest_dir / "little-widget"
-
-            init = cli_client.create_job(
-                workshop_env.paths, type="version.init", target_pillar="version", project_id="little-widget",
-                params={"production_branch": "master", "integration_branch": "dev"}, queue_key="little-widget",
-                depends_on=[], created_by="integration-test",
-            )
-            assert init["status"] == "succeeded", init
-            subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
-            subprocess.run(["git", "commit", "-m", "chore: version init"], cwd=project_dir, check=True, capture_output=True)
-            subprocess.run(["git", "checkout", "dev"], cwd=project_dir, check=True, capture_output=True)
-            subprocess.run(["git", "merge", "--ff-only", "master"], cwd=project_dir, check=True, capture_output=True)
 
             # A real row now exists in Version Control & Release's own
             # world -- the issue-link table, populated via `lvx_issue_set`'s
@@ -320,7 +314,7 @@ def test_project_remove_does_not_yet_cascade_to_other_pillars_data(tmp_path, wor
                 params={"name": "widgets", "issue": 42}, queue_key="little-widget", depends_on=[],
                 created_by="integration-test",
             )
-            assert feature_start["status"] == "succeeded", feature_start
+            print("DEBUG feature_start:", feature_start); assert feature_start["status"] == "succeeded", feature_start
 
             with client_for_socket(workshop_env.paths.socket_path("version"), timeout=5.0) as version_client:
                 issues_before = version_client.get("/v1/config", params={"project_id": "little-widget"}).json()
@@ -416,3 +410,45 @@ def test_project_sets_creating_a_duplicate_name_is_not_yet_handled_cleanly(works
             assert second.status_code == 500
     finally:
         systemd.stop("registry", runner=DEFAULT_RUNNER)
+
+
+@requires_systemd_user
+def test_bootstrap_initializes_real_gitflow_tracking_via_a_real_version_unit(tmp_path, workshop_env):
+    """M16's bootstrap-little-project parity gap, closed 2026-09-17: a
+    real cross-pillar call to Version Control & Release writes a real,
+    byte-compatible .lvx/config.json and commits it -- deliberately made
+    *after* Registry's own job_bootstrap releases its lock (registry/
+    version_client.py's own docstring explains why holding it would
+    deadlock)."""
+    env = workshop_env.env
+    _start_pillars(env, workshop_env, "registry", "version")
+    try:
+        core_server, orch_server, conn = _core_and_orchestration(workshop_env, ("registry", "version"))
+        try:
+            dest_dir = tmp_path / "workdir"
+            dest_dir.mkdir()
+            result = cli_client.create_job(
+                workshop_env.paths, type="project.bootstrap", target_pillar="registry", project_id="little-widget",
+                params={"name": "little-widget", "dest_dir": str(dest_dir)},
+                queue_key=None, depends_on=[], created_by="integration-test",
+            )
+            assert result["status"] == "succeeded", result
+            assert result["result"]["version_initialized"] is True
+
+            project_dir = dest_dir / "little-widget"
+            assert (project_dir / ".lvx" / "config.json").is_file()
+
+            log = subprocess.run(
+                ["git", "log", "--all", "--oneline"], cwd=project_dir, capture_output=True, text=True, check=True,
+            ).stdout
+            assert "chore: version init" in log
+
+            config = cli_client.version_config(workshop_env.paths, "little-widget")
+            assert config["production_branch"] == "master"
+            assert config["integration_branch"] == "dev"
+        finally:
+            orch_server.stop()
+            core_server.stop()
+            conn.close()
+    finally:
+        _stop_pillars("registry", "version")

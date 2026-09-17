@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ValidationError
 
 from common.paths import Paths
-from registry import db
+from registry import db, gitops, version_client
 from registry.bootstrap import BootstrapError, bootstrap_project
 from registry.import_ import ProjectImportError, import_project
 from registry.models import BootstrapParams, ImportParams, ProjectSet, ProjectStatus, Ticket
@@ -60,6 +61,28 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 result = bootstrap_project(conn, paths, bootstrap_params)
             except BootstrapError as exc:
                 return {"outcome": "failed", "error": str(exc)}
+        # Outside `lock`, deliberately: version.init calls back into this
+        # pillar's own PI to resolve the project it just registered
+        # (common/registry_client.py) -- doing that while still holding
+        # `lock` above would deadlock against this same endpoint's own
+        # GET /v1/projects/{name} handler. M16's bootstrap-little-project
+        # parity gap (docs/requirements.md): the old tool always ran
+        # `lvx init` as part of `create`; little-workshop's own `version`
+        # pillar already writes a byte-compatible `.lvx/config.json`.
+        project_dir = Path(result.path)
+        if version_client.init_version_tracking(paths, result.name):
+            gitops.run(["git", "add", "-A"], cwd=project_dir)
+            gitops.run(["git", "commit", "-m", "chore: version init"], cwd=project_dir)
+            gitops.run(["git", "checkout", "dev"], cwd=project_dir)
+            gitops.run(["git", "merge", "--ff-only", "master"], cwd=project_dir)
+            # Deliberately left checked out on `dev`, not `master` — the
+            # ready-to-start-working gitflow state, matching what a
+            # caller doing this same "bootstrap then version.init" dance
+            # by hand already expected before this was automated.
+            result.version_initialized = True
+            if result.pushed:
+                gitops.run(["git", "push", "origin", "master:master"], cwd=project_dir)
+                gitops.run(["git", "push", "origin", "dev:dev"], cwd=project_dir)
         return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
 
     @app.post("/v1/jobs/project.import")

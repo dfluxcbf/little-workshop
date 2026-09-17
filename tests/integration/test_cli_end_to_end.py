@@ -89,16 +89,13 @@ def test_lws_version_feature_start_then_finish_completes_a_real_cycle(tmp_path, 
             dest_dir = tmp_path / "workdir"
             dest_dir.mkdir()
 
+            # project.bootstrap now runs version.init (and the resulting
+            # git add/commit/checkout-dev/merge dance) automatically --
+            # see registry/app.py's job_bootstrap. Doing it again by hand
+            # here would just fail on "nothing to commit".
             assert cli_main.main(["project", "bootstrap", "little-widget", "--dest-dir", str(dest_dir)]) == 0
             capsys.readouterr()
             project_dir = dest_dir / "little-widget"
-
-            assert cli_main.main(["version", "init", "--project-id", "little-widget"]) == 0
-            capsys.readouterr()
-            subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
-            subprocess.run(["git", "commit", "-m", "chore: version init"], cwd=project_dir, check=True, capture_output=True)
-            subprocess.run(["git", "checkout", "dev"], cwd=project_dir, check=True, capture_output=True)
-            subprocess.run(["git", "merge", "--ff-only", "master"], cwd=project_dir, check=True, capture_output=True)
 
             assert cli_main.main(["version", "feature-start", "--project-id", "little-widget", "widgets"]) == 0
             capsys.readouterr()
