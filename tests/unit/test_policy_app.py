@@ -393,6 +393,58 @@ def test_activate_edit_can_explicitly_change_gate_points(client, conn):
     assert response.json()["result"]["gate_points"] == ["branch_finish"]
 
 
+# -- project_registration is framework-bound only (OQ-15, resolved 2026-09-17) --
+
+
+def test_author_rejects_project_registration_on_a_project_bound_target(client):
+    response = _author(client, target_pillar="registry", gate_points=["project_registration"])
+    assert response.json()["outcome"] == "failed"
+    assert "project_registration" in response.json()["error"]
+    assert "framework-bound" in response.json()["error"]
+
+
+def test_author_accepts_project_registration_when_framework_bound(client):
+    response = _author(
+        client, target_pillar="policy", created_by="framework", gate_points=["project_registration"],
+    )
+    assert response.json()["outcome"] == "succeeded"
+    assert response.json()["result"]["gate_points"] == ["project_registration"]
+
+
+def test_activate_rejects_project_registration_on_a_project_bound_target(client):
+    draft = _author(client, target_pillar="registry", gate_points=[]).json()["result"]
+    draft["gate_points"] = ["project_registration"]
+    response = _activate(client, draft)
+    assert response.json()["outcome"] == "failed"
+    assert "project_registration" in response.json()["error"]
+
+
+def test_configure_rejects_project_registration_on_a_project_bound_policy(client, conn):
+    draft = _author(client, target_pillar="registry", gate_points=[]).json()["result"]
+    policy_id = _activate(client, draft).json()["result"]["id"]
+
+    response = client.post(
+        "/v1/jobs/policy.configure",
+        json={"job_id": "j", "params": {"policy_id": policy_id, "gate_points": ["project_registration"]}},
+    )
+    assert response.json()["outcome"] == "failed"
+    assert "project_registration" in response.json()["error"]
+    # never partially applied
+    assert db.get_policy(conn, policy_id).gate_points == []
+
+
+def test_configure_accepts_project_registration_on_a_framework_bound_policy(client, conn):
+    draft = _author(client, target_pillar="policy", created_by="framework", gate_points=[]).json()["result"]
+    policy_id = _activate(client, draft).json()["result"]["id"]
+
+    response = client.post(
+        "/v1/jobs/policy.configure",
+        json={"job_id": "j", "params": {"policy_id": policy_id, "gate_points": ["project_registration"]}},
+    )
+    assert response.json()["outcome"] == "succeeded"
+    assert db.get_policy(conn, policy_id).gate_points == [GatePoint.PROJECT_REGISTRATION]
+
+
 # -- policy.configure: enable/disable and gate_points, no re-authoring --------
 
 

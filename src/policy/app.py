@@ -71,6 +71,22 @@ def _parse_gate_points(raw: object) -> tuple[list[GatePoint], str | None]:
         return [], f"invalid gate_point: {exc}"
 
 
+def _validate_gate_points_against_target(gate_points: list[GatePoint], target_pillar: str) -> str | None:
+    """`project_registration` can only ever be framework-bound
+    (`target_pillar == "policy"`) — resolved 2026-09-17 (`docs/
+    open_questions.md`'s `OQ-15`): the project it would gate doesn't
+    exist in the registry yet at the moment any project-bound check
+    could try to mount its checkout, a genuine chicken-and-egg problem
+    a project-bound policy can never resolve. Every other gate point is
+    free to be either."""
+    if GatePoint.PROJECT_REGISTRATION in gate_points and target_pillar != PILLAR_ITSELF:
+        return (
+            "gate_points: 'project_registration' may only be used on a framework-bound policy "
+            f"(target_pillar == {PILLAR_ITSELF!r}) — a project-bound policy has no project to check yet"
+        )
+    return None
+
+
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     app = FastAPI(title="little-workshop Policy & Compliance")
     lock = threading.Lock()
@@ -149,6 +165,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
         if gate_points_error:
             return {"outcome": "failed", "error": gate_points_error}
+        gate_points_target_error = _validate_gate_points_against_target(gate_points, target_pillar)
+        if gate_points_target_error:
+            return {"outcome": "failed", "error": gate_points_target_error}
 
         project_bound = target_pillar != PILLAR_ITSELF
         try:
@@ -209,6 +228,10 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 # policy.configure changes gate_points on its own.
                 gate_points = existing.gate_points if existing is not None else []
 
+            gate_points_target_error = _validate_gate_points_against_target(gate_points, target_pillar)
+            if gate_points_target_error:
+                return {"outcome": "failed", "error": gate_points_target_error}
+
             structural = db.find_by_scope(conn, topic=topic, scope_level=scope_level, scope_target=scope_target, exclude_id=policy_id)
             if structural is not None:
                 return {"outcome": "failed", "error": f"Gate 3a rejected: a policy already exists at this exact scope+topic (id={structural.id})"}
@@ -264,6 +287,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
                 if gate_points_error:
                     return {"outcome": "failed", "error": gate_points_error}
+                gate_points_target_error = _validate_gate_points_against_target(gate_points, policy.target_pillar)
+                if gate_points_target_error:
+                    return {"outcome": "failed", "error": gate_points_target_error}
 
             db.set_policy_configuration(conn, policy_id, enabled=enabled, gate_points=gate_points)
             updated = db.get_policy(conn, policy_id)

@@ -600,7 +600,31 @@ a change to the policy for any other project). Both are skipped by
 precedence resolution and fall through to whatever the next-lower-
 precedence policy on that topic is — framework tier still means "can't
 be shadowed by a lower-scope policy"; a waiver is a distinct, explicit
-act, not a scope-precedence outcome.
+act, not a scope-precedence outcome. **Resolved 2026-09-17** (`docs/
+open_questions.md`'s `OQ-13`): this stays exactly as built — a reason
+and a timestamp are the whole audit trail, and any caller with Pillar
+Interface access can grant or revoke freely, the same trust model as
+everything else in this single-user household system.
+
+**`project_registration` is a structurally different gate point, resolved
+2026-09-17** (`OQ-15`): every other category gates a Job *before*
+dispatch, holding it at `pending_confirmation` against an
+already-registered project's own checkout. A project being registered
+by the very Job `project_registration` would gate doesn't exist yet at
+check time, so a project-bound check has nothing to mount — a genuine
+chicken-and-egg problem, not a bug. Resolved by splitting the category
+into two real rules: (1) a policy gating `project_registration` must be
+framework-bound (`target_pillar == "policy"`, checking little-workshop's
+own state, not the incoming project's) — enforced at Gate-time in
+`policy.author`/`policy.activate`/`policy.configure`, rejected outright
+rather than failing confusingly at check time; (2) it is *verified*, not
+gated — `orchestration/policy_gate.py`'s `verify_after_completion` fires
+a real `policy.check_project` Job only once `project.bootstrap`/`project.
+import` has already genuinely succeeded, fire-and-forget, never wired
+back as that Job's own dependency. A `fail` verdict here is recorded in
+`policy_check_results` like any other check, never enforced — blocking
+an action that already happened is meaningless. Every other gate point's
+pre-dispatch, hold-until-confirmed behavior is unchanged.
 
 ### Deciding whether a Job type is gated
 

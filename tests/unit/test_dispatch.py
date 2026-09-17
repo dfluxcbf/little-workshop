@@ -121,6 +121,61 @@ def test_dispatch_ready_jobs_cascades_and_dispatches(monkeypatch, tmp_path, conn
 
 
 # ---------------------------------------------------------------------------
+# Per-Job-type dispatch timeouts -- docs/open_questions.md's OQ-14
+# ---------------------------------------------------------------------------
+
+def test_dispatch_timeout_for_returns_the_default_for_an_unlisted_job_type():
+    assert dispatch.dispatch_timeout_for("noop") == dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS
+    assert dispatch.dispatch_timeout_for("deployment.deploy") == dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS
+
+
+def test_dispatch_timeout_for_returns_the_longer_ceiling_for_the_two_agent_backed_policy_types():
+    assert dispatch.dispatch_timeout_for("policy.author") == 120.0
+    assert dispatch.dispatch_timeout_for("policy.activate") == 60.0
+    assert dispatch.dispatch_timeout_for("policy.author") > dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS
+
+
+def test_dispatch_ready_jobs_gives_policy_author_its_own_longer_timeout(monkeypatch, tmp_path, conn):
+    captured = {}
+
+    def factory(socket_path, *, timeout=5.0):
+        captured["timeout"] = timeout
+        return httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"outcome": "succeeded", "result": {}})),
+            base_url="http://pillar",
+        )
+
+    monkeypatch.setattr(dispatch, "client_for_socket", factory)
+
+    job = Job(type="policy.author", target_pillar="policy")
+    db.insert_job(conn, job)
+
+    dispatch.dispatch_ready_jobs(conn, socket_lookup=lambda pillar: tmp_path / "r.sock")
+
+    assert captured["timeout"] == 120.0
+
+
+def test_dispatch_ready_jobs_uses_the_plain_default_for_an_ordinary_job_type(monkeypatch, tmp_path, conn):
+    captured = {}
+
+    def factory(socket_path, *, timeout=5.0):
+        captured["timeout"] = timeout
+        return httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"outcome": "succeeded", "result": {}})),
+            base_url="http://pillar",
+        )
+
+    monkeypatch.setattr(dispatch, "client_for_socket", factory)
+
+    job = Job(type="noop", target_pillar="reference")
+    db.insert_job(conn, job)
+
+    dispatch.dispatch_ready_jobs(conn, socket_lookup=lambda pillar: tmp_path / "r.sock")
+
+    assert captured["timeout"] == dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS
+
+
+# ---------------------------------------------------------------------------
 # stop_job -- docs/milestones.md M9
 # ---------------------------------------------------------------------------
 

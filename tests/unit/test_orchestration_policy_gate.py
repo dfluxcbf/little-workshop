@@ -48,6 +48,15 @@ def test_job_type_categories_covers_the_four_2026_09_16_additions():
     assert categories["build.publish_vsix"] == {"package_publish"}
     assert categories["deployment.stop"] == {"server_stop"}
     assert categories["deployment.redeploy_pillar"] == {"self_redeploy"}
+    # project_registration is deliberately absent from this table — OQ-15
+    # (resolved 2026-09-17): it's verified after the fact, never
+    # pre-dispatch-gated. See POST_COMPLETION_VERIFY_JOB_TYPES below.
+    assert "project.bootstrap" not in categories
+    assert "project.import" not in categories
+
+
+def test_post_completion_verify_job_types_covers_project_registration():
+    categories = policy_gate.POST_COMPLETION_VERIFY_JOB_TYPES
     assert categories["project.bootstrap"] == {"project_registration"}
     assert categories["project.import"] == {"project_registration"}
 
@@ -163,6 +172,75 @@ def test_attach_policy_gate_sends_the_jobs_own_categories(conn, monkeypatch):
     policy_gate.attach_policy_gate(conn, socket_lookup, job)
 
     assert set(captured["categories"].split(",")) == {"server_launch", "deploy_redeploy"}
+
+
+def test_verify_after_completion_does_nothing_for_a_job_that_did_not_succeed(conn, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/policies/gating-for-job")
+    def gating(project_id: str, categories: str) -> list[dict]:
+        return [{"id": "pol1"}]
+
+    socket_lookup = _policy_socket_lookup(app, monkeypatch)
+    job = Job(type="project.bootstrap", target_pillar="registry", project_id="proj-a", status=JobStatus.FAILED)
+    db.insert_job(conn, job)
+    policy_gate.verify_after_completion(conn, socket_lookup, job)
+    assert db.list_jobs(conn, status=JobStatus.QUEUED) == []
+
+
+def test_verify_after_completion_does_nothing_for_an_unrelated_job_type(conn, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/policies/gating-for-job")
+    def gating(project_id: str, categories: str) -> list[dict]:
+        return [{"id": "pol1"}]
+
+    socket_lookup = _policy_socket_lookup(app, monkeypatch)
+    job = Job(type="deployment.deploy", target_pillar="deployment", project_id="proj-a", status=JobStatus.SUCCEEDED)
+    db.insert_job(conn, job)
+    policy_gate.verify_after_completion(conn, socket_lookup, job)
+    assert db.list_jobs(conn, status=JobStatus.QUEUED) == []
+
+
+def test_verify_after_completion_creates_a_real_check_job_after_a_real_bootstrap_succeeds(conn, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/policies/gating-for-job")
+    def gating(project_id: str, categories: str) -> list[dict]:
+        assert project_id == "proj-a"
+        assert categories == "project_registration"
+        return [{"id": "pol1"}]
+
+    socket_lookup = _policy_socket_lookup(app, monkeypatch)
+    job = Job(type="project.bootstrap", target_pillar="registry", project_id="proj-a", status=JobStatus.SUCCEEDED)
+    db.insert_job(conn, job)
+    policy_gate.verify_after_completion(conn, socket_lookup, job)
+
+    created = db.list_jobs(conn, status=JobStatus.QUEUED)
+    assert len(created) == 1
+    assert created[0].type == "policy.check_project"
+    assert created[0].target_pillar == "policy"
+    assert created[0].project_id == "proj-a"
+    assert created[0].params == {"policy_id": "pol1"}
+    assert created[0].depends_on == []  # fire-and-forget, never wired back
+
+
+def test_verify_after_completion_never_blocks_even_when_it_would_have_failed(conn, monkeypatch):
+    """The verification Job it creates is never wired as a dependency of
+    anything, and nothing here inspects its eventual verdict — a `fail`
+    outcome is recorded, not enforced, since the registration already
+    happened for real."""
+    app = FastAPI()
+
+    @app.get("/v1/policies/gating-for-job")
+    def gating(project_id: str, categories: str) -> list[dict]:
+        return [{"id": "pol1"}]
+
+    socket_lookup = _policy_socket_lookup(app, monkeypatch)
+    job = Job(type="project.import", target_pillar="registry", project_id="proj-a", status=JobStatus.SUCCEEDED)
+    db.insert_job(conn, job)
+    result = policy_gate.verify_after_completion(conn, socket_lookup, job)
+    assert result.status == JobStatus.SUCCEEDED  # untouched
 
 
 def test_maybe_gate_false_for_an_ungated_job_type(conn):
