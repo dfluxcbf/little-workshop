@@ -12,13 +12,21 @@ one instead").
 
 - Every open item gets a stable ID (`OQ-NNN`), assigned in raised order,
   never reused even if the item is later dropped rather than resolved.
-- Each open item has four parts: **where it comes from** (the design
-  round or gap that surfaced it), **what's actually being asked** (in
-  plain terms, not just the original one-line summary), **why it
-  matters** (what actually changes depending on the answer — nothing here
-  is asked just to have an answer on file), and **possible
-  interpretations** (a starting menu, not an exhaustive one — picking
-  none of them and saying something else is completely fine).
+- Each open item has seven parts: **where it comes from** (the design
+  round or gap that surfaced it); **first designed** (when the
+  mechanism the question is actually about was first designed —
+  traced to the presentations deck or implementation commit that
+  introduced it, not the date the question itself was raised, when the
+  two differ); **design goal** (what that original mechanism was for,
+  in the terms it was actually designed in); **pillars affected** (which
+  pillar(s) own the mechanism in question and which others call into or
+  depend on it, so the blast radius of any answer is visible up front);
+  **what's actually being asked** (in plain terms, not just the original
+  one-line summary); **why it matters** (what actually changes depending
+  on the answer — nothing here is asked just to have an answer on file);
+  and **possible interpretations** (a starting menu, not an exhaustive
+  one — picking none of them and saying something else is completely
+  fine).
 - Then a **Your answer** field — write directly under it, in this file.
   Partial answers, a decision plus a "but," or a question back are all
   fine; this is a worksheet, not a form with a single right shape.
@@ -44,6 +52,32 @@ usability refinement (enable/disable, per-project waivers, per-policy
 gate points) — not a pre-existing gap, a new one caught in the act of
 implementing, per this document's own "Claude CLI documents what it
 surfaces" convention.
+
+**First designed.** 2026-09-16, commit `5d76ae1` ("Policy usability
+refinement: enable/disable, waivers, per-policy gating") — `policy.
+waiver_grant`/`waiver_revoke` and `policy.models.PolicyWaiver` did not
+exist before this commit; there is no earlier design to trace this back
+to.
+
+**Design goal.** Framework tier's original all-or-nothing "never
+overridden by anything" left no usable way to say "this one project
+genuinely can't comply" — requested directly, right after M12/M13
+shipped, once that gap was hit in practice. The waiver was designed as
+an explicit, auditable, reversible per-project exception, deliberately
+*not* a weakening of scope precedence: a framework policy still can
+never be silently shadowed by a lower-scope policy; a waiver is a
+distinct, separate act, granted per project, never a change to the
+policy itself.
+
+**Pillars affected.** Policy & Compliance owns the mechanism entirely —
+the `policy_waivers` table, both Job types, and `policy/precedence.py`'s
+skip-if-waived check. Orchestration is a secondary dependent: `GET /v1/
+policies/gating-for-job` (called from `orchestration/policy_gate.py`'s
+`resolve_gating_policy_ids`) already excludes a waived policy from what
+it reports as gating a Job, so any answer here that adds a review/expiry
+step changes what that endpoint can return, not just what Policy &
+Compliance stores. No other pillar calls into the waiver endpoints
+directly today.
 
 **What's actually being asked.** `policy.waiver_grant` is an ordinary,
 ungated Job today: any caller who can reach Policy & Compliance's own
@@ -99,6 +133,32 @@ response, never Orchestration's own internal call to the target pillar.
 Every existing test passes because the fake `claude` stub responds in
 milliseconds; this is genuinely invisible until a real, slow LLM call
 sits behind a gated Job type.
+
+**First designed.** 2026-09-15, commit `70b2117` ("Implement M1 (Core +
+Orchestration)") — the architectural decision to dispatch a Job to its
+target pillar's Pillar Interface over a Unix socket dates to
+`presentations/03-execution-model.md`, 2026-09-14; the specific
+`timeout: float = 20.0` constant was fixed when `dispatch_job` was first
+written the next day and has never been revisited since, including
+through M12's own addition of `agent.query`-backed Job types.
+
+**Design goal.** A bounded wait for a Pillar Interface call, so one
+unreachable or hung pillar can never stall Orchestration's queue
+indefinitely — every dispatch gets a real, finite answer (success,
+failure, or "unreachable") rather than hanging forever. 20 seconds was
+never a considered number for anything beyond M1's own reference-pillar
+proof; nothing about it was chosen with a real, slow Job type in mind,
+because none existed yet.
+
+**Pillars affected.** Orchestration owns `dispatch_job` and is the only
+pillar this timeout lives in. Every other pillar is an indirect
+dependent purely by being a dispatch *target* — but the two that
+actually reach it in practice today are Policy & Compliance
+(`policy.author`/`policy.activate`, both real Claude-CLI-backed) and,
+through them, Agentic Development (`agent.query`, the call that's
+actually slow). Any Job type in any future pillar that shells out to
+something slow inherits this same ceiling automatically, with no opt-out
+today.
 
 **What's actually being asked.** How should a Job type whose real
 implementation can legitimately take longer than 20 seconds (today:
@@ -156,6 +216,33 @@ already treats specially), which sidesteps the chicken-and-egg problem
 but can't express "check something about the *incoming* project before
 letting it register," only "check something about little-workshop
 itself before letting any project register."
+
+**First designed.** The mechanism this question actually collides with —
+`_mounts_for_policy`'s project-bound-vs-framework-bound split — was
+introduced 2026-09-16, commit `24396f4` ("M12: Policy & Compliance"),
+following the sandbox design in `presentations/13-test-script-sandbox.md`
+(2026-09-15). The `project_registration` gate point that exposes the
+collision is much newer: commit `e4a7324` ("Add four gate-point
+categories…"), later the same day.
+
+**Design goal.** `_mounts_for_policy`'s two modes were designed for the
+two cases M12 actually needed: a project-bound policy checks something
+about one real, already-registered project (mount its checkout at
+`/project`); a framework-bound policy checks something about
+little-workshop itself (mount `src`/`docs` at `/framework/...`). Neither
+mode was designed with "check a project that doesn't exist in the
+registry yet" in mind, because no gate point needed that until
+`project_registration` was added four months later in project time (same
+day in wall-clock time).
+
+**Pillars affected.** Policy & Compliance owns `_mounts_for_policy` and
+the sandbox it feeds. Registry & Portfolio owns the two Job types this
+gate point actually gates (`project.bootstrap`, `project.import`) and is
+the pillar a project-bound policy would need to resolve the *incoming*
+project's path against, if interpretation (b) below were built.
+Orchestration is a pass-through here — it dispatches the gated Job and
+holds it at `pending_confirmation` exactly as it does for every other
+gate point, unaffected by which mode the check itself runs in.
 
 **What's actually being asked.** Is a project-bound `project_registration`
 gate a real, wanted capability (e.g. "the incoming project's directory
