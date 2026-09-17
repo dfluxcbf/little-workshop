@@ -20,6 +20,16 @@ healthy, currently-running process down.
 
 ## Responsibilities
 
+- **`deployment.set_manifest`** — the one write path for a project's own
+  `manifest.deployment.toml` (`GET /v1/manifest/{project_id}` reads it
+  back), added 2026-09-17 as an M17 ecosystem-cutover finding: nothing
+  exposed a way to configure a real project's server manifest at all
+  before this — `deploy`/`stop`/`status` could only ever fail with "no
+  manifest.deployment.toml" for any project actually being cut over from
+  `little-runner`'s own `[server]` config. Validated via `parse_manifest`
+  before being written, so a malformed manifest is rejected outright
+  rather than silently stored and only discovered at the next real
+  deploy.
 - **`deployment.deploy`** — build+install a commitish in a throwaway git
   worktree, never the project's own checkout; only stop the currently
   running version and launch the new one once install genuinely

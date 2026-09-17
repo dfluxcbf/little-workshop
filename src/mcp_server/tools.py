@@ -312,10 +312,18 @@ def _version_release_candidate_list(paths: Paths, args: JSONDict) -> Any:
 # Deployment & Servers
 # ---------------------------------------------------------------------------
 
+def _deployment_set_manifest(paths: Paths, args: JSONDict) -> Any:
+    return client.create_job(
+        paths, type="deployment.set_manifest", target_pillar="deployment", project_id=args["project_id"],
+        params={"toml": args["toml"]}, queue_key=None, depends_on=[], created_by="mcp",
+    )
+
+
 def _deployment_deploy(paths: Paths, args: JSONDict) -> Any:
     return client.create_job(
         paths, type="deployment.deploy", target_pillar="deployment", project_id=args["project_id"],
         params={"branch": args.get("branch", "dev")}, queue_key=args["project_id"], depends_on=[], created_by="mcp",
+        timeout=300.0,
     )
 
 
@@ -872,6 +880,10 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_version_config", "Return the project's effective lvx configuration (.lvx/config.json).",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _version_config),
 
+    ToolSpec("workshop_deployment_set_manifest", "Upload a project's own server manifest (a TOML [server] table -- name, "
+             "command, port, match, install, timeouts, optional [server.tailscale]/[server.screenshot]). Required once "
+             "before that project's first real deploy/stop/status call.",
+             _schema({"project_id": _PROJECT_ID, "toml": _prop("string", "The manifest's full TOML text.")}, ["project_id", "toml"]), _deployment_set_manifest),
     ToolSpec("workshop_deployment_deploy", "Deploy a project's managed server from a branch, under the confirm-gated rollback guard.",
              _schema({"project_id": _PROJECT_ID, "branch": _prop("string", "Branch to deploy. Default: dev.")}, ["project_id"]), _deployment_deploy),
     ToolSpec("workshop_deployment_stop", "Stop a project's currently running managed server.",

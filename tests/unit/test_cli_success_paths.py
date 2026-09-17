@@ -518,6 +518,30 @@ def test_version_stabilize_all_projects_loops_registry(paths, monkeypatch, capsy
 # deployment
 # ---------------------------------------------------------------------------
 
+def test_deployment_set_manifest_success(paths, monkeypatch, tmp_path):
+    manifest_path = tmp_path / "manifest.toml"
+    manifest_path.write_text("[server]\nname = \"x\"\ncommand = \"run.sh\"\nport = 9000\n", encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(
+        main.client, "create_job",
+        lambda p, **kw: (captured.update(kw), {"status": "succeeded", "result": {"name": "x", "port": 9000}})[1],
+    )
+    assert main.main([
+        "deployment", "set-manifest", "--project-id", "little-gadget", "--file", str(manifest_path),
+    ]) == 0
+    assert captured["type"] == "deployment.set_manifest"
+    assert captured["params"]["toml"] == manifest_path.read_text(encoding="utf-8")
+
+
+def test_deployment_set_manifest_failure_returns_1(paths, monkeypatch, tmp_path):
+    manifest_path = tmp_path / "manifest.toml"
+    manifest_path.write_text("not valid [", encoding="utf-8")
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "failed", "error": "invalid manifest"})
+    assert main.main([
+        "deployment", "set-manifest", "--project-id", "little-gadget", "--file", str(manifest_path),
+    ]) == 1
+
+
 def test_deployment_deploy_success_default_branch(paths, monkeypatch):
     captured = {}
     monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
