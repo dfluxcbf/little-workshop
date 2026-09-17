@@ -70,6 +70,31 @@ to 'is it done'" (`docs/architecture.md`).
   `ScheduledTask` (M9) whose `job_template` names `requirements.run_tests`
   — the scheduling mechanism built once in Orchestration, not
   duplicated here.
+- **M16 `little-requirements` parity, pure CLI-side** (2026-09-17):
+  `lws requirements export`, `import`, `report --md/--csv/--json-file`,
+  and `test-structure-create` match the old tool's own `requirement
+  export`/`import`, `report --csv/--md/--json`, and `test-structure
+  create`. All four are additions to `src/cli/main.py` only — no new
+  Pillar Interface route, since each is either a local file-writing
+  convenience over an existing read (`export`/`report`) or repeated
+  calls to the Job types M10 already exposed (`import`, one
+  `create_requirement`/`update_requirement` plus
+  `link_requirement_to_suite` per item). `import` matches by the
+  human-facing `key`, not a server-generated `id`, since little-workshop
+  (unlike the old tool) generates requirement IDs itself.
+  `set-verdict` was found to already have full functional parity via
+  the existing `result record` command (`requirements.record_test_result`
+  already writes `source="manual"`) — no new code needed. Three real
+  gaps from the old tool are deliberately left un-ported: `workspace`/
+  `install`/`update` (a client-side `.reqs`/`database.conf` config-file
+  model with no equivalent in a server-authoritative daemon — the same
+  "no equivalent" finding as `little-runner`'s own `.lrun/config.toml`),
+  `project` create/delete/list/get (superseded outright by Registry &
+  Portfolio, M2 — this pillar was never meant to own "project" at all),
+  and `lock`/`unlock`/`unlock-server` (concurrent-writer file locking
+  for N processes sharing one SQLite file — moot once a single daemon
+  process is the only writer, per-request serialization already
+  handled by this pillar's own `threading.Lock()`).
 
 ## Interfacing
 

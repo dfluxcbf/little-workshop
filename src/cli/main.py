@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -526,7 +527,244 @@ def cmd_requirements_report(args: argparse.Namespace) -> int:
     except client.RequirementsPillarUnavailable as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    _print(result)
+
+    if not (args.csv or args.md or args.json_file):
+        _print(result)
+        return 0
+
+    rows = result.get("requirements", [])
+    if args.suite:
+        rows = [r for r in rows if args.suite in r.get("suite_ids", [])]
+    if args.requirement:
+        rows = [r for r in rows if r.get("requirement_id") == args.requirement]
+
+    output_dir = Path(args.path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    generated = []
+    scope_suffix = f"-{args.suite}" if args.suite else (f"-{args.requirement}" if args.requirement else "")
+
+    if args.md:
+        lines = [
+            "# little-workshop Requirements Report", "", f"Project: {args.project_id}", "",
+            "## Requirements", "",
+        ]
+        for row in rows:
+            lines += [
+                f"### {row['requirement_id']} ({row['key']})",
+                f"Status: {row['status']}",
+                f"Tested: {row['tested']}",
+                f"Passing: {row['passing']}",
+                f"Done: {row['done']}",
+                f"Suites: {', '.join(row.get('suite_ids', [])) or '-'}",
+                "",
+            ]
+        md_path = output_dir / f"requirements_report{scope_suffix}.md"
+        md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        generated.append(str(md_path))
+
+    if args.csv:
+        csv_lines = ["Requirement ID,Key,Status,Tested,Passing,Done,Suite IDs"]
+        for row in rows:
+            suites_joined = ",".join(row.get("suite_ids", [])).replace('"', '""')
+            csv_lines.append(
+                f'"{row["requirement_id"]}","{row["key"]}","{row["status"]}",'
+                f'"{row["tested"]}","{row["passing"]}","{row["done"]}","{suites_joined}"'
+            )
+        csv_path = output_dir / f"requirements_report{scope_suffix}.csv"
+        csv_path.write_text("\n".join(csv_lines) + "\n", encoding="utf-8")
+        generated.append(str(csv_path))
+
+    if args.json_file:
+        json_path = output_dir / f"requirements_report{scope_suffix}.json"
+        json_path.write_text(
+            json.dumps({"project_id": args.project_id, "suite": args.suite, "requirement": args.requirement, "requirements": rows}, indent=2),
+            encoding="utf-8",
+        )
+        generated.append(str(json_path))
+
+    _print({"generated": generated})
+    return 0
+
+
+def cmd_requirements_export(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    requirements = client.requirements_list_requirements(paths, args.project_id)["requirements"]
+
+    rows = []
+    for req in requirements:
+        detail = client.requirements_get_requirement(paths, req["id"]).get("requirement") or {}
+        suite_ids = detail.get("suite_ids", [])
+        if args.suite and args.suite not in suite_ids:
+            continue
+        rows.append({
+            "id": req["id"], "key": req["key"], "title": req["title"],
+            "description": req.get("description", ""), "status": req["status"], "suite_ids": suite_ids,
+        })
+
+    if args.order_by == "name":
+        rows.sort(key=lambda row: row["title"].lower())
+    else:
+        rows.sort(key=lambda row: row["key"])
+    if args.desc_order:
+        rows.reverse()
+
+    output_dir = Path(args.path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    do_md = args.only in (None, "md")
+    do_csv = args.only in (None, "csv")
+    do_json = args.only in (None, "json")
+    generated = []
+
+    if do_md:
+        lines = [
+            "# little-workshop Requirements Export", "", f"Project: {args.project_id}", "",
+            "## Requirements", "",
+        ]
+        for row in rows:
+            lines += [
+                f"### {row['key']} - {row['title']}",
+                f"Description: {row['description'] or ''}",
+                f"Status: {row['status']}",
+                f"Suites: {', '.join(row['suite_ids']) or '-'}",
+                "",
+            ]
+        md_path = output_dir / "requirement_export.md"
+        md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        generated.append(str(md_path))
+
+    if do_csv:
+        csv_lines = ["Key,Title,Description,Status,Suite IDs"]
+        for row in rows:
+            def esc(value: str) -> str:
+                return str(value).replace('"', '""')
+
+            csv_lines.append(
+                f'"{esc(row["key"])}","{esc(row["title"])}","{esc(row["description"])}",'
+                f'"{esc(row["status"])}","{esc(",".join(row["suite_ids"]))}"'
+            )
+        csv_path = output_dir / "requirement_export.csv"
+        csv_path.write_text("\n".join(csv_lines) + "\n", encoding="utf-8")
+        generated.append(str(csv_path))
+
+    if do_json:
+        json_path = output_dir / "requirement_export.json"
+        json_path.write_text(
+            json.dumps({"project_id": args.project_id, "suite": args.suite, "requirements": rows}, indent=2),
+            encoding="utf-8",
+        )
+        generated.append(str(json_path))
+
+    _print({"generated": generated})
+    return 0
+
+
+def cmd_requirements_import(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    payload = json.loads(Path(args.json_path).read_text(encoding="utf-8"))
+    items = payload.get("list", [])
+    default_suite_id = args.suite_id or payload.get("suite_id")
+    existing_by_key = {
+        r["key"]: r for r in client.requirements_list_requirements(paths, args.project_id)["requirements"]
+    }
+
+    created: list[str] = []
+    updated: list[str] = []
+    skipped_conflicts: list[str] = []
+
+    try:
+        for item in items:
+            key = item["key"]
+            suite_ids = item.get("suite_ids")
+            if suite_ids is None:
+                candidate_suite_id = item.get("suite_id") or default_suite_id
+                suite_ids = [candidate_suite_id] if candidate_suite_id else []
+
+            existing = existing_by_key.get(key)
+            if existing and not args.edit:
+                skipped_conflicts.append(key)
+                continue
+            if existing and args.edit:
+                if existing["status"] != "draft":
+                    print(f"error: requirement {key!r} is published and cannot be updated via import", file=sys.stderr)
+                    return 1
+                update_result = client.create_job(
+                    paths, type="requirements.update_requirement", target_pillar="requirements",
+                    project_id=args.project_id,
+                    params={"requirement_id": existing["id"], "title": item["title"], "description": item.get("description", "")},
+                    queue_key=None, depends_on=[], created_by="lws",
+                )
+                if update_result.get("status") != "succeeded":
+                    print(f"error: updating requirement {key!r} failed: {update_result}", file=sys.stderr)
+                    return 1
+                requirement_id = existing["id"]
+                updated.append(key)
+            else:
+                result = client.create_job(
+                    paths, type="requirements.create_requirement", target_pillar="requirements",
+                    project_id=args.project_id,
+                    params={"key": key, "title": item["title"], "description": item.get("description", "")},
+                    queue_key=None, depends_on=[], created_by="lws",
+                )
+                if result.get("status") != "succeeded":
+                    print(f"error: creating requirement {key!r} failed: {result}", file=sys.stderr)
+                    return 1
+                requirement_id = result["result"]["id"]
+                created.append(key)
+                existing_by_key[key] = result["result"]
+
+            for suite_id in suite_ids:
+                link_result = client.create_job(
+                    paths, type="requirements.link_requirement_to_suite", target_pillar="requirements",
+                    project_id=args.project_id, params={"requirement_id": requirement_id, "suite_id": suite_id},
+                    queue_key=None, depends_on=[], created_by="lws",
+                )
+                if link_result.get("status") != "succeeded":
+                    print(f"error: linking requirement {key!r} to suite {suite_id!r} failed: {link_result}", file=sys.stderr)
+                    return 1
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    _print({"created": created, "updated": updated, "skipped_conflicts": skipped_conflicts})
+    return 0
+
+
+def _safe_suite_dirname(value: str) -> str:
+    normalized = value.replace("/", "_").replace("\\", "_")
+    normalized = re.sub(r"[^A-Za-z0-9._-]", "_", normalized)
+    normalized = normalized.strip("._")
+    return normalized or "suite"
+
+
+def cmd_requirements_test_structure_create(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    suites = client.requirements_list_test_suites(paths, args.project_id)["test_suites"]
+    tests_root = Path(args.tests_root) / "tests"
+
+    planned = [tests_root / _safe_suite_dirname(suite["name"]) / "__init__.py" for suite in suites]
+
+    if not args.force:
+        print("Planned test structure:")
+        for init_file in planned:
+            print(f"- {init_file} ({'EXISTS' if init_file.exists() else 'CREATE'})")
+        answer = input("Continue? [y/N]: ").strip().lower()
+        if answer not in {"y", "yes"}:
+            _print({"created": [], "warnings": [], "aborted": True})
+            return 0
+
+    created = []
+    warnings = []
+    for init_file in planned:
+        if init_file.exists():
+            warning = f"WARNING: {init_file} already exists"
+            print(warning, file=sys.stderr)
+            warnings.append(warning)
+            continue
+        init_file.parent.mkdir(parents=True, exist_ok=True)
+        init_file.write_text("", encoding="utf-8")
+        created.append(str(init_file))
+
+    _print({"created": created, "warnings": warnings})
     return 0
 
 
@@ -1490,7 +1728,41 @@ def build_parser() -> argparse.ArgumentParser:
 
     report = requirements_sub.add_parser("report", help="Definition-of-done report for a project")
     report.add_argument("--project-id", required=True)
+    report.add_argument("--csv", action="store_true", default=False, help="Also write a CSV report file")
+    report.add_argument("--md", action="store_true", default=False, help="Also write a Markdown report file")
+    report.add_argument("--json-file", action="store_true", default=False, help="Also write a JSON report file")
+    report.add_argument("--suite", default=None, help="Limit the file report to one suite ID")
+    report.add_argument("--requirement", default=None, help="Limit the file report to one requirement ID")
+    report.add_argument("--path", default=".report", help="Output folder for report files")
     report.set_defaults(func=cmd_requirements_report)
+
+    export = requirements_sub.add_parser("export", help="Export requirements to markdown/csv/json files")
+    export.add_argument("--project-id", required=True)
+    export.add_argument("--only", choices=["md", "csv", "json"], default=None, help="Generate only one format")
+    export.add_argument("--suite", default=None, help="Export requirements linked to one suite ID")
+    export.add_argument("--order-by", choices=["name", "key"], default="key", help="Sort by title or key")
+    export.add_argument("--desc-order", action="store_true", default=False, help="Sort in descending order")
+    export.add_argument("--path", default=".report", help="Output folder for exported files")
+    export.set_defaults(func=cmd_requirements_export)
+
+    import_reqs = requirements_sub.add_parser("import", help="Bulk create/update requirements from a JSON payload")
+    import_reqs.add_argument("--project-id", required=True)
+    import_reqs.add_argument(
+        "--json", dest="json_path", required=True,
+        help="Path to JSON file with {'list': [{'key','title','description'?,'suite_id'?}], 'suite_id'?}",
+    )
+    import_reqs.add_argument("--suite-id", default=None, help="Default suite ID used when an item omits one")
+    import_reqs.add_argument(
+        "--edit", action="store_true", default=False,
+        help="Update existing (by key) draft requirements instead of skipping them as conflicts",
+    )
+    import_reqs.set_defaults(func=cmd_requirements_import)
+
+    test_structure = requirements_sub.add_parser("test-structure-create", help="Create tests/<suite>/__init__.py for every suite")
+    test_structure.add_argument("--project-id", required=True)
+    test_structure.add_argument("--tests-root", default=".", help="Workspace root containing the tests/ directory")
+    test_structure.add_argument("--force", action="store_true", default=False, help="Skip the confirmation prompt")
+    test_structure.set_defaults(func=cmd_requirements_test_structure_create)
 
     build = subparsers.add_parser("build", help="Build & Packages commands")
     build_sub = build.add_subparsers(dest="build_command", required=True)

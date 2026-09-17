@@ -697,6 +697,212 @@ def test_requirements_report_success(paths, capsys, monkeypatch):
     assert _out(capsys)["project_id"] == "p1"
 
 
+def test_requirements_report_writes_md_csv_json_files(paths, capsys, monkeypatch, tmp_path):
+    rows = [
+        {"requirement_id": "r1", "key": "REQ-1", "status": "published", "suite_ids": ["s1"], "tested": True, "passing": True, "done": True},
+        {"requirement_id": "r2", "key": "REQ-2", "status": "draft", "suite_ids": [], "tested": False, "passing": False, "done": False},
+    ]
+    monkeypatch.setattr(main.client, "requirements_report", lambda p, project_id: {"project_id": project_id, "requirements": rows})
+    out_dir = tmp_path / "out"
+    assert main.main([
+        "requirements", "report", "--project-id", "p1", "--md", "--csv", "--json-file", "--path", str(out_dir),
+    ]) == 0
+    generated = _out(capsys)["generated"]
+    assert len(generated) == 3
+    assert (out_dir / "requirements_report.md").exists()
+    assert (out_dir / "requirements_report.csv").exists()
+    assert (out_dir / "requirements_report.json").exists()
+    assert "REQ-1" in (out_dir / "requirements_report.md").read_text()
+
+
+def test_requirements_report_filters_by_suite(paths, capsys, monkeypatch, tmp_path):
+    rows = [
+        {"requirement_id": "r1", "key": "REQ-1", "status": "published", "suite_ids": ["s1"], "tested": True, "passing": True, "done": True},
+        {"requirement_id": "r2", "key": "REQ-2", "status": "draft", "suite_ids": ["s2"], "tested": False, "passing": False, "done": False},
+    ]
+    monkeypatch.setattr(main.client, "requirements_report", lambda p, project_id: {"project_id": project_id, "requirements": rows})
+    out_dir = tmp_path / "out"
+    assert main.main([
+        "requirements", "report", "--project-id", "p1", "--md", "--suite", "s1", "--path", str(out_dir),
+    ]) == 0
+    content = (out_dir / "requirements_report-s1.md").read_text()
+    assert "REQ-1" in content
+    assert "REQ-2" not in content
+
+
+def test_requirements_export_writes_all_three_formats_by_default(paths, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        main.client, "requirements_list_requirements",
+        lambda p, project_id, status=None: {"requirements": [
+            {"id": "id1", "key": "REQ-1", "title": "Widget support", "description": "desc", "status": "published"},
+        ]},
+    )
+    monkeypatch.setattr(
+        main.client, "requirements_get_requirement",
+        lambda p, requirement_id: {"requirement": {"suite_ids": ["s1"]}},
+    )
+    out_dir = tmp_path / "out"
+    assert main.main(["requirements", "export", "--project-id", "p1", "--path", str(out_dir)]) == 0
+    generated = _out(capsys)["generated"]
+    assert len(generated) == 3
+    md = (out_dir / "requirement_export.md").read_text()
+    assert "REQ-1" in md and "Widget support" in md
+    csv = (out_dir / "requirement_export.csv").read_text()
+    assert "REQ-1" in csv
+    json_payload = json.loads((out_dir / "requirement_export.json").read_text())
+    assert json_payload["requirements"][0]["key"] == "REQ-1"
+
+
+def test_requirements_export_only_one_format(paths, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        main.client, "requirements_list_requirements",
+        lambda p, project_id, status=None: {"requirements": [
+            {"id": "id1", "key": "REQ-1", "title": "Widget", "description": "", "status": "draft"},
+        ]},
+    )
+    monkeypatch.setattr(main.client, "requirements_get_requirement", lambda p, requirement_id: {"requirement": {"suite_ids": []}})
+    out_dir = tmp_path / "out"
+    assert main.main(["requirements", "export", "--project-id", "p1", "--only", "json", "--path", str(out_dir)]) == 0
+    assert not (out_dir / "requirement_export.md").exists()
+    assert (out_dir / "requirement_export.json").exists()
+
+
+def test_requirements_export_filters_by_suite(paths, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        main.client, "requirements_list_requirements",
+        lambda p, project_id, status=None: {"requirements": [
+            {"id": "id1", "key": "REQ-1", "title": "In suite", "description": "", "status": "draft"},
+            {"id": "id2", "key": "REQ-2", "title": "Not in suite", "description": "", "status": "draft"},
+        ]},
+    )
+
+    def fake_get(p, requirement_id):
+        suite_ids = ["s1"] if requirement_id == "id1" else ["s2"]
+        return {"requirement": {"suite_ids": suite_ids}}
+
+    monkeypatch.setattr(main.client, "requirements_get_requirement", fake_get)
+    out_dir = tmp_path / "out"
+    assert main.main([
+        "requirements", "export", "--project-id", "p1", "--suite", "s1", "--only", "json", "--path", str(out_dir),
+    ]) == 0
+    payload = json.loads((out_dir / "requirement_export.json").read_text())
+    assert [r["key"] for r in payload["requirements"]] == ["REQ-1"]
+
+
+def test_requirements_import_creates_and_links_new_requirements(paths, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(main.client, "requirements_list_requirements", lambda p, project_id, status=None: {"requirements": []})
+    captured = []
+
+    def fake_create_job(p, **kw):
+        captured.append(kw)
+        if kw["type"] == "requirements.create_requirement":
+            return {"status": "succeeded", "result": {"id": "new-id-1"}}
+        return {"status": "succeeded", "result": {}}
+
+    monkeypatch.setattr(main.client, "create_job", fake_create_job)
+
+    json_path = tmp_path / "payload.json"
+    json_path.write_text(json.dumps({"list": [{"key": "REQ-1", "title": "T", "description": "D", "suite_id": "s1"}]}), encoding="utf-8")
+
+    assert main.main(["requirements", "import", "--project-id", "p1", "--json", str(json_path)]) == 0
+    assert _out(capsys) == {"created": ["REQ-1"], "updated": [], "skipped_conflicts": []}
+    job_types = [kw["type"] for kw in captured]
+    assert job_types == ["requirements.create_requirement", "requirements.link_requirement_to_suite"]
+    assert captured[1]["params"] == {"requirement_id": "new-id-1", "suite_id": "s1"}
+
+
+def test_requirements_import_skips_existing_key_without_edit(paths, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        main.client, "requirements_list_requirements",
+        lambda p, project_id, status=None: {"requirements": [{"id": "id1", "key": "REQ-1", "status": "draft"}]},
+    )
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: pytest.fail("should not create a job"))
+
+    json_path = tmp_path / "payload.json"
+    json_path.write_text(json.dumps({"list": [{"key": "REQ-1", "title": "T"}]}), encoding="utf-8")
+
+    assert main.main(["requirements", "import", "--project-id", "p1", "--json", str(json_path)]) == 0
+    assert _out(capsys) == {"created": [], "updated": [], "skipped_conflicts": ["REQ-1"]}
+
+
+def test_requirements_import_edit_updates_existing_draft(paths, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        main.client, "requirements_list_requirements",
+        lambda p, project_id, status=None: {"requirements": [{"id": "id1", "key": "REQ-1", "status": "draft"}]},
+    )
+    captured = []
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.append(kw), {"status": "succeeded", "result": {}})[1])
+
+    json_path = tmp_path / "payload.json"
+    json_path.write_text(json.dumps({"list": [{"key": "REQ-1", "title": "New title", "description": "New"}]}), encoding="utf-8")
+
+    assert main.main(["requirements", "import", "--project-id", "p1", "--json", str(json_path), "--edit"]) == 0
+    assert _out(capsys) == {"created": [], "updated": ["REQ-1"], "skipped_conflicts": []}
+    assert captured[0]["type"] == "requirements.update_requirement"
+    assert captured[0]["params"] == {"requirement_id": "id1", "title": "New title", "description": "New"}
+
+
+def test_requirements_import_edit_rejects_published_requirement(paths, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        main.client, "requirements_list_requirements",
+        lambda p, project_id, status=None: {"requirements": [{"id": "id1", "key": "REQ-1", "status": "published"}]},
+    )
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: pytest.fail("should not create a job"))
+
+    json_path = tmp_path / "payload.json"
+    json_path.write_text(json.dumps({"list": [{"key": "REQ-1", "title": "New title"}]}), encoding="utf-8")
+
+    assert main.main(["requirements", "import", "--project-id", "p1", "--json", str(json_path), "--edit"]) == 1
+
+
+def test_requirements_test_structure_create_with_force(paths, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        main.client, "requirements_list_test_suites",
+        lambda p, project_id: {"test_suites": [{"name": "Widgets/Core"}, {"name": "Auth"}]},
+    )
+    tests_root = tmp_path / "workspace"
+    tests_root.mkdir()
+    assert main.main([
+        "requirements", "test-structure-create", "--project-id", "p1", "--tests-root", str(tests_root), "--force",
+    ]) == 0
+    result = _out(capsys)
+    assert (tests_root / "tests" / "Widgets_Core" / "__init__.py").exists()
+    assert (tests_root / "tests" / "Auth" / "__init__.py").exists()
+    assert len(result["created"]) == 2
+    assert result["warnings"] == []
+
+
+def test_requirements_test_structure_create_warns_on_existing_file(paths, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        main.client, "requirements_list_test_suites", lambda p, project_id: {"test_suites": [{"name": "Auth"}]},
+    )
+    tests_root = tmp_path / "workspace"
+    (tests_root / "tests" / "Auth").mkdir(parents=True)
+    (tests_root / "tests" / "Auth" / "__init__.py").write_text("", encoding="utf-8")
+    assert main.main([
+        "requirements", "test-structure-create", "--project-id", "p1", "--tests-root", str(tests_root), "--force",
+    ]) == 0
+    result = _out(capsys)
+    assert result["created"] == []
+    assert len(result["warnings"]) == 1
+
+
+def test_requirements_test_structure_create_prompts_and_aborts_without_force(paths, capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        main.client, "requirements_list_test_suites", lambda p, project_id: {"test_suites": [{"name": "Auth"}]},
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+    tests_root = tmp_path / "workspace"
+    tests_root.mkdir()
+    assert main.main([
+        "requirements", "test-structure-create", "--project-id", "p1", "--tests-root", str(tests_root),
+    ]) == 0
+    out = capsys.readouterr().out
+    json_text = out[out.index("{"):]
+    assert json.loads(json_text)["aborted"] is True
+    assert not (tests_root / "tests" / "Auth").exists()
+
+
 # ---------------------------------------------------------------------------
 # build
 # ---------------------------------------------------------------------------
