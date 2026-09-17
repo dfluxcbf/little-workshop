@@ -273,6 +273,20 @@ def _version_config_remove_hook(paths: Paths, args: JSONDict) -> Any:
     return _version_job(paths, "version.config_remove_hook", args["project_id"], {"hook_path": args["hook_path"]})
 
 
+def _version_issue_set(paths: Paths, args: JSONDict) -> Any:
+    return _version_job(paths, "version.issue_set", args["project_id"], {
+        "issue_number": args["issue_number"], "branch": args.get("branch"),
+    })
+
+
+def _version_issue_unset(paths: Paths, args: JSONDict) -> Any:
+    return _version_job(paths, "version.issue_unset", args["project_id"], {"branch": args.get("branch")})
+
+
+def _version_issue_list(paths: Paths, args: JSONDict) -> Any:
+    return client.version_issues(paths, args["project_id"])
+
+
 def _version_status(paths: Paths, args: JSONDict) -> Any:
     return client.version_status(paths, args["kind"], args["project_id"])
 
@@ -782,6 +796,16 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_version_config_remove_hook", "Remove a previously registered version hook.",
              _schema({"project_id": _PROJECT_ID, "hook_path": _prop("string", "Path of the hook to remove.")},
                       ["project_id", "hook_path"]), _version_config_remove_hook),
+    ToolSpec("workshop_version_issue_set", "Link an issue number to a branch (default: the current branch).",
+             _schema({
+                 "project_id": _PROJECT_ID, "issue_number": _ISSUE,
+                 "branch": _prop("string", "Branch to link (default: current branch)."),
+             }, ["project_id", "issue_number"]), _version_issue_set),
+    ToolSpec("workshop_version_issue_unset", "Remove the issue link from a branch (default: the current branch).",
+             _schema({"project_id": _PROJECT_ID, "branch": _prop("string", "Branch to unlink (default: current branch).")},
+                      ["project_id"]), _version_issue_unset),
+    ToolSpec("workshop_version_issue_list", "List every branch with a linked issue.",
+             _schema({"project_id": _PROJECT_ID}, ["project_id"]), _version_issue_list),
     ToolSpec("workshop_version_status", "Return metadata for the current feature/improvement/hotfix/release branch.",
              _schema({"project_id": _PROJECT_ID, "kind": _prop("string", "feature|improvement|hotfix|release", enum=["feature", "improvement", "hotfix", "release"])},
                       ["project_id", "kind"]), _version_status),

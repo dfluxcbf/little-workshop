@@ -159,6 +159,39 @@ def test_status_endpoint_404s_on_unresolvable_project(paths, tmp_path):
     assert response.status_code == 404
 
 
+def test_issue_set_and_unset_jobs_over_the_pillar_interface(paths, tmp_path):
+    repo = make_repo(tmp_path)
+    client = make_client(paths, repo)
+
+    set_result = _job(client, "version.issue_set", {"issue_number": 42, "branch": "feature/widgets"})
+    assert set_result.json()["outcome"] == "succeeded"
+    assert set_result.json()["result"] == {"branch": "feature/widgets", "issue": 42}
+
+    listed = client.get("/v1/issues", params={"project_id": "little-widget"})
+    assert listed.json() == {"links": {"feature/widgets": 42}}
+
+    unset_result = _job(client, "version.issue_unset", {"branch": "feature/widgets"})
+    assert unset_result.json()["outcome"] == "succeeded"
+
+    listed_after = client.get("/v1/issues", params={"project_id": "little-widget"})
+    assert listed_after.json() == {"links": {}}
+
+
+def test_issue_set_job_fails_cleanly_for_a_non_linkable_branch(paths, tmp_path):
+    repo = make_repo(tmp_path)
+    client = make_client(paths, repo)
+    result = _job(client, "version.issue_set", {"issue_number": 1, "branch": "support/1.0"})
+    assert result.json()["outcome"] == "failed"
+    assert "does not support issue linkage" in result.json()["error"]
+
+
+def test_issues_endpoint_404s_on_unresolvable_project(paths, tmp_path):
+    repo = make_repo(tmp_path)
+    client = make_client(paths, repo)
+    response = client.get("/v1/issues", params={"project_id": "ghost"})
+    assert response.status_code == 404
+
+
 def test_config_endpoint_404s_on_unresolvable_project(paths, tmp_path):
     repo = make_repo(tmp_path)
     client = make_client(paths, repo)

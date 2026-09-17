@@ -10,7 +10,9 @@ from version.configstore import (
     config_path,
     get_issue_link,
     get_promoted_rc,
+    list_issue_links,
     load_config,
+    remove_issue_link,
     set_issue_link,
     set_promoted_rc,
 )
@@ -103,6 +105,27 @@ def test_get_issue_link_for_unknown_branch_is_none(tmp_path):
     repo = make_repo(tmp_path)
     set_issue_link(repo, "feature/widgets", 1)
     assert get_issue_link(repo, "feature/other") is None
+
+
+def test_remove_issue_link_clears_it(tmp_path):
+    repo = make_repo(tmp_path)
+    set_issue_link(repo, "feature/widgets", 42)
+    remove_issue_link(repo, "feature/widgets")
+    assert get_issue_link(repo, "feature/widgets") is None
+
+
+def test_remove_issue_link_for_an_unlinked_branch_is_a_no_op(tmp_path):
+    repo = make_repo(tmp_path)
+    remove_issue_link(repo, "feature/never-linked")  # must not raise
+    assert get_issue_link(repo, "feature/never-linked") is None
+
+
+def test_list_issue_links_returns_every_link(tmp_path):
+    repo = make_repo(tmp_path)
+    assert list_issue_links(repo) == {}
+    set_issue_link(repo, "feature/widgets", 42)
+    set_issue_link(repo, "hotfix/urgent", 7)
+    assert list_issue_links(repo) == {"feature/widgets": 42, "hotfix/urgent": 7}
 
 
 def test_set_and_get_promoted_rc(tmp_path):

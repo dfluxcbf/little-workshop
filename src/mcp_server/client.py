@@ -105,6 +105,10 @@ def version_release_candidates(paths: Paths, project_id: str, *, timeout: float 
     return _get(paths, "version", "/v1/release/candidates", params={"project_id": project_id}, timeout=timeout)
 
 
+def version_issues(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
+    return _get(paths, "version", "/v1/issues", params={"project_id": project_id}, timeout=timeout)
+
+
 def deployment_status(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "deployment", f"/v1/status/{project_id}", timeout=timeout)
 

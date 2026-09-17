@@ -265,6 +265,30 @@ def test_version_config_remove_hook_builds_version_job(paths, fake_create_job):
     assert call["type"] == "version.config_remove_hook"
 
 
+def test_version_issue_set_builds_version_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_version_issue_set"].handler(
+        paths, {"project_id": "little-widget", "issue_number": 42, "branch": "feature/widgets"}
+    )
+    call = fake_create_job[0]
+    assert call["type"] == "version.issue_set"
+    assert call["params"] == {"issue_number": 42, "branch": "feature/widgets"}
+
+
+def test_version_issue_set_defaults_branch_to_none(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_version_issue_set"].handler(paths, {"project_id": "little-widget", "issue_number": 42})
+    call = fake_create_job[0]
+    assert call["params"] == {"issue_number": 42, "branch": None}
+
+
+def test_version_issue_unset_builds_version_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_version_issue_unset"].handler(
+        paths, {"project_id": "little-widget", "branch": "feature/widgets"}
+    )
+    call = fake_create_job[0]
+    assert call["type"] == "version.issue_unset"
+    assert call["params"] == {"branch": "feature/widgets"}
+
+
 def test_deployment_stop_builds_deployment_job(paths, fake_create_job):
     tools_mod.TOOLS_BY_NAME["workshop_deployment_stop"].handler(paths, {"project_id": "little-meals"})
     call = fake_create_job[0]
@@ -361,6 +385,12 @@ def test_version_config_calls_client_version_config(paths, monkeypatch):
 def test_version_release_candidate_list_calls_client(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "version_release_candidates", result={"candidates": []})
     tools_mod.TOOLS_BY_NAME["workshop_version_release_candidate_list"].handler(paths, {"project_id": "little-widget"})
+    assert calls[0] == ((paths, "little-widget"), {})
+
+
+def test_version_issue_list_calls_client_version_issues(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "version_issues", result={"links": {}})
+    tools_mod.TOOLS_BY_NAME["workshop_version_issue_list"].handler(paths, {"project_id": "little-widget"})
     assert calls[0] == ((paths, "little-widget"), {})
 
 
