@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -585,6 +586,62 @@ def cmd_build_package_delete(args: argparse.Namespace) -> int:
 def cmd_build_package_list(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     _print(client.build_list_packages(paths, args.project_id, args.kind))
+    return 0
+
+
+# M16 little-pypi parity: the PEP 503 index is served over Build &
+# Packages' own Pillar Interface, a Unix domain socket
+# (docs/architecture.md's PI transport: "never a network port") — these
+# three commands assume a real HTTP reverse proxy already sits in front
+# of it at --host:--port, the same deployment-time-concern split
+# docs/pillars/dashboard.md's own browser-exposure section already
+# documents. `little-pypi`'s own equivalents make the identical
+# assumption (they just run their own TCP server directly); nothing
+# here builds that proxy.
+
+
+def cmd_build_print_pip_config(args: argparse.Namespace) -> int:
+    print(_pip_config_text(args.host, args.port))
+    return 0
+
+
+def cmd_build_write_pip_config(args: argparse.Namespace) -> int:
+    target = Path(args.path).expanduser().resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_pip_config_text(args.host, args.port) + "\n", encoding="utf-8")
+    _print({"written": str(target), "index_url": f"http://{args.host}:{args.port}/simple"})
+    return 0
+
+
+def _pip_config_text(host: str, port: int) -> str:
+    return "\n".join([
+        "[global]",
+        f"index-url = http://{host}:{port}/simple",
+        "extra-index-url = https://pypi.org/simple",
+        f"trusted-host = {host}",
+        "disable-pip-version-check = true",
+    ])
+
+
+def cmd_build_pip(args: argparse.Namespace) -> int:
+    pip_args = list(args.pip_install_args)
+    if pip_args and pip_args[0] == "--":
+        pip_args = pip_args[1:]
+    index_url = f"http://{args.host}:{args.port}/simple"
+    command = [
+        sys.executable, "-m", "pip", "install", args.package,
+        "--extra-index-url", index_url, "--trusted-host", args.host, *pip_args,
+    ]
+    completed = subprocess.run(command, check=False)
+    return completed.returncode
+
+
+def cmd_build_print_vsix_urls(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    listing = client.build_list_packages(paths, args.project_id, "vsix")
+    base_url = args.base_url.rstrip("/") if args.base_url else f"http://{args.host}:{args.port}"
+    urls = [f"{base_url}/vsix/{pkg['name']}/{pkg['version']}" for pkg in listing["packages"]]
+    _print({"count": len(urls), "urls": urls})
     return 0
 
 
@@ -1476,6 +1533,33 @@ def build_parser() -> argparse.ArgumentParser:
     build_package_delete.add_argument("--project-id", required=True)
     build_package_delete.add_argument("package_id")
     build_package_delete.set_defaults(func=cmd_build_package_delete)
+
+    build_print_pip_config = build_sub.add_parser(
+        "print-pip-config", help="Print a pip.conf snippet pointing at a reverse proxy in front of this pillar's PEP 503 index"
+    )
+    build_print_pip_config.add_argument("--host", default="127.0.0.1")
+    build_print_pip_config.add_argument("--port", type=int, default=8080)
+    build_print_pip_config.set_defaults(func=cmd_build_print_pip_config)
+
+    build_write_pip_config = build_sub.add_parser("write-pip-config", help="Write the same pip.conf snippet to a file")
+    build_write_pip_config.add_argument("--host", default="127.0.0.1")
+    build_write_pip_config.add_argument("--port", type=int, default=8080)
+    build_write_pip_config.add_argument("--path", default="~/.config/pip/pip.conf")
+    build_write_pip_config.set_defaults(func=cmd_build_write_pip_config)
+
+    build_pip = build_sub.add_parser("pip", help="Install a package using this pillar's index as an extra index")
+    build_pip.add_argument("--host", default="127.0.0.1")
+    build_pip.add_argument("--port", type=int, default=8080)
+    build_pip.add_argument("package")
+    build_pip.add_argument("pip_install_args", nargs=argparse.REMAINDER, help="Extra pip install args, e.g. -- --upgrade")
+    build_pip.set_defaults(func=cmd_build_pip)
+
+    build_print_vsix_urls = build_sub.add_parser("print-vsix-urls", help="Print direct install URLs for published .vsix files")
+    build_print_vsix_urls.add_argument("--project-id", default=None)
+    build_print_vsix_urls.add_argument("--host", default="127.0.0.1")
+    build_print_vsix_urls.add_argument("--port", type=int, default=8080)
+    build_print_vsix_urls.add_argument("--base-url", default=None, help="Overrides --host/--port with an explicit base URL")
+    build_print_vsix_urls.set_defaults(func=cmd_build_print_vsix_urls)
 
     policy = subparsers.add_parser("policy", help="Policy & Compliance commands")
     policy_sub = policy.add_subparsers(dest="policy_command", required=True)

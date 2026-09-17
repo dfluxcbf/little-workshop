@@ -761,6 +761,63 @@ def test_build_package_delete_success(paths, capsys, monkeypatch):
     assert captured["params"] == {"package_id": "pkg1"}
 
 
+def test_build_print_pip_config(capsys):
+    assert main.main(["build", "print-pip-config", "--host", "myhost", "--port", "9999"]) == 0
+    out = capsys.readouterr().out
+    assert "index-url = http://myhost:9999/simple" in out
+    assert "trusted-host = myhost" in out
+
+
+def test_build_write_pip_config(tmp_path, capsys):
+    target = tmp_path / "pip.conf"
+    assert main.main(["build", "write-pip-config", "--host", "myhost", "--port", "9999", "--path", str(target)]) == 0
+    assert "index-url = http://myhost:9999/simple" in target.read_text()
+    written = _out(capsys)
+    assert written["index_url"] == "http://myhost:9999/simple"
+
+
+def test_build_pip_shells_to_real_pip_with_the_extra_index(monkeypatch):
+    captured = {}
+
+    def fake_run(command, check=False):
+        captured["command"] = command
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    # --host/--port must precede the positional `package` — nargs=REMAINDER
+    # greedily swallows everything after it, the same ordering requirement
+    # little-pypi's own `pip` command already has.
+    assert main.main(["build", "pip", "--host", "myhost", "--port", "9999", "requests", "--", "--upgrade"]) == 0
+    assert "requests" in captured["command"]
+    assert "--extra-index-url" in captured["command"]
+    assert "http://myhost:9999/simple" in captured["command"]
+    assert "--upgrade" in captured["command"]
+
+
+def test_build_print_vsix_urls_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(
+        main.client, "build_list_packages",
+        lambda p, project_id, kind: {"source": "daemon", "packages": [{"name": "my-ext", "version": "1.0.0"}]},
+    )
+    assert main.main(["build", "print-vsix-urls", "--host", "myhost", "--port", "9999"]) == 0
+    out = _out(capsys)
+    assert out["urls"] == ["http://myhost:9999/vsix/my-ext/1.0.0"]
+
+
+def test_build_print_vsix_urls_honors_explicit_base_url(paths, capsys, monkeypatch):
+    monkeypatch.setattr(
+        main.client, "build_list_packages",
+        lambda p, project_id, kind: {"source": "daemon", "packages": [{"name": "my-ext", "version": "1.0.0"}]},
+    )
+    assert main.main(["build", "print-vsix-urls", "--base-url", "https://example.com/"]) == 0
+    out = _out(capsys)
+    assert out["urls"] == ["https://example.com/vsix/my-ext/1.0.0"]
+
+
 # ---------------------------------------------------------------------------
 # policy
 # ---------------------------------------------------------------------------
