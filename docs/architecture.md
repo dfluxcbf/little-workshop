@@ -87,13 +87,19 @@ Server: it's the only interface that can exist before any pillar with a
 web or agent-facing surface does, and is what actually exercises Core
 and Orchestration during their own construction.
 
-**Compatibility shims**: once `lws` exists, the five absorbed tools'
-original CLIs (`lreq`, `lvx`, `lrun`, `little-pypi`, `bootstrap-little-project`)
-are expected to become thin forwarders to the equivalent `lws` subcommand
-— muscle memory and any existing script that still calls them keeps
-working during the transition, rather than every caller needing to
-switch atomically the moment a pillar ships. This is deliberately
-separate from building `lws` itself; see `docs/milestones.md`.
+**No compatibility shims, by direct decision (corrected 2026-09-17;
+this section previously described the opposite)**: the five absorbed
+tools' original CLIs (`lreq`, `lvx`, `lrun`, `little-pypi`,
+`bootstrap-little-project`) are never made to forward into `lws`, and
+`lws` never calls into them — each stays exactly what it already is,
+running its own original, unmodified code, for the entire transition.
+A project's cutover means switching what it actually invokes (the old
+command, then `lws` instead), never a transparent swap underneath an
+unchanged command name. The old tools are uninstalled only once every
+milestone is done, a first release exists, and their owner has
+personally validated `lws` through real use — a deliberate, manual,
+confidence-gated decision, never an automated step this project's own
+tooling performs on its own. See `docs/milestones.md`.
 
 ## Pillar Interface (PI)
 
