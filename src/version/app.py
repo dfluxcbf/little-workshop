@@ -27,6 +27,7 @@ from version.commands.release import (
 )
 from version.commands.support import cmd_support_finish, cmd_support_start
 from version.commands.topic_branch import cmd_topic_finish, cmd_topic_start, cmd_topic_status
+from version.branch_audit import audit_as_dicts
 from version.common import CommandResult
 from version.gitops import GitError
 from version.resolve import ProjectResolutionError, resolve_project_path
@@ -109,6 +110,12 @@ def _issue_unset(repo_root: Path, params: dict) -> CommandResult:
     return cmd_issue_unset(repo_root, branch=params.get("branch"))
 
 
+def _branch_audit(repo_root: Path, params: dict) -> CommandResult:
+    violations = audit_as_dicts(repo_root)
+    status = "violations" if violations else "clean"
+    return CommandResult(success=True, message=f"{len(violations)} violation(s)", data={"status": status, "violations": violations})
+
+
 JOB_HANDLERS: dict[str, JobHandler] = {
     "version.init": _init,
     "version.feature_start": _feature_start,
@@ -127,6 +134,7 @@ JOB_HANDLERS: dict[str, JobHandler] = {
     "version.config_remove_hook": _config_remove_hook,
     "version.issue_set": _issue_set,
     "version.issue_unset": _issue_unset,
+    "version.branch_audit": _branch_audit,
 }
 
 STATUS_HANDLERS: dict[str, Callable[[Path], CommandResult]] = {

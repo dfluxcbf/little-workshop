@@ -413,6 +413,58 @@ def test_version_issue_list_success(paths, monkeypatch, capsys):
     assert _out(capsys)["links"] == {"feature/widgets": 42}
 
 
+def test_version_branch_audit_single_project_clean(paths, monkeypatch, capsys):
+    monkeypatch.setattr(
+        main.client, "create_job",
+        lambda p, **kw: {"status": "succeeded", "result": {"status": "clean", "violations": []}},
+    )
+    assert main.main(["version", "branch-audit", "--project-id", "little-widget"]) == 0
+    assert _out(capsys)["reports"] == [{"project_id": "little-widget", "status": "clean", "violations": []}]
+
+
+def test_version_branch_audit_single_project_with_violations_returns_1(paths, monkeypatch, capsys):
+    monkeypatch.setattr(
+        main.client, "create_job",
+        lambda p, **kw: {"status": "succeeded", "result": {"status": "violations", "violations": [{"kind": "naming"}]}},
+    )
+    assert main.main(["version", "branch-audit", "--project-id", "little-widget"]) == 1
+
+
+def test_version_branch_audit_all_projects_loops_registry(paths, monkeypatch, capsys):
+    monkeypatch.setattr(
+        main.client, "list_projects",
+        lambda p, **kw: {"projects": [{"name": "little-widget"}, {"name": "little-gadget"}]},
+    )
+    captured = []
+
+    def fake_create_job(p, **kw):
+        captured.append(kw["project_id"])
+        return {"status": "succeeded", "result": {"status": "clean", "violations": []}}
+
+    monkeypatch.setattr(main.client, "create_job", fake_create_job)
+    assert main.main(["version", "branch-audit", "--all"]) == 0
+    assert captured == ["little-widget", "little-gadget"]
+    assert len(_out(capsys)["reports"]) == 2
+
+
+def test_version_branch_audit_reports_a_failed_project_without_aborting(paths, monkeypatch, capsys):
+    monkeypatch.setattr(
+        main.client, "list_projects",
+        lambda p, **kw: {"projects": [{"name": "a"}, {"name": "b"}]},
+    )
+
+    def fake_create_job(p, **kw):
+        if kw["project_id"] == "a":
+            return {"status": "failed", "error": "not registered"}
+        return {"status": "succeeded", "result": {"status": "clean", "violations": []}}
+
+    monkeypatch.setattr(main.client, "create_job", fake_create_job)
+    assert main.main(["version", "branch-audit", "--all"]) == 0
+    reports = _out(capsys)["reports"]
+    assert reports[0] == {"project_id": "a", "status": "failed", "error": "not registered"}
+    assert reports[1]["project_id"] == "b"
+
+
 # ---------------------------------------------------------------------------
 # deployment
 # ---------------------------------------------------------------------------

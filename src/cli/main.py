@@ -390,6 +390,36 @@ def cmd_version_issue_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_version_branch_audit(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    if args.all:
+        project_ids = [p["name"] for p in client.list_projects(paths)["projects"]]
+    else:
+        project_ids = [args.project_id]
+
+    reports = []
+    any_violations = False
+    for project_id in project_ids:
+        try:
+            result = client.create_job(
+                paths, type="version.branch_audit", target_pillar="version", project_id=project_id,
+                params={}, queue_key=None, depends_on=[], created_by="lws",
+            )
+        except client.DaemonUnavailable as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if result.get("status") != "succeeded":
+            reports.append({"project_id": project_id, "status": "failed", "error": result.get("error")})
+            continue
+        data = result["result"]
+        if data["violations"]:
+            any_violations = True
+        reports.append({"project_id": project_id, **data})
+
+    _print({"reports": reports})
+    return 1 if any_violations else 0
+
+
 def _requirements_job(args: argparse.Namespace, job_type: str, params: dict, *, timeout: float = 30.0) -> int:
     paths = Paths.from_env()
     try:
@@ -1690,6 +1720,12 @@ def build_parser() -> argparse.ArgumentParser:
     issue_list = version_sub.add_parser("issue-list", help="List every branch with a linked issue")
     issue_list.add_argument("--project-id", required=True)
     issue_list.set_defaults(func=cmd_version_issue_list)
+
+    branch_audit = version_sub.add_parser("branch-audit", help="Read-only branch-hygiene audit (never merges/deletes/pushes)")
+    branch_audit_group = branch_audit.add_mutually_exclusive_group(required=True)
+    branch_audit_group.add_argument("--project-id")
+    branch_audit_group.add_argument("--all", action="store_true", help="Audit every registered project")
+    branch_audit.set_defaults(func=cmd_version_branch_audit)
 
     requirements = subparsers.add_parser("requirements", help="Requirements & Quality commands")
     requirements_sub = requirements.add_subparsers(dest="requirements_command", required=True)

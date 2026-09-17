@@ -292,6 +292,10 @@ def _version_status(paths: Paths, args: JSONDict) -> Any:
     return client.version_status(paths, args["kind"], args["project_id"])
 
 
+def _version_branch_audit(paths: Paths, args: JSONDict) -> Any:
+    return _version_job(paths, "version.branch_audit", args["project_id"], {})
+
+
 def _version_config(paths: Paths, args: JSONDict) -> Any:
     return client.version_config(paths, args["project_id"])
 
@@ -829,6 +833,9 @@ TOOLS: tuple[ToolSpec, ...] = (
                       ["project_id"]), _version_issue_unset),
     ToolSpec("workshop_version_issue_list", "List every branch with a linked issue.",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _version_issue_list),
+    ToolSpec("workshop_version_branch_audit", "Read-only branch-hygiene audit for one project (naming, stale-merged, "
+             "abandoned, detached-HEAD, stray-worktree violations). Never merges, deletes, commits, or pushes anything.",
+             _schema({"project_id": _PROJECT_ID}, ["project_id"]), _version_branch_audit),
     ToolSpec("workshop_version_status", "Return metadata for the current feature/improvement/hotfix/release branch.",
              _schema({"project_id": _PROJECT_ID, "kind": _prop("string", "feature|improvement|hotfix|release", enum=["feature", "improvement", "hotfix", "release"])},
                       ["project_id", "kind"]), _version_status),

@@ -437,3 +437,34 @@ def test_standalone_issue_set_unset_and_list_over_real_registry_and_version_unit
 
         listed_after = cli_client.version_issues(workshop_env.paths, "little-widget")
         assert listed_after == {"links": {}}
+
+
+@requires_systemd_user
+def test_branch_audit_finds_a_real_stale_merged_branch_over_real_registry_and_version_units(tmp_path, workshop_env):
+    """M16 `little-runner` parity: `lrun branch-audit run`, as
+    `version.branch_audit` -- a real git branch, really merged, really
+    classified by the real audit against a real registry+version pair."""
+    with _Session(workshop_env):
+        project_dir = _bootstrap_and_init(tmp_path, workshop_env, "little-widget")
+
+        clean = _job(workshop_env, "version.branch_audit", "little-widget", {})
+        assert clean["status"] == "succeeded", clean
+        assert clean["result"] == {"status": "clean", "violations": []}
+
+        subprocess.run(["git", "checkout", "-b", "feature/done"], cwd=project_dir, check=True, capture_output=True)
+        (project_dir / "done.txt").write_text("done\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
+        subprocess.run(["git", "commit", "-m", "finish it"], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "dev"], cwd=project_dir, check=True, capture_output=True)
+        subprocess.run(["git", "merge", "--no-ff", "feature/done"], cwd=project_dir, check=True, capture_output=True)
+
+        dirty = _job(workshop_env, "version.branch_audit", "little-widget", {})
+        assert dirty["status"] == "succeeded", dirty
+        assert dirty["result"]["status"] == "violations"
+        assert dirty["result"]["violations"] == [{
+            "kind": "stale_merged", "branch": "feature/done", "detail": "already merged into dev.",
+            "recommended_action": "delete: git branch -d feature/done (and the remote copy, if any).",
+        }]
+
+        unresolvable = _job(workshop_env, "version.branch_audit", "no-such-project", {})
+        assert unresolvable["status"] == "failed", unresolvable
