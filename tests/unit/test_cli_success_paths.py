@@ -669,6 +669,49 @@ def test_agent_ci_status_none_recorded_returns_1(paths, monkeypatch):
     assert main.main(["agent", "ci-status", "--project-id", "little-widget"]) == 1
 
 
+def test_agent_session_start_success(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        main.client, "create_job",
+        lambda p, **kw: (captured.update(kw), {"status": "succeeded", "result": {"session_name": "lws-little-widget-session"}})[1],
+    )
+    assert main.main(["agent", "session-start", "--project-id", "little-widget"]) == 0
+    assert captured["type"] == "agent.session_start"
+    assert captured["project_id"] == "little-widget"
+
+
+def test_agent_session_start_failure_returns_1(paths, monkeypatch):
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: {"status": "failed", "error": "not trusted"})
+    assert main.main(["agent", "session-start", "--project-id", "little-widget"]) == 1
+
+
+def test_agent_session_stop_success(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        main.client, "create_job",
+        lambda p, **kw: (captured.update(kw), {"status": "succeeded", "result": {"stopped": True}})[1],
+    )
+    assert main.main(["agent", "session-stop", "--project-id", "little-widget"]) == 0
+    assert captured["type"] == "agent.session_stop"
+
+
+def test_agent_session_list_loops_registry(paths, monkeypatch, capsys):
+    monkeypatch.setattr(
+        main.client, "list_projects",
+        lambda p, **kw: {"projects": [{"name": "little-widget"}, {"name": "little-gadget"}]},
+    )
+    captured = []
+
+    def fake_status(p, project_id, **kw):
+        captured.append(project_id)
+        return {"project_id": project_id, "running": False, "session_name": None}
+
+    monkeypatch.setattr(main.client, "agent_session_status", fake_status)
+    assert main.main(["agent", "session-list"]) == 0
+    assert captured == ["little-widget", "little-gadget"]
+    assert len(_out(capsys)["sessions"]) == 2
+
+
 # ---------------------------------------------------------------------------
 # job queue
 

@@ -686,6 +686,16 @@ def agent_latest_ci_check(paths: Paths, project_id: str, *, branch: str | None =
         raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
 
 
+def agent_session_status(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("agent"), timeout=timeout) as client:
+            response = client.get(f"/v1/sessions/{project_id}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
+
+
 def pump(paths: Paths, *, timeout: float = 10.0) -> dict:
     try:
         with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:

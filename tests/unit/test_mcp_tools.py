@@ -492,6 +492,26 @@ def test_agent_ci_status_calls_client_with_branch(paths, monkeypatch):
     assert calls[0] == ((paths, "little-widget"), {"branch": "dev"})
 
 
+def test_agent_session_start_builds_agent_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_agent_session_start"].handler(paths, {"project_id": "little-widget"})
+    call = fake_create_job[0]
+    assert call["type"] == "agent.session_start"
+    assert call["project_id"] == "little-widget"
+    assert call["params"] == {}
+
+
+def test_agent_session_stop_builds_agent_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_agent_session_stop"].handler(paths, {"project_id": "little-widget"})
+    call = fake_create_job[0]
+    assert call["type"] == "agent.session_stop"
+
+
+def test_agent_session_status_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "agent_session_status", result={"running": False})
+    tools_mod.TOOLS_BY_NAME["workshop_agent_session_status"].handler(paths, {"project_id": "little-widget"})
+    assert calls[0] == ((paths, "little-widget"), {})
+
+
 def test_job_stop_calls_client_stop_job(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "stop_job", result={"stopped": True, "reason": None})
     result = tools_mod.TOOLS_BY_NAME["workshop_job_stop"].handler(paths, {"job_id": "j1"})

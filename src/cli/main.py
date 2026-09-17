@@ -1402,6 +1402,48 @@ def cmd_agent_ci_status(args: argparse.Namespace) -> int:
     return 0 if result.get("ci_check") is not None else 1
 
 
+def cmd_agent_session_start(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths, type="agent.session_start", target_pillar="agent", project_id=args.project_id,
+            params={}, queue_key=None, depends_on=[], created_by="lws", timeout=30.0,
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_agent_session_stop(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.create_job(
+            paths, type="agent.session_stop", target_pillar="agent", project_id=args.project_id,
+            params={}, queue_key=None, depends_on=[], created_by="lws", timeout=30.0,
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_agent_session_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    project_ids = [p["name"] for p in client.list_projects(paths)["projects"]]
+    statuses = []
+    for project_id in project_ids:
+        try:
+            statuses.append(client.agent_session_status(paths, project_id))
+        except client.AgentPillarUnavailable as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    _print({"sessions": statuses})
+    return 0
+
+
 def cmd_job_queue_show(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -2212,6 +2254,18 @@ def build_parser() -> argparse.ArgumentParser:
     a_ci_status.add_argument("--project-id", required=True)
     a_ci_status.add_argument("--branch", default=None)
     a_ci_status.set_defaults(func=cmd_agent_ci_status)
+
+    a_session_start = agent_sub.add_parser("session-start", help="Open an ad-hoc, human-driven interactive Remote Control session")
+    a_session_start.add_argument("--project-id", required=True)
+    a_session_start.set_defaults(func=cmd_agent_session_start)
+
+    a_session_stop = agent_sub.add_parser("session-stop", help="Close the ad-hoc session running against a project")
+    a_session_stop.add_argument("--project-id", required=True)
+    a_session_stop.set_defaults(func=cmd_agent_session_stop)
+
+    agent_sub.add_parser("session-list", help="List every registered project and whether an ad-hoc session is running").set_defaults(
+        func=cmd_agent_session_list
+    )
 
     worktree = subparsers.add_parser("worktree", help="Shared worktree-provisioning capability")
     worktree_sub = worktree.add_subparsers(dest="worktree_command", required=True)

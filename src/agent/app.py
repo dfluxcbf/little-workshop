@@ -22,6 +22,7 @@ from common.uds_client import client_for_socket
 from agent import db
 from agent.flow import AgentFlow, AgentFlowError
 from agent.query import run_query
+from agent.session_flow import SessionError, SessionFlow, session_name as session_name_for
 
 
 def _complete_orchestration_job(paths: Paths, job_id: str, *, succeeded: bool, result: dict | None, error: str | None) -> None:
@@ -47,10 +48,13 @@ class JobRequest(BaseModel):
     params: dict[str, Any] = {}
 
 
-def build_app(paths: Paths, conn: sqlite3.Connection, flow: AgentFlow | None = None) -> FastAPI:
+def build_app(
+    paths: Paths, conn: sqlite3.Connection, flow: AgentFlow | None = None, session_flow: SessionFlow | None = None,
+) -> FastAPI:
     app = FastAPI(title="little-workshop Agentic Development")
     lock = threading.Lock()
     flow = flow or AgentFlow(paths=paths)
+    session_flow = session_flow or SessionFlow(paths=paths)
 
     @app.get("/v1/health")
     def health() -> dict:
@@ -186,5 +190,34 @@ def build_app(paths: Paths, conn: sqlite3.Connection, flow: AgentFlow | None = N
         if check is None:
             raise HTTPException(status_code=404, detail="no CI check recorded yet")
         return check
+
+    @app.post("/v1/jobs/agent.session_start")
+    def job_session_start(request: JobRequest) -> dict:
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        try:
+            project_dir = Path(resolve_project(paths, request.project_id)["path"])
+        except ProjectResolutionError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        try:
+            name = session_flow.start(request.project_id, project_dir)
+        except SessionError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        return {"outcome": "succeeded", "result": {"session_name": name}}
+
+    @app.post("/v1/jobs/agent.session_stop")
+    def job_session_stop(request: JobRequest) -> dict:
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        stopped = session_flow.stop(request.project_id)
+        return {"outcome": "succeeded", "result": {"stopped": stopped}}
+
+    @app.get("/v1/sessions/{project_id}")
+    def session_status(project_id: str) -> dict:
+        running = session_flow.is_running(project_id)
+        return {
+            "project_id": project_id, "running": running,
+            "session_name": session_name_for(project_id) if running else None,
+        }
 
     return app

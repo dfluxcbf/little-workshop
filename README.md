@@ -199,7 +199,7 @@ gained `verify_after_completion` — the category is verified *after* a
 real `project.bootstrap`/`project.import` succeeds, fire-and-forget,
 never gated before it.
 
-### M16 — full functional parity with the absorbed tools (in progress)
+### M16 — full functional parity with the absorbed tools (done)
 
 Rejected compatibility shims outright, by direct decision: the five old
 tools (`lreq`, `lvx`, `lrun`, `little-pypi`, `bootstrap-little-project`)
@@ -253,13 +253,18 @@ the integration branch up to date, commit pending changes, finish the
 checked-out topic branch (delegating to this pillar's own already-
 existing finish commands), push, and delete already-merged branches.
 Dry run by default, matching the old tool's own design — nothing
-mutates until `--execute` is passed explicitly. Only `session
-start/stop/list`'s ad-hoc, human-driven half (host-process `dtach`/PTY
-machinery with no daemon equivalent) remains open — the last M16 gap,
-deliberately deferred.
+mutates until `--execute` is passed explicitly. `session start/stop/list`'s
+ad-hoc, human-driven half — the last item across all five tools — is
+also closed, as `agent.session_start`/`session_stop`: a real interactive
+`dtach`-backed PTY session, kept alive in its own `systemd --user`
+*scope* so it survives this pillar's own unit restarting, reversing an
+earlier deferral once the underlying mechanics turned out to already
+have a home in this daemon's own model (Deployment & Servers already
+launches and tracks long-running background processes the same shape).
+**Every real gap across all five absorbed tools is now closed.**
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1797 tests — 1651 unit, 146 real
+`bazel test //:coverage` all work today (1828 tests — 1681 unit, 147 real
 `systemd --user` end-to-end integration proofs (a deliberate +15%
 expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
 three of four newly-added gate-point categories that don't hit a

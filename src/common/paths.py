@@ -112,6 +112,18 @@ class Paths:
         return self.worktrees_dir / worktree_id
 
     @property
+    def sessions_dir(self) -> Path:
+        """Agentic Development's ad-hoc, human-driven Remote Control
+        session sockets (docs/milestones.md M16 `little-runner` parity:
+        `lrun session start/stop/list`) — one deterministic `dtach`
+        socket per project, so "is it running" reduces to matching this
+        same path in the process list."""
+        return self.state_home / "sessions"
+
+    def session_socket_path(self, project_id: str) -> Path:
+        return self.sessions_dir / f"{project_id.replace('/', '-')}.sock"
+
+    @property
     def packages_dir(self) -> Path:
         """Build & Packages' own package blobs (docs/milestones.md M11) —
         metadata lives in this pillar's own database, the blobs

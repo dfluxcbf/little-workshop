@@ -233,11 +233,32 @@ next queued Job dispatches).
 
 `lrun session start/stop/list`'s other half — an ad-hoc, human-driven,
 `dtach`-backed interactive terminal session, independent of any Job —
-stays deliberately un-ported: it is host-process machinery (a real PTY,
-a per-repo `dtach` socket, a dedicated systemd unit, `~/.claude.json`
-trust-dialog probing) with no clean equivalent in this daemon's own
-Job/Pillar-Interface model, the same category of gap as
-`bootstrap-little-project`'s `.lrun/config.toml`.
+is also closed (2026-09-17), as `agent.session_start`/`session_stop`
+(`agent/session_flow.py`), reversing the earlier deferral once the
+underlying mechanics turned out to already have a home in this daemon's
+own model, not a foreign one: Deployment & Servers already launches and
+tracks long-running background processes started once and stopped
+later (`deployment.deploy`/`server.launch`), and M5's self-redeploy
+worker already established the `systemd-run --user --collect` detached-
+dispatch pattern this reuses. What genuinely is new here is the PTY
+itself — `agent.run_task`'s own Remote Control usage is headless
+(`claude -p`, `flow.py`'s `_invoke_claude`); an *interactive*
+`claude --remote-control` session needs a real terminal to attach to,
+which `dtach` provides, kept alive independent of whatever launched it.
+A transient `systemd --user` *scope* (not a *service*) tracks cgroup
+population rather than one main PID, so the session survives this
+pillar's own unit restarting — ported directly from `little-runner`'s
+own hard-earned finding that a plain `dtach -n` fork still inherits its
+launcher's cgroup despite reparenting in the process tree. Exactly one
+session per project (a deterministic socket path,
+`Paths.session_socket_path`); refused outright if one is already
+running, or if the project's checkout isn't yet trusted by Claude Code
+(`~/.claude.json`'s own trust-dialog state — a session launched fully
+detached would otherwise hang at that prompt forever with no one there
+to answer it). `GET /v1/sessions/{project_id}` reports whether one is
+running; `lws agent session-list` loops that over Registry & Portfolio's
+own project list for the old tool's "every project" view, the same
+pattern `version.branch_audit`/`version.stabilize` already established.
 
 ## Left open
 
