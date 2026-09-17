@@ -227,6 +227,7 @@ def cmd_project_bootstrap(args: argparse.Namespace) -> int:
         "public": args.public,
         "remote_host": args.remote_host,
         "github_token": args.github_token,
+        "ensure_labels": args.ensure_labels,
     }
     try:
         result = client.create_job(
@@ -1230,6 +1231,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_bootstrap.add_argument("--public", action="store_true")
     project_bootstrap.add_argument("--remote-host", default="github.com")
     project_bootstrap.add_argument("--github-token", default=None)
+    project_bootstrap.add_argument("--no-labels", dest="ensure_labels", action="store_false", default=True)
     project_bootstrap.set_defaults(func=cmd_project_bootstrap)
 
     project_import = project_sub.add_parser("import", help="Register an existing, already-conformant repository")

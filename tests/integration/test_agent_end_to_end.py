@@ -160,18 +160,11 @@ def test_agent_run_task_end_to_end(tmp_path, monkeypatch):
                 created_by="integration-test",
             )
             assert bootstrap["status"] == "succeeded", bootstrap
+            # project.bootstrap now runs version.init (and the git
+            # add/commit/checkout-dev/merge dance) automatically --
+            # see registry/app.py's job_bootstrap.
+            assert bootstrap["result"]["version_initialized"] is True
             project_dir = dest_dir / "little-widget"
-
-            init = cli_client.create_job(
-                paths, type="version.init", target_pillar="version", project_id="little-widget",
-                params={"production_branch": "master", "integration_branch": "dev"}, queue_key="little-widget",
-                depends_on=[], created_by="integration-test",
-            )
-            assert init["status"] == "succeeded", init
-            subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
-            subprocess.run(["git", "commit", "-m", "chore: version init"], cwd=project_dir, check=True, capture_output=True)
-            subprocess.run(["git", "checkout", "dev"], cwd=project_dir, check=True, capture_output=True)
-            subprocess.run(["git", "merge", "--ff-only", "master"], cwd=project_dir, check=True, capture_output=True)
 
             created = cli_client.create_job(
                 paths, type="agent.run_task", target_pillar="agent", project_id="little-widget",

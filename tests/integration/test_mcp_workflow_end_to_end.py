@@ -72,22 +72,13 @@ def test_mcp_version_feature_start_reaches_real_version_control(tmp_path, worksh
                 created_by="integration-test",
             )
             assert bootstrap["status"] == "succeeded", bootstrap
+            # project.bootstrap now runs version.init (and the git
+            # add/commit/checkout-dev/merge dance) automatically -- see
+            # registry/app.py's job_bootstrap.
+            assert bootstrap["result"]["version_initialized"] is True
             project_dir = dest_dir / "little-widget"
 
             mcp = MCPServer(paths=workshop_env.paths)
-            init_response = mcp.handle_request({
-                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                "params": {"name": "workshop_version_init", "arguments": {
-                    "project_id": "little-widget", "production_branch": "master", "integration_branch": "dev",
-                }},
-            })
-            assert init_response["result"]["isError"] is False, init_response
-
-            subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
-            subprocess.run(["git", "commit", "-m", "chore: version init"], cwd=project_dir, check=True, capture_output=True)
-            subprocess.run(["git", "checkout", "dev"], cwd=project_dir, check=True, capture_output=True)
-            subprocess.run(["git", "merge", "--ff-only", "master"], cwd=project_dir, check=True, capture_output=True)
-
             feature_response = mcp.handle_request({
                 "jsonrpc": "2.0", "id": 2, "method": "tools/call",
                 "params": {"name": "workshop_version_feature_start", "arguments": {

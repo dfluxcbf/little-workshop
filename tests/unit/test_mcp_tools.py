@@ -57,6 +57,15 @@ def test_project_bootstrap_builds_registry_job(paths, fake_create_job):
     assert call["params"]["dest_dir"] == "/tmp/little-widget"
     assert call["params"]["create_github_repo"] is True
     assert call["params"]["owner"] == "dfluxcbf"
+    assert call["params"]["ensure_labels"] is True
+
+
+def test_project_bootstrap_honors_ensure_labels_false(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_project_bootstrap"].handler(
+        paths, {"name": "little-widget", "dest_dir": "/tmp/little-widget", "ensure_labels": False}
+    )
+    call = fake_create_job[0]
+    assert call["params"]["ensure_labels"] is False
 
 
 def test_project_import_builds_registry_job(paths, fake_create_job):

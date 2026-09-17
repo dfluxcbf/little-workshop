@@ -232,6 +232,14 @@ def test_project_bootstrap_passes_all_flags_through_as_params(paths, monkeypatch
     assert params["public"] is True
     assert params["remote_host"] == "example.com"
     assert params["github_token"] == "tok"
+    assert params["ensure_labels"] is True
+
+
+def test_project_bootstrap_no_labels_flag(paths, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    main.main(["project", "bootstrap", "little-widget", "--dest-dir", "/tmp/x", "--no-labels"])
+    assert captured["params"]["ensure_labels"] is False
 
 
 def test_project_import_success_exits_0(paths, monkeypatch):

@@ -33,8 +33,14 @@ Deployment & Servers, Agentic Development — needs somewhere to resolve
   `repo_url`, `status` (`active`/`removed`), timestamps.
 - **Two registration paths, one outcome**: `project.bootstrap`
   (`POST /v1/jobs/project.bootstrap`, M2) — deterministic: scaffold,
-  `git init`, `dev` branch, optional GitHub repo creation and push, then
-  register. `project.import` (`POST /v1/jobs/project.import`, M8) — for
+  `git init`, `dev` branch, optional GitHub repo creation and push,
+  optional GitHub label creation (`registry/github.py`'s
+  `BOOTSTRAP_LABELS`, guarded by `BootstrapParams.ensure_labels`), and an
+  optional real cross-pillar `version.init` call into Version Control &
+  Release (M16 `bootstrap-little-project` parity gap:
+  `registry/version_client.py`, best-effort — reported back via
+  `BootstrapResult.version_initialized`, never raised if that pillar is
+  unreachable), then register. `project.import` (`POST /v1/jobs/project.import`, M8) — for
   an *existing*, already-checked-out repository: deliberately
   mechanical, validating only that there's something real to register
   (the path exists, is a git repository), reading its real `origin`
@@ -63,7 +69,12 @@ Deployment & Servers, Agentic Development — needs somewhere to resolve
 
 Registry & Portfolio is a leaf in the call graph for reads: many pillars
 call *into* it to resolve a project; it never calls back out to resolve
-anything about the project itself.
+anything about the project itself. As of M16, it does make one
+best-effort outbound call of its own — `project.bootstrap` calling
+Version Control & Release's `version.init` — made *after*, never inside,
+`job_bootstrap`'s own lock (Version's own callback into this pillar's
+`GET /v1/projects/{name}`, via `common.registry_client`, would deadlock
+against that same lock otherwise).
 
 - **Called by**: Version Control & Release, Deployment & Servers, and
   Agentic Development, all through the identical `common.registry_client`
@@ -73,10 +84,12 @@ anything about the project itself.
   whether/where to open a pull request). `lws`, the MCP Server, and
   Orchestration (dispatching `project.bootstrap`/`project.import`/
   `project.remove` Jobs) also call it directly.
-- **Calls**: nothing, as of M8 — no other pillar's Pillar Interface.
-  `project.bootstrap` shells out to `git`/GitHub's REST API/`gh` directly
-  (`registry/gitops.py`, `registry/github.py`), not through another
-  pillar.
+- **Calls**: `project.bootstrap` shells out to `git`/GitHub's REST API/`gh`
+  directly (`registry/gitops.py`, `registry/github.py`), not through
+  another pillar. As of M16, it also makes one real cross-pillar Pillar
+  Interface call of its own: `version_client.init_version_tracking`
+  resolves Version Control & Release's socket through Core and posts a
+  `version.init` Job, best-effort (never raised if unreachable).
 - **Discovered through**: Core, like every pillar. Its socket is one of
   Core's very first registry entries, since Version Control & Release
   and Deployment & Servers both need it resolvable from the moment they

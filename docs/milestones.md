@@ -38,7 +38,7 @@ discipline this project already applies to itself); the *sequence* and
 | M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
-| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions` and `little-pypi` gaps closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up); `bootstrap-little-project`, `little-requirements`, `little-runner` gaps still open |
+| M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | In progress — `little-versions`, `little-pypi`, and `bootstrap-little-project` gaps closed 2026-09-17 (`docs/requirements.md`'s M16 follow-up); `little-requirements`, `little-runner` gaps still open |
 | M17 | Ecosystem cutover | M15, M16 | Not started |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
@@ -443,12 +443,20 @@ What M16 actually is: closing the real functional gaps a direct,
 command-by-command survey found between each old tool's own CLI surface
 and what its corresponding pillar(s) implement today (the full survey:
 `docs/requirements.md`'s M16 follow-up section). `little-versions` is
-closest — one small gap (standalone `issue list/set/unset`).
-`little-pypi` is close on its storage half; only dev-convenience commands
-(`pip`/config-file helpers) are missing. `bootstrap-little-project` needs
-three real features added to `project.bootstrap` (GitHub-automation init,
-`lvx init`, label creation). `little-requirements` and `little-runner`
-are not close — both have real, load-bearing concepts (a client-side
+closed (standalone `issue list/set/unset`, 2026-09-17). `little-pypi` is
+closed on its dev-convenience half (`pip`/config-file helpers,
+2026-09-17); its storage half was already close. `bootstrap-little-project`
+is closed (2026-09-17): `project.bootstrap` now creates the real GitHub
+labels the old tool did and runs a real cross-pillar `version.init` call
+(plus the git add/commit/checkout-dev/merge dance) so a freshly
+bootstrapped project is left gitflow-ready, matching what the old tool's
+own `create` always did. One gap was deliberately deferred rather than
+closed: `.lrun/config.toml` is a host-local file (never committed,
+written under `~/.config/little-runner/`) with no clear pillar owner and
+no clear future pillar-equivalent yet — a low-value, awkward fit that
+doesn't belong to `project.bootstrap`'s own job. `little-requirements`
+and `little-runner` are not close — both have real, load-bearing concepts
+(a client-side
 workspace config; GitHub-issue-triggered polling, per-repo issue queues,
 session management, branch stabilization, cross-project branch
 auditing) with no equivalent anywhere in little-workshop yet, and

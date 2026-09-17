@@ -26,18 +26,11 @@ def _bootstrap_and_init(tmp_path, workshop_env, project_id="little-widget"):
         params={"name": project_id, "dest_dir": str(dest_dir)}, queue_key=None, depends_on=[], created_by="t",
     )
     assert bootstrap["status"] == "succeeded", bootstrap
+    # project.bootstrap now runs version.init (and the git
+    # add/commit/checkout-dev/merge dance) automatically -- see
+    # registry/app.py's job_bootstrap.
+    assert bootstrap["result"]["version_initialized"] is True
     project_dir = dest_dir / project_id
-
-    init = cli_client.create_job(
-        workshop_env.paths, type="version.init", target_pillar="version", project_id=project_id,
-        params={"production_branch": "master", "integration_branch": "dev"}, queue_key=project_id, depends_on=[],
-        created_by="t",
-    )
-    assert init["status"] == "succeeded", init
-    subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True)
-    subprocess.run(["git", "commit", "-m", "chore: version init"], cwd=project_dir, check=True, capture_output=True)
-    subprocess.run(["git", "checkout", "dev"], cwd=project_dir, check=True, capture_output=True)
-    subprocess.run(["git", "merge", "--ff-only", "master"], cwd=project_dir, check=True, capture_output=True)
     return project_dir
 
 
