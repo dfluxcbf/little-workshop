@@ -34,12 +34,19 @@ are the current state of every pillar.
 ## Responsibilities
 
 - **Dashboard** (`/`, redesigned 2026-09-21): a project-management
-  overview, no longer a pillar table — stat tiles (projects, servers
-  running, Claude sessions, active tasks, pillars healthy) and one row
-  per registered project: server up/down, Claude Code session, tasks
-  awaiting finish/running, requirements done/total, latest CI. Each
-  panel is its own live read; a pillar that is down renders as "—" for
-  that panel only, never a 500.
+  overview that fits a phone screen. Five stat tiles (projects, servers up,
+  Claude sessions, active tasks, pillars healthy — the last links to
+  Pillars and turns red when any pillar is not healthy), then one compact
+  card per registered project. A card lists only the facts that exist —
+  server up/down (with version), Claude session (running / idle /
+  untrusted), tasks awaiting finish or running, requirements done/total,
+  latest CI — as a plain-text label beside a status pill, never a row of
+  "—" placeholders; a project with something to act on (an untrusted
+  session, a task awaiting finish, a failing CI) gets an amber edge. Each
+  panel is its own live read; a pillar that is down degrades that fact
+  only ("unavailable"), never a 500. Small text is kept legible: dim text
+  is a lighter grey than before (`--ink-faint`), and stat labels are plain
+  13px text rather than tiny uppercase.
 - **Control** (`/control`): per-project accordion, copied in shape from
   `little-runner`'s own Control page — deploy a branch (Launch/
   Relaunch) or Stop the server, **Start/Stop a Claude Code session**

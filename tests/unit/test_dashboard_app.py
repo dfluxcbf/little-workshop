@@ -1030,3 +1030,81 @@ def test_hidden_selection_inputs_are_zero_sized_so_they_cannot_widen_the_page(te
     for selector in (".pcard .pick", ".gp input", ".prow-select input", ".prow-gate input", ".switch-row input"):
         line = next(l for l in css.splitlines() if l.startswith(selector + " {"))
         assert "width: 0" in line and "padding: 0" in line, selector
+
+
+# -- dashboard: compact project cards -----------------------------------------------------
+
+
+def _one_project(monkeypatch, **overrides):
+    _stub_project_panels(monkeypatch, **overrides)
+
+
+def test_dashboard_shows_projects_as_cards_not_a_table(test_client, monkeypatch):
+    _one_project(monkeypatch, names=("little-widget", "little-gadget"))
+    text = test_client.get("/").text
+    assert "<table" not in text and "<h2" not in text
+    assert text.count('class="proj-card') == 2
+    assert 'href="/control#little-widget"' in text and 'class="proj-name"' in text
+
+
+def test_a_project_card_only_lists_the_facts_that_exist(test_client, monkeypatch):
+    _one_project(monkeypatch, server=None, report=None, ci=None, session={"running": False, "trusted": True})
+    text = test_client.get("/").text
+    assert ">Session<" in text and ">Tasks<" in text
+    assert ">Server<" not in text and ">Requirements<" not in text and ">CI<" not in text
+    main = text.split('<main class="content">', 1)[1].split("</main>", 1)[0]
+    assert "&mdash;" not in main and "—" not in main  # no placeholder dashes standing in for missing data
+
+
+def test_a_project_card_shows_every_fact_when_present(test_client, monkeypatch):
+    _one_project(
+        monkeypatch, server={"listening": True, "version": "0.3.1", "unit": "active"},
+        session={"running": True, "trusted": True}, runs=[{"status": "running"}],
+        report={"requirements": [{"done": True}, {"done": False}]}, ci={"state": "failure"},
+    )
+    text = test_client.get("/").text
+    for key in ("Server", "Session", "Tasks", "Requirements", "CI"):
+        assert f'<span class="fact-k">{key}</span>' in text
+    assert "v0.3.1" in text and "1 running" in text and "1/2 done" in text and 'pill fail">failure' in text
+
+
+def test_a_down_server_and_an_unreachable_agent_are_labelled_not_blank(test_client, monkeypatch):
+    _one_project(monkeypatch, server={"listening": False, "version": "1", "unit": "inactive"}, session=None)
+    text = test_client.get("/").text
+    assert 'pill idle">down' in text and ">unavailable<" in text
+
+
+@pytest.mark.parametrize("overrides,expected", [
+    ({"session": {"running": False, "trusted": False}}, True),
+    ({"runs": [{"status": "awaiting_finish"}]}, True),
+    ({"ci": {"state": "error"}}, True),
+    ({"session": {"running": False, "trusted": True}}, False),
+])
+def test_a_project_needing_attention_is_marked(test_client, monkeypatch, overrides, expected):
+    _one_project(monkeypatch, **overrides)
+    assert ('class="proj-card attn"' in test_client.get("/").text) is expected
+
+
+def test_stat_tiles_have_plain_readable_labels_and_pillars_link_to_the_pillars_page(test_client, monkeypatch):
+    _one_project(monkeypatch)
+    text = test_client.get("/").text
+    for label in ("Projects", "Servers up", "Claude sessions", "Active tasks", "Pillars healthy"):
+        assert f'<span class="stat-label">{label}</span>' in text
+    assert re.search(r'<a class="stat-tile[^"]*" href="/pillars">', text)
+
+
+def test_unhealthy_summary_is_singular_or_plural(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch)
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": {"agent": {"status": "crashed"}}})
+    assert "1 pillar not healthy" in test_client.get("/").text
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": {"agent": {"status": "crashed"}, "policy": {"status": "faulted"}}})
+    assert "2 pillars not healthy" in test_client.get("/").text
+
+
+def test_dim_text_stays_legible_on_the_dark_background(test_client):
+    css = test_client.get("/static/app.css").text
+    faint = float(re.search(r"--ink-faint: oklch\((\d+(?:\.\d+)?)%", css).group(1))
+    soft = float(re.search(r"--ink-soft: oklch\((\d+(?:\.\d+)?)%", css).group(1))
+    assert faint >= 60 and soft >= 72
+    labels = re.search(r"\.stat-label \{([^}]*)\}", css).group(1)
+    assert "text-transform" not in labels and "font-size: 13px" in labels

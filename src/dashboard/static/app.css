@@ -11,7 +11,7 @@
   --border-soft: oklch(27% 0.02 260);
   --ink: oklch(94% 0.01 260);
   --ink-soft: oklch(74% 0.02 260);
-  --ink-faint: oklch(54% 0.02 260);
+  --ink-faint: oklch(62% 0.02 260);
   --cyan: oklch(78% 0.15 200);
   --cyan-soft: oklch(30% 0.06 200);
   --cyan-deep: oklch(66% 0.13 205);
@@ -137,7 +137,8 @@ h2 {
 }
 
 section { margin-bottom: 30px; }
-section > .lede { color: var(--ink-faint); font-size: 13px; margin: 0 0 14px; }
+p.lede { color: var(--ink-soft); font-size: 13px; line-height: 1.5; margin: 14px 2px 0; }
+section > .lede { color: var(--ink-soft); font-size: 13px; margin: 0 0 14px; }
 
 p.muted { color: var(--ink-faint); }
 .muted { color: var(--ink-faint); }
@@ -334,22 +335,56 @@ ul.plain-list li { margin: 3px 0; font-size: 13.5px; }
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin: 0 0 12px;
+}
+/* Five tiles: three across, then the last two sharing the row — no empty slot. */
+.stat-grid > .stat-tile { grid-column: span 2; }
+.stat-grid > .stat-tile:nth-child(n+4) { grid-column: span 3; }
+@media (min-width: 681px) {
+  .stat-grid { grid-template-columns: repeat(5, 1fr); }
+  .stat-grid > .stat-tile, .stat-grid > .stat-tile:nth-child(n+4) { grid-column: auto; }
 }
 .stat-tile {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
+  color: inherit;
+  text-decoration: none;
 }
+a.stat-tile:hover { border-color: var(--cyan-deep); }
 .stat-tile.stat-fail { border-color: oklch(50% 0.14 25); background: linear-gradient(180deg, var(--fail-soft), var(--surface)); }
-.stat-value { font-family: var(--font-mono); font-size: 26px; font-weight: 700; line-height: 1; }
+.stat-value { font-family: var(--font-mono); font-size: 22px; font-weight: 700; line-height: 1.1; }
 .stat-total { font-size: 14px; font-weight: 500; color: var(--ink-faint); }
-.stat-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-faint); }
+.stat-label { font-size: 13px; color: var(--ink-soft); }
+
+/* --- dashboard: one compact card per project ---------------------------------- */
+
+.proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 8px; align-items: start; }
+.proj-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.proj-card.attn { border-left-color: var(--warn); }
+a.proj-name { font-family: var(--font-mono); font-size: 16px; font-weight: 700; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+a.proj-name:hover { color: var(--cyan); }
+.facts { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.fact { display: inline-flex; align-items: center; gap: 6px; }
+.fact-k { font-size: 13px; color: var(--ink-soft); }
+.fact-v { font-size: 12.5px; color: var(--ink-soft); font-family: var(--font-mono); }
+.fact a { text-decoration: none; }
 
 /* --- collapsible project panels (control tab) ------------------------------- */
 

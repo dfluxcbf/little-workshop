@@ -2,64 +2,60 @@
 {% block title %}Dashboard — little-workshop{% endblock %}
 {% block content %}
 {% if unhealthy %}
-<div class="card fail"><strong>{{ unhealthy|length }} pillar(s) not healthy:</strong>
+<div class="card fail"><strong>{{ unhealthy|length }} pillar{{ '' if unhealthy|length == 1 else 's' }} not healthy:</strong>
   {% for n in unhealthy %}<code>{{ n }}</code> {% endfor %}&mdash; <a href="/pillars">see Pillars</a>.</div>
 {% endif %}
-<section>
-  <h2>Overview</h2>
-  <div class="stat-grid">
-    <div class="stat-tile"><span class="stat-value">{{ stats.projects }}</span><span class="stat-label">Projects</span></div>
-    <div class="stat-tile"><span class="stat-value">{{ stats.servers_up }}<span class="stat-total">/{{ stats.servers_total }}</span></span><span class="stat-label">Servers running</span></div>
-    <div class="stat-tile"><span class="stat-value">{{ stats.sessions_up }}</span><span class="stat-label">Claude sessions</span></div>
-    <div class="stat-tile"><span class="stat-value">{{ stats.tasks_active }}</span><span class="stat-label">Active tasks</span></div>
-    <div class="stat-tile {{ 'stat-fail' if unhealthy }}"><span class="stat-value">{{ stats.pillars_ok }}<span class="stat-total">/{{ stats.pillars_total }}</span></span><span class="stat-label">Pillars healthy</span></div>
-  </div>
-</section>
 
-<section>
-  <h2>Projects</h2>
-  {% if not rows %}
-  <p class="muted">No project registered yet. Register one with <code>lws project import</code>.</p>
-  {% else %}
-  <div class="panel">
-  <table>
-    <thead><tr><th>Project</th><th>Server</th><th>Claude session</th><th>Tasks</th><th>Requirements</th><th>CI</th></tr></thead>
-    <tbody>
-    {% for r in rows %}
-    <tr>
-      <td data-label="Project"><a href="/control#{{ r.name }}"><strong>{{ r.name }}</strong></a></td>
-      <td data-label="Server">
-        {% if r.server is none %}<span class="muted">&mdash;</span>
-        {% elif r.server.listening %}<span class="pill ok">up</span> <span class="muted">v{{ r.server.version }}</span>
+<div class="stat-grid">
+  <div class="stat-tile"><span class="stat-value">{{ stats.projects }}</span><span class="stat-label">Projects</span></div>
+  <div class="stat-tile"><span class="stat-value">{{ stats.servers_up }}<span class="stat-total">/{{ stats.servers_total }}</span></span><span class="stat-label">Servers up</span></div>
+  <div class="stat-tile"><span class="stat-value">{{ stats.sessions_up }}</span><span class="stat-label">Claude sessions</span></div>
+  <div class="stat-tile"><span class="stat-value">{{ stats.tasks_active }}</span><span class="stat-label">Active tasks</span></div>
+  <a class="stat-tile {{ 'stat-fail' if unhealthy }}" href="/pillars"><span class="stat-value">{{ stats.pillars_ok }}<span class="stat-total">/{{ stats.pillars_total }}</span></span><span class="stat-label">Pillars healthy</span></a>
+</div>
+
+{% if not rows %}
+<p class="muted">No project registered yet. Register one with <code>lws project import</code>.</p>
+{% else %}
+<div class="proj-grid">
+  {% for r in rows %}
+  {% set attn = r.awaiting or (r.ci and r.ci.state in ('failure', 'error')) or (r.session and r.session.trusted == false) %}
+  <article class="proj-card{{ ' attn' if attn }}">
+    <a class="proj-name" href="/control#{{ r.name }}">{{ r.name }}</a>
+    <div class="facts">
+      {% if r.server is not none %}
+      <span class="fact"><span class="fact-k">Server</span>
+        {% if r.server.listening %}<span class="pill ok">up</span>{% if r.server.version %}<span class="fact-v">v{{ r.server.version }}</span>{% endif %}
         {% else %}<span class="pill idle">down</span>{% endif %}
-      </td>
-      <td data-label="Claude session">
-        {% if r.session is none %}<span class="muted">&mdash;</span>
+      </span>
+      {% endif %}
+      <span class="fact"><span class="fact-k">Session</span>
+        {% if r.session is none %}<span class="fact-v">unavailable</span>
         {% elif r.session.running %}<span class="pill ok">running</span>
         {% elif r.session.trusted == false %}<span class="pill warn">untrusted</span>
         {% else %}<span class="pill idle">idle</span>{% endif %}
-      </td>
-      <td data-label="Tasks">
+      </span>
+      <span class="fact"><span class="fact-k">Tasks</span>
         {% if r.awaiting %}<a href="/tasks"><span class="pill warn">{{ r.awaiting }} awaiting finish</span></a>{% endif %}
         {% if r.running %}<a href="/tasks"><span class="pill ok">{{ r.running }} running</span></a>{% endif %}
         {% if not r.awaiting and not r.running %}<span class="pill idle">idle</span>{% endif %}
-      </td>
-      <td data-label="Requirements">
-        {% if r.reqs is none or not r.reqs.total %}<span class="muted">&mdash;</span>
-        {% else %}<span class="pill {{ 'ok' if r.reqs.done == r.reqs.total else 'warn' }}">{{ r.reqs.done }}/{{ r.reqs.total }} done</span>{% endif %}
-      </td>
-      <td data-label="CI">
-        {% if r.ci is none %}<span class="muted">&mdash;</span>
-        {% elif r.ci.state == 'success' %}<span class="pill ok">success</span>
+      </span>
+      {% if r.reqs and r.reqs.total %}
+      <span class="fact"><span class="fact-k">Requirements</span>
+        <span class="pill {{ 'ok' if r.reqs.done == r.reqs.total else 'warn' }}">{{ r.reqs.done }}/{{ r.reqs.total }} done</span>
+      </span>
+      {% endif %}
+      {% if r.ci is not none %}
+      <span class="fact"><span class="fact-k">CI</span>
+        {% if r.ci.state == 'success' %}<span class="pill ok">success</span>
         {% elif r.ci.state in ('failure', 'error') %}<span class="pill fail">{{ r.ci.state }}</span>
         {% else %}<span class="pill warn">{{ r.ci.state }}</span>{% endif %}
-      </td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  {% endif %}
-</section>
-<p class="lede">Launching servers and Claude sessions lives in <a href="/control">Control</a>; the system's own pillars are under <a href="/pillars">Pillars</a>.</p>
+      </span>
+      {% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% endif %}
+<p class="lede">Servers and Claude sessions are launched from <a href="/control">Control</a>; the system's own components are under <a href="/pillars">Pillars</a>.</p>
 {% endblock %}
