@@ -792,3 +792,10 @@ def test_reject_and_restore_report_failures(test_client, monkeypatch):
     reject = test_client.post("/policies/drafts/d1/reject", data={}, follow_redirects=False)
     restore = test_client.post("/policies/drafts/d1/restore", follow_redirects=False)
     assert "not pending" in unquote(reject.headers["location"]) and "Could not restore" in unquote(restore.headers["location"])
+
+
+def test_body_has_no_viewport_height_minimum_that_makes_short_pages_scroll(test_client):
+    css = test_client.get("/static/app.css").text
+    body_rule = css[css.index("\nbody {"):css.index("}", css.index("\nbody {"))]
+    assert "min-height" not in body_rule.replace("/* No min-height", "")
+    assert "background-attachment: fixed" in body_rule  # what keeps the whole screen painted

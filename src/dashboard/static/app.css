@@ -33,7 +33,9 @@ html { color-scheme: dark; }
 
 body {
   margin: 0;
-  min-height: 100vh;
+  /* No min-height: `100vh` is the tall viewport on phones (browser chrome hidden),
+     taller than what is visible, so it made short pages scroll. The fixed background
+     already paints the whole screen. */
   background:
     radial-gradient(1100px 520px at 12% -8%, oklch(30% 0.07 200 / 35%), transparent 60%),
     radial-gradient(900px 480px at 100% 0%, oklch(28% 0.05 215 / 22%), transparent 55%),
