@@ -154,7 +154,7 @@ mapping from the tools it absorbs. Implementation is underway against the
   fake-stub tests) also caught and fixed a real defect: the
   script-generation prompt never stated the sandbox's actual mount
   paths, so a generated script would have silently found nothing to
-  check even for a compliant project. The other 60 catalog entries stay
+  check even for a compliant project. The other 73 catalog entries stay
   queued as real future work through this same tool.
 
 ### Policy usability refinement (2026-09-16)

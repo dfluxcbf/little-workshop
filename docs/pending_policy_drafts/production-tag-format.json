@@ -1,0 +1,11 @@
+{
+  "ears_text": "WHEN a production tag is created, the version control system shall create it as an annotated tag named v<major>.<minor>.<patch>.",
+  "ears_refined": true,
+  "test_script": "import re\nimport subprocess\n\nimport pytest\n\nPROJECT = \"/project\"\n\nPRODUCTION_RE = re.compile(r\"^v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$\")\n# Pre-release tags (release candidates, etc.) are not production tags.\nPRERELEASE_RE = re.compile(r\"(?i)(^|[-_.+])(rc|alpha|beta|pre|preview|dev|snapshot)[-_.]?\\d*\")\n\n\ndef _git(*args):\n    return subprocess.run(\n        [\"git\", \"-c\", f\"safe.directory={PROJECT}\", \"-C\", PROJECT, *args],\n        capture_output=True,\n        text=True,\n    )\n\n\ndef _tags():\n    res = _git(\n        \"for-each-ref\",\n        \"--format=%(refname:strip=2) %(objecttype)\",\n        \"refs/tags\",\n    )\n    assert res.returncode == 0, f\"git for-each-ref failed: {res.stderr}\"\n    tags = []\n    for line in res.stdout.splitlines():\n        line = line.strip()\n        if not line:\n            continue\n        name, objtype = line.rsplit(\" \", 1)\n        tags.append((name, objtype))\n    return tags\n\n\ndef test_production_tags_are_annotated_semver():\n    inside = _git(\"rev-parse\", \"--is-inside-work-tree\")\n    bare = _git(\"rev-parse\", \"--is-bare-repository\")\n    assert inside.returncode == 0 or bare.returncode == 0, (\n        f\"{PROJECT} is not a git repository: {inside.stderr}\"\n    )\n\n    tags = _tags()\n    production = [(n, t) for n, t in tags if not PRERELEASE_RE.search(n)]\n\n    violations = []\n    for name, objtype in production:\n        if not PRODUCTION_RE.match(name):\n            violations.append(\n                f\"{name!r}: production tag name does not match v<major>.<minor>.<patch>\"\n            )\n        if objtype != \"tag\":\n            violations.append(\n                f\"{name!r}: is a lightweight tag (object type {objtype!r}), not annotated\"\n            )\n\n    assert not violations, \"Production tag violations:\\n\" + \"\\n\".join(violations)",
+  "topic": "production-tag-format",
+  "target_pillar": "version",
+  "scope_level": "all_projects",
+  "scope_target": null,
+  "created_by": "framework",
+  "gate_points": []
+}
