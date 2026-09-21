@@ -14,6 +14,7 @@ is killed (`--rm` plus a hard `-s KILL`), never left orphaned.
 
 from __future__ import annotations
 
+import posixpath
 import re
 import tempfile
 import uuid
@@ -46,6 +47,32 @@ class SandboxUnavailable(Exception):
 class SandboxResult:
     outcome: CheckOutcome
     detail: str
+
+
+def git_dir_mount(project_dir: Path) -> dict[Path, str | tuple[str, ...]]:
+    """A submodule checkout's `.git` is a file (`gitdir: <path>`) pointing
+    outside the project directory, so mounting only the checkout leaves git
+    with no history inside the container. Mount the real git directory where
+    that pointer resolves to from `/project`, and the checkout itself where the
+    git directory's own `core.worktree` points, since git chdirs there."""
+    dot_git = project_dir / ".git"
+    if not dot_git.is_file():
+        return {}
+    text = dot_git.read_text(encoding="utf-8").strip()
+    if not text.startswith("gitdir:"):
+        return {}
+    pointer = text.removeprefix("gitdir:").strip()
+    host_git_dir = (project_dir / pointer).resolve()
+    if not host_git_dir.is_dir():
+        return {}
+    container_git_dir = pointer if posixpath.isabs(pointer) else posixpath.normpath(posixpath.join("/project", pointer))
+    mounts = {host_git_dir: container_git_dir}
+    config = host_git_dir / "config"
+    match = re.search(r"(?m)^\s*worktree\s*=\s*(\S+)\s*$", config.read_text(encoding="utf-8")) if config.is_file() else None
+    if match:
+        worktree = match.group(1)
+        mounts[project_dir] = posixpath.normpath(worktree if posixpath.isabs(worktree) else posixpath.join(container_git_dir, worktree))
+    return mounts
 
 
 def ensure_image(*, runner: CommandRunner = DEFAULT_RUNNER, tag: str = IMAGE_TAG) -> None:
@@ -88,7 +115,7 @@ def _parse_verdict(stdout: str, exit_code: int) -> SandboxResult:
 
 
 def run_policy_check(
-    test_script: str, mounts: dict[Path, str], *,
+    test_script: str, mounts: dict[Path, str | tuple[str, ...]], *,
     timeout: float = DEFAULT_CHECK_TIMEOUT_SECONDS, runner: CommandRunner = DEFAULT_RUNNER, tag: str = IMAGE_TAG,
 ) -> SandboxResult:
     """`mounts` maps a real host path to the read-only path it should
@@ -109,8 +136,9 @@ def run_policy_check(
             "-e", "PYTHONDONTWRITEBYTECODE=1",
             "-v", f"{script_path}:/policy/test_policy.py:ro",
         ]
-        for host_path, container_path in mounts.items():
-            argv += ["-v", f"{host_path}:{container_path}:ro"]
+        for host_path, container_paths in mounts.items():
+            for container_path in ((container_paths,) if isinstance(container_paths, str) else container_paths):
+                argv += ["-v", f"{host_path}:{container_path}:ro"]
         argv += [
             "-w", "/policy", tag,
             "python", "-m", "pytest", "test_policy.py", "-rA", "--no-header", "-q", "-p", "no:cacheprovider",

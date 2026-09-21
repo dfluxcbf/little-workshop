@@ -130,3 +130,26 @@ def test_parse_verdict_no_tests_ran_is_treated_as_fail():
 def test_sandbox_image_ships_git_for_history_based_policies():
     assert "install -y --no-install-recommends git" in sandbox._DOCKERFILE
     assert sandbox.IMAGE_TAG != "little-workshop-policy-sandbox:latest"
+
+
+def test_git_dir_mount_is_empty_for_an_ordinary_checkout(tmp_path):
+    (tmp_path / ".git").mkdir()
+    assert sandbox.git_dir_mount(tmp_path) == {}
+
+
+def test_git_dir_mount_maps_a_submodule_gitdir_and_its_worktree(tmp_path):
+    modules = tmp_path / ".git" / "modules" / "sub"
+    modules.mkdir(parents=True)
+    (modules / "config").write_text("[core]\n\tworktree = ../../../sub\n", encoding="utf-8")
+    project = tmp_path / "sub"
+    project.mkdir()
+    (project / ".git").write_text("gitdir: ../.git/modules/sub\n", encoding="utf-8")
+
+    assert sandbox.git_dir_mount(project) == {modules.resolve(): "/.git/modules/sub", project: "/sub"}
+
+
+def test_run_policy_check_mounts_a_host_path_at_every_container_path(tmp_path):
+    runner = FakeRunner([CommandResult(0, "", ""), CommandResult(0, "1 passed in 0.01s", ""), CommandResult(0, "", "")])
+    sandbox.run_policy_check("def test_x(): pass\n", {tmp_path: ("/project", "/sub")}, runner=runner)
+    run_argv = next(c for c in runner.calls if c[:2] == ["docker", "run"])
+    assert f"{tmp_path}:/project:ro" in run_argv and f"{tmp_path}:/sub:ro" in run_argv

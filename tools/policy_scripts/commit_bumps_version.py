@@ -44,7 +44,10 @@ def version_at(sha):
 
 def head_and_parent_versions():
     """(head_version_text, parent_sha, parent_version_text); skips when there is nothing to compare."""
-    line = git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
+    listed = git("rev-list", "--parents", "-n", "1", "HEAD")
+    # A repository git cannot read is a failure, never "nothing to compare".
+    assert listed.returncode == 0, f"cannot read the repository's history: {listed.stderr.strip()}"
+    line = listed.stdout.split()
     if len(line) < 2:
         pytest.skip("HEAD has no parent commit")
     head_version = version_at("HEAD")

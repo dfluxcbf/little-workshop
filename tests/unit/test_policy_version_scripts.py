@@ -172,3 +172,10 @@ def test_shared_helper_blocks_are_identical_in_both_scripts():
         return text[text.index("# --- shared helpers"):text.index("# --- end shared helpers ---")]
 
     assert block(RULE1) == block(RULE2)
+
+
+@pytest.mark.parametrize("script", [RULE1, RULE2])
+def test_an_unreadable_repository_fails_instead_of_passing_quietly(tmp_path, script):
+    not_a_repo = tmp_path / "plain"
+    not_a_repo.mkdir()
+    assert verdict(script, not_a_repo) == "fail"

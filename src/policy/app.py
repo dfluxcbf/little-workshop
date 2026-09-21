@@ -327,14 +327,15 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
 
     # -- enforcement ------------------------------------------------------------
 
-    def _mounts_for_policy(policy: Policy, project_id: str) -> dict[Path, str]:
+    def _mounts_for_policy(policy: Policy, project_id: str) -> dict[Path, str | tuple[str, ...]]:
         if policy.scope_level == ScopeLevel.ALL_PROJECTS and policy.target_pillar == PILLAR_ITSELF:
             # framework-bound: little-workshop's own enumerated source/docs
             repo_root = Path(__file__).resolve().parents[2]
             return {repo_root / "src": "/framework/src", repo_root / "docs": "/framework/docs"}
         project_dir = Path(resolve_project(paths, project_id)["path"])
         project_files_dir = paths.project_dir(project_id)
-        mounts = {project_dir: "/project"}
+        mounts = sandbox.git_dir_mount(project_dir)
+        mounts[project_dir] = ("/project", *((mounts[project_dir],) if project_dir in mounts else ()))
         if project_files_dir.exists():
             mounts[project_files_dir] = "/project-files"
         return mounts

@@ -45,7 +45,10 @@ def version_at(sha):
 
 def head_and_parent_versions():
     """(head_version_text, parent_sha, parent_version_text); skips when there is nothing to compare."""
-    line = git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
+    listed = git("rev-list", "--parents", "-n", "1", "HEAD")
+    # A repository git cannot read is a failure, never "nothing to compare".
+    assert listed.returncode == 0, f"cannot read the repository's history: {listed.stderr.strip()}"
+    line = listed.stdout.split()
     if len(line) < 2:
         pytest.skip("HEAD has no parent commit")
     head_version = version_at("HEAD")
@@ -76,6 +79,8 @@ def parent_is_on_integration_line(parent_sha):
 
 
 def test_working_branch_commit_carries_the_next_patch_dev_suffix():
+    readable = git("rev-parse", "--git-dir")
+    assert readable.returncode == 0, f"cannot read the repository: {readable.stderr.strip()}"
     branch = current_branch()
     if branch is None:
         pytest.skip("detached HEAD: no branch to judge")
