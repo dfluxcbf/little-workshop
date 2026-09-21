@@ -9,7 +9,7 @@ pipeline (`lws policy catalog list`/`run`, `workshop_policy_catalog_*`)
 and carried exactly one entry (`version-file-single-source`, below) all
 the way to a real, activated `policies` row as a working proof — Gate 4's
 "full human approval, every time, no exception" is fundamentally
-incompatible with unattended bulk population, so the other 58 entries
+incompatible with unattended bulk population, so the other 60 entries
 below are still real future work, one topic at a time, through this
 same tool — never a bulk import. That live run also surfaced a real,
 now-fixed defect: the script-generation prompt didn't originally state
@@ -124,6 +124,8 @@ than narrowing them the way a few others were:
 | `abandoned-branch` | IF an unmerged short-lived branch has had no commits for longer than its project's staleness window, THEN it shall be reported as an abandoned-branch violation. | `branching_policy.md` |
 | `no-detached-head` | IF a repository has a detached `HEAD` outside a brief, tool-managed operation, THEN it shall be reported as a violation. | `branching_policy.md` |
 | `single-worktree` | IF a repository has more than one active `git worktree` outside a short-lived, tool-managed one, THEN it shall be reported as a violation. | `branching_policy.md` |
+| `commit-bumps-version` | WHEN a commit is made, the commit's `VERSION` shall have a higher version precedence than its parent commit's `VERSION`. | little-workshop `version_policy.md` — new (2026-09-21); `little-versions` bumps only at stage boundaries. Judges only the newest commit against its immediate parent, so a past mistake never fails it forever. |
+| `branch-commit-dev-suffix` | WHILE a commit is made on a working branch (not `master`/`dev`, `release/*`, `hotfix/*` or `support/*`), the commit's `VERSION` shall be the next patch version of the commit the branch was cut from with the suffix `-dev.N`, where N is 1 for the branch's first commit and one more than its parent's N for every later commit. | little-workshop `version_policy.md` — new (2026-09-21); the per-commit version on a working branch is what `little-versions` never defined. Same newest-commit-only rule. |
 
 ## D. Requirements &amp; quality
 

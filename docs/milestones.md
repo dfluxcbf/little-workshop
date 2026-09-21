@@ -35,7 +35,7 @@ discipline this project already applies to itself); the *sequence* and
 | M10 | Requirements & Quality | M1, M2, M4 | Done |
 | M11 | Build & Packages | M1, M2, M4 | Done |
 | M12 | Policy & Compliance | M1, M4, M6, M10 | Done |
-| M13 | Populate the policy catalog | M12 | In progress — tool built, 1/59 entries activated as a real proof; see `docs/requirements.md` M13 |
+| M13 | Populate the policy catalog | M12 | In progress — tool built, 1/61 entries activated as a real proof; see `docs/requirements.md` M13 |
 | M14 | Dashboard | M2–M13 (whatever exists by then) | Done — Overview/Projects/Jobs/Policy panels; see `docs/pillars/dashboard.md` |
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
 | M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | Done (2026-09-17) — every real gap in all five absorbed tools closed (`docs/requirements.md`'s M16 follow-up); the handful of items left un-ported (`.lrun/config.toml`, `little-requirements`' client-config model, `lock`/`unlock`) are documented, deliberate architectural non-gaps, not deferred work |

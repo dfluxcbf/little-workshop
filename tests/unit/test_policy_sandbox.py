@@ -125,3 +125,8 @@ def test_run_policy_check_mounts_every_given_path_read_only(monkeypatch):
 def test_parse_verdict_no_tests_ran_is_treated_as_fail():
     result = sandbox._parse_verdict("no tests found\n", 5)
     assert result.outcome == CheckOutcome.FAIL
+
+
+def test_sandbox_image_ships_git_for_history_based_policies():
+    assert "install -y --no-install-recommends git" in sandbox._DOCKERFILE
+    assert sandbox.IMAGE_TAG != "little-workshop-policy-sandbox:latest"

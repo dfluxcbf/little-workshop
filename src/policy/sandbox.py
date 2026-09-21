@@ -23,10 +23,15 @@ from pathlib import Path
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from policy.models import CheckOutcome
 
-IMAGE_TAG = "little-workshop-policy-sandbox:latest"
+IMAGE_TAG = "little-workshop-policy-sandbox:2"
 DEFAULT_CHECK_TIMEOUT_SECONDS = 1800.0
 
-_DOCKERFILE = "FROM python:3.12-slim\nRUN pip install --no-cache-dir pytest\n"
+# git: version policies compare a commit with its parent, which needs real history.
+_DOCKERFILE = (
+    "FROM python:3.12-slim\n"
+    "RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*\n"
+    "RUN pip install --no-cache-dir pytest\n"
+)
 
 _FAILED_RE = re.compile(r"(\d+) failed")
 _PASSED_RE = re.compile(r"(\d+) passed")
