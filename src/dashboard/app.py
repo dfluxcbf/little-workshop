@@ -339,6 +339,7 @@ def build_app(paths: Paths) -> FastAPI:
         return _render(
             request, "policies.html",
             policies=rows, waivers=waivers, error=error, message=message,
+            topics={r["id"]: r.get("topic") or r["id"] for r in rows},
             gate_point_values=GATE_POINT_VALUES, nav_active="policies",
         )
 

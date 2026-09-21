@@ -72,8 +72,14 @@ are the current state of every pillar.
   status — the same `GET /v1/jobs` the CLI's `lws job list` already
   uses.
 - **Policy management** (`/policies`, `/policies/{id}`) — the concrete,
-  fully-specified panel `docs/milestones.md` M14 called out: every
-  policy in its natural-language `ears_text` form with a checkbox for
+  fully-specified panel `docs/milestones.md` M14 called out. The list
+  (redesigned 2026-09-21) is one card per policy, no page heading: the
+  topic as the card's header with an enabled/disabled pill, the full
+  `ears_text` beneath it, and a row of chips — one per gate point (or
+  "no gate"), the scope, the target pillar, and who created it. The
+  whole card opens the policy; a disabled policy is dimmed; waivers, if
+  any, follow as compact cards headed by the policy's topic. Each
+  policy's detail page: `ears_text` with a checkbox for
   its `enabled` toggle, a per-policy gate-point selector (all ten
   categories, multi-select or none), a read-only view of the generated
   `test_script` (editing it is `lws policy activate`'s own job, Gate 4's

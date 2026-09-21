@@ -6,6 +6,7 @@ with a client response/failure, not the socket transport again."""
 
 from __future__ import annotations
 
+import re
 import threading
 from urllib.parse import unquote
 
@@ -308,18 +309,35 @@ def test_jobs_passes_through_status_filter(test_client, monkeypatch):
     assert "policy.configure" in response.text
 
 
-def test_policies_renders_ears_text_and_waivers(test_client, monkeypatch):
+def test_policies_renders_one_card_per_policy_with_chips_and_waivers(test_client, monkeypatch):
     monkeypatch.setattr(client, "policy_list", lambda paths: [
-        {"id": "pol1", "ears_text": "every project shall have a name", "enabled": True,
-         "gate_points": ["server_launch"], "scope_level": "all_projects", "scope_target": None}
+        {"id": "pol1", "topic": "project-has-name", "ears_text": "every project shall have a name", "enabled": True,
+         "gate_points": ["server_launch", "release"], "scope_level": "all_projects", "scope_target": None,
+         "target_pillar": "registry", "created_by": "framework"},
+        {"id": "pol2", "topic": "keep-docs", "ears_text": "docs shall exist", "enabled": False,
+         "gate_points": [], "scope_level": "project", "scope_target": "little-widget",
+         "target_pillar": "registry", "created_by": "user"},
     ])
     monkeypatch.setattr(client, "policy_list_waivers", lambda paths: [
         {"policy_id": "pol1", "project_id": "proj-a", "reason": "cannot comply yet"}
     ])
     response = test_client.get("/policies")
-    assert response.status_code == 200
-    assert "every project shall have a name" in response.text
-    assert "cannot comply yet" in response.text
+    text = response.text
+    assert response.status_code == 200 and "<h1" not in text
+    assert len(re.findall(r'class="polcard[ "]', text)) == 3  # two policies + one waiver
+    assert 'href="/policies/pol1"' in text and 'href="/policies/pol2"' in text
+    assert "project-has-name" in text and "every project shall have a name" in text
+    assert '<span class="chip gate">server_launch</span>' in text and '<span class="chip gate">release</span>' in text
+    assert ">no gate<" in text and ">all projects<" in text and ">little-widget<" in text
+    assert "polcard is-off" in text and "disabled" in text
+    assert "cannot comply yet" in text and "Waivers" in text
+
+
+def test_policies_hides_the_waivers_section_when_there_are_none(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths: [])
+    monkeypatch.setattr(client, "policy_list_waivers", lambda paths: [])
+    text = test_client.get("/policies").text
+    assert "No policies authored yet." in text and "Waivers" not in text
 
 
 def test_policy_detail_success_renders_script_and_waivers(test_client, monkeypatch):
