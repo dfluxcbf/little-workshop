@@ -388,3 +388,19 @@ def test_pillars_endpoint_reports_deployed_sha_and_repo_head(paths, conn, tmp_pa
     assert body["pillars"]["policy"]["commit_sha"] == "abc123"
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
     assert body["repo_head"] == head
+
+
+def test_pillars_endpoint_lists_recent_commits_with_their_versions(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    (repo / "VERSION").write_text("1.1.0\n", encoding="utf-8")
+    _git(["commit", "-am", "bump"], repo)
+    (repo / "run.sh").write_text("#!/bin/sh\necho\n", encoding="utf-8")
+    _git(["rm", "--cached", "VERSION"], repo)
+    _git(["commit", "-am", "no version here"], repo)
+    monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(repo))
+    client, _ = make_client(paths, conn, repo)
+
+    commits = client.get("/v1/pillars").json()["commits"]
+    assert [c["subject"] for c in commits] == ["no version here", "bump", "first"]
+    assert [c["version"] for c in commits] == [None, "1.1.0", "1.0.0"]
+    assert all(len(c["sha"]) == 40 for c in commits)

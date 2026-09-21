@@ -285,10 +285,12 @@ def build_app(paths: Paths) -> FastAPI:
         except client.PillarUnavailable as exc:
             entries, error = {}, str(exc)
         deployed = _try(client.deployment_pillars, paths, default=None)
+        commits = (deployed or {}).get("commits", [])
         return _render(
             request, "pillars.html", pillars=entries, error=error, nav_active="pillars",
             deployed=(deployed or {}).get("pillars", {}), repo_head=(deployed or {}).get("repo_head"),
-            deployment_known=deployed is not None,
+            deployment_known=deployed is not None, commits=commits,
+            versions={c["sha"]: c["version"] for c in commits if c.get("version")},
         )
 
     @app.post("/pillars/redeploy")

@@ -444,18 +444,31 @@ _TWO_PILLARS = {
 }
 
 
-def test_pillars_page_shows_deployed_sha_and_checkboxes(test_client, monkeypatch):
+def test_pillars_page_shows_cards_with_sha_version_and_a_commit_dropdown(test_client, monkeypatch):
     sha = "0123456789abcdef0123456789abcdef01234567"
+    newer = "f" * 40
     monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": _TWO_PILLARS})
     monkeypatch.setattr(client, "deployment_pillars", lambda paths: {
-        "pillars": {"policy": {"commit_sha": sha, "updated_at": "2026-09-21"}}, "repo_head": "f" * 40,
+        "pillars": {"policy": {"commit_sha": sha, "updated_at": "2026-09-21"}}, "repo_head": newer,
+        "commits": [
+            {"sha": newer, "subject": "Add the picker", "version": "0.2.0"},
+            {"sha": sha, "subject": "Older work", "version": "0.1.0"},
+        ],
     })
     text = test_client.get("/pillars").text
-    assert sha[:12] in text and "behind HEAD" in text
+    assert "<h1" not in text
+    assert sha[:7] in text and "v0.1.0" in text and ">behind<" in text
     assert "initial install" in text
-    assert 'value="registry"' in text and 'value="policy"' in text
-    assert 'value="build"' not in text
-    assert "Redeploy selected" in text
+    assert 'value="registry"' in text and 'value="policy"' in text and 'value="build"' not in text
+    assert f'<option value="{newer}">' in text and "v0.2.0" in text and "(HEAD)" in text
+    assert f'<option value="{sha}">' in text
+    assert "Redeploy" in text and "<input type=\"text\"" not in text
+
+
+def test_pillars_page_falls_back_to_head_when_no_commit_list(test_client, monkeypatch):
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": _TWO_PILLARS})
+    monkeypatch.setattr(client, "deployment_pillars", lambda paths: {"pillars": {}, "repo_head": None})
+    assert '<option value="HEAD">' in test_client.get("/pillars").text
 
 
 def test_pillars_page_survives_deployment_being_down(test_client, monkeypatch):

@@ -542,3 +542,56 @@ nav.tabbar .tab.tab-back { color: var(--ink-faint); }
     margin-bottom: 2px;
   }
 }
+
+/* --- pillars: selectable cards ---------------------------------------------- */
+
+.pillar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 10px; }
+.pcard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+.pcard:hover { border-color: var(--cyan-deep); }
+.pcard .pick { position: absolute; opacity: 0; pointer-events: none; }
+.pcard:has(.pick:checked) { border-color: var(--cyan); background: var(--cyan-soft); box-shadow: 0 0 0 1px var(--cyan); }
+.pcard:has(.pick:focus-visible) { box-shadow: 0 0 0 3px var(--cyan-soft); }
+.pcard.is-disabled { opacity: 0.5; cursor: default; }
+.pcard.is-disabled:hover { border-color: var(--border); }
+.pcard-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pcard-name { font-family: var(--font-mono); font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+.pcard-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 13px; }
+.pcard-meta code { color: var(--cyan); }
+.pcard-meta .ver { color: var(--ink-soft); font-family: var(--font-mono); font-size: 12px; }
+.pcard-meta .dim { color: var(--ink-faint); }
+
+.redeploy-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 10px;
+  background: oklch(19% 0.02 260 / 94%);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.redeploy-bar select { flex: 1; min-width: 0; }
+.redeploy-actions { display: flex; gap: 8px; }
+
+@media (max-width: 680px) {
+  .pillar-grid { grid-template-columns: 1fr; gap: 8px; }
+  .redeploy-bar { flex-direction: column; align-items: stretch; bottom: calc(70px + env(safe-area-inset-bottom)); }
+  .redeploy-actions button { flex: 1; justify-content: center; padding: 11px 14px; }
+}

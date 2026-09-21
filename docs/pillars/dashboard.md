@@ -52,17 +52,22 @@ are the current state of every pillar.
   Agentic Development's runs across every project, a New task form
   (`agent.run_task`), and per-run detail with the change report and
   Finish/Skip for a run awaiting review.
-- **Pillars** (`/pillars`): the system's own components, separate from
-  project management — Core's live health, crash counts, interface
-  version, and the **commit SHA each pillar was deployed from** (from
-  Deployment's `GET /v1/pillars`; "initial install" if never redeployed,
-  "behind HEAD" if it differs from this checkout's HEAD). A checkbox per
-  enabled pillar plus select-all and a commit/branch field (default
-  `HEAD`) drive **Redeploy selected** (`POST /pillars/redeploy`): one
-  `deployment.redeploy_pillar` Job per selected pillar, submitted in
+- **Pillars** (`/pillars`, redesigned 2026-09-21): one tappable card per
+  pillar, no page heading — the pillar's name is the card's header, with
+  its health pill beside it and one compact line below (deployed commit
+  SHA and version, "behind" when that differs from this checkout's HEAD,
+  crash count, interface version; "initial install" if never redeployed
+  through Deployment). Tapping a card selects it (a visually hidden
+  checkbox inside a `<label>`, so it submits without JavaScript);
+  disabled pillars are dimmed and unselectable. A sticky bar holds a
+  **commit dropdown** — the checkout's 10 newest commits, each shown as
+  `sha · vVERSION · subject` (from Deployment's `GET /v1/pillars`, which
+  reads each commit's `VERSION`; falls back to `HEAD` if unavailable) —
+  plus Select all/Clear and **Redeploy N** (`POST /pillars/redeploy`):
+  one `deployment.redeploy_pillar` Job per selected pillar, submitted in
   sequence from a background thread with Orchestration/Deployment/Core
   last, since redeploying those interrupts the redeploy chain itself.
-  `/jobs` and `/policies` hang off it.
+  `/jobs` and `/policies` hang off the More tab.
 - **Jobs** (`/jobs`): the Orchestration queue, optionally filtered by
   status — the same `GET /v1/jobs` the CLI's `lws job list` already
   uses.

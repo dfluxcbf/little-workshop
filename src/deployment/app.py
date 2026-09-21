@@ -232,11 +232,13 @@ def build_app(
             rows = db.list_pillar_deployments(conn)
         try:
             head = gitutil.run(["git", "rev-parse", "HEAD"], workshop_repo_dir()).stdout.strip() or None
+            commits = gitutil.recent_commits(workshop_repo_dir(), 10)
         except Exception:
-            head = None
+            head, commits = None, []
         return {
             "pillars": {r["pillar"]: {"commit_sha": r["commit_sha"], "updated_at": r["updated_at"]} for r in rows},
             "repo_head": head,
+            "commits": commits,
         }
 
     @app.get("/v1/deployments/{project_id}")

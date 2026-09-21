@@ -45,6 +45,23 @@ def list_branches(project_dir: Path) -> list[str]:
     return sorted(names)
 
 
+def recent_commits(repo_dir: Path, limit: int = 10) -> list[dict]:
+    """The newest `limit` commits of the checked-out branch, each with the
+    contents of its `VERSION` file (None where the commit has none)."""
+    result = run(["git", "log", f"-n{limit}", "--format=%H%x1f%s"], repo_dir)
+    commits = []
+    for line in result.stdout.splitlines():
+        sha, _, subject = line.partition("\x1f")
+        if not sha:
+            continue
+        shown = subprocess.run(
+            ["git", "show", f"{sha}:VERSION"], cwd=str(repo_dir), capture_output=True, text=True,
+        )
+        version = shown.stdout.strip() if shown.returncode == 0 and shown.stdout.strip() else None
+        commits.append({"sha": sha, "subject": subject, "version": version})
+    return commits
+
+
 def branch_location(project_dir: Path, branch: str) -> str | None:
     """Assumes `git fetch origin` has already run. When the branch is only
     on the remote and no tracking ref exists, one is fetched so the
