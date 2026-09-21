@@ -22,7 +22,7 @@ last: "its value scales with how much there already is to show."
 ## Look and installability
 
 The UI is `little-runner`'s own "mission control" design, copied rather
-than re-derived (`static/app.css` verbatim, its top bar and bottom tab
+than re-derived (`static/app.css`, minus its violet — this identity is cyan-only, `presentations/06-visual-identity.md`; its top bar and bottom tab
 bar, its icons and PWA manifest): dark, card-based, phone-first. It
 **installs as an Android app** (a web app manifest with maskable icons,
 a root-scoped service worker at `/sw.js`, HTTPS via the tailnet), and

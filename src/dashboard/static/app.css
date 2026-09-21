@@ -1,5 +1,5 @@
-/* little-runner: dark-only "terminal mission control" design system.
-   See docs/ui_design.md for the concept and token table. */
+/* little-workshop's dashboard: little-runner's dark "mission control" system
+   with violet removed -- cyan is the only accent (presentations/06-visual-identity.md). */
 
 :root {
   color-scheme: dark;
@@ -14,8 +14,7 @@
   --ink-faint: oklch(54% 0.02 260);
   --cyan: oklch(78% 0.15 200);
   --cyan-soft: oklch(30% 0.06 200);
-  --violet: oklch(66% 0.22 320);
-  --violet-soft: oklch(32% 0.08 320);
+  --cyan-deep: oklch(66% 0.13 205);
   --ok: oklch(78% 0.19 152);
   --ok-soft: oklch(30% 0.07 152);
   --warn: oklch(80% 0.16 80);
@@ -37,7 +36,7 @@ body {
   min-height: 100vh;
   background:
     radial-gradient(1100px 520px at 12% -8%, oklch(30% 0.07 200 / 35%), transparent 60%),
-    radial-gradient(900px 480px at 100% 0%, oklch(28% 0.09 320 / 25%), transparent 55%),
+    radial-gradient(900px 480px at 100% 0%, oklch(28% 0.05 215 / 22%), transparent 55%),
     var(--void);
   background-attachment: fixed;
   color: var(--ink);
@@ -104,7 +103,7 @@ nav.topnav a.navlink {
 }
 
 nav.topnav a.navlink:hover { border-color: var(--cyan); color: var(--ink); }
-nav.topnav a.navlink.primary { border-color: transparent; background: linear-gradient(135deg, var(--cyan), var(--violet)); color: oklch(14% 0.02 260); }
+nav.topnav a.navlink.primary { border-color: transparent; background: linear-gradient(135deg, var(--cyan), var(--cyan-deep)); color: oklch(14% 0.02 260); }
 nav.topnav a.navlink.primary:hover { filter: brightness(1.08); }
 nav.topnav a.navlink svg { width: 15px; height: 15px; }
 
@@ -123,7 +122,7 @@ h1 {
   gap: 10px;
 }
 
-h1::before { content: ""; width: 4px; height: 18px; border-radius: 2px; background: linear-gradient(180deg, var(--cyan), var(--violet)); display: inline-block; }
+h1::before { content: ""; width: 4px; height: 18px; border-radius: 2px; background: linear-gradient(180deg, var(--cyan), var(--cyan-deep)); display: inline-block; }
 
 h2 {
   font-family: var(--font-mono);
@@ -243,7 +242,7 @@ button:active, .btn:active { transform: scale(0.97); }
 
 button.primary, .btn.primary {
   border-color: transparent;
-  background: linear-gradient(135deg, var(--cyan), var(--violet));
+  background: linear-gradient(135deg, var(--cyan), var(--cyan-deep));
   color: oklch(14% 0.02 260);
   font-weight: 700;
 }

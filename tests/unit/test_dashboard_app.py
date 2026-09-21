@@ -401,3 +401,17 @@ def test_waiver_revoke_posts_waiver_id(test_client, monkeypatch):
     assert response.status_code == 303
     assert captured["type"] == "policy.waiver_revoke"
     assert captured["params"] == {"waiver_id": "waiver-1"}
+
+
+def test_stylesheet_carries_no_violet(test_client):
+    """presentations/06-visual-identity.md: cyan is the only accent; Mission
+    Control's violet (oklch hue ~320) is deliberately not part of this identity."""
+    import re
+
+    css = test_client.get("/static/app.css").text
+    assert "--violet" not in css
+    assert not re.search(r"oklch\([^)]*\s3[0-4]\d(\s|/|\))", css), "a violet-hued color crept back in"
+
+
+def test_service_worker_cache_name_is_bumped_with_the_icons(test_client):
+    assert "workshop-shell-v3" in test_client.get("/sw.js").text
