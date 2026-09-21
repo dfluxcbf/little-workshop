@@ -254,3 +254,23 @@ def test_dispatch_self_rollback_shells_out_to_worker(paths, tmp_path):
     argv = dispatch_calls[0]
     assert "rollback-pillar-worker" in argv
     assert "--deploy-id" in argv and "deploy-1" in argv
+
+
+def test_launched_pillar_inherits_the_workshop_repo_override(paths, conn, tmp_path, monkeypatch):
+    repo = make_workshop_repo(tmp_path)
+    monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(repo))
+    runner = FakeRunner()
+    make_flow(paths, runner).redeploy_pillar_direct(conn, "orchestration", repo, "main")
+
+    launch = next(c for c in runner.calls if c and c[0] == "systemd-run")
+    assert f"--setenv=LITTLE_WORKSHOP_REPO_DIR={repo}" in launch
+
+
+def test_launched_pillar_gets_no_repo_override_when_none_is_set(paths, conn, tmp_path, monkeypatch):
+    repo = make_workshop_repo(tmp_path)
+    monkeypatch.delenv("LITTLE_WORKSHOP_REPO_DIR", raising=False)
+    runner = FakeRunner()
+    make_flow(paths, runner).redeploy_pillar_direct(conn, "orchestration", repo, "main")
+
+    launch = next(c for c in runner.calls if c and c[0] == "systemd-run")
+    assert not any("LITTLE_WORKSHOP_REPO_DIR" in a for a in launch)

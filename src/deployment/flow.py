@@ -7,6 +7,7 @@ itself) is explicitly not in scope here — docs/milestones.md M5.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 import time
@@ -355,10 +356,15 @@ class DeploymentFlow:
         }
 
     def _launch_pillar(self, pillar: str, install_dir: Path) -> str:
+        environment = {"PYTHONPATH": str(install_dir / "src"), **self._xdg_env_for_own_paths()}
+        # A pipx-installed pillar can't locate the source checkout on its own; carry the override forward.
+        repo_override = os.environ.get("LITTLE_WORKSHOP_REPO_DIR")
+        if repo_override:
+            environment["LITTLE_WORKSHOP_REPO_DIR"] = repo_override
         result = systemd.start(
             pillar, ["python3", "-m", pillar],
             working_directory=str(install_dir),
-            environment={"PYTHONPATH": str(install_dir / "src"), **self._xdg_env_for_own_paths()},
+            environment=environment,
             runner=self.runner,
         )
         if not result.ok:
