@@ -56,6 +56,13 @@ class ServerManifest:
     tailscale: TailscaleManifest | None = None
     screenshot: ScreenshotManifest | None = None
     env: dict[str, str] = field(default_factory=dict)
+    # A server that something else owns (e.g. little-workshop's own dashboard bridge, a
+    # persistent systemd unit): Deployment only *reports* its status — it never builds,
+    # launches, stops or re-exposes it, since stopping it could cut off the very
+    # connection the user is managing it through. `unit` names the systemd unit whose
+    # state is reported as its own.
+    external: bool = False
+    unit: str | None = None
 
     @property
     def unit_name(self) -> str:
@@ -85,6 +92,15 @@ def parse_manifest(text: str) -> ServerManifest:
     confirm_timeout = server.get("confirm_timeout_seconds")
     if confirm_timeout is not None and (not isinstance(confirm_timeout, int) or confirm_timeout <= 0):
         raise ManifestError("[server].confirm_timeout_seconds must be a positive integer")
+
+    external = server.get("external", False)
+    if not isinstance(external, bool):
+        raise ManifestError("[server].external must be true or false")
+    unit = server.get("unit")
+    if unit is not None and (not isinstance(unit, str) or not unit.strip()):
+        raise ManifestError("[server].unit must be a non-empty systemd unit name")
+    if unit is not None and not external:
+        raise ManifestError("[server].unit only applies to an external server (set external = true)")
 
     tailscale = None
     if "tailscale" in server:
@@ -124,6 +140,8 @@ def parse_manifest(text: str) -> ServerManifest:
         tailscale=tailscale,
         screenshot=screenshot,
         env={str(k): str(v) for k, v in server.get("env", {}).items()},
+        external=external,
+        unit=unit.strip() if isinstance(unit, str) else None,
     )
 
 
@@ -144,6 +162,10 @@ def render_manifest(manifest: ServerManifest) -> str:
     ]
     if manifest.confirm_timeout_seconds is not None:
         lines.append(f"confirm_timeout_seconds = {manifest.confirm_timeout_seconds}")
+    if manifest.external:
+        lines.append("external = true")
+        if manifest.unit:
+            lines.append(f"unit = {_toml_str(manifest.unit)}")
     if manifest.env:
         lines.append("")
         lines.append("[server.env]")

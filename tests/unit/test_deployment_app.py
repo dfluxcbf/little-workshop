@@ -433,3 +433,56 @@ def test_policy_script_locate_is_not_found_without_a_github_remote(paths, conn, 
     monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(repo))
     client, _ = make_client(paths, conn, repo)
     assert client.post("/v1/policy-scripts/locate", json={"script": "x\n"}).json() == {"found": False}
+
+
+# -- externally managed servers --------------------------------------------------------------
+
+EXTERNAL_TOML = """
+[server]
+name = "little-workshop"
+command = "python3 bridge.py"
+port = 8790
+match = "dashboard_bridge.py"
+external = true
+unit = "little-workshop-dashboard-bridge.service"
+"""
+
+
+def _external_client(paths, conn, tmp_path):
+    ProjectFilesClient(paths, caller_pillar="deployment").write("little-workshop", "manifest.deployment.toml", EXTERNAL_TOML)
+    runner = FakeRunner()
+    runner.active_bridge = True
+
+    def is_active_aware(argv, timeout=None, cwd=None):
+        if argv[:3] == ["systemctl", "--user", "is-active"] and argv[3] == "little-workshop-dashboard-bridge.service":
+            from common.shell import CommandResult
+            return CommandResult(0, "active\n", "")
+        return FakeRunner.run(runner, argv, timeout=timeout, cwd=cwd)
+
+    runner.run = is_active_aware
+    flow = DeploymentFlow(paths=paths, runner=runner, sleep=lambda s: None, probe=lambda port: port == 8790)
+    return TestClient(build_app(paths, conn, resolve=lambda p, project_id: tmp_path, flow=flow)), runner
+
+
+def test_status_of_an_external_server_says_so_and_names_its_unit(paths, conn, tmp_path):
+    client, _ = _external_client(paths, conn, tmp_path)
+    status = client.get("/v1/status/little-workshop").json()
+    assert status["external"] is True and status["managed_unit"] == "little-workshop-dashboard-bridge.service"
+    assert status["unit"] == "active" and status["listening"] is True
+
+
+def test_status_of_an_ordinary_server_is_not_external(paths, conn, tmp_path):
+    repo = make_repo(tmp_path)
+    client, _ = make_client(paths, conn, repo)
+    status = client.get("/v1/status/little-meals").json()
+    assert status["external"] is False and status["managed_unit"] is None
+
+
+def test_deploy_and_stop_jobs_for_an_external_server_fail_cleanly_and_touch_nothing(paths, conn, tmp_path):
+    client, runner = _external_client(paths, conn, tmp_path)
+    before = len(runner.calls)
+    deploy = client.post("/v1/jobs/deployment.deploy", json={"job_id": "j1", "project_id": "little-workshop", "params": {"branch": "dev"}}).json()
+    stop = client.post("/v1/jobs/deployment.stop", json={"job_id": "j2", "project_id": "little-workshop", "params": {}}).json()
+    assert deploy["outcome"] == "failed" and "managed outside Deployment" in deploy["error"] and "will not deploy" in deploy["error"]
+    assert stop["outcome"] == "failed" and "will not stop" in stop["error"]
+    assert not any(c and (c[0] in ("pkill", "systemd-run", "bazel") or c[:3] == ["systemctl", "--user", "stop"]) for c in runner.calls[before:])

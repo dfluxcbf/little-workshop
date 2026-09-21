@@ -61,6 +61,17 @@ healthy, currently-running process down.
   was last redeployed from (`pillar_deployments`), this checkout's HEAD,
   and its 10 newest commits with each one's `VERSION`; the Dashboard's
   Pillars page renders them.
+- **Externally managed servers** (`external = true` in `[server]`, with an
+  optional `unit = "<systemd unit>"`; 2026-09-21) — for a server that
+  something else owns, such as little-workshop's own dashboard bridge (a
+  persistent systemd unit publishing the app on the tailnet). Deployment
+  reports its status — port listening, matching processes, the named unit's
+  state, tailnet mapping — but **refuses to deploy or stop it** (`deployment.
+  deploy`/`deployment.stop` fail before touching anything), because stopping
+  it would also switch off its tailnet route and cut off the very connection
+  it is managed through. `GET /v1/status/{id}` returns `external` and
+  `managed_unit`; the Dashboard shows such a server as up/down but offers no
+  Launch or Stop, and does not print an unknown version.
 - **Worktree provisioning as a shared capability** (`POST /v1/worktrees`,
   `DELETE /v1/worktrees/{id}`) — built in M4 explicitly for other pillars
   to call rather than each provisioning their own: Requirements &

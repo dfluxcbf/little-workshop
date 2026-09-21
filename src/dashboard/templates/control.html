@@ -23,12 +23,16 @@
       <p class="muted">No server manifest yet. Upload one with <code>lws deployment set-manifest --project-id {{ p.name }} --file manifest.toml</code>.</p>
       {% else %}
       <dl class="kv">
-        <dt>Running</dt><dd><span class="pill {{ 'ok' if p.server.unit == 'active' else 'idle' }}">{{ 'running' if p.server.unit == 'active' else 'stopped' }}</span></dd>
+        <dt>Running</dt><dd><span class="pill {{ 'ok' if p.server.unit == 'active' or p.server.listening else 'idle' }}">{{ 'running' if p.server.unit == 'active' or p.server.listening else 'stopped' }}</span></dd>
         <dt>Port</dt><dd><span class="pill {{ 'ok' if p.server.listening else 'idle' }}">{{ 'listening' if p.server.listening else 'closed' }}</span></dd>
-        <dt>Version</dt><dd><code>{{ p.server.version }}</code></dd>
+        {% if p.server.version and p.server.version != '?' %}<dt>Version</dt><dd><code>{{ p.server.version }}</code></dd>{% endif %}
         <dt>Tailscale</dt><dd>{{ p.server.tailscale }}</dd>
-        <dt>Branch</dt><dd>{{ p.server.branch }}</dd>
+        {% if p.server.branch and p.server.branch != '?' %}<dt>Branch</dt><dd>{{ p.server.branch }}</dd>{% endif %}
+        {% if p.server.external and p.server.managed_unit %}<dt>Unit</dt><dd><code>{{ p.server.managed_unit }}</code></dd>{% endif %}
       </dl>
+      {% if p.server.external %}
+      <p class="muted external-note">Managed outside Deployment — this page shows its status only. Launching or stopping it from here could cut off your connection to the app.</p>
+      {% else %}
       <form class="row" method="post" action="/projects/{{ p.name }}/deploy">
         <select name="branch" style="width:220px">
           {% for b in p.branches or ['dev'] %}<option value="{{ b }}" {{ 'selected' if b == (p.server.branch if p.server.branch in p.branches else 'dev') }}>{{ b }}</option>{% endfor %}
@@ -38,6 +42,7 @@
         <button type="submit" formaction="/projects/{{ p.name }}/stop" formnovalidate class="danger">Stop</button>
         {% endif %}
       </form>
+      {% endif %}
       {% endif %}
     </div>
 

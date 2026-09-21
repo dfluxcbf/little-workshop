@@ -89,6 +89,7 @@ class ServerStatus:
     tailscale: str
     branch: str
     version: str
+    external: bool = False
 
     @property
     def running(self) -> bool:
@@ -131,7 +132,20 @@ class DeploymentFlow:
 
     # -- down: defence-in-depth stop -------------------------------------
 
+    @staticmethod
+    def _refuse_external(manifest: ServerManifest, action: str) -> None:
+        """An external server belongs to something else; touching it could cut off the
+        very connection it is being managed through (a stop would also switch off its
+        tailnet route). Refused before anything is stopped, built or exposed."""
+        if manifest.external:
+            owner = f" (systemd unit {manifest.unit})" if manifest.unit else ""
+            raise DeploymentError(
+                f"{manifest.name} is managed outside Deployment{owner}; Deployment only reports its status, "
+                f"so it will not {action} it"
+            )
+
     def down(self, project_id: str, manifest: ServerManifest, *, tailscale_off: bool = True) -> DownReport:
+        self._refuse_external(manifest, "stop")
         report = DownReport(manifest.name)
 
         if systemd.is_active(_unit_key(project_id), runner=self.runner):
@@ -232,6 +246,7 @@ class DeploymentFlow:
         return version, commit, how
 
     def up(self, conn: sqlite3.Connection, project_id: str, manifest: ServerManifest, project_dir: Path, branch: str) -> UpResult:
+        self._refuse_external(manifest, "deploy")
         gitutil.run(["git", "fetch", "origin", "--prune"], project_dir)
         location = gitutil.branch_location(project_dir, branch)
         if location is None:
@@ -305,7 +320,11 @@ class DeploymentFlow:
     # -- status -----------------------------------------------------------
 
     def status(self, conn: sqlite3.Connection, project_id: str, manifest: ServerManifest) -> ServerStatus:
-        unit = "active" if systemd.is_active(_unit_key(project_id), runner=self.runner) else "inactive"
+        if manifest.external and manifest.unit:
+            checked = self.runner.run(["systemctl", "--user", "is-active", manifest.unit])
+            unit = "active" if checked.stdout.strip() == "active" else "inactive"
+        else:
+            unit = "active" if systemd.is_active(_unit_key(project_id), runner=self.runner) else "inactive"
         cached = db.get_server_state(conn, project_id)
         branch = cached["branch"] if cached else "?"
         version = cached["version"] if cached else "?"
@@ -316,7 +335,7 @@ class DeploymentFlow:
             ts = "n/a"
         return ServerStatus(
             name=manifest.name, unit=unit, pids=self._pids(manifest), listening=self.probe(manifest.port),
-            tailscale=ts, branch=branch, version=version,
+            tailscale=ts, branch=branch, version=version, external=manifest.external,
         )
 
     # -- self-redeploy: little-workshop's own pillars (M5) ----------------

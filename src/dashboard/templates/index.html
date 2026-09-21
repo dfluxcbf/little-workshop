@@ -25,7 +25,7 @@
     <div class="facts">
       {% if r.server is not none %}
       <span class="fact"><span class="fact-k">Server</span>
-        {% if r.server.listening %}<span class="pill ok">up</span>{% if r.server.version %}<span class="fact-v">v{{ r.server.version }}</span>{% endif %}
+        {% if r.server.listening %}<span class="pill ok">up</span>{% if r.server.version and r.server.version != '?' %}<span class="fact-v">v{{ r.server.version }}</span>{% endif %}
         {% else %}<span class="pill idle">down</span>{% endif %}
       </span>
       {% endif %}

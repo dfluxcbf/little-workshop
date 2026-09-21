@@ -273,3 +273,77 @@ def test_status_reports_cached_state(paths, conn, tmp_path):
     assert status.branch == "main"
     assert status.version == "1.0.0"
     assert status.unit == "active"
+
+
+# -- externally managed servers ------------------------------------------------------------
+
+
+def external_manifest(**overrides) -> ServerManifest:
+    fields = dict(
+        name="little-workshop", command="python3 bridge.py", port=8790, match="dashboard_bridge.py",
+        external=True, unit="little-workshop-dashboard-bridge.service",
+        tailscale=TailscaleManifest(https_port=443, service="little-workshop"),
+    )
+    fields.update(overrides)
+    return ServerManifest(**fields)
+
+
+def _touching_calls(runner):
+    """Anything that would build, launch, stop, kill or (un)expose — none may happen to an external server."""
+    forbidden = ("systemd-run", "pkill", "bazel")
+    return [
+        c for c in runner.calls
+        if (c and c[0] in forbidden)
+        or c[:3] == ["systemctl", "--user", "stop"] or c[:3] == ["systemctl", "--user", "reset-failed"]
+        or (c[:2] == ["tailscale", "serve"] and c[2:3] != ["status"])
+    ]
+
+
+def test_stopping_an_external_server_is_refused_before_anything_is_touched(paths, conn):
+    runner = FakeRunner()
+    runner.pids = [4711]
+    flow = make_flow(paths, runner)
+    with pytest.raises(DeploymentError, match="managed outside Deployment.*dashboard-bridge.*will not stop"):
+        flow.down("little-workshop", external_manifest())
+    assert runner.calls == [] and runner.pids == [4711]
+
+
+def test_deploying_an_external_server_is_refused_before_git_or_the_build_run(paths, conn, tmp_path):
+    runner = FakeRunner()
+    flow = make_flow(paths, runner)
+    with pytest.raises(DeploymentError, match="will not deploy"):
+        flow.up(conn, "little-workshop", external_manifest(), tmp_path / "no-such-checkout", "dev")
+    assert runner.calls == []
+    assert db.list_deployments(conn, "little-workshop") == []
+
+
+def test_status_of_an_external_server_reports_its_own_unit_and_flags_it_external(paths, conn):
+    runner = FakeRunner()
+    runner.pids = [4711]
+    runner.active["little-workshop-dashboard-bridge.service"] = True
+    flow = make_flow(paths, runner)
+    flow.probe = lambda port: port == 8790
+    status = flow.status(conn, "little-workshop", external_manifest())
+    assert status.external is True and status.unit == "active" and status.listening is True and status.pids == [4711]
+    assert ["systemctl", "--user", "is-active", "little-workshop-dashboard-bridge.service"] in runner.calls
+    assert _touching_calls(runner) == []
+
+
+def test_status_reports_an_inactive_external_unit(paths, conn):
+    flow = make_flow(paths, FakeRunner())
+    status = flow.status(conn, "little-workshop", external_manifest())
+    assert status.unit == "inactive" and status.external is True
+
+
+def test_status_of_an_ordinary_server_is_unchanged_and_not_external(paths, conn):
+    runner = FakeRunner()
+    flow = make_flow(paths, runner)
+    status = flow.status(conn, "little-meals", manifest())
+    assert status.external is False
+    assert ["systemctl", "--user", "is-active", "little-workshop-deploy-little-meals.service"] in runner.calls
+
+
+def test_an_external_manifest_without_a_unit_falls_back_to_the_deploy_unit_name(paths, conn):
+    runner = FakeRunner()
+    make_flow(paths, runner).status(conn, "little-workshop", external_manifest(unit=None))
+    assert ["systemctl", "--user", "is-active", "little-workshop-deploy-little-workshop.service"] in runner.calls

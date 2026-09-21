@@ -55,6 +55,9 @@ are the current state of every pillar.
   project's recent tasks. Deploys are submitted from a background
   thread, since a cold `bazel run //:install` outlasts a browser
   request; progress is on the Jobs page.
+  For an **externally managed** server (see `deployment_servers.md`) the
+  Server section shows its status and unit but no Launch/Stop controls, only a
+  note that it is managed outside Deployment.
 - **Tasks** (`/tasks`, `/tasks/new`, `/tasks/{project}/{run}`):
   Agentic Development's runs across every project, a New task form
   (`agent.run_task`), and per-run detail with the change report and

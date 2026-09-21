@@ -225,6 +225,7 @@ def build_app(
         return {
             "name": result.name, "unit": result.unit, "pids": result.pids, "listening": result.listening,
             "tailscale": result.tailscale, "branch": result.branch, "version": result.version,
+            "external": result.external, "managed_unit": manifest.unit,
         }
 
     @app.get("/v1/pillars")

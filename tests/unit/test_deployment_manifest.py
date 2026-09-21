@@ -104,3 +104,55 @@ wait_ms = 3000
 
     reparsed = parse_manifest(render_manifest(manifest))
     assert reparsed == manifest
+
+
+# -- externally managed servers ------------------------------------------------------------
+
+EXTERNAL = """
+[server]
+name = "little-workshop"
+command = "python3 bridge.py"
+port = 8790
+match = "dashboard_bridge.py"
+external = true
+unit = "little-workshop-dashboard-bridge.service"
+
+[server.tailscale]
+https_port = 443
+service = "little-workshop"
+"""
+
+
+def test_parse_external_manifest():
+    from deployment.manifest import parse_manifest
+
+    m = parse_manifest(EXTERNAL)
+    assert m.external is True and m.unit == "little-workshop-dashboard-bridge.service" and m.port == 8790
+
+
+def test_servers_are_not_external_by_default():
+    from deployment.manifest import parse_manifest
+
+    m = parse_manifest('[server]\nname = "x"\ncommand = "run"\nport = 1\n')
+    assert m.external is False and m.unit is None
+
+
+@pytest.mark.parametrize("extra,message", [
+    ('external = "yes"', "external must be true or false"),
+    ('external = true\nunit = ""', "non-empty systemd unit name"),
+    ('external = true\nunit = 7', "non-empty systemd unit name"),
+    ('unit = "some.service"', "only applies to an external server"),
+])
+def test_invalid_external_fields_are_rejected(extra, message):
+    from deployment.manifest import ManifestError, parse_manifest
+
+    with pytest.raises(ManifestError, match=message):
+        parse_manifest(f'[server]\nname = "x"\ncommand = "run"\nport = 1\n{extra}\n')
+
+
+def test_external_manifest_round_trips_through_render():
+    from deployment.manifest import parse_manifest, render_manifest
+
+    again = parse_manifest(render_manifest(parse_manifest(EXTERNAL)))
+    assert again.external is True and again.unit == "little-workshop-dashboard-bridge.service" and again.port == 8790
+    assert "external" not in render_manifest(parse_manifest('[server]\nname = "x"\ncommand = "run"\nport = 1\n'))

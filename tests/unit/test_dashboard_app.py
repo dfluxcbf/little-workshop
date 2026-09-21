@@ -1108,3 +1108,40 @@ def test_dim_text_stays_legible_on_the_dark_background(test_client):
     assert faint >= 60 and soft >= 72
     labels = re.search(r"\.stat-label \{([^}]*)\}", css).group(1)
     assert "text-transform" not in labels and "font-size: 13px" in labels
+
+
+# -- externally managed servers ---------------------------------------------------------------
+
+
+def test_an_external_server_is_shown_as_up_on_the_dashboard(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch, server={"listening": True, "version": "?", "branch": "?", "unit": "active", "tailscale": "mapped", "external": True, "managed_unit": "x.service"})
+    text = test_client.get("/").text
+    assert 'fact-k">Server</span>' in text and 'pill ok">up' in text
+    assert "v?" not in text  # an unknown version is not printed
+
+
+def test_an_ordinary_running_server_still_shows_its_known_version(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch, server={"listening": True, "version": "0.3.1", "unit": "active"})
+    assert "v0.3.1" in test_client.get("/").text
+
+
+def test_control_offers_no_launch_or_stop_for_an_external_server(test_client, monkeypatch):
+    _stub_project_panels(
+        monkeypatch, session={"running": False, "trusted": True},
+        server={"listening": True, "version": "?", "branch": "?", "unit": "active", "tailscale": "mapped", "external": True, "managed_unit": "little-workshop-dashboard-bridge.service"},
+    )
+    text = test_client.get("/control").text
+    assert "Managed outside Deployment" in text and "little-workshop-dashboard-bridge.service" in text
+    assert "/projects/little-widget/deploy" not in text and "/projects/little-widget/stop" not in text
+    assert ">Launch<" not in text and ">Relaunch<" not in text and ">Stop<" not in text
+    assert "<dt>Version</dt>" not in text and "<dt>Branch</dt>" not in text
+
+
+def test_control_still_offers_launch_and_stop_for_an_ordinary_server(test_client, monkeypatch):
+    _stub_project_panels(
+        monkeypatch, session={"running": False, "trusted": True},
+        server={"listening": True, "version": "0.3.1", "unit": "active", "branch": "dev", "tailscale": "off"},
+    )
+    text = test_client.get("/control").text
+    assert "/projects/little-widget/deploy" in text and "/projects/little-widget/stop" in text
+    assert "Managed outside Deployment" not in text and "<dt>Version</dt>" in text and "<dt>Branch</dt>" in text
