@@ -33,7 +33,7 @@ include = ["common*", "core*", "orchestration*", "registry*", "requirements*", "
 
 [tool.setuptools.package-data]
 agent = ["templates/prompts/*.md"]
-dashboard = ["templates/*.html", "static/*.css"]
+dashboard = ["templates/*.html", "static/*.css", "static/*.js", "static/*.webmanifest", "static/icons/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

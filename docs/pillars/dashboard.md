@@ -19,13 +19,42 @@ M13 gave it something concrete and already-backed to surface first
 (policy management), per that milestone's own reasoning for landing
 last: "its value scales with how much there already is to show."
 
+## Look and installability
+
+The UI is `little-runner`'s own "mission control" design, copied rather
+than re-derived (`static/app.css` verbatim, its top bar and bottom tab
+bar, its icons and PWA manifest): dark, card-based, phone-first. It
+**installs as an Android app** (a web app manifest with maskable icons,
+a root-scoped service worker at `/sw.js`, HTTPS via the tailnet), and
+**fits phone widths** (`viewport-fit=cover`; tables collapse to labelled
+cards under 680px; a bottom tab bar replaces the top nav). The service
+worker caches only the static shell — pages are always live, since they
+are the current state of every pillar.
+
 ## Responsibilities
 
-- **Overview** (`/`): every pillar's live health, sourced from Core's
-  own `/v1/status` — the same status Core's crash-relaunch/reconcile
-  logic already tracks, not a separate probe.
-- **Projects** (`/projects`): every registered project and its status,
-  read from Registry & Portfolio.
+- **Dashboard** (`/`, redesigned 2026-09-21): a project-management
+  overview, no longer a pillar table — stat tiles (projects, servers
+  running, Claude sessions, active tasks, pillars healthy) and one row
+  per registered project: server up/down, Claude Code session, tasks
+  awaiting finish/running, requirements done/total, latest CI. Each
+  panel is its own live read; a pillar that is down renders as "—" for
+  that panel only, never a 500.
+- **Control** (`/control`): per-project accordion, copied in shape from
+  `little-runner`'s own Control page — deploy a branch (Launch/
+  Relaunch) or Stop the server, **Start/Stop a Claude Code session**
+  (`agent.session_start`/`session_stop`; refused with an explanation
+  when the project isn't yet trusted by Claude Code), and see the
+  project's recent tasks. Deploys are submitted from a background
+  thread, since a cold `bazel run //:install` outlasts a browser
+  request; progress is on the Jobs page.
+- **Tasks** (`/tasks`, `/tasks/new`, `/tasks/{project}/{run}`):
+  Agentic Development's runs across every project, a New task form
+  (`agent.run_task`), and per-run detail with the change report and
+  Finish/Skip for a run awaiting review.
+- **Pillars** (`/pillars`): the system's own components, separate from
+  project management — Core's live health, crash counts, interface
+  version. `/jobs` and `/policies` hang off it.
 - **Jobs** (`/jobs`): the Orchestration queue, optionally filtered by
   status — the same `GET /v1/jobs` the CLI's `lws job list` already
   uses.

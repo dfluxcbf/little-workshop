@@ -198,7 +198,7 @@ def test_dashboard_renders_an_unreachable_pillar_as_a_visible_error_not_a_crash(
         probe = probe_health(workshop_env.paths.socket_path("dashboard"), timeout=5.0, max_retries=10)
         assert probe.ok, probe.error
         with client_for_socket(workshop_env.paths.socket_path("dashboard"), timeout=10.0) as http:
-            for path in ("/", "/projects", "/jobs", "/policies"):
+            for path in ("/", "/control", "/tasks", "/tasks/new", "/pillars", "/jobs", "/policies"):
                 response = http.get(path)
                 assert response.status_code == 200
                 assert "UNREACHABLE" in response.text

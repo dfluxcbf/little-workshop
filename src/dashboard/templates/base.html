@@ -1,25 +1,75 @@
+{% macro icon(name, w=2) -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ w }}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+{%- if name == 'dashboard' %}<rect x="3" y="3" width="7" height="9" rx="1.5"></rect><rect x="14" y="3" width="7" height="5" rx="1.5"></rect><rect x="14" y="12" width="7" height="9" rx="1.5"></rect><rect x="3" y="16" width="7" height="5" rx="1.5"></rect>
+{%- elif name == 'control' %}<path d="M4 6h16M4 12h10M4 18h13"></path><circle cx="19" cy="6" r="1.6"></circle><circle cx="16" cy="12" r="1.6"></circle><circle cx="19" cy="18" r="1.6"></circle>
+{%- elif name == 'tasks' %}<path d="M9 6h11M9 12h11M9 18h11"></path><path d="M4 6h.01M4 12h.01M4 18h.01"></path>
+{%- elif name == 'pillars' %}<path d="M5 21V8l7-5 7 5v13"></path><path d="M9 21v-8h6v8"></path>
+{%- elif name == 'more' %}<circle cx="5" cy="12" r="1.6"></circle><circle cx="12" cy="12" r="1.6"></circle><circle cx="19" cy="12" r="1.6"></circle>
+{%- elif name == 'plus' %}<path d="M12 5v14M5 12h14"></path>
+{%- elif name == 'jobs' %}<circle cx="12" cy="12" r="8"></circle><path d="M12 8v4l3 2"></path>
+{%- elif name == 'policies' %}<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3Z"></path><path d="M9 12l2 2 4-4"></path>
+{%- elif name == 'back' %}<path d="M15 6l-6 6 6 6"></path>
+{%- endif %}</svg>
+{%- endmacro %}
+{% set primary = [('dashboard', '/', 'Dashboard', 'dashboard'), ('control', '/control', 'Control', 'control'), ('tasks', '/tasks', 'Tasks', 'tasks'), ('pillars', '/pillars', 'Pillars', 'pillars')] %}
+{% set more = [('new-task', '/tasks/new', 'New task', 'plus'), ('jobs', '/jobs', 'Jobs', 'jobs'), ('policies', '/policies', 'Policies', 'policies')] %}
+{% set more_keys = ['new-task', 'jobs', 'policies'] %}
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>{% block title %}little-workshop{% endblock %} — Dashboard</title>
-  <link rel="stylesheet" href="/static/identity-tokens.css">
-  <link rel="stylesheet" href="/static/dashboard.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{% block title %}little-workshop{% endblock %}</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#0b0e1a">
+<link rel="icon" href="/static/icons/favicon-64.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="little-workshop">
+<meta name="color-scheme" content="dark">
+<link rel="stylesheet" href="/static/app.css?v={{ static_v }}">
 </head>
 <body>
-  <header class="titleblock">
-    <div class="wordmark">little-workshop</div>
-    <nav>
-      <a href="/">overview</a>
-      <a href="/projects">projects</a>
-      <a href="/jobs">jobs</a>
-      <a href="/policies">policies</a>
-    </nav>
-    <div class="meta">{% block sheet %}{% endblock %}</div>
-  </header>
-  <main>
-    {% if error %}<p class="pill fail">UNREACHABLE — {{ error }}</p>{% endif %}
-    {% block content %}{% endblock %}
-  </main>
+<header class="topbar">
+  <a href="/" class="brand"><img src="/static/icons/icon-192.png" alt="">little-workshop</a>
+  <nav class="topnav" aria-label="Primary">
+    {% for key, href, label, ic in primary + more %}
+    <a href="{{ href }}" class="navlink {{ 'primary' if nav_active == key }}">{{ icon(ic) }}{{ label }}</a>
+    {% endfor %}
+  </nav>
+</header>
+<main class="content">
+{% if error %}<div class="card fail"><strong>UNREACHABLE</strong> &mdash; {{ error }}</div>{% endif %}
+{% if message %}<div class="flash">{{ message }}</div>{% endif %}
+{% block content %}{% endblock %}
+</main>
+<nav class="tabbar" aria-label="Primary">
+  <div class="tabbar-row {{ 'tabbar-row-active' if nav_active not in more_keys }}" data-view="main">
+    {% for key, href, label, ic in primary %}
+    <a href="{{ href }}" class="tab {{ 'tab-active' if nav_active == key }}">{{ icon(ic, 1.9) }}<span>{{ label }}</span></a>
+    {% endfor %}
+    <button type="button" class="tab tab-group {{ 'tab-active' if nav_active in more_keys }}" data-open="more">{{ icon('more', 1.9) }}<span>More</span></button>
+  </div>
+  <div class="tabbar-row {{ 'tabbar-row-active' if nav_active in more_keys }}" data-view="more">
+    {% for key, href, label, ic in more %}
+    <a href="{{ href }}" class="tab {{ 'tab-active' if nav_active == key }}">{{ icon(ic, 1.9) }}<span>{{ label }}</span></a>
+    {% endfor %}
+    <button type="button" class="tab tab-back" data-close aria-label="Back to main menu">{{ icon('back', 1.9) }}<span>Back</span></button>
+  </div>
+</nav>
+<script>
+(function () {
+  var bar = document.querySelector('nav.tabbar');
+  if (bar) {
+    var rows = bar.querySelectorAll('.tabbar-row');
+    var setView = function (v) { rows.forEach(function (r) { r.classList.toggle('tabbar-row-active', r.dataset.view === v); }); };
+    bar.querySelectorAll('.tab-group').forEach(function (b) { b.addEventListener('click', function () { setView(b.dataset.open); }); });
+    bar.querySelectorAll('.tab-back').forEach(function (b) { b.addEventListener('click', function () { setView('main'); }); });
+  }
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {}); }
+})();
+</script>
 </body>
 </html>

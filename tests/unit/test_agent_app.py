@@ -594,7 +594,7 @@ def test_session_status_running(paths, conn):
     client = TestClient(app)
     response = client.get("/v1/sessions/little-widget")
     body = response.json()
-    assert body == {"project_id": "little-widget", "running": True, "session_name": "lws-little-widget-session"}
+    assert body == {"project_id": "little-widget", "running": True, "trusted": None, "session_name": "lws-little-widget-session"}
 
 
 def test_session_status_idle(paths, conn):
@@ -602,4 +602,45 @@ def test_session_status_idle(paths, conn):
     client = TestClient(app)
     response = client.get("/v1/sessions/little-widget")
     body = response.json()
-    assert body == {"project_id": "little-widget", "running": False, "session_name": None}
+    assert body == {"project_id": "little-widget", "running": False, "trusted": None, "session_name": None}
+
+
+def test_session_status_reports_trust(paths, conn, monkeypatch):
+    monkeypatch.setattr(
+        "agent.app.resolve_project",
+        lambda paths_, project_id, **kw: {"name": project_id, "path": "/tmp/x", "repo_url": None, "status": "active"},
+    )
+    monkeypatch.setattr("agent.app.is_trusted", lambda project_dir: True)
+    app = build_app(paths, conn, session_flow=FakeSessionFlow(running=False))
+    assert TestClient(app).get("/v1/sessions/little-widget").json()["trusted"] is True
+
+
+def test_run_reads_do_not_wait_on_a_long_running_task(tmp_path, paths, monkeypatch):
+    """The whole point of the read-only connection: agent.run_task holds the
+    write lock for up to an hour, and run history must stay readable."""
+    import threading
+
+    file_conn = db.connect(tmp_path / "file.db")
+    db.create_run(file_conn, "r1", job_id=None, project_id="p", intent="task", review_mode="manual", title="t", source={})
+    monkeypatch.setattr(
+        "agent.app.resolve_project",
+        lambda paths_, project_id, **kw: {"name": project_id, "path": "/tmp/x", "repo_url": None, "status": "active"},
+    )
+
+    started, release = threading.Event(), threading.Event()
+
+    class BlockingFlow(AgentFlow):
+        def run_task(self, *args, **kwargs):
+            started.set()
+            release.wait(timeout=10)  # holds the pillar's write lock meanwhile
+            from agent.flow import RunTaskResult
+            return RunTaskResult("r2", db.FAILED, None, "failed", None, None, "stopped by test")
+
+    client = TestClient(build_app(paths, file_conn, flow=BlockingFlow(paths=paths), session_flow=FakeSessionFlow()))
+    client.post("/v1/jobs/agent.run_task", json={"job_id": "j1", "project_id": "p", "params": {"title": "x"}})
+    try:
+        assert started.wait(timeout=5)
+        response = client.get("/v1/runs/p")  # would hang for the whole run if it queued behind the lock
+        assert [r["id"] for r in response.json()] == ["r1"]
+    finally:
+        release.set()

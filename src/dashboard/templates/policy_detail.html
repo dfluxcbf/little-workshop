@@ -1,6 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Policy {{ policy.id if policy else "" }}{% endblock %}
-{% block sheet %}SHEET 12 — POLICY &amp; COMPLIANCE{% endblock %}
 {% block content %}
 {% if policy %}
 <h1>{{ policy.ears_text }}</h1>
