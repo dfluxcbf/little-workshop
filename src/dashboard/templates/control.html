@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Control — little-workshop{% endblock %}
+{% block content %}
+<h1>Control</h1>
+<p class="lede">Every registered project &mdash; its server, its Claude Code session, and the tasks it is working on.</p>
+{% if not panels %}<p class="muted">No project registered yet.</p>{% endif %}
+
+{% for p in panels %}
+<details class="project-panel" id="{{ p.name }}" {{ 'open' if p.name == focus }}>
+  <summary>
+    <span class="project-name">{{ p.name }}</span>
+    <span class="project-pills">
+      {% if p.server %}<span class="pill {{ 'ok' if p.server.listening else 'idle' }}">{{ 'server up' if p.server.listening else 'server down' }}</span>{% endif %}
+      <span class="pill {{ 'ok' if p.session and p.session.running else 'idle' }}">{{ 'session running' if p.session and p.session.running else 'session idle' }}</span>
+      {% if p.awaiting %}<span class="pill warn">{{ p.awaiting }} to finish</span>{% endif %}
+    </span>
+  </summary>
+  <div class="project-body">
+
+    <div class="subsection">
+      <h3>Server</h3>
+      {% if not p.server %}
+      <p class="muted">No server manifest yet. Upload one with <code>lws deployment set-manifest --project-id {{ p.name }} --file manifest.toml</code>.</p>
+      {% else %}
+      <dl class="kv">
+        <dt>Running</dt><dd><span class="pill {{ 'ok' if p.server.unit == 'active' else 'idle' }}">{{ 'running' if p.server.unit == 'active' else 'stopped' }}</span></dd>
+        <dt>Port</dt><dd><span class="pill {{ 'ok' if p.server.listening else 'idle' }}">{{ 'listening' if p.server.listening else 'closed' }}</span></dd>
+        <dt>Version</dt><dd><code>{{ p.server.version }}</code></dd>
+        <dt>Tailscale</dt><dd>{{ p.server.tailscale }}</dd>
+        <dt>Branch</dt><dd>{{ p.server.branch }}</dd>
+      </dl>
+      <form class="row" method="post" action="/projects/{{ p.name }}/deploy">
+        <select name="branch" style="width:220px">
+          {% for b in p.branches or ['dev'] %}<option value="{{ b }}" {{ 'selected' if b == (p.server.branch if p.server.branch in p.branches else 'dev') }}>{{ b }}</option>{% endfor %}
+        </select>
+        <button type="submit" class="primary" title="Build from a throwaway worktree of this branch, then stop, install and relaunch">{{ 'Relaunch' if p.server.listening else 'Launch' }}</button>
+        {% if p.server.listening or p.server.unit == 'active' %}
+        <button type="submit" formaction="/projects/{{ p.name }}/stop" formnovalidate class="danger">Stop</button>
+        {% endif %}
+      </form>
+      {% endif %}
+    </div>
+
+    <div class="subsection">
+      <h3>Claude Code session</h3>
+      {% if not p.session %}
+      <p class="muted">Agentic Development is unreachable.</p>
+      {% else %}
+      <dl class="kv">
+        <dt>Status</dt><dd>
+          {% if p.session.running %}<span class="pill ok">running</span>
+          {% elif p.session.trusted == false %}<span class="pill warn">untrusted</span>
+          {% else %}<span class="pill idle">idle</span>{% endif %}
+        </dd>
+        <dt>Name</dt><dd><code>{{ p.session_name }}</code></dd>
+      </dl>
+      {% if p.session.running %}
+      <p class="muted" style="font-size:12.5px">Open the Claude app and pick <code>{{ p.session_name }}</code> to attach.</p>
+      <form method="post" action="/projects/{{ p.name }}/session/stop"><button type="submit" class="danger">Stop session</button></form>
+      {% elif p.session.trusted == false %}
+      <p class="muted" style="font-size:12.5px">Not trusted by Claude Code yet &mdash; run <code>claude</code> in this project's directory once and accept the trust prompt, then start a session here.</p>
+      {% else %}
+      <form method="post" action="/projects/{{ p.name }}/session/start"><button type="submit" class="primary">Start session</button></form>
+      {% endif %}
+      {% endif %}
+    </div>
+
+    <div class="subsection">
+      <h3>Work</h3>
+      {% if p.runs %}
+      <ul class="plain-list">
+        {% for r in p.runs[:5] %}
+        <li>
+          <a href="/tasks/{{ p.name }}/{{ r.id }}">{{ r.title }}</a>
+          <span class="pill {{ 'warn' if r.status == 'awaiting_finish' else ('ok' if r.status in ('running', 'finished') else ('fail' if r.status == 'failed' else 'idle')) }}">{{ r.status.replace('_', ' ') }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="muted">No task has run on this project yet.</p>{% endif %}
+      <div class="row"><a href="/tasks/new?project={{ p.name }}"><button type="button" class="primary">New task</button></a></div>
+    </div>
+
+  </div>
+</details>
+{% endfor %}
+{% endblock %}

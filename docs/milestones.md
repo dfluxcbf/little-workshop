@@ -524,6 +524,14 @@ subcommands already look like — the goal is that `lws` can do everything
 the old tool could, not that it mimics the old tool's own command
 spelling.
 
+## Dashboard redesign (2026-09-21)
+
+Not a numbered milestone: the M14 dashboard, rebuilt around managing
+projects rather than listing pillars, in `little-runner`'s own visual
+design, installable on Android and usable from a phone, with Claude
+Code sessions launchable per project. See `docs/pillars/dashboard.md`
+and `docs/requirements.md`'s REQ-000000193–197.
+
 ## M17 — Ecosystem cutover
 
 The actual point of this project, not just little-workshop's own

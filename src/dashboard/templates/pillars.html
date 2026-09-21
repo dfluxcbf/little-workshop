@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Pillars — little-workshop{% endblock %}
+{% block content %}
+<h1>Pillars</h1>
+<p class="lede">little-workshop's own components, supervised by Core. Health is Core's live view; a crashed pillar is relaunched automatically.</p>
+<div class="panel">
+<table>
+  <thead><tr><th>Pillar</th><th>Status</th><th>Crashes</th><th>Interface</th></tr></thead>
+  <tbody>
+  {% for name, entry in pillars.items() %}
+    <tr>
+      <td data-label="Pillar"><strong>{{ name }}</strong></td>
+      <td data-label="Status">
+        {% if entry.status in ("healthy", "active") %}<span class="pill ok">{{ entry.status }}</span>
+        {% elif entry.status == "disabled" %}<span class="pill idle">disabled</span>
+        {% else %}<span class="pill fail">{{ entry.status }}</span>{% endif %}
+      </td>
+      <td data-label="Crashes">{{ entry.crash_count }}</td>
+      <td data-label="Interface">{{ entry.interface_version or '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="lede"><a href="/jobs">Jobs</a> (Orchestration) &middot; <a href="/policies">Policies</a> (Policy &amp; Compliance)</p>
+{% endblock %}

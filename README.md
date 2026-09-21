@@ -282,7 +282,7 @@ docs, on a dedicated branch, merged only once confirmed working. See
 `docs/milestones.md`'s M17 section.
 
 `bazel build //:wheel`, `bazel run //:install`, `bazel test //:test`, and
-`bazel test //:coverage` all work today (1838 tests — 1691 unit, 147 real
+`bazel test //:coverage` all work today (1866 tests — 1719 unit, 147 real
 `systemd --user` end-to-end integration proofs (a deliberate +15%
 expansion over the prior 119, 2026-09-17: real end-to-end proofs of the
 three of four newly-added gate-point categories that don't hit a

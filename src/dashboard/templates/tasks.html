@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Tasks — little-workshop{% endblock %}
+{% block content %}
+<h1>Tasks</h1>
+<p class="lede">Every task Claude has been given on any project &mdash; running, waiting for your review, or done. Start one from <a href="/tasks/new">New task</a>.</p>
+{% if not runs %}
+<p class="muted">No task has run yet.</p>
+{% else %}
+<div class="panel">
+<table>
+  <thead><tr><th>Project</th><th>Task</th><th>Status</th><th>Branch</th><th>Started</th></tr></thead>
+  <tbody>
+  {% for r in runs %}
+  <tr>
+    <td data-label="Project">{{ r.project_id }}</td>
+    <td data-label="Task"><a href="/tasks/{{ r.project_id }}/{{ r.id }}">{{ r.title }}</a></td>
+    <td data-label="Status"><span class="pill {{ 'warn' if r.status == 'awaiting_finish' else ('ok' if r.status in ('running', 'finished') else ('fail' if r.status == 'failed' else 'idle')) }}">{{ r.status.replace('_', ' ') }}</span></td>
+    <td data-label="Branch">{% if r.branch %}<code>{{ r.branch }}</code>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+    <td data-label="Started">{{ r.created_at[:16].replace('T', ' ') }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

@@ -22,7 +22,7 @@ from common.uds_client import client_for_socket
 from agent import db
 from agent.flow import AgentFlow, AgentFlowError
 from agent.query import run_query
-from agent.session_flow import SessionError, SessionFlow, session_name as session_name_for
+from agent.session_flow import SessionError, SessionFlow, is_trusted, session_name as session_name_for
 
 
 def _complete_orchestration_job(paths: Paths, job_id: str, *, succeeded: bool, result: dict | None, error: str | None) -> None:
@@ -55,6 +55,25 @@ def build_app(
     lock = threading.Lock()
     flow = flow or AgentFlow(paths=paths)
     session_flow = session_flow or SessionFlow(paths=paths)
+
+    def read(fn, *args, **kwargs):
+        """Reads must never queue behind `lock`: `agent.run_task`'s worker
+        holds it for the whole of a run (up to an hour), and the Dashboard's
+        run/CI panels would otherwise time out and show this whole pillar as
+        unreachable for exactly as long as it is busiest. A short-lived
+        read-only connection (WAL) sidesteps it; an in-memory database
+        (tests) has no file to reopen, so it falls back to the shared one."""
+        row = conn.execute("PRAGMA database_list").fetchone()
+        db_file = row[2] if row else ""
+        if not db_file:
+            with lock:
+                return fn(conn, *args, **kwargs)
+        reader = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
+        reader.row_factory = sqlite3.Row
+        try:
+            return fn(reader, *args, **kwargs)
+        finally:
+            reader.close()
 
     @app.get("/v1/health")
     def health() -> dict:
@@ -167,26 +186,22 @@ def build_app(
 
     @app.get("/v1/runs/{project_id}")
     def list_runs(project_id: str, status: str | None = None) -> list[dict]:
-        with lock:
-            return db.list_runs(conn, project_id, status=status)
+        return read(db.list_runs, project_id, status=status)
 
     @app.get("/v1/runs/{project_id}/{run_id}")
     def get_run(project_id: str, run_id: str) -> dict:
-        with lock:
-            run = db.get_run(conn, run_id)
+        run = read(db.get_run, run_id)
         if run is None or run["project_id"] != project_id:
             raise HTTPException(status_code=404, detail="run not found")
         return run
 
     @app.get("/v1/ci_checks/{project_id}")
     def list_ci_checks(project_id: str) -> list[dict]:
-        with lock:
-            return db.list_ci_checks(conn, project_id)
+        return read(db.list_ci_checks, project_id)
 
     @app.get("/v1/ci_checks/{project_id}/latest")
     def latest_ci_check(project_id: str, branch: str | None = None) -> dict:
-        with lock:
-            check = db.latest_ci_check(conn, project_id, branch=branch)
+        check = read(db.latest_ci_check, project_id, branch=branch)
         if check is None:
             raise HTTPException(status_code=404, detail="no CI check recorded yet")
         return check
@@ -215,8 +230,13 @@ def build_app(
     @app.get("/v1/sessions/{project_id}")
     def session_status(project_id: str) -> dict:
         running = session_flow.is_running(project_id)
+        trusted = None  # unknown when the project can't be resolved
+        try:
+            trusted = is_trusted(Path(resolve_project(paths, project_id)["path"]))
+        except ProjectResolutionError:
+            pass
         return {
-            "project_id": project_id, "running": running,
+            "project_id": project_id, "running": running, "trusted": trusted,
             "session_name": session_name_for(project_id) if running else None,
         }
 

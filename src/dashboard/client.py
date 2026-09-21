@@ -87,3 +87,58 @@ def policy_list_waivers(paths: Paths, *, policy_id: str | None = None, project_i
 
 def deployment_status(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "deployment", f"/v1/status/{project_id}", timeout=timeout)
+
+
+def _get_optional(paths: Paths, pillar: str, path: str, *, params: dict | None = None, timeout: float = 5.0) -> dict | None:
+    """Like `_get`, but a 404 is an answer ("nothing there"), not an outage."""
+    socket_path = resolve_pillar_socket(paths, pillar, timeout=timeout)
+    if socket_path is None:
+        raise PillarUnavailable(f"{pillar} daemon unreachable — Core has no socket for it registered")
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.get(path, params=params or {})
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
+
+
+def deployment_status_optional(paths: Paths, project_id: str) -> dict | None:
+    """None when the project has no server manifest configured."""
+    return _get_optional(paths, "deployment", f"/v1/status/{project_id}")
+
+
+def deployment_branches(paths: Paths, project_id: str) -> list[str]:
+    try:
+        result = _get(paths, "deployment", f"/v1/branches/{project_id}")
+    except PillarUnavailable:
+        return []
+    return result if isinstance(result, list) else result.get("branches", [])
+
+
+def agent_session_status(paths: Paths, project_id: str) -> dict:
+    return _get(paths, "agent", f"/v1/sessions/{project_id}")
+
+
+def agent_runs(paths: Paths, project_id: str) -> list[dict]:
+    return _get(paths, "agent", f"/v1/runs/{project_id}")
+
+
+def agent_run(paths: Paths, project_id: str, run_id: str) -> dict | None:
+    return _get_optional(paths, "agent", f"/v1/runs/{project_id}/{run_id}")
+
+
+def agent_latest_ci_check(paths: Paths, project_id: str) -> dict | None:
+    return _get_optional(paths, "agent", f"/v1/ci_checks/{project_id}/latest")
+
+
+def requirements_report(paths: Paths, project_id: str) -> dict:
+    return _get(paths, "requirements", "/v1/report", params={"project_id": project_id}, timeout=10.0)
+
+
+def session_name_for(project_id: str) -> str:
+    """Mirrors `agent.session_flow.session_name` — duplicated, never imported
+    (no shared import between two pillars' `src/` trees)."""
+    return f"lws-{project_id.split('/')[-1]}-session"

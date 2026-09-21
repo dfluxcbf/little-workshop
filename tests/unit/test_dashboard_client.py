@@ -161,3 +161,73 @@ def test_deployment_status_success(paths, monkeypatch):
 
     _rig(paths, monkeypatch, "deployment", app)
     assert client.deployment_status(paths, "little-widget") == {"project_id": "little-widget", "listening": True}
+
+
+# -- per-project panels (mission-control Dashboard) --------------------------
+
+
+def test_optional_reads_treat_404_as_nothing_there_not_an_outage(paths, monkeypatch):
+    from fastapi import HTTPException
+
+    app = FastAPI()
+
+    @app.get("/v1/status/{project_id}")
+    def status(project_id: str) -> dict:
+        raise HTTPException(status_code=404, detail="no manifest")
+
+    _rig(paths, monkeypatch, "deployment", app)
+    assert client.deployment_status_optional(paths, "little-widget") is None
+
+
+def test_optional_reads_return_the_body_when_present(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/status/{project_id}")
+    def status(project_id: str) -> dict:
+        return {"name": project_id, "listening": True}
+
+    _rig(paths, monkeypatch, "deployment", app)
+    assert client.deployment_status_optional(paths, "little-widget") == {"name": "little-widget", "listening": True}
+
+
+def test_optional_reads_still_raise_when_the_pillar_is_down(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.deployment_status_optional(paths, "little-widget")
+    with pytest.raises(client.PillarUnavailable):
+        client.agent_run(paths, "little-widget", "r1")
+    with pytest.raises(client.PillarUnavailable):
+        client.agent_latest_ci_check(paths, "little-widget")
+
+
+def test_deployment_branches_degrades_to_empty_when_deployment_is_down(paths):
+    assert client.deployment_branches(paths, "little-widget") == []
+
+
+def test_agent_reads_and_requirements_report(paths, monkeypatch):
+    agent_app = FastAPI()
+
+    @agent_app.get("/v1/sessions/{project_id}")
+    def session(project_id: str) -> dict:
+        return {"project_id": project_id, "running": False, "trusted": True}
+
+    @agent_app.get("/v1/runs/{project_id}")
+    def runs(project_id: str) -> list:
+        return [{"id": "r1"}]
+
+    _rig(paths, monkeypatch, "agent", agent_app)
+    assert client.agent_session_status(paths, "p")["trusted"] is True
+    assert client.agent_runs(paths, "p") == [{"id": "r1"}]
+
+    req_app = FastAPI()
+
+    @req_app.get("/v1/report")
+    def report(project_id: str) -> dict:
+        return {"requirements": [], "done_count": 0}
+
+    _rig(paths, monkeypatch, "requirements", req_app)
+    assert client.requirements_report(paths, "p")["done_count"] == 0
+
+
+def test_session_name_matches_the_agent_pillars_naming():
+    assert client.session_name_for("little-widget") == "lws-little-widget-session"
+    assert client.session_name_for("dfluxcbf/little-widget") == "lws-little-widget-session"

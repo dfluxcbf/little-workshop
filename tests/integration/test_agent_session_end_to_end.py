@@ -128,7 +128,7 @@ def test_session_start_stop_uses_real_dtach_and_a_real_systemd_scope(tmp_path, w
         assert started["result"]["session_name"] == "lws-little-widget-session"
 
         status_running = cli_client.agent_session_status(workshop_env.paths, "little-widget")
-        assert status_running == {"project_id": "little-widget", "running": True, "session_name": "lws-little-widget-session"}
+        assert status_running == {"project_id": "little-widget", "running": True, "trusted": True, "session_name": "lws-little-widget-session"}
 
         # A second start is refused while one is already running.
         duplicate = _job(workshop_env, "agent.session_start", "agent", "little-widget", {})
