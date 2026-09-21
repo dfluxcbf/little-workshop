@@ -198,8 +198,8 @@ def test_job_redeploy_pillar_missing_pillar_param(paths, conn):
 
 def test_job_redeploy_pillar_deployment_error_records_a_failed_deployment(paths, conn, tmp_path, monkeypatch):
     workshop_repo = tmp_path / "workshop"
-    (workshop_repo / "src" / "orchestration").mkdir(parents=True)
-    (workshop_repo / "src" / "orchestration" / "__init__.py").write_text("this is not valid python (((\n", encoding="utf-8")
+    (workshop_repo / "src" / "policy").mkdir(parents=True)
+    (workshop_repo / "src" / "policy" / "__init__.py").write_text("this is not valid python (((\n", encoding="utf-8")
     (workshop_repo / "VERSION").write_text("1.0.0\n", encoding="utf-8")
     _git(["init", "-b", "main"], workshop_repo)
     _git(["config", "user.email", "t@example.com"], workshop_repo)
@@ -222,11 +222,11 @@ def test_job_redeploy_pillar_deployment_error_records_a_failed_deployment(paths,
     client = TestClient(app)
 
     response = client.post(
-        "/v1/jobs/deployment.redeploy_pillar", json={"job_id": "j1", "params": {"pillar": "orchestration", "commit": "HEAD"}}
+        "/v1/jobs/deployment.redeploy_pillar", json={"job_id": "j1", "params": {"pillar": "policy", "commit": "HEAD"}}
     )
     body = response.json()
     assert body["outcome"] == "failed"
-    history = db.list_deployments(conn, "orchestration")
+    history = db.list_deployments(conn, "policy")
     assert history[0]["outcome"] == "failed"
 
 

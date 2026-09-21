@@ -166,13 +166,13 @@ def test_redeploy_pillar_raises_dispatch_signal_when_inside_own_cgroup(paths, co
 
 
 def test_redeploy_pillar_runs_inline_when_targeting_a_different_pillar(paths, conn, tmp_path):
-    repo = make_workshop_repo(tmp_path, pillar="orchestration")
+    repo = make_workshop_repo(tmp_path, pillar="policy")
     runner = FakeRunner()
     # This process happens to be inside deployment's own cgroup, but the
     # redeploy TARGET is a different pillar -- safe to run inline.
     flow = make_flow(paths, runner, own_cgroup=lambda: "0::/user.slice/little-workshop-deployment.service")
 
-    result = flow.redeploy_pillar(conn, "orchestration", repo, "main")
+    result = flow.redeploy_pillar(conn, "policy", repo, "main")
     assert result.version == "1.0.0"
 
 
@@ -188,13 +188,13 @@ def test_redeploy_pillar_arms_confirm_gate_by_default_for_core_and_deployment(pa
 
 
 def test_redeploy_pillar_does_not_gate_other_pillars_by_default(paths, conn, tmp_path):
-    repo = make_workshop_repo(tmp_path, pillar="orchestration")
+    repo = make_workshop_repo(tmp_path, pillar="policy")
     runner = FakeRunner()
     flow = make_flow(paths, runner)
 
-    result = flow.redeploy_pillar(conn, "orchestration", repo, "main")
+    result = flow.redeploy_pillar(conn, "policy", repo, "main")
     assert result.confirm_message is None
-    assert db.get_confirmation(conn, "orchestration") is None
+    assert db.get_confirmation(conn, "policy") is None
 
 
 def test_rollback_pillar_if_unconfirmed_redeploys_confirmed_commit(paths, conn, tmp_path):
@@ -274,3 +274,12 @@ def test_launched_pillar_gets_no_repo_override_when_none_is_set(paths, conn, tmp
 
     launch = next(c for c in runner.calls if c and c[0] == "systemd-run")
     assert not any("LITTLE_WORKSHOP_REPO_DIR" in a for a in launch)
+
+
+def test_redeploying_the_job_dispatcher_always_dispatches_even_outside_its_cgroup(paths, conn, tmp_path):
+    repo = make_workshop_repo(tmp_path, pillar="orchestration")
+    flow = make_flow(paths, FakeRunner(), own_cgroup=lambda: "0::/user.slice/little-workshop-deployment.service")
+    with pytest.raises(SelfRedeployRequiresDispatch):
+        flow.redeploy_pillar(conn, "orchestration", repo, "main")
+    with pytest.raises(SelfRedeployRequiresDispatch):
+        flow.rollback_pillar_if_unconfirmed(conn, "orchestration", repo, "deploy-id")

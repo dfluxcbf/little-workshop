@@ -31,6 +31,11 @@ from deployment.workshop_repo import workshop_repo_dir
 # already used elsewhere in this project as the human-override window.
 DEFAULT_SELF_REDEPLOY_CONFIRM_SECONDS = 600
 SELF_REDEPLOY_GATED_BY_DEFAULT = ("core", "deployment")
+# Pillars whose process is the one waiting on the redeploy Job's HTTP reply
+# (Orchestration dispatches every Job): stopping it mid-request times the Job
+# out, re-queues it, and the retry restarts it again — a loop. Always dispatch
+# these to a detached worker, which reports completion back by job id.
+ALWAYS_DISPATCHED_PILLARS = ("orchestration",)
 
 
 class DeploymentError(Exception):
@@ -435,8 +440,9 @@ class DeploymentFlow:
     ) -> UpResult:
         """The checked entry point for a forward self-redeploy — raises
         `SelfRedeployRequiresDispatch` when this process is itself running
-        inside the target pillar's own unit."""
-        if self._inside_own_cgroup(systemd.unit_name(pillar)):
+        inside the target pillar's own unit, or when the target is the
+        Job dispatcher itself (`ALWAYS_DISPATCHED_PILLARS`)."""
+        if pillar in ALWAYS_DISPATCHED_PILLARS or self._inside_own_cgroup(systemd.unit_name(pillar)):
             raise SelfRedeployRequiresDispatch(pillar)
 
         result = self.redeploy_pillar_direct(conn, pillar, workshop_repo_dir, commit)
@@ -455,7 +461,7 @@ class DeploymentFlow:
         raises `SelfRedeployRequiresDispatch` under the same condition as
         `redeploy_pillar` (rolling back `deployment` itself, from inside
         its own about-to-be-replaced unit)."""
-        if self._inside_own_cgroup(systemd.unit_name(pillar)):
+        if pillar in ALWAYS_DISPATCHED_PILLARS or self._inside_own_cgroup(systemd.unit_name(pillar)):
             raise SelfRedeployRequiresDispatch(pillar)
 
         state, reason = confirm.rollback_guard(conn, pillar, deploy_id)

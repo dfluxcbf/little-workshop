@@ -225,7 +225,7 @@ def test_deployments_history_endpoint(paths, conn, tmp_path):
     assert history[0]["outcome"] == "succeeded"
 
 
-def _init_workshop_repo(tmp_path, pillar="orchestration"):
+def _init_workshop_repo(tmp_path, pillar="policy"):
     repo = tmp_path / "workshop-repo"
     (repo / "src" / pillar).mkdir(parents=True)
     (repo / "src" / pillar / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -255,7 +255,7 @@ def test_redeploy_pillar_job_succeeds_inline_for_a_non_self_target(paths, conn, 
     from deployment.app import build_app
     from deployment.flow import DeploymentFlow
 
-    workshop_repo = _init_workshop_repo(tmp_path, pillar="orchestration")
+    workshop_repo = _init_workshop_repo(tmp_path, pillar="policy")
     monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(workshop_repo))
 
     runner = PassthroughFakeRunner()
@@ -265,7 +265,7 @@ def test_redeploy_pillar_job_succeeds_inline_for_a_non_self_target(paths, conn, 
 
     response = client.post(
         "/v1/jobs/deployment.redeploy_pillar",
-        json={"job_id": "j1", "params": {"pillar": "orchestration", "commit": "main"}},
+        json={"job_id": "j1", "params": {"pillar": "policy", "commit": "main"}},
     )
     body = response.json()
     assert body["outcome"] == "succeeded", body
