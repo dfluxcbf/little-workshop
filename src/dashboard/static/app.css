@@ -914,3 +914,19 @@ form > .dcard { margin-bottom: 10px; }
   .job-list { grid-template-columns: minmax(0, 1fr); }
   .job-more .btn { flex: none; }
 }
+
+/* --- jobs: delete old jobs ------------------------------------------------------ */
+
+.cleanup { margin: 0 0 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.cleanup > summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; list-style: none; cursor: pointer; font-size: 13.5px; font-weight: 600; color: var(--ink-soft); -webkit-tap-highlight-color: transparent; }
+.cleanup > summary::-webkit-details-marker { display: none; }
+.cleanup > summary svg { width: 16px; height: 16px; color: var(--fail); }
+.cleanup-chev { margin-left: auto; font-size: 13px; line-height: 1; color: var(--ink-faint); transition: transform 0.15s; }
+.cleanup[open] .cleanup-chev { transform: rotate(90deg); }
+.cleanup[open] > summary { border-bottom: 1px solid var(--border-soft); }
+.cleanup-form { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.cleanup-help { margin: 0; font-size: 12.5px; }
+.age-grid .age-n { margin-left: auto; font-size: 11px; color: var(--ink-faint); }
+.age-grid .gp:has(input:checked)::after { margin-left: 8px; }
+.age-grid .gp:has(input:checked) .age-n { color: var(--ink-soft); }
+.gp.is-disabled { opacity: 0.4; pointer-events: none; }

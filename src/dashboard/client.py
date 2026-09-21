@@ -68,6 +68,26 @@ def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0) 
     return _get(paths, "orchestration", "/v1/jobs", params={"status": status} if status else None, timeout=timeout)
 
 
+def job_cleanup_preview(paths: Paths, days: list[int], *, timeout: float = 10.0) -> dict[str, int]:
+    """{"7": how many finished jobs are older than 7 days, ...} — nothing is deleted."""
+    body = _get(paths, "orchestration", "/v1/job-cleanup", params={"days": ",".join(str(d) for d in days)}, timeout=timeout)
+    return body["prunable"]
+
+
+def job_cleanup(paths: Paths, older_than_days: int, *, timeout: float = 60.0) -> dict:
+    """Delete finished jobs older than this many days; returns {deleted, pipeline_runs_deleted, kept_for_safety}."""
+    socket_path = resolve_pillar_socket(paths, "orchestration", timeout=timeout)
+    if socket_path is None:
+        raise PillarUnavailable("orchestration daemon unreachable — Core has no socket for it registered")
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.post("/v1/job-cleanup", json={"older_than_days": older_than_days})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise PillarUnavailable("orchestration daemon unreachable") from exc
+
+
 def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> list[dict]:
     return _get(paths, "registry", "/v1/projects", params={"status": status} if status else None, timeout=timeout)
 

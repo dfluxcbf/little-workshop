@@ -99,6 +99,8 @@ JOB_STATUS_LABELS = {
 }
 JOB_ACTIVE_STATUSES = {"running", "queued", "pending_confirmation"}
 JOBS_PAGE_SIZE = 50
+# (days, label) — how old a finished job must be before "Delete old jobs" may remove it.
+JOB_CLEANUP_AGES = [(2, "2 days"), (7, "1 week"), (28, "4 weeks"), (56, "8 weeks"), (168, "24 weeks")]
 
 
 def _parse_time(value: str | None) -> datetime | None:
@@ -392,11 +394,28 @@ def build_app(paths: Paths) -> FastAPI:
             ]
         matching.sort(key=lambda j: j.get("created_at") or "", reverse=True)
         limit = max(JOBS_PAGE_SIZE, min(limit, 1000))
+        prunable = _try(lambda: client.job_cleanup_preview(paths, [days for days, _ in JOB_CLEANUP_AGES]), default={}) if everything else {}
+        cleanup_options = [{"days": days, "label": label, "count": prunable.get(str(days), 0)} for days, label in JOB_CLEANUP_AGES]
         return _render(
-            request, "jobs.html", jobs=matching[:limit], total=len(matching), limit=limit, next_limit=limit + JOBS_PAGE_SIZE,
+            request, "jobs.html", cleanup_options=cleanup_options, jobs=matching[:limit], total=len(matching), limit=limit, next_limit=limit + JOBS_PAGE_SIZE,
             status=status, q=q or "", all_count=len(everything),
             counts=[(name, JOB_STATUS_LABELS.get(name, name), counts[name]) for name in [*JOB_STATUS_ORDER, *[k for k in counts if k not in JOB_STATUS_ORDER]] if counts[name]],
             active=sum(counts.get(name, 0) for name in JOB_ACTIVE_STATUSES), error=error, nav_active="jobs")
+
+    @app.post("/jobs/cleanup")
+    def jobs_cleanup(days: int | None = Form(None)):
+        """Delete finished jobs older than one of the offered ages. Anything else is refused."""
+        labels = dict(JOB_CLEANUP_AGES)
+        if days not in labels:
+            return _back("/jobs", "Choose how old the jobs must be before deleting them.")
+        try:
+            result = client.job_cleanup(paths, days)
+        except client.PillarUnavailable as exc:
+            return _back("/jobs", f"Could not delete jobs: {exc}")
+        deleted = result.get("deleted", 0)
+        kept = result.get("kept_for_safety", 0)
+        note = f" {kept} kept because active work still depends on them." if kept else ""
+        return _back("/jobs", f"Deleted {deleted} job{'' if deleted == 1 else 's'} older than {labels[days]}.{note}")
 
     @app.get("/policies", response_class=HTMLResponse)
     def policies(request: Request, message: str | None = None):

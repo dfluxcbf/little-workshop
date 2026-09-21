@@ -935,3 +935,80 @@ def test_body_has_no_viewport_height_minimum_that_makes_short_pages_scroll(test_
     body_rule = css[css.index("\nbody {"):css.index("}", css.index("\nbody {"))]
     assert "min-height" not in body_rule.replace("/* No min-height", "")
     assert "background-attachment: fixed" in body_rule  # what keeps the whole screen painted
+
+
+# -- delete old jobs -------------------------------------------------------------------
+
+
+def _stub_cleanup(monkeypatch, counts):
+    monkeypatch.setattr(client, "job_cleanup_preview", lambda paths, days: counts)
+
+
+def test_jobs_page_offers_the_five_ages_with_how_many_each_would_delete(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1)])
+    _stub_cleanup(monkeypatch, {"2": 312, "7": 187, "28": 24, "56": 1, "168": 0})
+    text = test_client.get("/jobs").text
+    assert 'action="/jobs/cleanup"' in text and "Delete old jobs" in text
+    for days, label, count in ((2, "2 days", 312), (7, "1 week", 187), (28, "4 weeks", 24), (56, "8 weeks", 1), (168, "24 weeks", 0)):
+        assert f'name="days" value="{days}" data-count="{count}" data-label="{label}"' in text
+        assert f'<span>{label}</span><span class="age-n">{count}</span>' in text
+    assert re.search(r'value="168" data-count="0" data-label="24 weeks" disabled', text)  # nothing to delete: not selectable
+    assert not re.search(r'value="7" data-count="187" data-label="1 week" disabled', text)
+    assert "never deleted" in text and "confirm(" in text
+
+
+def test_the_delete_panel_is_absent_when_there_are_no_jobs(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [])
+    assert "Delete old jobs" not in test_client.get("/jobs").text
+
+
+def test_the_page_still_renders_when_the_cleanup_preview_fails(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1)])
+
+    def down(paths, days):
+        raise client.PillarUnavailable("orchestration daemon unreachable")
+
+    monkeypatch.setattr(client, "job_cleanup_preview", down)
+    response = test_client.get("/jobs")
+    assert response.status_code == 200 and 'data-count="0"' in response.text
+
+
+def test_cleanup_deletes_and_reports_how_many(test_client, monkeypatch):
+    seen = []
+    monkeypatch.setattr(client, "job_cleanup", lambda paths, days: (seen.append(days), {"deleted": 187, "pipeline_runs_deleted": 2, "kept_for_safety": 0})[1])
+    response = test_client.post("/jobs/cleanup", data={"days": "7"}, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"].startswith("/jobs?message=")
+    assert seen == [7] and "Deleted 187 jobs older than 1 week." in unquote(response.headers["location"])
+
+
+@pytest.mark.parametrize("days,label", [(2, "2 days"), (7, "1 week"), (28, "4 weeks"), (56, "8 weeks"), (168, "24 weeks")])
+def test_every_offered_age_is_accepted(test_client, monkeypatch, days, label):
+    monkeypatch.setattr(client, "job_cleanup", lambda paths, d: {"deleted": 1, "kept_for_safety": 0})
+    location = unquote(test_client.post("/jobs/cleanup", data={"days": str(days)}, follow_redirects=False).headers["location"])
+    assert f"Deleted 1 job older than {label}." in location
+
+
+def test_cleanup_mentions_jobs_kept_because_active_work_needs_them(test_client, monkeypatch):
+    monkeypatch.setattr(client, "job_cleanup", lambda paths, days: {"deleted": 4, "kept_for_safety": 3})
+    location = unquote(test_client.post("/jobs/cleanup", data={"days": "28"}, follow_redirects=False).headers["location"])
+    assert "Deleted 4 jobs older than 4 weeks." in location and "3 kept because active work still depends on them" in location
+
+
+@pytest.mark.parametrize("data", [{}, {"days": ""}, {"days": "3"}, {"days": "0"}, {"days": "-7"}, {"days": "9999"}])
+def test_cleanup_refuses_anything_but_an_offered_age_and_deletes_nothing(test_client, monkeypatch, data):
+    calls = []
+    monkeypatch.setattr(client, "job_cleanup", lambda paths, days: calls.append(days))
+    response = test_client.post("/jobs/cleanup", data=data, follow_redirects=False)
+    assert response.status_code in (303, 422)
+    if response.status_code == 303:
+        assert "Choose how old" in unquote(response.headers["location"])
+    assert calls == []
+
+
+def test_cleanup_reports_orchestration_being_unreachable(test_client, monkeypatch):
+    def down(paths, days):
+        raise client.PillarUnavailable("orchestration daemon unreachable")
+
+    monkeypatch.setattr(client, "job_cleanup", down)
+    location = unquote(test_client.post("/jobs/cleanup", data={"days": "7"}, follow_redirects=False).headers["location"])
+    assert "Could not delete jobs" in location and "unreachable" in location

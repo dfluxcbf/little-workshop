@@ -57,6 +57,21 @@ dispatched.
   wired between them on trigger. Built as general-purpose infrastructure
   in M1; no pillar has a concrete use for it yet as of M8.
 
+- **Job history cleanup** (`GET`/`POST /v1/job-cleanup`, 2026-09-21) — the
+  Dashboard's "Delete old jobs". `GET` previews how many finished jobs each
+  age (in days) would remove; `POST {"older_than_days": N}` deletes them and
+  their `job_runs`. Only **finished** jobs (`succeeded`, `failed`,
+  `cancelled`, `stopped`) last updated before the cutoff are eligible; a
+  running, queued or awaiting-confirmation job is never touched however old.
+  Also kept, regardless of age: a job an unfinished job still `depends_on`
+  (the queue reads its status), a scheduled task's `last_job_id`, and every
+  job of a pipeline run that is not wholly eligible — a pipeline run is
+  removed whole (its row too) or kept whole. The response says how many were
+  deleted and how many eligible jobs were kept for those reasons. Direct
+  endpoints rather than a Job type, so cleaning up never records a job of
+  its own; deliberately no MCP tool or CLI command — it is a human action in
+  the Dashboard.
+
 ## Scheduled tasks (`docs/milestones.md` M9)
 
 A `ScheduledTask` is a durable definition, distinct from a `Job`, that

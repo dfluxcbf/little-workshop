@@ -386,3 +386,64 @@ def get_pipeline_run(conn: sqlite3.Connection, run_id: str) -> PipelineRun | Non
         job_ids=json.loads(row["job_ids"]),
         created_at=_parse_iso(row["created_at"]),
     )
+
+
+# -- cleanup of old, finished jobs ---------------------------------------------
+
+FINISHED_STATUSES = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.STOPPED)
+
+
+def _plan_cleanup(conn: sqlite3.Connection, before: datetime) -> tuple[set[str], list[str], int]:
+    """(job ids to delete, pipeline run ids to delete, eligible jobs kept for safety).
+
+    Only *finished* jobs last updated before `before` are eligible. Kept regardless:
+    a job an unfinished job still depends on (the queue reads its status), a
+    scheduled task's last job, and every job of a pipeline run that is not wholly
+    eligible — a run is removed whole or kept whole, never left partial."""
+    jobs = {job.id: job for job in list_jobs(conn)}
+    eligible = {i for i, job in jobs.items() if job.status in FINISHED_STATUSES and job.updated_at < before}
+
+    protected: set[str] = set()
+    for job in jobs.values():
+        if job.status not in FINISHED_STATUSES:
+            protected.update(job.depends_on)
+    for row in conn.execute("SELECT last_job_id FROM scheduled_tasks WHERE last_job_id IS NOT NULL"):
+        protected.add(row["last_job_id"])
+
+    def run_job_ids(raw: str) -> list[str]:
+        loaded = json.loads(raw)  # {node_id: job_id}
+        return [i for i in (loaded.values() if isinstance(loaded, dict) else loaded) if i in jobs]
+
+    runs = [
+        (row["id"], run_job_ids(row["job_ids"]), _parse_iso(row["created_at"]))
+        for row in conn.execute("SELECT id, job_ids, created_at FROM pipeline_runs")
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for _, present, _created in runs:
+            if any(i not in eligible or i in protected for i in present):
+                for i in present:
+                    if i not in protected:
+                        protected.add(i)
+                        changed = True
+
+    to_delete = eligible - protected
+    runs_to_delete = [
+        run_id for run_id, present, created in runs
+        if (all(i in to_delete for i in present) if present else created < before)
+    ]
+    return to_delete, runs_to_delete, len(eligible & protected)
+
+
+def count_prunable_jobs(conn: sqlite3.Connection, before: datetime) -> int:
+    return len(_plan_cleanup(conn, before)[0])
+
+
+def prune_finished_jobs(conn: sqlite3.Connection, before: datetime) -> dict:
+    to_delete, runs_to_delete, kept = _plan_cleanup(conn, before)
+    conn.executemany("DELETE FROM job_runs WHERE job_id = ?", [(i,) for i in to_delete])
+    conn.executemany("DELETE FROM jobs WHERE id = ?", [(i,) for i in to_delete])
+    conn.executemany("DELETE FROM pipeline_runs WHERE id = ?", [(i,) for i in runs_to_delete])
+    conn.commit()
+    return {"deleted": len(to_delete), "pipeline_runs_deleted": len(runs_to_delete), "kept_for_safety": kept}

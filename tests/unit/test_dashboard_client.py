@@ -243,3 +243,37 @@ def test_deployment_pillars_reads_the_pillar_deployments_endpoint(paths, monkeyp
 
     _rig(paths, monkeypatch, "deployment", app)
     assert client.deployment_pillars(paths)["pillars"]["policy"]["commit_sha"] == "abc123"
+
+
+def test_job_cleanup_preview_returns_the_counts_per_age(paths, monkeypatch):
+    app = FastAPI()
+    seen = {}
+
+    @app.get("/v1/job-cleanup")
+    def preview(days: str) -> dict:
+        seen["days"] = days
+        return {"prunable": {"2": 5, "7": 3}}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.job_cleanup_preview(paths, [2, 7]) == {"2": 5, "7": 3} and seen["days"] == "2,7"
+
+
+def test_job_cleanup_posts_the_age_and_returns_the_result(paths, monkeypatch):
+    app = FastAPI()
+    seen = {}
+
+    @app.post("/v1/job-cleanup")
+    def cleanup(body: dict) -> dict:
+        seen.update(body)
+        return {"deleted": 9, "pipeline_runs_deleted": 0, "kept_for_safety": 1}
+
+    _rig(paths, monkeypatch, "orchestration", app)
+    assert client.job_cleanup(paths, 28) == {"deleted": 9, "pipeline_runs_deleted": 0, "kept_for_safety": 1}
+    assert seen == {"older_than_days": 28}
+
+
+def test_job_cleanup_calls_raise_when_orchestration_is_down(paths):
+    with pytest.raises(client.PillarUnavailable):
+        client.job_cleanup(paths, 7)
+    with pytest.raises(client.PillarUnavailable):
+        client.job_cleanup_preview(paths, [7])

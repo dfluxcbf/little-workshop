@@ -97,6 +97,14 @@ are the current state of every pillar.
   itself "live" and re-fetches its list every 5 seconds — never while a card
   is expanded or the search box has focus. Filtering and searching are done
   on the full list, so the counts always describe everything.
+  **Delete old jobs**: a collapsed panel above the filters. Pick an age —
+  2 days, 1 week, 4 weeks, 8 weeks or 24 weeks, each showing how many
+  finished jobs it would delete (an age with none is disabled) — and the
+  button reads "Delete N jobs"; a native confirmation asks before it goes
+  through (`POST /jobs/cleanup` → Orchestration's `POST /v1/job-cleanup`,
+  which refuses any other age). Only finished jobs are ever removed, and
+  the result message says how many were deleted and how many were kept
+  because active work still depends on them.
 - **Policy management** (`/policies`, `/policies/{id}`) — the concrete,
   fully-specified panel `docs/milestones.md` M14 called out. The list
   (redesigned 2026-09-21) is one card per policy, no page heading: the

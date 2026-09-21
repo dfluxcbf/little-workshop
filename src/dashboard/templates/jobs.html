@@ -10,6 +10,47 @@
   {% if active %}<span class="live" title="Refreshing every few seconds while jobs are active"><span class="live-dot"></span>live</span>{% endif %}
 </form>
 
+{% if all_count %}
+<details class="cleanup">
+  <summary>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4h6v3"></path></svg>
+    <span>Delete old jobs</span>
+    <span class="cleanup-chev" aria-hidden="true">▸</span>
+  </summary>
+  <form class="cleanup-form" id="cleanup-form" method="post" action="/jobs/cleanup">
+    <p class="muted cleanup-help">Removes finished jobs (succeeded, failed, cancelled, stopped) older than:</p>
+    <div class="gp-grid age-grid">
+      {% for o in cleanup_options %}
+      <label class="gp{{ ' is-disabled' if not o.count }}">
+        <input type="radio" name="days" value="{{ o.days }}" data-count="{{ o.count }}" data-label="{{ o.label }}"{% if not o.count %} disabled{% endif %}>
+        <span>{{ o.label }}</span><span class="age-n">{{ o.count }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <p class="muted cleanup-help">Running, queued and awaiting-confirmation jobs are never deleted.</p>
+    <button type="submit" class="danger block" id="cleanup-go">Delete</button>
+  </form>
+</details>
+<script>
+(function () {
+  var form = document.getElementById("cleanup-form");
+  if (!form) return;
+  var go = document.getElementById("cleanup-go");
+  function chosen() { return form.querySelector('input[name="days"]:checked'); }
+  form.addEventListener("change", function () {
+    var r = chosen();
+    if (r) go.textContent = "Delete " + r.dataset.count + " job" + (r.dataset.count === "1" ? "" : "s");
+  });
+  form.addEventListener("submit", function (e) {
+    var r = chosen();
+    if (!r) { e.preventDefault(); return; }
+    if (!confirm("Delete " + r.dataset.count + " finished job" + (r.dataset.count === "1" ? "" : "s") +
+                 " older than " + r.dataset.label + "? This cannot be undone.")) e.preventDefault();
+  });
+})();
+</script>
+{% endif %}
+
 <div id="jobs-live">
   <nav class="jobs-filters" aria-label="Filter by status">
     {{ fchip("All", "/jobs" ~ ("?q=" ~ q|urlencode if q else ""), all_count, not status) }}
