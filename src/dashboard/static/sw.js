@@ -2,7 +2,7 @@
 // its shell (CSS, icons) available offline. Pages themselves are always
 // fetched live -- they are the current state of every pillar, so a cached copy
 // would be worse than an honest "offline" page.
-const SHELL = "workshop-shell-v1";
+const SHELL = "workshop-shell-v2";
 const ASSETS = ["/static/app.css", "/static/icons/icon-192.png", "/offline"];
 
 self.addEventListener("install", (event) => {
