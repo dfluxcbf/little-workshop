@@ -167,7 +167,7 @@ def ensure_requirement(pillar: Pillar, project: str, existing: dict, key: str, t
                        published: bool, milestone_id: str | None, summary: dict) -> str:
     current = existing.get(key)
     if current is None:
-        params = {"key": key, "title": title, "description": description}
+        params = {"key": key, "title": title, "description": description, "imported": True}
         if milestone_id:
             params["milestone_id"] = milestone_id
         created = pillar.job("requirements.create_requirement", project, **params)

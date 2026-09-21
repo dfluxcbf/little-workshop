@@ -8,12 +8,24 @@
 {%- elif name == 'plus' %}<path d="M12 5v14M5 12h14"></path>
 {%- elif name == 'jobs' %}<circle cx="12" cy="12" r="8"></circle><path d="M12 8v4l3 2"></path>
 {%- elif name == 'policies' %}<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3Z"></path><path d="M9 12l2 2 4-4"></path>
+{%- elif name == 'projects' %}<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"></path>
+{%- elif name == 'report' %}<path d="M6 3h9l4 4v14H6Z"></path><path d="M14 3v5h5M9 13h7M9 17h7"></path>
+{%- elif name == 'system' %}<circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"></path>
+{%- elif name == 'queue' %}<path d="M4 6h10M4 12h10M4 18h6"></path><path d="M17 15l3 3-3 3"></path>
+{%- elif name == 'schedule' %}<rect x="4" y="5" width="16" height="15" rx="2"></rect><path d="M4 10h16M9 3v4M15 3v4"></path>
+{%- elif name == 'alert' %}<path d="M12 4l9 16H3Z"></path><path d="M12 10v4M12 17h.01"></path>
 {%- elif name == 'back' %}<path d="M15 6l-6 6 6 6"></path>
 {%- endif %}</svg>
 {%- endmacro %}
-{% set primary = [('dashboard', '/', 'Dashboard', 'dashboard'), ('control', '/control', 'Control', 'control'), ('tasks', '/tasks', 'Tasks', 'tasks'), ('pillars', '/pillars', 'Pillars', 'pillars')] %}
-{% set more = [('new-task', '/tasks/new', 'New task', 'plus'), ('jobs', '/jobs', 'Jobs', 'jobs'), ('policies', '/policies', 'Policies', 'policies')] %}
-{% set more_keys = ['new-task', 'jobs', 'policies'] %}
+{# Each group is (key, label, landing href, icon, [(page key, href, label, icon)]). A one-page group is a plain link. #}
+{% set groups = [
+  ('dashboard', 'Dashboard', '/', 'dashboard', [('dashboard', '/', 'Dashboard', 'dashboard')]),
+  ('projects', 'Projects', '/control', 'projects', [('control', '/control', 'Control', 'control'), ('report', '/report', 'Report', 'report'), ('new-project', '/projects/new', 'New project', 'plus')]),
+  ('tasks', 'Tasks', '/tasks', 'tasks', [('tasks', '/tasks', 'Task list', 'tasks'), ('new-task', '/tasks/new', 'New task', 'plus'), ('queue-task', '/tasks/queue', 'Queue task', 'queue'), ('schedule-task', '/tasks/schedule', 'Schedule task', 'schedule'), ('jobs', '/jobs', 'Jobs', 'jobs')]),
+  ('system', 'System', '/pillars', 'system', [('pillars', '/pillars', 'Pillars', 'pillars'), ('policies', '/policies', 'Policies', 'policies'), ('attention', '/attention', 'Attention', 'alert')]),
+] %}
+{% set ns = namespace(active=None) %}
+{% for g in groups %}{% for page in g[4] %}{% if page[0] == nav_active %}{% set ns.active = g %}{% endif %}{% endfor %}{% endfor %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -35,11 +47,16 @@
 <header class="topbar">
   <a href="/" class="brand"><img src="/static/icons/icon-192.png" alt="">little-workshop</a>
   <nav class="topnav" aria-label="Primary">
-    {% for key, href, label, ic in primary + more %}
-    <a href="{{ href }}" class="navlink {{ 'primary' if nav_active == key }}">{{ icon(ic) }}{{ label }}</a>
+    {% for g in groups %}
+    <a href="{{ g[2] }}" class="navlink {{ 'primary' if ns.active and ns.active[0] == g[0] }}">{{ icon(g[3]) }}{{ g[1] }}</a>
     {% endfor %}
   </nav>
 </header>
+{% if ns.active and ns.active[4]|length > 1 %}
+<nav class="subnav" aria-label="{{ ns.active[1] }}">
+  {% for page in ns.active[4] %}<a href="{{ page[1] }}" class="subnav-link {{ 'is-active' if page[0] == nav_active }}">{{ icon(page[3]) }}{{ page[2] }}</a>{% endfor %}
+</nav>
+{% endif %}
 <a class="attention-banner" id="attention-banner" href="/attention"{% if not attention_count %} hidden{% endif %}>
   <strong id="attention-count">{{ attention_count }}</strong> <span>need{{ '' if attention_count == 1 else 's' }} your attention</span>
 </a>
@@ -49,18 +66,23 @@
 {% block content %}{% endblock %}
 </main>
 <nav class="tabbar" aria-label="Primary">
-  <div class="tabbar-row {{ 'tabbar-row-active' if nav_active not in more_keys }}" data-view="main">
-    {% for key, href, label, ic in primary %}
-    <a href="{{ href }}" class="tab {{ 'tab-active' if nav_active == key }}">{{ icon(ic, 1.9) }}<span>{{ label }}</span></a>
+  <div class="tabbar-row {{ 'tabbar-row-active' if not (ns.active and ns.active[4]|length > 1) }}" data-view="main">
+    {% for g in groups %}
+    {% if g[4]|length > 1 %}
+    <button type="button" class="tab tab-group {{ 'tab-active' if ns.active and ns.active[0] == g[0] }}" data-open="{{ g[0] }}">{{ icon(g[3], 1.9) }}<span>{{ g[1] }}</span></button>
+    {% else %}
+    <a href="{{ g[2] }}" class="tab {{ 'tab-active' if ns.active and ns.active[0] == g[0] }}">{{ icon(g[3], 1.9) }}<span>{{ g[1] }}</span></a>
+    {% endif %}
     {% endfor %}
-    <button type="button" class="tab tab-group {{ 'tab-active' if nav_active in more_keys }}" data-open="more">{{ icon('more', 1.9) }}<span>More</span></button>
   </div>
-  <div class="tabbar-row {{ 'tabbar-row-active' if nav_active in more_keys }}" data-view="more">
-    {% for key, href, label, ic in more %}
-    <a href="{{ href }}" class="tab {{ 'tab-active' if nav_active == key }}">{{ icon(ic, 1.9) }}<span>{{ label }}</span></a>
+  {% for g in groups if g[4]|length > 1 %}
+  <div class="tabbar-row {{ 'tabbar-row-active' if ns.active and ns.active[0] == g[0] }}" data-view="{{ g[0] }}">
+    {% for page in g[4] %}
+    <a href="{{ page[1] }}" class="tab {{ 'tab-active' if page[0] == nav_active }}">{{ icon(page[3], 1.9) }}<span>{{ page[2] }}</span></a>
     {% endfor %}
     <button type="button" class="tab tab-back" data-close aria-label="Back to main menu">{{ icon('back', 1.9) }}<span>Back</span></button>
   </div>
+  {% endfor %}
 </nav>
 <script>
 (function () {

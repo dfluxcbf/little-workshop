@@ -19,6 +19,7 @@ from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
 from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
+from common.workspace import WORKSPACE_ID, workspace_dir
 from agent import db
 from agent.flow import AgentFlow, AgentFlowError
 from agent.query import run_query
@@ -211,7 +212,7 @@ def build_app(
         if not request.project_id:
             return {"outcome": "failed", "error": "missing project_id"}
         try:
-            project_dir = Path(resolve_project(paths, request.project_id)["path"])
+            project_dir = workspace_dir() if request.project_id == WORKSPACE_ID else Path(resolve_project(paths, request.project_id)["path"])
         except ProjectResolutionError as exc:
             return {"outcome": "failed", "error": str(exc)}
         try:
@@ -232,7 +233,7 @@ def build_app(
         running = session_flow.is_running(project_id)
         trusted = None  # unknown when the project can't be resolved
         try:
-            trusted = is_trusted(Path(resolve_project(paths, project_id)["path"]))
+            trusted = is_trusted(workspace_dir() if project_id == WORKSPACE_ID else Path(resolve_project(paths, project_id)["path"]))
         except ProjectResolutionError:
             pass
         return {

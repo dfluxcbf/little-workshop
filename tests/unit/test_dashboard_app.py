@@ -944,16 +944,16 @@ def _stub_cleanup(monkeypatch, counts):
     monkeypatch.setattr(client, "job_cleanup_preview", lambda paths, days: counts)
 
 
-def test_jobs_page_offers_the_five_ages_with_how_many_each_would_delete(test_client, monkeypatch):
+def test_jobs_page_offers_the_six_ages_with_how_many_each_would_delete(test_client, monkeypatch):
     _stub_jobs(monkeypatch, [_job(1)])
-    _stub_cleanup(monkeypatch, {"2": 312, "7": 187, "28": 24, "56": 1, "168": 0})
+    _stub_cleanup(monkeypatch, {"12": 400, "48": 312, "168": 187, "672": 24, "1344": 1, "4032": 0})
     text = test_client.get("/jobs").text
     assert 'action="/jobs/cleanup"' in text and "Delete old jobs" in text
-    for days, label, count in ((2, "2 days", 312), (7, "1 week", 187), (28, "4 weeks", 24), (56, "8 weeks", 1), (168, "24 weeks", 0)):
-        assert f'name="days" value="{days}" data-count="{count}" data-label="{label}"' in text
+    for days, label, count in ((12, "12 hours", 400), (48, "2 days", 312), (168, "1 week", 187), (672, "4 weeks", 24), (1344, "8 weeks", 1), (4032, "24 weeks", 0)):
+        assert f'name="hours" value="{days}" data-count="{count}" data-label="{label}"' in text
         assert f'<span>{label}</span><span class="age-n">{count}</span>' in text
-    assert re.search(r'value="168" data-count="0" data-label="24 weeks" disabled', text)  # nothing to delete: not selectable
-    assert not re.search(r'value="7" data-count="187" data-label="1 week" disabled', text)
+    assert re.search(r'value="4032" data-count="0" data-label="24 weeks" disabled', text)  # nothing to delete: not selectable
+    assert not re.search(r'value="168" data-count="187" data-label="1 week" disabled', text)
     assert "never deleted" in text and "confirm(" in text
 
 
@@ -976,25 +976,25 @@ def test_the_page_still_renders_when_the_cleanup_preview_fails(test_client, monk
 def test_cleanup_deletes_and_reports_how_many(test_client, monkeypatch):
     seen = []
     monkeypatch.setattr(client, "job_cleanup", lambda paths, days: (seen.append(days), {"deleted": 187, "pipeline_runs_deleted": 2, "kept_for_safety": 0})[1])
-    response = test_client.post("/jobs/cleanup", data={"days": "7"}, follow_redirects=False)
+    response = test_client.post("/jobs/cleanup", data={"hours": "168"}, follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"].startswith("/jobs?message=")
-    assert seen == [7] and "Deleted 187 jobs older than 1 week." in unquote(response.headers["location"])
+    assert seen == [168] and "Deleted 187 jobs older than 1 week." in unquote(response.headers["location"])
 
 
-@pytest.mark.parametrize("days,label", [(2, "2 days"), (7, "1 week"), (28, "4 weeks"), (56, "8 weeks"), (168, "24 weeks")])
+@pytest.mark.parametrize("days,label", [(12, "12 hours"), (48, "2 days"), (168, "1 week"), (672, "4 weeks"), (1344, "8 weeks"), (4032, "24 weeks")])
 def test_every_offered_age_is_accepted(test_client, monkeypatch, days, label):
     monkeypatch.setattr(client, "job_cleanup", lambda paths, d: {"deleted": 1, "kept_for_safety": 0})
-    location = unquote(test_client.post("/jobs/cleanup", data={"days": str(days)}, follow_redirects=False).headers["location"])
+    location = unquote(test_client.post("/jobs/cleanup", data={"hours": str(days)}, follow_redirects=False).headers["location"])
     assert f"Deleted 1 job older than {label}." in location
 
 
 def test_cleanup_mentions_jobs_kept_because_active_work_needs_them(test_client, monkeypatch):
     monkeypatch.setattr(client, "job_cleanup", lambda paths, days: {"deleted": 4, "kept_for_safety": 3})
-    location = unquote(test_client.post("/jobs/cleanup", data={"days": "28"}, follow_redirects=False).headers["location"])
+    location = unquote(test_client.post("/jobs/cleanup", data={"hours": "672"}, follow_redirects=False).headers["location"])
     assert "Deleted 4 jobs older than 4 weeks." in location and "3 kept because active work still depends on them" in location
 
 
-@pytest.mark.parametrize("data", [{}, {"days": ""}, {"days": "3"}, {"days": "0"}, {"days": "-7"}, {"days": "9999"}])
+@pytest.mark.parametrize("data", [{}, {"hours": ""}, {"hours": "3"}, {"hours": "0"}, {"hours": "-7"}, {"hours": "9999"}])
 def test_cleanup_refuses_anything_but_an_offered_age_and_deletes_nothing(test_client, monkeypatch, data):
     calls = []
     monkeypatch.setattr(client, "job_cleanup", lambda paths, days: calls.append(days))
@@ -1010,7 +1010,7 @@ def test_cleanup_reports_orchestration_being_unreachable(test_client, monkeypatc
         raise client.PillarUnavailable("orchestration daemon unreachable")
 
     monkeypatch.setattr(client, "job_cleanup", down)
-    location = unquote(test_client.post("/jobs/cleanup", data={"days": "7"}, follow_redirects=False).headers["location"])
+    location = unquote(test_client.post("/jobs/cleanup", data={"hours": "168"}, follow_redirects=False).headers["location"])
     assert "Could not delete jobs" in location and "unreachable" in location
 
 
@@ -1242,3 +1242,345 @@ def test_attention_degrades_to_nothing_when_the_pillars_are_down(test_client, mo
     monkeypatch.setattr(client, "policy_check_results", down)
     monkeypatch.setattr(client, "list_jobs", down)
     assert test_client.get("/attention.json").json() == {"count": 0, "items": []}
+
+
+# -- pillar names ---------------------------------------------------------------
+
+
+def test_pillars_page_shows_each_pillar_under_its_full_name(test_client, monkeypatch):
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": {
+        "policy": {"status": "healthy", "crash_count": 0, "interface_version": "v1"},
+        "requirements": {"status": "healthy", "crash_count": 0, "interface_version": "v1"},
+        "version": {"status": "healthy", "crash_count": 0, "interface_version": "v1"},
+        "mcp": {"status": "disabled", "crash_count": 0, "interface_version": "v1"},
+    }})
+    monkeypatch.setattr(client, "deployment_pillars", lambda paths: {"pillars": {}, "commits": [], "repo_head": None})
+    text = test_client.get("/pillars").text
+    for full in ("Policy &amp; Compliance", "Requirements &amp; Quality", "Version Control &amp; Release", "MCP Server"):
+        assert f'>{full}</span>' in text
+    assert '<span class="pcard-name" title="policy">' in text
+
+
+def test_an_unknown_pillar_is_shown_as_given():
+    assert app_module.pillar_name("brand-new") == "brand-new"
+    assert app_module.pillar_name("agent") == "Agentic Development"
+
+
+# -- grouped navigation ---------------------------------------------------------
+
+
+def test_bottom_toolbar_groups_related_pages_under_one_button(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [])
+    monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
+    text = test_client.get("/policies").text
+    bar = text[text.index('<nav class="tabbar"'):]
+    assert bar.count('data-open="tasks"') == 1 and bar.count('data-open="projects"') == 1 and bar.count('data-open="system"') == 1
+    tasks_row = re.search(r'data-view="tasks">(.*?)</div>', bar, re.S).group(1)
+    for href, label in (("/tasks", "Task list"), ("/tasks/new", "New task"), ("/tasks/queue", "Queue task"), ("/tasks/schedule", "Schedule task"), ("/jobs", "Jobs")):
+        assert f'href="{href}"' in tasks_row and f"<span>{label}</span>" in tasks_row
+    projects_row = re.search(r'data-view="projects">(.*?)</div>', bar, re.S).group(1)
+    assert all(h in projects_row for h in ('href="/control"', 'href="/report"', 'href="/projects/new"'))
+
+
+def test_the_group_of_the_current_page_is_open_and_highlighted(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [])
+    monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
+    text = test_client.get("/policies").text
+    assert re.search(r'class="tabbar-row tabbar-row-active" data-view="system"', text)
+    assert re.search(r'class="tab tab-group tab-active" data-open="system"', text)
+    assert 'class="subnav-link is-active" href="/policies"' in text.replace('href="/policies" class="subnav-link is-active"', 'class="subnav-link is-active" href="/policies"')
+
+
+# -- arranging project cards (Dashboard and Control) -----------------------------
+
+
+def _names(text, pattern):
+    return re.findall(pattern, text)
+
+
+def test_dashboard_cards_follow_the_saved_order_and_the_order_survives_visits(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch, names=("a-app", "b-app", "c-app"))
+    assert _names(test_client.get("/").text, r'class="proj-name" href="/control#([\w-]+)"') == ["a-app", "b-app", "c-app"]
+    response = test_client.post("/order/dashboard/c-app/up", follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/?arrange=1"
+    test_client.post("/order/dashboard/c-app/up", follow_redirects=False)
+    assert _names(test_client.get("/").text, r'class="proj-name" href="/control#([\w-]+)"') == ["c-app", "a-app", "b-app"]
+
+
+def test_control_order_is_independent_of_the_dashboard_order(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch, names=("a-app", "b-app"))
+    test_client.post("/order/dashboard/b-app/up")
+    assert _names(test_client.get("/control").text, r'<details class="project-panel" id="(?!workspace)([\w-]+)"') == ["a-app", "b-app"]
+    test_client.post("/order/control/b-app/up")
+    assert _names(test_client.get("/control").text, r'<details class="project-panel" id="(?!workspace)([\w-]+)"') == ["b-app", "a-app"]
+    assert _names(test_client.get("/").text, r'class="proj-name" href="/control#([\w-]+)"') == ["b-app", "a-app"]
+
+
+def test_arrange_mode_lists_projects_with_move_buttons(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch, names=("a-app", "b-app"))
+    text = test_client.get("/?arrange=1").text
+    assert 'action="/order/dashboard/a-app/down"' in text and 'action="/order/dashboard/b-app/up"' in text
+    assert re.search(r'aria-label="Move a-app up" disabled', text) and re.search(r'aria-label="Move b-app down" disabled', text)
+    assert "/order/control/" in test_client.get("/control?arrange=1").text
+
+
+def test_a_new_project_appears_after_the_placed_ones_and_a_bad_move_is_refused(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch, names=("a-app", "b-app"))
+    test_client.post("/order/dashboard/b-app/up")
+    _stub_project_panels(monkeypatch, names=("a-app", "b-app", "new-app"))
+    assert _names(test_client.get("/").text, r'class="proj-name" href="/control#([\w-]+)"') == ["b-app", "a-app", "new-app"]
+    refused = test_client.post("/order/dashboard/ghost/up", follow_redirects=False).headers["location"]
+    assert "Could not reorder" in unquote(refused)
+    assert "Could not reorder" in unquote(test_client.post("/order/elsewhere/a-app/up", follow_redirects=False).headers["location"])
+
+
+def test_a_damaged_preferences_file_means_the_default_order(test_client, monkeypatch, paths):
+    _stub_project_panels(monkeypatch, names=("a-app", "b-app"))
+    prefs_file = paths.state_home / "dashboard" / "prefs.json"
+    prefs_file.parent.mkdir(parents=True)
+    prefs_file.write_text("{not json")
+    assert _names(test_client.get("/").text, r'class="proj-name" href="/control#([\w-]+)"') == ["a-app", "b-app"]
+
+
+# -- report: requirements (description, verdict) and tests (name, verdict) ---------------
+
+
+def _stub_report(monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}, {"name": "other", "status": "active"}])
+    monkeypatch.setattr(client, "requirements_report", lambda paths, project: {"requirements": [
+        {"requirement_id": "r1", "status": "published", "tested": True, "passing": True, "done": True},
+        {"requirement_id": "r2", "status": "published", "tested": True, "passing": False, "done": False},
+        {"requirement_id": "r3", "status": "published", "tested": False, "passing": False, "done": False},
+        {"requirement_id": "r4", "status": "draft", "tested": False, "passing": False, "done": False},
+    ]})
+    monkeypatch.setattr(client, "requirements_list", lambda paths, project: [
+        {"id": "r1", "key": "REQ-1", "title": "Lists", "description": "The Widget shall list things.", "status": "published"},
+        {"id": "r2", "key": "REQ-2", "title": "Sorts", "description": "The Widget shall sort things.", "status": "published"},
+        {"id": "r3", "key": "REQ-3", "title": "Exports", "description": "The Widget shall export things.", "status": "published"},
+        {"id": "r4", "key": "REQ-4", "title": "Prints", "description": "The Widget shall print things.", "status": "draft"},
+    ])
+    monkeypatch.setattr(client, "requirements_suites", lambda paths, project: [{"id": "s1", "name": "Unit tests"}])
+    monkeypatch.setattr(client, "requirements_test_results", lambda paths, project: [
+        {"suite_id": "s1", "test_name": "t::a", "verdict": "failed", "executed_at": "2026-09-21T09:00:00Z"},
+        {"suite_id": "s1", "test_name": "t::a", "verdict": "passed", "executed_at": "2026-09-21T10:00:00Z"},
+        {"suite_id": "s1", "test_name": "t::b", "verdict": "failed", "executed_at": "2026-09-21T10:00:00Z"},
+        {"suite_id": "s1", "test_name": "t::c", "verdict": "skipped", "executed_at": "2026-09-21T10:00:00Z"},
+    ])
+
+
+def test_report_lists_every_requirement_with_description_and_verdict(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/report").text
+    for key, desc, verdict in (("REQ-1", "The Widget shall list things.", "passing"), ("REQ-2", "The Widget shall sort things.", "failing"),
+                               ("REQ-3", "The Widget shall export things.", "no tests"), ("REQ-4", "The Widget shall print things.", "draft")):
+        block = text[text.index(f"<code>{key}</code>"):]
+        assert verdict in block[:200] and desc in block[:400]
+
+
+def test_report_lists_every_test_with_its_latest_verdict(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/report").text
+    assert re.search(r'report-test-name">t::a</span>\s*<span class="pill ok">passed', text)  # the later pass replaces the earlier failure
+    assert re.search(r'report-test-name">t::b</span>\s*<span class="pill fail">failed', text)
+    assert re.search(r'report-test-name">t::c</span>\s*<span class="pill idle">skipped', text)
+    assert "Unit tests" in text and text.count("report-test-name") == 3
+
+
+def test_report_filters_by_search_and_verdict(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/report", params={"verdict": "failing"}).text
+    assert "REQ-2" in text and "REQ-1" not in text and "REQ-4" not in text
+    assert "REQ-3" in test_client.get("/report", params={"q": "export"}).text
+    assert "t::b" in test_client.get("/report", params={"verdict": "failed"}).text
+    assert "t::a" not in test_client.get("/report", params={"verdict": "failed"}).text
+
+
+def test_report_shows_a_pillar_outage_as_an_error_not_a_500(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+
+    def down(paths, project):
+        raise client.PillarUnavailable("requirements daemon unreachable")
+
+    monkeypatch.setattr(client, "requirements_report", down)
+    response = test_client.get("/report")
+    assert response.status_code == 200 and "unreachable" in response.text
+
+
+# -- new project (bootstrap) from the toolbar ----------------------------------------
+
+
+def test_new_project_form_is_reachable_from_the_projects_group(test_client):
+    text = test_client.get("/projects/new").text
+    assert 'action="/projects/new"' in text and 'name="create_github_repo"' in text
+    assert 'href="/projects/new"' in text  # the toolbar's Projects group offers it
+
+
+def test_new_project_submits_a_bootstrap_job_into_the_workspace(test_client, monkeypatch, tmp_path):
+    monkeypatch.setenv("LITTLE_WORKSHOP_WORKSPACE_DIR", str(tmp_path))
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (jobs.append(kw), {"status": "succeeded", "result": {"path": f"{tmp_path}/little-new"}})[1])
+    response = test_client.post("/projects/new", data={"name": "little-new", "description": "A thing"}, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"].startswith("/control?message=")
+    job = jobs[0]
+    assert job["type"] == "project.bootstrap" and job["target_pillar"] == "registry"
+    assert job["params"] == {"name": "little-new", "dest_dir": str(tmp_path), "description": "A thing", "create_github_repo": False, "public": False}
+    assert "created" in unquote(response.headers["location"])
+
+
+def test_new_project_creates_a_github_repo_only_when_asked(test_client, monkeypatch):
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (jobs.append(kw), {"status": "succeeded", "result": {"path": "/x"}})[1])
+    test_client.post("/projects/new", data={"name": "little-new", "create_github_repo": "1", "public": "1"})
+    assert jobs[0]["params"]["create_github_repo"] is True and jobs[0]["params"]["public"] is True
+
+
+@pytest.mark.parametrize("name", ["", "Little New", "../escape", "-lead", "UPPER", "a/b"])
+def test_new_project_refuses_an_unsafe_name_and_creates_nothing(test_client, monkeypatch, name):
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: jobs.append(kw))
+    response = test_client.post("/projects/new", data={"name": name}, follow_redirects=False)
+    assert response.status_code in (303, 422) and jobs == []
+
+
+def test_new_project_reports_a_failed_bootstrap(test_client, monkeypatch):
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: {"status": "failed", "error": "project 'little-new' is already registered"})
+    location = unquote(test_client.post("/projects/new", data={"name": "little-new"}, follow_redirects=False).headers["location"])
+    assert location.startswith("/projects/new?message=") and "already registered" in location
+
+
+# -- queue a task behind a predecessor ------------------------------------------------
+
+
+def _task_job(job_id, project, title, status="running"):
+    return {"id": job_id, "type": "agent.run_task", "project_id": project, "status": status, "params": {"title": title}, "created_at": "2026-09-21T10:00:00Z"}
+
+
+def _stub_task_pages(monkeypatch, jobs):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: jobs)
+
+
+def test_queue_page_offers_only_unfinished_agent_tasks_as_predecessors(test_client, monkeypatch):
+    _stub_task_pages(monkeypatch, [
+        _task_job("j1", "little-widget", "Add search", "running"), _task_job("j2", "little-widget", "Old thing", "succeeded"),
+        {"id": "j3", "type": "deployment.deploy", "project_id": "little-widget", "status": "running", "params": {}},
+        _task_job("j4", "little-widget", "Waiting one", "queued"),
+    ])
+    text = test_client.get("/tasks/queue").text
+    assert 'value="j1"' in text and 'value="j4"' in text
+    assert 'value="j2"' not in text and 'value="j3"' not in text
+    assert "little-widget — Add search (running)" in text
+
+
+def test_queue_page_explains_when_there_is_nothing_to_wait_for(test_client, monkeypatch):
+    _stub_task_pages(monkeypatch, [_task_job("j2", "little-widget", "Done", "succeeded")])
+    text = test_client.get("/tasks/queue").text
+    assert "nothing to queue behind" in text and 'action="/tasks/queue"' not in text
+
+
+def test_queue_submits_the_task_depending_on_its_predecessor(test_client, monkeypatch):
+    _stub_task_pages(monkeypatch, [_task_job("j1", "little-widget", "Add search")])
+    created = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (created.append(kw), {"status": "queued"})[1])
+    response = test_client.post("/tasks/queue", data={"project": "little-widget", "title": "Then sort", "description": "d", "after": "j1"}, follow_redirects=False)
+    assert response.status_code == 303 and "queued" in unquote(response.headers["location"])
+    job = created[0]
+    assert job["type"] == "agent.run_task" and job["depends_on"] == ["j1"] and job["queue_key"] == "little-widget"
+    assert job["params"]["title"] == "Then sort"
+
+
+@pytest.mark.parametrize("after", ["", "unknown-job", "j2"])
+def test_queue_refuses_a_missing_or_finished_predecessor_and_creates_no_job(test_client, monkeypatch, after):
+    _stub_task_pages(monkeypatch, [_task_job("j1", "little-widget", "Add search"), _task_job("j2", "little-widget", "Done", "succeeded")])
+    created = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: created.append(kw))
+    response = test_client.post("/tasks/queue", data={"project": "little-widget", "title": "t", "after": after}, follow_redirects=False)
+    assert response.status_code == 303 and "Choose the task" in unquote(response.headers["location"]) and created == []
+
+
+# -- schedule a task -------------------------------------------------------------------
+
+
+def test_schedule_once_creates_a_scheduled_task_that_starts_an_agent_task(test_client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: calls.append(kw) or {})
+    response = test_client.post("/tasks/schedule", data={
+        "project": "little-widget", "title": "Nightly tidy", "description": "d", "kind": "once", "at": "2999-01-02T09:30"}, follow_redirects=False)
+    assert response.status_code == 303 and "scheduled" in unquote(response.headers["location"])
+    call = calls[0]
+    assert call["name"] == "little-widget: Nightly tidy" and call["schedule"] == {"kind": "once", "at": "2999-01-02T09:30:00"}
+    template = call["job_template"]
+    assert template["type"] == "agent.run_task" and template["target_pillar"] == "agent" and template["project_id"] == "little-widget"
+    assert template["params"]["title"] == "Nightly tidy"
+
+
+def test_schedule_recurring_takes_weekdays_and_a_time(test_client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: calls.append(kw) or {})
+    test_client.post("/tasks/schedule", data={
+        "project": "little-widget", "title": "Weekly", "kind": "recurring", "day": ["4", "0", "0"], "time_of_day": "07:05"})
+    assert calls[0]["schedule"] == {"kind": "recurring", "days_of_week": [0, 4], "time_of_day": "07:05"}
+
+
+@pytest.mark.parametrize("data", [
+    {"kind": "once", "at": ""}, {"kind": "once", "at": "2001-01-01T00:00"}, {"kind": "once", "at": "not a date"},
+    {"kind": "recurring", "time_of_day": "07:05"}, {"kind": "recurring", "day": ["1"], "time_of_day": "25:99"},
+    {"kind": "recurring", "day": ["9"], "time_of_day": "07:05"}, {"kind": "weekly"},
+])
+def test_schedule_refuses_an_incomplete_or_past_schedule(test_client, monkeypatch, data):
+    calls = []
+    monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: calls.append(kw) or {})
+    response = test_client.post("/tasks/schedule", data={"project": "little-widget", "title": "t", **data}, follow_redirects=False)
+    assert response.status_code == 303 and calls == []
+
+
+def test_schedule_page_lists_scheduled_agent_tasks_and_removes_one(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [
+        {"id": "t1", "name": "little-widget: Weekly", "state": "active", "next_run_at": "2026-09-28T07:05:00",
+         "job_template": {"type": "agent.run_task"}, "schedule": {"kind": "recurring", "days_of_week": [0, 4], "time_of_day": "07:05"}},
+        {"id": "t2", "name": "policy audit", "state": "active", "job_template": {"type": "policy.check_all"}, "schedule": {"kind": "once", "at": "2026-09-30T00:00:00"}},
+    ])
+    text = test_client.get("/tasks/schedule").text
+    assert "little-widget: Weekly" in text and "Mon, Fri at 07:05" in text and "policy audit" not in text
+    removed = []
+    monkeypatch.setattr(client, "remove_scheduled_task", lambda paths, task_id: removed.append(task_id) or {})
+    response = test_client.post("/tasks/schedule/t1/remove", follow_redirects=False)
+    assert removed == ["t1"] and response.status_code == 303
+
+
+# -- workspace-level session on Control ------------------------------------------------
+
+
+def test_control_offers_a_workspace_session_above_the_projects(test_client, monkeypatch, tmp_path):
+    monkeypatch.setenv("LITTLE_WORKSHOP_WORKSPACE_DIR", str(tmp_path))
+    _stub_project_panels(monkeypatch, session={"running": False, "trusted": True})
+    text = test_client.get("/control").text
+    assert text.index('id="workspace"') < text.index('id="little-widget"')
+    assert str(tmp_path) in text and 'action="/projects/workspace/session/start"' in text and "Start workspace session" in text
+
+
+def test_a_running_workspace_session_offers_stop_and_its_name(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch, session={"running": True, "trusted": True})
+    text = test_client.get("/control").text
+    assert 'action="/projects/workspace/session/stop"' in text and "lws-workspace-session" in text
+
+
+def test_an_untrusted_workspace_says_how_to_trust_it(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch, session={"running": False, "trusted": False})
+    assert "accept the trust prompt" in test_client.get("/control").text
+
+
+def test_starting_the_workspace_session_submits_an_agent_job_for_the_reserved_id(test_client, monkeypatch):
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (jobs.append(kw), {"status": "succeeded", "result": {"session_name": "lws-workspace-session"}})[1])
+    response = test_client.post("/projects/workspace/session/start", follow_redirects=False)
+    assert jobs[0]["type"] == "agent.session_start" and jobs[0]["project_id"] == "workspace"
+    assert response.headers["location"].startswith("/control?project=workspace")
+
+
+def test_a_project_cannot_be_bootstrapped_under_the_reserved_workspace_name(test_client, monkeypatch):
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: jobs.append(kw))
+    location = unquote(test_client.post("/projects/new", data={"name": "workspace"}, follow_redirects=False).headers["location"])
+    assert "reserved" in location and jobs == []

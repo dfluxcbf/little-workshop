@@ -33,6 +33,7 @@ from __future__ import annotations
 import importlib.resources
 import json
 import os
+import re
 import threading
 from datetime import datetime, timezone
 
@@ -42,7 +43,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from common.paths import Paths
-from dashboard import client
+from common.workspace import WORKSPACE_ID, workspace_dir
+from dashboard import client, prefs
 
 GATE_POINT_VALUES = [
     "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
@@ -92,6 +94,54 @@ def _back(to: str, message: str) -> RedirectResponse:
     return RedirectResponse(f"{to}{'&' if '?' in to else '?'}message={quote(message)}", status_code=303)
 
 
+def requirement_verdict(row: dict) -> str:
+    """One word for a requirement's state: passing (done), failing, no tests, or draft."""
+    if row.get("done"):
+        return "passing"
+    if row.get("status") != "published":
+        return "draft"
+    return "failing" if row.get("tested") else "no tests"
+
+
+def build_report(paths: Paths, project: str) -> dict:
+    """Every requirement (description, verdict) and every test (name, verdict — the latest run) of one project."""
+    rows = {r["requirement_id"]: r for r in client.requirements_report(paths, project).get("requirements", [])}
+    requirements = []
+    for req in sorted(client.requirements_list(paths, project), key=lambda r: r["key"]):
+        row = rows.get(req["id"], {})
+        requirements.append({
+            "key": req["key"], "title": req.get("title", ""), "description": req.get("description", ""),
+            "verdict": requirement_verdict({**row, "status": row.get("status", req.get("status"))}),
+        })
+    suites = {s["id"]: s["name"] for s in client.requirements_suites(paths, project)}
+    latest: dict[tuple[str, str], dict] = {}
+    for result in client.requirements_test_results(paths, project):
+        key = (result["suite_id"], result["test_name"])
+        if key not in latest or result["executed_at"] >= latest[key]["executed_at"]:
+            latest[key] = result
+    tests = [
+        {"suite": suites.get(sid, sid), "name": name, "verdict": r["verdict"], "detail": r.get("detail", "")}
+        for (sid, name), r in latest.items()
+    ]
+    tests.sort(key=lambda t: (t["suite"], t["name"]))
+    return {"requirements": requirements, "tests": tests}
+
+
+WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+PILLAR_NAMES = {
+    "orchestration": "Orchestration", "policy": "Policy & Compliance", "registry": "Registry & Portfolio",
+    "requirements": "Requirements & Quality", "version": "Version Control & Release", "build": "Build & Packages",
+    "deployment": "Deployment & Servers", "agent": "Agentic Development", "dashboard": "Dashboard", "mcp": "MCP Server",
+}
+
+
+def pillar_name(identifier: str) -> str:
+    """The pillar's full name, capitalised as in docs/architecture.md; an unknown identifier is shown as given."""
+    return PILLAR_NAMES.get(identifier, identifier)
+
+
 def collect_attention(paths: Paths) -> list[dict]:
     """What needs a human right now: an enabled policy whose latest check on a
     project failed, and every Job waiting for a confirmation. Both are read
@@ -124,8 +174,8 @@ JOB_STATUS_LABELS = {
 }
 JOB_ACTIVE_STATUSES = {"running", "queued", "pending_confirmation"}
 JOBS_PAGE_SIZE = 50
-# (days, label) — how old a finished job must be before "Delete old jobs" may remove it.
-JOB_CLEANUP_AGES = [(2, "2 days"), (7, "1 week"), (28, "4 weeks"), (56, "8 weeks"), (168, "24 weeks")]
+# (hours, label) — how old a finished job must be before "Delete old jobs" may remove it.
+JOB_CLEANUP_AGES = [(12, "12 hours"), (48, "2 days"), (168, "1 week"), (672, "4 weeks"), (1344, "8 weeks"), (4032, "24 weeks")]
 
 
 def _parse_time(value: str | None) -> datetime | None:
@@ -174,6 +224,7 @@ def build_app(paths: Paths) -> FastAPI:
     static_dir = importlib.resources.files("dashboard") / "static"
     templates.env.filters["reltime"] = relative_time
     templates.env.filters["pretty"] = pretty_json
+    templates.env.globals["pillar_name"] = pillar_name
     templates.env.globals["job_duration"] = job_duration
     templates.env.globals["static_v"] = int(os.path.getmtime(str(static_dir / "app.css")))
     # follow_symlink: Bazel runfiles trees are symlink forests.
@@ -208,20 +259,36 @@ def build_app(paths: Paths) -> FastAPI:
     @app.get("/attention", response_class=HTMLResponse)
     def attention(request: Request):
         items = collect_attention(paths)
-        return _render(request, "attention.html", items=items, attention_count=len(items), nav_active="dashboard")
+        return _render(request, "attention.html", items=items, attention_count=len(items), nav_active="attention")
 
     def _project_names() -> list[str]:
         return [p["name"] for p in client.list_projects(paths) if p.get("status", "active") == "active"]
 
     # ---- Dashboard: manage projects at a glance -------------------------
 
+    def _arrange_page(request: Request, page: str, names: list[str], back: str):
+        return _render(request, "arrange.html", names=names, page=page, back=back, nav_active="dashboard" if page == "dashboard" else "control")
+
+    @app.post("/order/{page}/{name}/{direction}")
+    def reorder(page: str, name: str, direction: str):
+        back = "/" if page == "dashboard" else "/control"
+        try:
+            prefs.move(paths, page, _project_names(), name, direction)
+        except client.PillarUnavailable as exc:
+            return _back(back, f"Could not reorder: {exc}")
+        except ValueError as exc:
+            return _back(back, f"Could not reorder: {exc}")
+        return RedirectResponse(f"{back}?arrange=1", status_code=303)
+
     @app.get("/", response_class=HTMLResponse)
-    def index(request: Request):
+    def index(request: Request, arrange: str | None = None):
         error = None
         try:
-            names = _project_names()
+            names = prefs.ordered(paths, "dashboard", _project_names())
         except client.PillarUnavailable as exc:
             names, error = [], str(exc)
+        if arrange:
+            return _arrange_page(request, "dashboard", names, "/")
         pillars = _try(lambda: client.core_status(paths).get("pillars", {}), default={})
         unhealthy = [n for n, e in pillars.items() if e["status"] not in ("healthy", "active", "disabled")]
 
@@ -258,15 +325,53 @@ def build_app(paths: Paths) -> FastAPI:
         }
         return _render(request, "index.html", rows=rows, stats=stats, unhealthy=unhealthy, error=error, nav_active="dashboard")
 
+    # ---- Report: requirements and tests with their verdicts ---------------
+
+    @app.get("/report", response_class=HTMLResponse)
+    def report(request: Request, project: str | None = None, q: str = "", verdict: str = ""):
+        error = None
+        try:
+            names = prefs.ordered(paths, "dashboard", _project_names())
+        except client.PillarUnavailable as exc:
+            names, error = [], str(exc)
+        chosen = project if project in names else (names[0] if names else None)
+        data = {"requirements": [], "tests": []}
+        if chosen:
+            try:
+                data = build_report(paths, chosen)
+            except client.PillarUnavailable as exc:
+                error = str(exc)
+        needle = q.strip().lower()
+        reqs = [r for r in data["requirements"] if (not verdict or r["verdict"] == verdict)
+                and (not needle or needle in f"{r['key']} {r['title']} {r['description']}".lower())]
+        tests = [t for t in data["tests"] if (not verdict or t["verdict"] == verdict)
+                 and (not needle or needle in f"{t['suite']} {t['name']}".lower())]
+        req_counts: dict[str, int] = {}
+        for r in data["requirements"]:
+            req_counts[r["verdict"]] = req_counts.get(r["verdict"], 0) + 1
+        test_counts: dict[str, int] = {}
+        for t in data["tests"]:
+            test_counts[t["verdict"]] = test_counts.get(t["verdict"], 0) + 1
+        suites: dict[str, list[dict]] = {}
+        for t in tests:
+            suites.setdefault(t["suite"], []).append(t)
+        return _render(
+            request, "report.html", projects=names, project=chosen, q=q, verdict=verdict, requirements=reqs,
+            suites=suites, req_counts=req_counts, test_counts=test_counts, req_total=len(data["requirements"]),
+            test_total=len(data["tests"]), error=error, nav_active="report",
+        )
+
     # ---- Control: per-project servers, sessions, work -------------------
 
     @app.get("/control", response_class=HTMLResponse)
-    def control(request: Request, project: str | None = None):
+    def control(request: Request, project: str | None = None, arrange: str | None = None):
         error = None
         try:
-            names = _project_names()
+            names = prefs.ordered(paths, "control", _project_names())
         except client.PillarUnavailable as exc:
             names, error = [], str(exc)
+        if arrange:
+            return _arrange_page(request, "control", names, "/control")
         from dashboard.client import session_name_for
 
         panels = []
@@ -279,7 +384,11 @@ def build_app(paths: Paths) -> FastAPI:
                 "session": _try(client.agent_session_status, paths, name), "session_name": session_name_for(name),
                 "runs": runs, "awaiting": awaiting,
             })
-        return _render(request, "control.html", panels=panels, focus=project, error=error, nav_active="control")
+        workspace = {
+            "id": WORKSPACE_ID, "dir": str(workspace_dir()), "session": _try(client.agent_session_status, paths, WORKSPACE_ID),
+            "session_name": session_name_for(WORKSPACE_ID),
+        }
+        return _render(request, "control.html", panels=panels, workspace=workspace, focus=project, error=error, nav_active="control")
 
     @app.post("/projects/{name}/deploy")
     def deploy(name: str, branch: str = Form("dev")):
@@ -315,6 +424,33 @@ def build_app(paths: Paths) -> FastAPI:
             queue_key=None, depends_on=[], created_by="dashboard",
         ))
         return _back(f"/control?project={name}", "Session stopped.")
+
+    @app.get("/projects/new", response_class=HTMLResponse)
+    def project_new(request: Request):
+        return _render(request, "project_new.html", dest=str(workspace_dir()), nav_active="new-project")
+
+    @app.post("/projects/new")
+    def project_create(
+        name: str = Form(...), description: str = Form(""), create_github_repo: str | None = Form(None),
+        public: str | None = Form(None),
+    ):
+        name = name.strip()
+        if name == WORKSPACE_ID:
+            return _back("/projects/new", f"{WORKSPACE_ID!r} is reserved for the workspace session; choose another name.")
+        if not PROJECT_NAME_RE.match(name):
+            return _back("/projects/new", "The name must be lowercase letters, digits and hyphens, starting with a letter or digit.")
+        params = {"name": name, "dest_dir": str(workspace_dir()), "description": description.strip(),
+                  "create_github_repo": bool(create_github_repo), "public": bool(public)}
+        try:
+            result = client.create_job(
+                paths, timeout=300.0, type="project.bootstrap", target_pillar="registry", project_id=name,
+                params=params, queue_key=None, depends_on=[], created_by="dashboard",
+            )
+        except client.PillarUnavailable as exc:
+            return _back("/projects/new", f"Could not create {name}: {exc}")
+        if result.get("status") != "succeeded":
+            return _back("/projects/new", f"Could not create {name}: {result.get('error') or result.get('status')}")
+        return _back("/control", f"Project {name} created at {result['result']['path']} and registered.")
 
     @app.get("/projects")
     def projects_redirect():
@@ -356,6 +492,95 @@ def build_app(paths: Paths) -> FastAPI:
         if result is None or result.get("status") not in ("running", "succeeded"):
             return _back("/tasks/new", f"Could not start the task: {(result or {}).get('error', 'orchestration unreachable')}")
         return _back("/tasks", f"Task started on {project}.")
+
+    # ---- Queue a task behind another; schedule a task for later ----------------
+
+    def _waiting_on_candidates() -> list[dict]:
+        """Agent tasks that have not finished yet — what a queued task can wait behind."""
+        jobs = _try(lambda: client.list_jobs(paths), default=[])
+        return [
+            {"id": j["id"], "label": f"{j.get('project_id') or '?'} — {(j.get('params') or {}).get('title') or j['id'][:8]} ({j['status'].replace('_', ' ')})"}
+            for j in sorted(jobs, key=lambda j: j.get("created_at") or "", reverse=True)
+            if j.get("type") == "agent.run_task" and j.get("status") in JOB_ACTIVE_STATUSES
+        ]
+
+    @app.get("/tasks/queue", response_class=HTMLResponse)
+    def task_queue(request: Request, project: str | None = None):
+        error = None
+        try:
+            names = _project_names()
+        except client.PillarUnavailable as exc:
+            names, error = [], str(exc)
+        return _render(request, "task_queue.html", projects=names, selected=project, predecessors=_waiting_on_candidates(), error=error, nav_active="queue-task")
+
+    @app.post("/tasks/queue")
+    def task_queue_submit(
+        project: str = Form(...), title: str = Form(...), description: str = Form(""), intent: str = Form("task"),
+        review_mode: str = Form("manual"), after: str = Form(""),
+    ):
+        if not after or after not in {c["id"] for c in _waiting_on_candidates()}:
+            return _back("/tasks/queue", "Choose the task this one should wait for.")
+        result = _try(lambda: client.create_job(
+            paths, type="agent.run_task", target_pillar="agent", project_id=project,
+            params={"title": title, "description": description, "intent": intent, "review_mode": review_mode},
+            queue_key=project, depends_on=[after], created_by="dashboard",
+        ))
+        if result is None or result.get("status") not in ("queued", "running", "succeeded"):
+            return _back("/tasks/queue", f"Could not queue the task: {(result or {}).get('error', 'orchestration unreachable')}")
+        return _back("/tasks", f"Task queued on {project}; it starts once the task it waits for has succeeded.")
+
+    @app.get("/tasks/schedule", response_class=HTMLResponse)
+    def task_schedule(request: Request, project: str | None = None):
+        error = None
+        try:
+            names = _project_names()
+        except client.PillarUnavailable as exc:
+            names, error = [], str(exc)
+        scheduled = [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") == "agent.run_task"]
+        return _render(
+            request, "task_schedule.html", projects=names, selected=project, scheduled=scheduled, weekdays=WEEKDAYS,
+            error=error, nav_active="schedule-task",
+        )
+
+    @app.post("/tasks/schedule")
+    def task_schedule_submit(
+        project: str = Form(...), title: str = Form(...), description: str = Form(""), intent: str = Form("task"),
+        review_mode: str = Form("manual"), kind: str = Form("once"), at: str = Form(""), time_of_day: str = Form(""),
+        day: list[str] = Form(default=[]),
+    ):
+        if kind == "once":
+            try:
+                when = datetime.fromisoformat(at)
+            except ValueError:
+                return _back("/tasks/schedule", "Choose the date and time to start the task.")
+            if when <= datetime.now():
+                return _back("/tasks/schedule", "That time has already passed — choose a time in the future.")
+            schedule = {"kind": "once", "at": when.isoformat()}
+        elif kind == "recurring":
+            days = sorted({int(d) for d in day if d.isdigit() and 0 <= int(d) <= 6})
+            if not days or not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", time_of_day):
+                return _back("/tasks/schedule", "Choose at least one weekday and a time of day.")
+            schedule = {"kind": "recurring", "days_of_week": days, "time_of_day": time_of_day}
+        else:
+            return _back("/tasks/schedule", "Choose whether the task runs once or every week.")
+        template = {
+            "type": "agent.run_task", "target_pillar": "agent", "project_id": project,
+            "params": {"title": title, "description": description, "intent": intent, "review_mode": review_mode},
+            "queue_key": project, "depends_on": [],
+        }
+        try:
+            client.create_scheduled_task(paths, name=f"{project}: {title}", job_template=template, schedule=schedule)
+        except client.PillarUnavailable as exc:
+            return _back("/tasks/schedule", f"Could not schedule the task: {exc}")
+        return _back("/tasks/schedule", f"Task scheduled on {project}.")
+
+    @app.post("/tasks/schedule/{task_id}/remove")
+    def task_schedule_remove(task_id: str):
+        try:
+            client.remove_scheduled_task(paths, task_id)
+        except client.PillarUnavailable as exc:
+            return _back("/tasks/schedule", f"Could not remove it: {exc}")
+        return _back("/tasks/schedule", "Scheduled task removed.")
 
     @app.get("/tasks/{project}/{run_id}", response_class=HTMLResponse)
     def task_detail(request: Request, project: str, run_id: str):
@@ -437,8 +662,8 @@ def build_app(paths: Paths) -> FastAPI:
             ]
         matching.sort(key=lambda j: j.get("created_at") or "", reverse=True)
         limit = max(JOBS_PAGE_SIZE, min(limit, 1000))
-        prunable = _try(lambda: client.job_cleanup_preview(paths, [days for days, _ in JOB_CLEANUP_AGES]), default={}) if everything else {}
-        cleanup_options = [{"days": days, "label": label, "count": prunable.get(str(days), 0)} for days, label in JOB_CLEANUP_AGES]
+        prunable = _try(lambda: client.job_cleanup_preview(paths, [hours for hours, _ in JOB_CLEANUP_AGES]), default={}) if everything else {}
+        cleanup_options = [{"hours": hours, "label": label, "count": prunable.get(str(hours), 0)} for hours, label in JOB_CLEANUP_AGES]
         return _render(
             request, "jobs.html", cleanup_options=cleanup_options, jobs=matching[:limit], total=len(matching), limit=limit, next_limit=limit + JOBS_PAGE_SIZE,
             status=status, q=q or "", all_count=len(everything),
@@ -446,19 +671,19 @@ def build_app(paths: Paths) -> FastAPI:
             active=sum(counts.get(name, 0) for name in JOB_ACTIVE_STATUSES), error=error, nav_active="jobs")
 
     @app.post("/jobs/cleanup")
-    def jobs_cleanup(days: int | None = Form(None)):
+    def jobs_cleanup(hours: int | None = Form(None)):
         """Delete finished jobs older than one of the offered ages. Anything else is refused."""
         labels = dict(JOB_CLEANUP_AGES)
-        if days not in labels:
+        if hours not in labels:
             return _back("/jobs", "Choose how old the jobs must be before deleting them.")
         try:
-            result = client.job_cleanup(paths, days)
+            result = client.job_cleanup(paths, hours)
         except client.PillarUnavailable as exc:
             return _back("/jobs", f"Could not delete jobs: {exc}")
         deleted = result.get("deleted", 0)
         kept = result.get("kept_for_safety", 0)
         note = f" {kept} kept because active work still depends on them." if kept else ""
-        return _back("/jobs", f"Deleted {deleted} job{'' if deleted == 1 else 's'} older than {labels[days]}.{note}")
+        return _back("/jobs", f"Deleted {deleted} job{'' if deleted == 1 else 's'} older than {labels[hours]}.{note}")
 
     @app.get("/policies", response_class=HTMLResponse)
     def policies(request: Request, message: str | None = None):

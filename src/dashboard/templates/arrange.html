@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Arrange projects — little-workshop{% endblock %}
+{% block content %}
+<h1>Arrange projects</h1>
+<p class="lede">Move a project up or down; the order is used for the cards on {{ 'the Dashboard' if page == 'dashboard' else 'Control' }}.</p>
+<ol class="arrange-list">
+  {% for n in names %}
+  <li class="arrange-row">
+    <span class="arrange-pos">{{ loop.index }}</span>
+    <span class="arrange-name">{{ n }}</span>
+    <form method="post" action="/order/{{ page }}/{{ n }}/up"><button type="submit" aria-label="Move {{ n }} up"{% if loop.first %} disabled{% endif %}>&#9650;</button></form>
+    <form method="post" action="/order/{{ page }}/{{ n }}/down"><button type="submit" aria-label="Move {{ n }} down"{% if loop.last %} disabled{% endif %}>&#9660;</button></form>
+  </li>
+  {% else %}
+  <li class="muted">No project registered yet.</li>
+  {% endfor %}
+</ol>
+<p><a class="btn primary" href="{{ back }}">Done</a></p>
+{% endblock %}

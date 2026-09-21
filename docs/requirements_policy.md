@@ -37,6 +37,23 @@ mandate: sequential, unambiguous, assigned in creation order, recorded in
 never requiring `lreq` to mint it. See that file's own "Conventions"
 section for the full shape.
 
+## Requirements are the source of truth for every implementation request (2026-09-21)
+
+- **Every implementation request is mapped to Requirements before it is implemented.**
+  A request that adds behaviour adds requirements; one that changes behaviour edits the
+  affected requirements (a published requirement is locked, so a change to one is a new
+  requirement that supersedes it); one that removes behaviour removes them. The commits
+  that implement the request cite the affected ids (`REQ-nnnnnnnnn`) in their messages.
+  Judging that the mapping is *right* is a review matter; the mechanical part — commits under
+  `src/` cite an id — is the `commit-cites-requirement` policy, filed as a draft for approval in
+  the app.
+- **Requirements follow EARS.** A description reads `<The system> shall <response>`, optionally
+  prefixed by `While <state>,`, `When <trigger>,`, `Where <feature>,` or `If <condition>, then`.
+  The Requirements pillar enforces this: creating a requirement or editing a draft's description
+  is refused, with the correction, when it is not EARS (`src/requirements/ears.py`). Bulk
+  imports of requirements written elsewhere (`imported: true`) are exempt, and requirements that
+  predate the rule stay as they are until someone edits them.
+
 ## Project-specific notes
 
 - No test suites exist yet (design-only round, no `src/`/`tests/` content).

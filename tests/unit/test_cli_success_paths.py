@@ -1086,12 +1086,12 @@ def test_requirements_import_edit_updates_existing_draft(paths, capsys, monkeypa
     monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.append(kw), {"status": "succeeded", "result": {}})[1])
 
     json_path = tmp_path / "payload.json"
-    json_path.write_text(json.dumps({"list": [{"key": "REQ-1", "title": "New title", "description": "New"}]}), encoding="utf-8")
+    json_path.write_text(json.dumps({"list": [{"key": "REQ-1", "title": "New title", "description": "New", "imported": True}]}), encoding="utf-8")
 
     assert main.main(["requirements", "import", "--project-id", "p1", "--json", str(json_path), "--edit"]) == 0
     assert _out(capsys) == {"created": [], "updated": ["REQ-1"], "skipped_conflicts": []}
     assert captured[0]["type"] == "requirements.update_requirement"
-    assert captured[0]["params"] == {"requirement_id": "id1", "title": "New title", "description": "New"}
+    assert captured[0]["params"] == {"requirement_id": "id1", "title": "New title", "description": "New", "imported": True}
 
 
 def test_requirements_import_edit_rejects_published_requirement(paths, capsys, monkeypatch, tmp_path):

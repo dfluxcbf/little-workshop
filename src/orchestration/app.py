@@ -30,11 +30,11 @@ from orchestration.schedule import first_occurrence
 from orchestration.scheduler import cancel_task, postpone_task, trigger_task
 
 
-MAX_CLEANUP_DAYS = 3650
+MAX_CLEANUP_HOURS = 3650 * 24
 
 
 class JobCleanupRequest(BaseModel):
-    older_than_days: int = Field(ge=1, le=MAX_CLEANUP_DAYS)
+    older_than_hours: int = Field(ge=1, le=MAX_CLEANUP_HOURS)
 
 
 class CreateJobRequest(BaseModel):
@@ -111,24 +111,24 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup) -> FastAPI:
     # Job history cleanup. Paths avoid `/v1/jobs/...` so they are never read as a job id.
 
     @app.get("/v1/job-cleanup")
-    def job_cleanup_preview(days: str = "2,7,28,56,168") -> dict:
-        """How many finished jobs each age would delete: {"prunable": {"7": 312, ...}}."""
+    def job_cleanup_preview(hours: str = "12,48,168,672,1344,4032") -> dict:
+        """How many finished jobs each age would delete: {"prunable": {"168": 312, ...}} (keys in hours)."""
         try:
-            ages = [int(d) for d in days.split(",") if d.strip()]
+            ages = [int(h) for h in hours.split(",") if h.strip()]
         except ValueError:
-            raise HTTPException(status_code=400, detail="days must be comma-separated integers")
-        if not ages or any(a < 1 or a > MAX_CLEANUP_DAYS for a in ages):
-            raise HTTPException(status_code=400, detail=f"each age must be 1..{MAX_CLEANUP_DAYS} days")
+            raise HTTPException(status_code=400, detail="hours must be comma-separated integers")
+        if not ages or any(a < 1 or a > MAX_CLEANUP_HOURS for a in ages):
+            raise HTTPException(status_code=400, detail=f"each age must be 1..{MAX_CLEANUP_HOURS} hours")
         now = datetime.now(timezone.utc)
         with lock:
-            return {"prunable": {str(a): db.count_prunable_jobs(conn, now - timedelta(days=a)) for a in ages}}
+            return {"prunable": {str(a): db.count_prunable_jobs(conn, now - timedelta(hours=a)) for a in ages}}
 
     @app.post("/v1/job-cleanup")
     def job_cleanup(request: JobCleanupRequest) -> dict:
         """Delete finished jobs (and their run records) last updated more than
-        `older_than_days` ago. Running, queued and awaiting-confirmation jobs are never
+        `older_than_hours` ago. Running, queued and awaiting-confirmation jobs are never
         touched, nor anything they still depend on."""
-        cutoff = datetime.now(timezone.utc) - timedelta(days=request.older_than_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=request.older_than_hours)
         with lock:
             return db.prune_finished_jobs(conn, cutoff)
 

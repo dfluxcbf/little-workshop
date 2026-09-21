@@ -9,7 +9,7 @@
   <label class="pcard{{ ' is-disabled' if disabled }}">
     {% if not disabled %}<input type="checkbox" class="pick" name="pillar" value="{{ name }}">{% endif %}
     <span class="pcard-head">
-      <span class="pcard-name">{{ name }}</span>
+      <span class="pcard-name" title="{{ name }}">{{ pillar_name(name) }}</span>
       {% if entry.status in ("healthy", "active", "reconnected") %}<span class="pill ok">{{ entry.status }}</span>
       {% elif disabled %}<span class="pill idle">disabled</span>
       {% else %}<span class="pill fail">{{ entry.status }}</span>{% endif %}

@@ -751,7 +751,7 @@ def cmd_requirements_import(args: argparse.Namespace) -> int:
                 update_result = client.create_job(
                     paths, type="requirements.update_requirement", target_pillar="requirements",
                     project_id=args.project_id,
-                    params={"requirement_id": existing["id"], "title": item["title"], "description": item.get("description", "")},
+                    params={"requirement_id": existing["id"], "title": item["title"], "description": item.get("description", ""), "imported": True},
                     queue_key=None, depends_on=[], created_by="lws",
                 )
                 if update_result.get("status") != "succeeded":
@@ -763,7 +763,7 @@ def cmd_requirements_import(args: argparse.Namespace) -> int:
                 result = client.create_job(
                     paths, type="requirements.create_requirement", target_pillar="requirements",
                     project_id=args.project_id,
-                    params={"key": key, "title": item["title"], "description": item.get("description", "")},
+                    params={"key": key, "title": item["title"], "description": item.get("description", ""), "imported": True},
                     queue_key=None, depends_on=[], created_by="lws",
                 )
                 if result.get("status") != "succeeded":

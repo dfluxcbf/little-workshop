@@ -270,3 +270,11 @@ pattern `version.branch_audit`/`version.stabilize` already established.
   questions (is the agent's *own* work good enough to finish
   automatically, vs. does a *policy* allow this action to happen at all)
   and nothing yet says how a Job subject to both actually resolves.
+
+## Workspace session (2026-09-21)
+
+`agent.session_start`/`agent.session_stop` and `GET /v1/sessions/{project_id}` also accept the reserved
+id `workspace` (`common/workspace.py`), which is never looked up in Registry & Portfolio and resolves to
+the projects root directory — the parent of the workshop checkout, or `LITTLE_WORKSHOP_WORKSPACE_DIR`.
+It gives the user one Claude Code session above every project for cross-project work, with the same
+one-session limit, trust check and detached lifetime as a project session.

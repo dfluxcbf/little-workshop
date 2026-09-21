@@ -33,7 +33,7 @@ def _create_suite(client, project_id="p1", name="core"):
 
 
 def _create_requirement(client, project_id="p1", key="REQ-1", title="thing works", **extra):
-    params = {"key": key, "title": title, **extra}
+    params = {"key": key, "title": title, "description": "The system shall work.", **extra}
     return client.post(
         "/v1/jobs/requirements.create_requirement",
         json={"job_id": "j", "project_id": project_id, "params": params},

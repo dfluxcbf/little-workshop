@@ -275,34 +275,47 @@ def _old_job(conn, days, status=JobStatus.SUCCEEDED):
 def test_cleanup_preview_counts_each_age_without_deleting(client, conn):
     _old_job(conn, 3); _old_job(conn, 10); _old_job(conn, 40); _old_job(conn, 40, status=JobStatus.FAILED)
     _old_job(conn, 500, status=JobStatus.RUNNING)  # never counted
-    assert client.get("/v1/job-cleanup").json() == {"prunable": {"2": 4, "7": 3, "28": 2, "56": 0, "168": 0}}
-    assert client.get("/v1/job-cleanup", params={"days": "5,30"}).json() == {"prunable": {"5": 3, "30": 2}}
+    assert client.get("/v1/job-cleanup").json() == {"prunable": {"12": 4, "48": 4, "168": 3, "672": 2, "1344": 0, "4032": 0}}
+    assert client.get("/v1/job-cleanup", params={"hours": "120,720"}).json() == {"prunable": {"120": 3, "720": 2}}
     assert len(db.list_jobs(conn)) == 5
 
 
-@pytest.mark.parametrize("days", ["", "x", "0", "-3", "3651", "7,abc"])
-def test_cleanup_preview_rejects_bad_ages(client, days):
-    assert client.get("/v1/job-cleanup", params={"days": days}).status_code == 400
+@pytest.mark.parametrize("hours", ["", "x", "0", "-3", "87601", "7,abc"])
+def test_cleanup_preview_rejects_bad_ages(client, hours):
+    assert client.get("/v1/job-cleanup", params={"hours": hours}).status_code == 400
 
 
 def test_cleanup_deletes_finished_jobs_older_than_the_chosen_age(client, conn):
     old = _old_job(conn, 30)
     recent = _old_job(conn, 3)
     running = _old_job(conn, 30, status=JobStatus.RUNNING)
-    response = client.post("/v1/job-cleanup", json={"older_than_days": 7})
+    response = client.post("/v1/job-cleanup", json={"older_than_hours": 168})
     assert response.status_code == 200
     assert response.json() == {"deleted": 1, "pipeline_runs_deleted": 0, "kept_for_safety": 0}
     remaining = {j["id"] for j in client.get("/v1/jobs").json()}
     assert remaining == {recent.id, running.id} and old.id not in remaining
 
 
+def test_cleanup_can_delete_jobs_older_than_twelve_hours(client, conn):
+    def job_aged(hours, status=JobStatus.SUCCEEDED):
+        when = datetime.now(timezone.utc) - timedelta(hours=hours)
+        job = Job(type="noop", target_pillar="reference", status=status, created_at=when, updated_at=when)
+        db.insert_job(conn, job)
+        return job
+
+    old, fresh, running = job_aged(13), job_aged(11), job_aged(13, status=JobStatus.RUNNING)
+    assert client.get("/v1/job-cleanup", params={"hours": "12"}).json() == {"prunable": {"12": 1}}
+    assert client.post("/v1/job-cleanup", json={"older_than_hours": 12}).json()["deleted"] == 1
+    assert {j["id"] for j in client.get("/v1/jobs").json()} == {fresh.id, running.id} and old.id not in {j.id for j in db.list_jobs(conn)}
+
+
 def test_cleanup_is_repeatable_and_a_second_run_deletes_nothing(client, conn):
     _old_job(conn, 30)
-    assert client.post("/v1/job-cleanup", json={"older_than_days": 7}).json()["deleted"] == 1
-    assert client.post("/v1/job-cleanup", json={"older_than_days": 7}).json()["deleted"] == 0
+    assert client.post("/v1/job-cleanup", json={"older_than_hours": 168}).json()["deleted"] == 1
+    assert client.post("/v1/job-cleanup", json={"older_than_hours": 168}).json()["deleted"] == 0
 
 
-@pytest.mark.parametrize("body", [{}, {"older_than_days": 0}, {"older_than_days": -1}, {"older_than_days": 3651}, {"older_than_days": "soon"}])
+@pytest.mark.parametrize("body", [{}, {"older_than_hours": 0}, {"older_than_hours": -1}, {"older_than_hours": 87601}, {"older_than_hours": "soon"}])
 def test_cleanup_rejects_invalid_requests_and_deletes_nothing(client, conn, body):
     _old_job(conn, 30)
     assert client.post("/v1/job-cleanup", json=body).status_code == 422

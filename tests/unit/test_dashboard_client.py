@@ -250,12 +250,12 @@ def test_job_cleanup_preview_returns_the_counts_per_age(paths, monkeypatch):
     seen = {}
 
     @app.get("/v1/job-cleanup")
-    def preview(days: str) -> dict:
-        seen["days"] = days
-        return {"prunable": {"2": 5, "7": 3}}
+    def preview(hours: str) -> dict:
+        seen["hours"] = hours
+        return {"prunable": {"12": 5, "168": 3}}
 
     _rig(paths, monkeypatch, "orchestration", app)
-    assert client.job_cleanup_preview(paths, [2, 7]) == {"2": 5, "7": 3} and seen["days"] == "2,7"
+    assert client.job_cleanup_preview(paths, [12, 168]) == {"12": 5, "168": 3} and seen["hours"] == "12,168"
 
 
 def test_job_cleanup_posts_the_age_and_returns_the_result(paths, monkeypatch):
@@ -269,7 +269,7 @@ def test_job_cleanup_posts_the_age_and_returns_the_result(paths, monkeypatch):
 
     _rig(paths, monkeypatch, "orchestration", app)
     assert client.job_cleanup(paths, 28) == {"deleted": 9, "pipeline_runs_deleted": 0, "kept_for_safety": 1}
-    assert seen == {"older_than_days": 28}
+    assert seen == {"older_than_hours": 28}
 
 
 def test_job_cleanup_calls_raise_when_orchestration_is_down(paths):

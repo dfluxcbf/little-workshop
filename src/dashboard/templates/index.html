@@ -17,6 +17,7 @@
 {% if not rows %}
 <p class="muted">No project registered yet. Register one with <code>lws project import</code>.</p>
 {% else %}
+<p class="arrange-link"><a href="/?arrange=1">Arrange cards</a></p>
 <div class="proj-grid">
   {% for r in rows %}
   {% set attn = r.awaiting or (r.ci and r.ci.state in ('failure', 'error')) or (r.session and r.session.trusted == false) %}

@@ -64,24 +64,49 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
         raise PillarUnavailable("orchestration daemon unreachable") from exc
 
 
+def _send(paths: Paths, pillar: str, method: str, path: str, *, json: dict | None = None, timeout: float = 30.0) -> dict:
+    socket_path = resolve_pillar_socket(paths, pillar, timeout=timeout)
+    if socket_path is None:
+        raise PillarUnavailable(f"{pillar} daemon unreachable — Core has no socket for it registered")
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.request(method, path, json=json)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise PillarUnavailable(f"{pillar} daemon unreachable or refused the request") from exc
+
+
+def scheduled_tasks(paths: Paths) -> list[dict]:
+    return _get(paths, "orchestration", "/v1/scheduled_tasks")
+
+
+def create_scheduled_task(paths: Paths, *, name: str, job_template: dict, schedule: dict) -> dict:
+    return _send(paths, "orchestration", "POST", "/v1/scheduled_tasks", json={"name": name, "job_template": job_template, "schedule": schedule})
+
+
+def remove_scheduled_task(paths: Paths, task_id: str) -> dict:
+    return _send(paths, "orchestration", "DELETE", f"/v1/scheduled_tasks/{task_id}")
+
+
 def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> list[dict]:
     return _get(paths, "orchestration", "/v1/jobs", params={"status": status} if status else None, timeout=timeout)
 
 
-def job_cleanup_preview(paths: Paths, days: list[int], *, timeout: float = 10.0) -> dict[str, int]:
-    """{"7": how many finished jobs are older than 7 days, ...} — nothing is deleted."""
-    body = _get(paths, "orchestration", "/v1/job-cleanup", params={"days": ",".join(str(d) for d in days)}, timeout=timeout)
+def job_cleanup_preview(paths: Paths, hours: list[int], *, timeout: float = 10.0) -> dict[str, int]:
+    """{"168": how many finished jobs are older than 168 hours, ...} — nothing is deleted."""
+    body = _get(paths, "orchestration", "/v1/job-cleanup", params={"hours": ",".join(str(h) for h in hours)}, timeout=timeout)
     return body["prunable"]
 
 
-def job_cleanup(paths: Paths, older_than_days: int, *, timeout: float = 60.0) -> dict:
-    """Delete finished jobs older than this many days; returns {deleted, pipeline_runs_deleted, kept_for_safety}."""
+def job_cleanup(paths: Paths, older_than_hours: int, *, timeout: float = 60.0) -> dict:
+    """Delete finished jobs older than this many hours; returns {deleted, pipeline_runs_deleted, kept_for_safety}."""
     socket_path = resolve_pillar_socket(paths, "orchestration", timeout=timeout)
     if socket_path is None:
         raise PillarUnavailable("orchestration daemon unreachable — Core has no socket for it registered")
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.post("/v1/job-cleanup", json={"older_than_days": older_than_days})
+            response = client.post("/v1/job-cleanup", json={"older_than_hours": older_than_hours})
         response.raise_for_status()
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
@@ -184,6 +209,18 @@ def agent_latest_ci_check(paths: Paths, project_id: str) -> dict | None:
 
 def requirements_report(paths: Paths, project_id: str) -> dict:
     return _get(paths, "requirements", "/v1/report", params={"project_id": project_id}, timeout=10.0)
+
+
+def requirements_list(paths: Paths, project_id: str) -> list[dict]:
+    return _get(paths, "requirements", "/v1/requirements", params={"project_id": project_id}, timeout=10.0)
+
+
+def requirements_suites(paths: Paths, project_id: str) -> list[dict]:
+    return _get(paths, "requirements", "/v1/test_suites", params={"project_id": project_id}, timeout=10.0)
+
+
+def requirements_test_results(paths: Paths, project_id: str) -> list[dict]:
+    return _get(paths, "requirements", "/v1/test_results", params={"project_id": project_id}, timeout=30.0)
 
 
 def session_name_for(project_id: str) -> str:

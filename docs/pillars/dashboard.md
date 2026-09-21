@@ -61,6 +61,31 @@ are the current state of every pillar.
   down contributes nothing. This is the Dashboard half of "informing the user
   immediately" (REQ-000000127); GitHub-issue and Remote Control delivery
   are not built.
+- **Workbench additions (2026-09-21)**:
+  - **Navigation** is grouped. The bottom toolbar has Dashboard, Projects, Tasks and System; a group
+    button reveals its pages (Projects: Control, Report, New project; Tasks: Task list, New task,
+    Queue task, Schedule task, Jobs; System: Pillars, Policies, Attention) with Back returning to
+    the main row, and the group of the current page stays open. On a wide screen the top bar holds
+    the four groups and a sub-navigation row lists the active group's pages.
+  - **Arrange cards** (`/?arrange=1`, `/control?arrange=1`, `POST /order/{page}/{project}/{up|down}`):
+    the Dashboard and Control each keep their own order of project cards; a project the user has
+    never placed goes after the placed ones.
+  - **Workspace session** (Control, top panel): starts and stops one Claude Code session in the
+    projects root directory (`~/little-projects`, the parent of the workshop checkout;
+    `LITTLE_WORKSHOP_WORKSPACE_DIR` overrides), under the reserved project id `workspace`, so Claude
+    can work across projects. The root must be trusted by Claude Code like any project.
+  - **Report** (`/report`): for one project, every requirement with its description and verdict
+    (passing, failing, no tests, draft) and every test with its name and latest verdict, grouped by
+    suite, with a search box and a verdict filter.
+  - **New project** (`/projects/new`): the form behind `project.bootstrap` — creates the basic files,
+    a git repository on `dev` with version tracking, and registers it under the workspace directory;
+    a GitHub repository is created only when the box is ticked.
+  - **Queue task** (`/tasks/queue`): a task that starts only after a chosen unfinished agent task
+    has succeeded (a job with `depends_on`); the form refuses to submit without a predecessor.
+  - **Schedule task** (`/tasks/schedule`): a scheduled task on Orchestration whose job starts an
+    agent task once at a chosen local time or on chosen weekdays each week; scheduled agent tasks are
+    listed and can be removed.
+  - **Pillars** shows each pillar's full name (Policy & Compliance, Registry & Portfolio, …).
 - **Control** (`/control`): per-project accordion, copied in shape from
   `little-runner`'s own Control page — deploy a branch (Launch/
   Relaunch) or Stop the server, **Start/Stop a Claude Code session**
@@ -122,7 +147,7 @@ are the current state of every pillar.
   is expanded or the search box has focus. Filtering and searching are done
   on the full list, so the counts always describe everything.
   **Delete old jobs**: a collapsed panel above the filters. Pick an age —
-  2 days, 1 week, 4 weeks, 8 weeks or 24 weeks, each showing how many
+  12 hours, 2 days, 1 week, 4 weeks, 8 weeks or 24 weeks, each showing how many
   finished jobs it would delete (an age with none is disabled) — and the
   button reads "Delete N jobs"; a native confirmation asks before it goes
   through (`POST /jobs/cleanup` → Orchestration's `POST /v1/job-cleanup`,
@@ -185,9 +210,10 @@ are the current state of every pillar.
 
 ## Data model
 
-None. Dashboard has no database of its own (`docs/architecture.md`'s
-Data model section already lists it alongside MCP Server as holding "no
-persistent storage of their own").
+No database. The one thing the Dashboard stores is the user's own display preference — the order of
+the project cards on the Dashboard and on Control — in `<state>/dashboard/prefs.json`
+(`dashboard/prefs.py`). A missing or damaged file means the default order. Everything else on a
+page is a live read of the pillar that owns it.
 
 ## Left open
 

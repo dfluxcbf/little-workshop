@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from common.paths import Paths
 from common.worktree_client import WorktreeUnavailable
 from requirements import db
+from requirements.ears import ears_error
 from requirements.junit import JUnitParseError, parse_junit_xml
 from requirements.models import (
     Milestone,
@@ -114,6 +115,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     @app.post("/v1/jobs/requirements.create_requirement")
     def job_create_requirement(request: JobRequest) -> dict:
         error = _require(request.params, "key", "title") or (None if request.project_id else "missing project_id")
+        if not error and not request.params.get("imported"):  # `imported`: bulk import of requirements written elsewhere
+            error = ears_error(request.params.get("description"))
         if error:
             return {"outcome": "failed", "error": error}
         requirement = Requirement(
@@ -137,6 +140,10 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 return {"outcome": "failed", "error": f"requirement {requirement_id!r} not found"}
             if requirement.status != RequirementStatus.DRAFT:
                 return {"outcome": "failed", "error": "only a draft requirement can be edited — publish creates a locked record"}
+            if "description" in request.params and not request.params.get("imported"):
+                error = ears_error(request.params["description"])
+                if error:
+                    return {"outcome": "failed", "error": error}
             for field in ("title", "description", "category", "use_case_id", "milestone_id"):
                 if field in request.params:
                     setattr(requirement, field, request.params[field])

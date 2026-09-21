@@ -109,6 +109,20 @@ nav.topnav a.navlink.primary { border-color: transparent; background: linear-gra
 nav.topnav a.navlink.primary:hover { filter: brightness(1.08); }
 nav.topnav a.navlink svg { width: 15px; height: 15px; }
 
+nav.subnav {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  max-width: 1040px; margin: 0 auto; padding: 10px 20px 0;
+}
+a.subnav-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border-radius: 999px;
+  color: var(--ink-soft); text-decoration: none; font-size: 13px; font-weight: 600;
+  border: 1px solid transparent;
+}
+a.subnav-link svg { width: 14px; height: 14px; }
+a.subnav-link:hover { color: var(--ink); border-color: var(--border); }
+a.subnav-link.is-active { color: var(--cyan); border-color: var(--cyan-soft); background: var(--surface); }
+
 main.content { max-width: 1040px; margin: 0 auto; padding: 24px 20px 96px; }
 
 /* --- typography ---------------------------------------------------------- */
@@ -572,6 +586,7 @@ nav.tabbar .tab.tab-back { color: var(--ink-faint); }
 @media (max-width: 680px) {
   main.content { padding: 16px 12px 84px; }
   nav.topnav { display: none; }
+  nav.subnav { display: none; }
   nav.tabbar { display: grid; }
 
   .panel table, .panel table thead, .panel table tbody, .panel table tr, .panel table td, .panel table th { display: block; }
@@ -984,3 +999,45 @@ form > .dcard { margin-bottom: 10px; }
 .age-grid .gp:has(input:checked) .age-n { color: var(--ink-soft); }
 .gp.is-disabled { opacity: 0.4; pointer-events: none; }
 .external-note { font-size: 12.5px; margin: 4px 0 0; }
+
+
+/* --- arranging project cards ------------------------------------------------ */
+
+.arrange-link { margin: 0 0 8px; text-align: right; font-size: 13px; }
+.arrange-list { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.arrange-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+}
+.arrange-pos { width: 22px; color: var(--ink-faint); font-family: var(--font-mono); font-size: 13px; }
+.arrange-name { flex: 1; font-weight: 600; overflow-wrap: anywhere; }
+.arrange-row form { margin: 0; }
+.arrange-row button { width: 44px; padding: 8px 0; }
+.arrange-row button:disabled { opacity: 0.35; cursor: default; }
+
+/* --- report ------------------------------------------------------------------- */
+
+.report-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.report-filter select, .report-filter input[type=search] { width: auto; flex: 1 1 160px; margin: 0; }
+.report-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+.report-item { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
+.report-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.report-title { font-weight: 600; }
+.report-desc { color: var(--ink-soft); font-size: 13.5px; overflow-wrap: anywhere; }
+.report-suite { background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); margin-bottom: 8px; }
+.report-suite summary { display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; cursor: pointer; }
+.report-tests { list-style: none; margin: 0; padding: 0 12px 10px; display: flex; flex-direction: column; gap: 4px; }
+.report-tests li { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
+.report-test-name { font-family: var(--font-mono); overflow-wrap: anywhere; color: var(--ink-soft); }
+
+/* --- weekday picker --------------------------------------------------------------- */
+
+.daypick { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.chip-check { display: inline-flex; margin: 0; text-transform: none; letter-spacing: 0; cursor: pointer; }
+.chip-check input { position: absolute; opacity: 0; pointer-events: none; width: auto; }
+.chip-check span {
+  padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--ink-soft); font-size: 13px; font-weight: 600;
+}
+.chip-check input:checked + span { color: oklch(14% 0.02 260); background: var(--cyan); border-color: var(--cyan); }
+.chip-check input:focus-visible + span { outline: 2px solid var(--cyan); outline-offset: 2px; }

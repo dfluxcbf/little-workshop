@@ -644,3 +644,43 @@ def test_run_reads_do_not_wait_on_a_long_running_task(tmp_path, paths, monkeypat
         assert [r["id"] for r in response.json()] == ["r1"]
     finally:
         release.set()
+
+
+# -- the workspace-level session (a session across projects) ------------------
+
+
+def test_workspace_session_starts_in_the_projects_root_without_a_registry_lookup(paths, conn, monkeypatch, tmp_path):
+    monkeypatch.setenv("LITTLE_WORKSHOP_WORKSPACE_DIR", str(tmp_path))
+
+    def never(*a, **kw):
+        raise AssertionError("the workspace is not a registered project")
+
+    monkeypatch.setattr("agent.app.resolve_project", never)
+    seen = {}
+
+    class Flow(FakeSessionFlow):
+        def start(self, project_id, project_dir):
+            seen["dir"] = project_dir
+            return super().start(project_id, project_dir)
+
+    client = TestClient(build_app(paths, conn, session_flow=Flow()))
+    body = client.post("/v1/jobs/agent.session_start", json={"job_id": "j", "project_id": "workspace", "params": {}}).json()
+    assert body["outcome"] == "succeeded" and seen["dir"] == tmp_path
+
+
+def test_workspace_session_status_reports_trust_of_the_projects_root(paths, conn, monkeypatch, tmp_path):
+    claude = tmp_path / "claude.json"
+    claude.write_text(json.dumps({"projects": {str(tmp_path): {"hasTrustDialogAccepted": True}}}))
+    monkeypatch.setenv("LITTLE_WORKSHOP_WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setenv("LITTLE_WORKSHOP_CLAUDE_CONFIG_PATH", str(claude))
+    client = TestClient(build_app(paths, conn, session_flow=FakeSessionFlow()))
+    status = client.get("/v1/sessions/workspace").json()
+    assert status["trusted"] is True and status["running"] is False
+
+
+def test_workspace_dir_defaults_to_the_parent_of_the_workshop_checkout(monkeypatch, tmp_path):
+    from common.workspace import workspace_dir
+
+    monkeypatch.delenv("LITTLE_WORKSHOP_WORKSPACE_DIR", raising=False)
+    monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(tmp_path / "little-workshop"))
+    assert workspace_dir() == tmp_path.resolve()

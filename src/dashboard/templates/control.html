@@ -3,7 +3,40 @@
 {% block content %}
 <h1>Control</h1>
 <p class="lede">Every registered project &mdash; its server, its Claude Code session, and the tasks it is working on.</p>
-{% if not panels %}<p class="muted">No project registered yet.</p>{% endif %}
+<details class="project-panel" id="workspace" {{ 'open' if focus == workspace.id }}>
+  <summary>
+    <span class="project-name">Workspace</span>
+    <span class="project-pills"><span class="pill {{ 'ok' if workspace.session and workspace.session.running else 'idle' }}">{{ 'session running' if workspace.session and workspace.session.running else 'session idle' }}</span></span>
+  </summary>
+  <div class="project-body">
+    <div class="subsection">
+      <h3>Claude Code session across projects</h3>
+      <p class="muted" style="font-size:12.5px">Runs in <code>{{ workspace.dir }}</code>, above every project, so Claude can work on several projects at once.</p>
+      {% if not workspace.session %}
+      <p class="muted">Agentic Development is unreachable.</p>
+      {% else %}
+      <dl class="kv">
+        <dt>Status</dt><dd>
+          {% if workspace.session.running %}<span class="pill ok">running</span>
+          {% elif workspace.session.trusted == false %}<span class="pill warn">untrusted</span>
+          {% else %}<span class="pill idle">idle</span>{% endif %}
+        </dd>
+        <dt>Name</dt><dd><code>{{ workspace.session_name }}</code></dd>
+      </dl>
+      {% if workspace.session.running %}
+      <p class="muted" style="font-size:12.5px">Open the Claude app and pick <code>{{ workspace.session_name }}</code> to attach.</p>
+      <form method="post" action="/projects/{{ workspace.id }}/session/stop"><button type="submit" class="danger">Stop session</button></form>
+      {% elif workspace.session.trusted == false %}
+      <p class="muted" style="font-size:12.5px">Not trusted by Claude Code yet &mdash; run <code>claude</code> in <code>{{ workspace.dir }}</code> once and accept the trust prompt, then start the session here.</p>
+      {% else %}
+      <form method="post" action="/projects/{{ workspace.id }}/session/start"><button type="submit" class="primary">Start workspace session</button></form>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+</details>
+
+{% if not panels %}<p class="muted">No project registered yet.</p>{% else %}<p class="arrange-link"><a href="/control?arrange=1">Arrange cards</a></p>{% endif %}
 
 {% for p in panels %}
 <details class="project-panel" id="{{ p.name }}" {{ 'open' if p.name == focus }}>

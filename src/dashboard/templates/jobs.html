@@ -22,7 +22,7 @@
     <div class="gp-grid age-grid">
       {% for o in cleanup_options %}
       <label class="gp{{ ' is-disabled' if not o.count }}">
-        <input type="radio" name="days" value="{{ o.days }}" data-count="{{ o.count }}" data-label="{{ o.label }}"{% if not o.count %} disabled{% endif %}>
+        <input type="radio" name="hours" value="{{ o.hours }}" data-count="{{ o.count }}" data-label="{{ o.label }}"{% if not o.count %} disabled{% endif %}>
         <span>{{ o.label }}</span><span class="age-n">{{ o.count }}</span>
       </label>
       {% endfor %}
@@ -36,7 +36,7 @@
   var form = document.getElementById("cleanup-form");
   if (!form) return;
   var go = document.getElementById("cleanup-go");
-  function chosen() { return form.querySelector('input[name="days"]:checked'); }
+  function chosen() { return form.querySelector('input[name="hours"]:checked'); }
   form.addEventListener("change", function () {
     var r = chosen();
     if (r) go.textContent = "Delete " + r.dataset.count + " job" + (r.dataset.count === "1" ? "" : "s");

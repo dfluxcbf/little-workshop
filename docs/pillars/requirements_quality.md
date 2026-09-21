@@ -135,3 +135,11 @@ to 'is it done'" (`docs/architecture.md`).
   planned to read this pillar's definition-of-done report as one input
   to its own conflict-check flow.
 - **Discovered through**: Core, like every pillar.
+
+## EARS enforcement (2026-09-21)
+
+`requirements.create_requirement`, and `requirements.update_requirement` when it changes the description,
+refuse a description that is not in EARS form and reply with how to fix it (`requirements/ears.py`, a
+deterministic pattern check: an optional `While`/`When`/`Where`/`If … then` prefix, then a determiner, a
+system name and `shall`). A bulk import from another tool passes `imported: true` to skip the check; requirements
+recorded before the rule keep their wording until edited.

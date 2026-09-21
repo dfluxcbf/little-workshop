@@ -59,7 +59,7 @@ dispatched.
 
 - **Job history cleanup** (`GET`/`POST /v1/job-cleanup`, 2026-09-21) — the
   Dashboard's "Delete old jobs". `GET` previews how many finished jobs each
-  age (in days) would remove; `POST {"older_than_days": N}` deletes them and
+  age (in hours) would remove; `POST {"older_than_hours": N}` deletes them and
   their `job_runs`. Only **finished** jobs (`succeeded`, `failed`,
   `cancelled`, `stopped`) last updated before the cutoff are eligible; a
   running, queued or awaiting-confirmation job is never touched however old.

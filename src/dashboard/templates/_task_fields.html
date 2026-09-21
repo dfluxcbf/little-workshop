@@ -1,0 +1,16 @@
+  <label for="project">Project</label>
+  <select name="project" id="project">
+    {% for p in projects %}<option value="{{ p }}" {{ 'selected' if p == selected }}>{{ p }}</option>{% endfor %}
+  </select>
+  <label for="title">Title</label>
+  <input type="text" name="title" id="title" required>
+  <label for="description">Task</label>
+  <textarea name="description" id="description" rows="6" placeholder="What should Claude do?"></textarea>
+  <label for="intent">Kind of work</label>
+  <select name="intent" id="intent">
+    <option value="task">task</option><option value="bug">bug</option><option value="docs">docs</option><option value="milestone">milestone</option>
+  </select>
+  <label for="review_mode">Review</label>
+  <select name="review_mode" id="review_mode">
+    <option value="manual">Manual &mdash; I finish it</option><option value="auto_approve">Auto-approve when done and tests pass</option>
+  </select>
