@@ -54,7 +54,15 @@ are the current state of every pillar.
   Finish/Skip for a run awaiting review.
 - **Pillars** (`/pillars`): the system's own components, separate from
   project management — Core's live health, crash counts, interface
-  version. `/jobs` and `/policies` hang off it.
+  version, and the **commit SHA each pillar was deployed from** (from
+  Deployment's `GET /v1/pillars`; "initial install" if never redeployed,
+  "behind HEAD" if it differs from this checkout's HEAD). A checkbox per
+  enabled pillar plus select-all and a commit/branch field (default
+  `HEAD`) drive **Redeploy selected** (`POST /pillars/redeploy`): one
+  `deployment.redeploy_pillar` Job per selected pillar, submitted in
+  sequence from a background thread with Orchestration/Deployment/Core
+  last, since redeploying those interrupts the redeploy chain itself.
+  `/jobs` and `/policies` hang off it.
 - **Jobs** (`/jobs`): the Orchestration queue, optionally filtered by
   status — the same `GET /v1/jobs` the CLI's `lws job list` already
   uses.

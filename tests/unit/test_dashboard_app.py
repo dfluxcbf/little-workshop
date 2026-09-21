@@ -6,6 +6,9 @@ with a client response/failure, not the socket transport again."""
 
 from __future__ import annotations
 
+import threading
+from urllib.parse import unquote
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -432,3 +435,81 @@ def test_every_icon_fills_its_whole_canvas_with_the_dark_ground():
         for corner in ((2, 2), (w - 3, 2), (2, h - 3), (w - 3, h - 3)):
             r, g, b = image.getpixel(corner)
             assert max(r, g, b) < 60, f"{name} corner {corner} is not the dark ground: {(r, g, b)}"
+
+
+_TWO_PILLARS = {
+    "registry": {"status": "healthy", "crash_count": 0, "interface_version": "v1"},
+    "policy": {"status": "healthy", "crash_count": 0, "interface_version": "v1"},
+    "build": {"status": "disabled", "crash_count": 0, "interface_version": "v1"},
+}
+
+
+def test_pillars_page_shows_deployed_sha_and_checkboxes(test_client, monkeypatch):
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": _TWO_PILLARS})
+    monkeypatch.setattr(client, "deployment_pillars", lambda paths: {
+        "pillars": {"policy": {"commit_sha": sha, "updated_at": "2026-09-21"}}, "repo_head": "f" * 40,
+    })
+    text = test_client.get("/pillars").text
+    assert sha[:12] in text and "behind HEAD" in text
+    assert "initial install" in text
+    assert 'value="registry"' in text and 'value="policy"' in text
+    assert 'value="build"' not in text
+    assert "Redeploy selected" in text
+
+
+def test_pillars_page_survives_deployment_being_down(test_client, monkeypatch):
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": _TWO_PILLARS})
+
+    def down(paths):
+        raise client.PillarUnavailable("deployment daemon unreachable")
+
+    monkeypatch.setattr(client, "deployment_pillars", down)
+    response = test_client.get("/pillars")
+    assert response.status_code == 200 and "registry" in response.text
+
+
+def _capture_jobs(monkeypatch):
+    jobs: list[dict] = []
+    done = threading.Event()
+
+    def fake_create_job(paths, timeout=30.0, **fields):
+        jobs.append(fields)
+        if len(jobs) >= 3:
+            done.set()
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(client, "create_job", fake_create_job)
+    return jobs, done
+
+
+def test_redeploy_submits_one_job_per_selected_pillar_self_affecting_last(test_client, monkeypatch):
+    pillars = {**_TWO_PILLARS, "deployment": {"status": "healthy", "crash_count": 0}}
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": pillars})
+    jobs, done = _capture_jobs(monkeypatch)
+    response = test_client.post(
+        "/pillars/redeploy", data={"pillar": ["deployment", "registry", "policy", "build", "nope"], "commit": "abc123"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303 and "started" in response.headers["location"]
+    assert done.wait(5)
+    assert [j["params"]["pillar"] for j in jobs] == ["policy", "registry", "deployment"]
+    assert all(j["type"] == "deployment.redeploy_pillar" and j["params"]["commit"] == "abc123" for j in jobs)
+    assert [j["queue_key"] for j in jobs] == ["policy", "registry", "deployment"]
+
+
+def test_redeploy_requires_a_selection(test_client, monkeypatch):
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": _TWO_PILLARS})
+    jobs, _ = _capture_jobs(monkeypatch)
+    response = test_client.post("/pillars/redeploy", data={}, follow_redirects=False)
+    assert response.status_code == 303 and "Select" in unquote(response.headers["location"])
+    assert jobs == []
+
+
+def test_redeploy_reports_core_being_unreachable(test_client, monkeypatch):
+    def down(paths):
+        raise client.PillarUnavailable("Core daemon unreachable")
+
+    monkeypatch.setattr(client, "core_status", down)
+    response = test_client.post("/pillars/redeploy", data={"pillar": "registry"}, follow_redirects=False)
+    assert response.status_code == 303 and "Core daemon unreachable" in unquote(response.headers["location"])

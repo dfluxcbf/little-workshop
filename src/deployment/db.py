@@ -112,6 +112,11 @@ def get_pillar_deployment(conn: sqlite3.Connection, pillar: str) -> dict | None:
     return dict(row) if row else None
 
 
+def list_pillar_deployments(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute("SELECT * FROM pillar_deployments ORDER BY pillar").fetchall()
+    return [dict(row) for row in rows]
+
+
 # -- deployments (audit trail) -------------------------------------------
 
 

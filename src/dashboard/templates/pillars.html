@@ -3,17 +3,31 @@
 {% block content %}
 <h1>Pillars</h1>
 <p class="lede">little-workshop's own components, supervised by Core. Health is Core's live view; a crashed pillar is relaunched automatically.</p>
+<form method="post" action="/pillars/redeploy">
 <div class="panel">
 <table>
-  <thead><tr><th>Pillar</th><th>Status</th><th>Crashes</th><th>Interface</th></tr></thead>
+  <thead><tr>
+    <th style="width:32px"><input type="checkbox" id="select-all" aria-label="Select all pillars" title="Select all"></th>
+    <th>Pillar</th><th>Status</th><th>Deployed from</th><th>Crashes</th><th>Interface</th>
+  </tr></thead>
   <tbody>
   {% for name, entry in pillars.items() %}
+    {% set dep = deployed.get(name) %}
     <tr>
+      <td data-label="Select">
+        {% if entry.status != "disabled" %}<input type="checkbox" class="pillar-pick" name="pillar" value="{{ name }}" aria-label="Redeploy {{ name }}">{% endif %}
+      </td>
       <td data-label="Pillar"><strong>{{ name }}</strong></td>
       <td data-label="Status">
         {% if entry.status in ("healthy", "active") %}<span class="pill ok">{{ entry.status }}</span>
         {% elif entry.status == "disabled" %}<span class="pill idle">disabled</span>
         {% else %}<span class="pill fail">{{ entry.status }}</span>{% endif %}
+      </td>
+      <td data-label="Deployed from">
+        {% if dep %}<code title="{{ dep.commit_sha }} — deployed {{ dep.updated_at }}">{{ dep.commit_sha[:12] }}</code>
+          {% if repo_head and dep.commit_sha != repo_head %}<span class="pill warn" title="This checkout's HEAD is {{ repo_head[:12] }}">behind HEAD</span>{% endif %}
+        {% elif deployment_known %}<span class="muted" title="Never redeployed through Deployment; still on its initial install">initial install</span>
+        {% else %}<span class="muted" title="Deployment &amp; Servers is unreachable">—</span>{% endif %}
       </td>
       <td data-label="Crashes">{{ entry.crash_count }}</td>
       <td data-label="Interface">{{ entry.interface_version or '—' }}</td>
@@ -22,5 +36,22 @@
   </tbody>
 </table>
 </div>
+{% if pillars %}
+<div class="row" style="margin-top:12px">
+  <input type="text" name="commit" value="HEAD" style="width:220px" aria-label="Commit or branch to redeploy from" title="Commit, branch or tag of this little-workshop checkout">
+  <button type="submit" class="primary" title="Build each selected pillar from that commit, then stop and relaunch only it">Redeploy selected</button>
+</div>
+<p class="muted" style="font-size:12.5px">Selected pillars are redeployed one after another; the others keep running. Pillars that the redeploy itself depends on (Orchestration, Deployment) go last.</p>
+{% endif %}
+</form>
+<script>
+(function () {
+  var all = document.getElementById("select-all");
+  if (!all) return;
+  all.addEventListener("change", function () {
+    document.querySelectorAll(".pillar-pick").forEach(function (b) { b.checked = all.checked; });
+  });
+})();
+</script>
 <p class="lede"><a href="/jobs">Jobs</a> (Orchestration) &middot; <a href="/policies">Policies</a> (Policy &amp; Compliance)</p>
 {% endblock %}

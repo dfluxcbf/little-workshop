@@ -57,6 +57,9 @@ healthy, currently-running process down.
   `systemd-run` unit instead of running inline — the same cgroup-aware
   escape proven for `little-runner`'s own self-restart. Confirm-gating
   defaults on for `core`/`deployment` at a 600-second window.
+- **Deployed-commit read** (`GET /v1/pillars`) — the commit each pillar
+  was last redeployed from (`pillar_deployments`) plus this checkout's
+  HEAD; the Dashboard's Pillars page renders it.
 - **Worktree provisioning as a shared capability** (`POST /v1/worktrees`,
   `DELETE /v1/worktrees/{id}`) — built in M4 explicitly for other pillars
   to call rather than each provisioning their own: Requirements &

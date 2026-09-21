@@ -231,3 +231,14 @@ def test_agent_reads_and_requirements_report(paths, monkeypatch):
 def test_session_name_matches_the_agent_pillars_naming():
     assert client.session_name_for("little-widget") == "lws-little-widget-session"
     assert client.session_name_for("dfluxcbf/little-widget") == "lws-little-widget-session"
+
+
+def test_deployment_pillars_reads_the_pillar_deployments_endpoint(paths, monkeypatch):
+    app = FastAPI()
+
+    @app.get("/v1/pillars")
+    def pillars() -> dict:
+        return {"pillars": {"policy": {"commit_sha": "abc123", "updated_at": "t"}}, "repo_head": "def456"}
+
+    _rig(paths, monkeypatch, "deployment", app)
+    assert client.deployment_pillars(paths)["pillars"]["policy"]["commit_sha"] == "abc123"

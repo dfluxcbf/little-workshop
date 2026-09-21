@@ -375,3 +375,16 @@ def test_get_manifest_404_when_not_set(paths, conn):
     client = TestClient(app)
     response = client.get("/v1/manifest/never-configured")
     assert response.status_code == 404
+
+
+def test_pillars_endpoint_reports_deployed_sha_and_repo_head(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(repo))
+    client, _ = make_client(paths, conn, repo)
+    assert client.get("/v1/pillars").json()["pillars"] == {}
+
+    db.save_pillar_deployment(conn, "policy", str(tmp_path / "install"), "abc123")
+    body = client.get("/v1/pillars").json()
+    assert body["pillars"]["policy"]["commit_sha"] == "abc123"
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    assert body["repo_head"] == head

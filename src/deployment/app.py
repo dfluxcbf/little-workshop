@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from common.paths import Paths
 from common.projectfiles import ProjectFilesClient
 from common.registry_client import ProjectResolutionError, resolve_project_path
-from deployment import db, worktrees
+from deployment import db, gitutil, worktrees
 from deployment.confirm import rollback_guard
 from deployment.flow import DeploymentError, DeploymentFlow, SelfRedeployRequiresDispatch
 from deployment.gitutil import list_branches
@@ -221,6 +221,22 @@ def build_app(
         return {
             "name": result.name, "unit": result.unit, "pids": result.pids, "listening": result.listening,
             "tailscale": result.tailscale, "branch": result.branch, "version": result.version,
+        }
+
+    @app.get("/v1/pillars")
+    def pillar_deployments() -> dict:
+        """The commit each little-workshop pillar was last redeployed from,
+        plus this checkout's own HEAD for comparison. A pillar with no row
+        was never redeployed through this pillar (still on its initial install)."""
+        with lock:
+            rows = db.list_pillar_deployments(conn)
+        try:
+            head = gitutil.run(["git", "rev-parse", "HEAD"], workshop_repo_dir()).stdout.strip() or None
+        except Exception:
+            head = None
+        return {
+            "pillars": {r["pillar"]: {"commit_sha": r["commit_sha"], "updated_at": r["updated_at"]} for r in rows},
+            "repo_head": head,
         }
 
     @app.get("/v1/deployments/{project_id}")

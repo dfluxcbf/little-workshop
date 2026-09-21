@@ -47,6 +47,10 @@ GATE_POINT_VALUES = [
     "release", "package_publish", "branch_finish", "project_removal", "project_registration",
 ]
 
+# Redeploying these restarts a link in the redeploy chain (Orchestration
+# dispatches, Deployment executes), so they are submitted after the rest.
+SELF_AFFECTING_PILLARS = {"orchestration", "deployment", "core"}
+
 
 def _templates() -> Jinja2Templates:
     templates_dir = importlib.resources.files("dashboard") / "templates"
@@ -280,7 +284,39 @@ def build_app(paths: Paths) -> FastAPI:
             entries, error = client.core_status(paths).get("pillars", {}), None
         except client.PillarUnavailable as exc:
             entries, error = {}, str(exc)
-        return _render(request, "pillars.html", pillars=entries, error=error, nav_active="pillars")
+        deployed = _try(client.deployment_pillars, paths, default=None)
+        return _render(
+            request, "pillars.html", pillars=entries, error=error, nav_active="pillars",
+            deployed=(deployed or {}).get("pillars", {}), repo_head=(deployed or {}).get("repo_head"),
+            deployment_known=deployed is not None,
+        )
+
+    @app.post("/pillars/redeploy")
+    def redeploy_pillars(pillar: list[str] = Form(default=[]), commit: str = Form("HEAD")):
+        try:
+            known = client.core_status(paths).get("pillars", {})
+        except client.PillarUnavailable as exc:
+            return _back("/pillars", f"Could not redeploy: {exc}")
+        chosen = [p for p in dict.fromkeys(pillar) if p in known and known[p].get("status") != "disabled"]
+        if not chosen:
+            return _back("/pillars", "Select at least one pillar to redeploy.")
+        commit = commit.strip() or "HEAD"
+        # Pillars whose restart interrupts the redeploy machinery itself go last.
+        chosen.sort(key=lambda p: (p in SELF_AFFECTING_PILLARS, p))
+
+        def submit_all() -> None:
+            for name in chosen:
+                try:
+                    client.create_job(
+                        paths, timeout=320.0, type="deployment.redeploy_pillar", target_pillar="deployment",
+                        project_id=name, params={"pillar": name, "commit": commit}, queue_key=name,
+                        depends_on=[], created_by="dashboard",
+                    )
+                except client.PillarUnavailable:
+                    pass
+
+        threading.Thread(target=submit_all, daemon=True).start()
+        return _back("/pillars", f"Redeploy of {', '.join(chosen)} ({commit}) started — progress is on the Jobs page.")
 
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs(request: Request, status: str | None = None):

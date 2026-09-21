@@ -89,6 +89,11 @@ def deployment_status(paths: Paths, project_id: str, *, timeout: float = 5.0) ->
     return _get(paths, "deployment", f"/v1/status/{project_id}", timeout=timeout)
 
 
+def deployment_pillars(paths: Paths, *, timeout: float = 5.0) -> dict:
+    """{"pillars": {name: {commit_sha, updated_at}}, "repo_head": sha|None}."""
+    return _get(paths, "deployment", "/v1/pillars", timeout=timeout)
+
+
 def _get_optional(paths: Paths, pillar: str, path: str, *, params: dict | None = None, timeout: float = 5.0) -> dict | None:
     """Like `_get`, but a 404 is an answer ("nothing there"), not an outage."""
     socket_path = resolve_pillar_socket(paths, pillar, timeout=timeout)
