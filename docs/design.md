@@ -171,6 +171,11 @@ supersede the first round's "Module" concept.
   bootstrap manifest (the pillar list, enabled flags, crash-backoff
   settings) lives directly at `~/.config/little-workshop/manifest.toml`,
   beside the ten pillar directories rather than inside one.
+  The manifest's `[core] workshop_repo_dir` names this project's own git
+  checkout; Core hands it to every pillar it launches as
+  `LITTLE_WORKSHOP_REPO_DIR` (and Deployment carries it on to pillars it
+  redeploys), because a pipx-installed pillar cannot find the checkout by
+  itself and pillar redeploys build from it.
 - **Project files** — the one place pillars actually share a directory:
   `~/.config/little-workshop/projects/<project>/`, one such directory per
   project this system manages. Unlike pillar configuration, this directory

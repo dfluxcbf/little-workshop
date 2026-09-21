@@ -124,3 +124,15 @@ def test_pillar_db_path_and_socket_path(tmp_path):
     assert paths.pillar_db_path("registry") == paths.pillars_db_dir / "registry.db"
     assert paths.socket_path("registry") == paths.sockets_dir / "registry.sock"
     assert paths.core_socket_path == paths.sockets_dir / "core.sock"
+
+
+def test_workshop_repo_dir_round_trips_through_the_manifest_file(tmp_path):
+    path = tmp_path / "manifest.toml"
+    manifest = default_manifest()
+    manifest.workshop_repo_dir = '/home/x/little "workshop"'
+    write_manifest(path, manifest)
+    assert load_manifest(path).workshop_repo_dir == '/home/x/little "workshop"'
+
+    manifest.workshop_repo_dir = None
+    write_manifest(path, manifest)
+    assert load_manifest(path).workshop_repo_dir is None

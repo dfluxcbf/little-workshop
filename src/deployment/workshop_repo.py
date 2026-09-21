@@ -16,4 +16,11 @@ def workshop_repo_dir() -> Path:
     if override:
         return Path(override)
     # src/deployment/workshop_repo.py -> src/deployment -> src -> repo root
-    return Path(__file__).resolve().parents[2]
+    candidate = Path(__file__).resolve().parents[2]
+    if not (candidate / ".git").exists():
+        raise RuntimeError(
+            f"cannot locate little-workshop's git checkout ({candidate} is not a repository — "
+            "an installed copy?); set `workshop_repo_dir` under [core] in manifest.toml "
+            "or LITTLE_WORKSHOP_REPO_DIR"
+        )
+    return candidate

@@ -168,7 +168,7 @@ def build_app(
                     pillar, commit, confirm_timeout_seconds=confirm_timeout, job_id=request.job_id
                 )
                 return {"outcome": "accepted", "result": {"dispatched": dispatched}}
-            except DeploymentError as exc:
+            except (DeploymentError, RuntimeError) as exc:
                 db.record_deployment(conn, pillar, commit, "?", "?", "failed", str(exc))
                 return {"outcome": "failed", "error": str(exc)}
         payload = {"branch": result.branch, "version": result.version, "commit": result.commit, "how": result.how}

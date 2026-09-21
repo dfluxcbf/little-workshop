@@ -219,3 +219,37 @@ def _registry_entry_crashed(supervisor: Supervisor, count: int):
         status=PillarStatus.CRASHED,
         crash_count=count,
     )
+
+
+def _launch_argv(runner):
+    return next(c for c in runner.calls if c[0] == "systemd-run")
+
+
+def test_startup_hands_the_workshop_repo_dir_to_launched_pillars(tmp_path):
+    runner = FakeRunner(active={})
+    supervisor = Supervisor(
+        paths=make_paths(tmp_path), manifest=make_manifest(workshop_repo_dir="/src/little-workshop"),
+        runner=runner, probe=probe_always(HealthResult(ok=True, attempts=1)),
+    )
+    supervisor.startup()
+    assert "--setenv=LITTLE_WORKSHOP_REPO_DIR=/src/little-workshop" in _launch_argv(runner)
+
+
+def test_crash_relaunch_also_hands_over_the_workshop_repo_dir(tmp_path):
+    runner = FakeRunner(active={})
+    supervisor = Supervisor(
+        paths=make_paths(tmp_path), manifest=make_manifest(workshop_repo_dir="/src/little-workshop"),
+        runner=runner, probe=probe_always(HealthResult(ok=True, attempts=1)),
+    )
+    supervisor.reconcile_once()
+    assert "--setenv=LITTLE_WORKSHOP_REPO_DIR=/src/little-workshop" in _launch_argv(runner)
+
+
+def test_no_repo_dir_configured_sets_nothing(tmp_path):
+    runner = FakeRunner(active={})
+    supervisor = Supervisor(
+        paths=make_paths(tmp_path), manifest=make_manifest(), runner=runner,
+        probe=probe_always(HealthResult(ok=True, attempts=1)),
+    )
+    supervisor.startup()
+    assert not any("LITTLE_WORKSHOP_REPO_DIR" in a for a in _launch_argv(runner))

@@ -59,6 +59,10 @@ class Manifest:
     # docs/milestones.md M1: 10 tries, 1 minute apart, then faulted.
     crash_relaunch_max_attempts: int = 10
     crash_relaunch_interval_seconds: float = 60.0
+    # Where little-workshop's own git checkout lives. A pipx-installed pillar
+    # can't find it by itself; Core hands it to every pillar it launches as
+    # LITTLE_WORKSHOP_REPO_DIR, which Deployment needs for pillar redeploys.
+    workshop_repo_dir: str | None = None
 
     def enabled_pillars(self) -> list[str]:
         return [name for name, entry in self.pillars.items() if entry.enabled]
@@ -95,6 +99,8 @@ def load_manifest(path: Path) -> Manifest:
     manifest.crash_relaunch_interval_seconds = float(
         core.get("crash_relaunch_interval_seconds", manifest.crash_relaunch_interval_seconds)
     )
+    repo_dir = core.get("workshop_repo_dir")
+    manifest.workshop_repo_dir = str(repo_dir) if repo_dir else None
 
     pillars_raw = raw.get("pillars", {})
     for name in PILLARS:
@@ -112,6 +118,10 @@ def _toml_bool(value: bool) -> str:
     return "true" if value else "false"
 
 
+def _toml_string(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _toml_string_array(values: list[str]) -> str:
     escaped = [v.replace("\\", "\\\\").replace('"', '\\"') for v in values]
     return "[" + ", ".join(f'"{v}"' for v in escaped) + "]"
@@ -127,8 +137,10 @@ def write_manifest(path: Path, manifest: Manifest) -> None:
         f"health_probe_max_retries = {manifest.health_probe_max_retries}",
         f"crash_relaunch_max_attempts = {manifest.crash_relaunch_max_attempts}",
         f"crash_relaunch_interval_seconds = {manifest.crash_relaunch_interval_seconds}",
-        "",
     ]
+    if manifest.workshop_repo_dir:
+        lines.append(f"workshop_repo_dir = {_toml_string(manifest.workshop_repo_dir)}")
+    lines.append("")
     for name in PILLARS:
         entry = manifest.pillars.get(name, PillarEntry(name=name, enabled=DEFAULT_ENABLED[name]))
         lines.append(f"[pillars.{name}]")

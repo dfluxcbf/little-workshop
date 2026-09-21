@@ -41,6 +41,13 @@ class Supervisor:
             max_retries=self.manifest.health_probe_max_retries,
         )
 
+    def _launch_environment(self, entry) -> dict[str, str]:
+        env: dict[str, str] = {}
+        if self.manifest.workshop_repo_dir:
+            env["LITTLE_WORKSHOP_REPO_DIR"] = self.manifest.workshop_repo_dir
+        env.update(entry.environment or {})
+        return env
+
     def startup(self) -> None:
         """Reconnect to what's already running; start only what's missing;
         confirm every disabled pillar is actually stopped."""
@@ -87,7 +94,7 @@ class Supervisor:
             name,
             entry.command,
             working_directory=None,
-            environment=entry.environment,
+            environment=self._launch_environment(entry),
             runner=self.runner,
         )
         result = self._probe(name)
@@ -114,7 +121,7 @@ class Supervisor:
             self.registry.set(faulted)
             return faulted
 
-        systemd.start(name, entry.command, environment=entry.environment, runner=self.runner)
+        systemd.start(name, entry.command, environment=self._launch_environment(entry), runner=self.runner)
         result = self._probe(name)
         status = PillarStatus.HEALTHY if result.ok else PillarStatus.CRASHED
         entry_out = RegistryEntry(
