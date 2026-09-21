@@ -1196,12 +1196,24 @@ def test_build_publish_pypi_reads_the_file_and_base64_encodes_it(paths, capsys, 
     captured = {}
     monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
     assert main.main([
-        "build", "publish-pypi", "--project-id", "p1", "--build-run-id", "r1", "pkg", "1.0.0", str(wheel),
+        "build", "publish-pypi", "--project-id", "p1", "--build-run-id", "r1", str(wheel),
     ]) == 0
     assert captured["type"] == "build.publish_pypi"
     assert captured["params"]["filename"] == "pkg-1.0.0.whl"
+    assert "name" not in captured["params"] and "version" not in captured["params"]
     import base64
     assert base64.b64decode(captured["params"]["content_base64"]) == b"fake wheel bytes"
+
+
+def test_build_publish_pypi_passes_explicit_name_and_version_through(paths, monkeypatch, tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    wheel.write_bytes(b"w")
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main([
+        "build", "publish-pypi", "--project-id", "p1", "--build-run-id", "r1", "--name", "pkg", "--version", "1.0.0", str(wheel),
+    ]) == 0
+    assert captured["params"]["name"] == "pkg" and captured["params"]["version"] == "1.0.0"
 
 
 def test_build_publish_vsix_reads_the_file_and_base64_encodes_it(paths, capsys, monkeypatch, tmp_path):

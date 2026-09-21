@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Needs attention — little-workshop{% endblock %}
+{% block content %}
+<div class="policy-list">
+  {% for i in items %}
+  <a class="polcard" href="{{ i.href }}">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ i.title }}</span>
+      <span class="pill {{ 'fail' if i.kind == 'policy' else 'warn' }}">{{ 'failing' if i.kind == 'policy' else 'confirm' }}</span>
+    </span>
+    {% if i.detail %}<span class="polcard-ears">{{ i.detail }}</span>{% endif %}
+    <span class="polcard-meta">
+      {% if i.project %}<span class="chip">{{ i.project }}</span>{% endif %}
+      {% if i.since %}<span class="chip">{{ i.since | reltime }}</span>{% endif %}
+    </span>
+  </a>
+  {% else %}
+  <p class="muted">Nothing needs you right now: every enabled policy check passes and no job is waiting for confirmation.</p>
+  {% endfor %}
+</div>
+<p class="muted"><button type="button" class="btn" id="enable-alerts" hidden>Alert me on this device when something new fails</button></p>
+{% endblock %}

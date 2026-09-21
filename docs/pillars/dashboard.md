@@ -50,6 +50,17 @@ are the current state of every pillar.
   only ("unavailable"), never a 500. Small text is kept legible: dim text
   is a lighter grey than before (`--ink-faint`), and stat labels are plain
   13px text rather than tiny uppercase.
+- **Needs attention** (every page; `/attention`, `/attention.json`, 2026-09-21):
+  a banner under the top bar, shown only when something needs a human — an
+  enabled policy whose latest check on a project failed, or a Job awaiting
+  confirmation. `/attention` lists each item as a card linking to the
+  policy or the Jobs page; `/attention.json` is the same list as data. The
+  banner re-reads the feed every 20 seconds without reloading, and once the
+  user taps "Alert me on this device" (browser notification permission) it
+  raises a notification for each item that newly appears. A pillar that is
+  down contributes nothing. This is the Dashboard half of "informing the user
+  immediately" (REQ-000000127); GitHub-issue and Remote Control delivery
+  are not built.
 - **Control** (`/control`): per-project accordion, copied in shape from
   `little-runner`'s own Control page — deploy a branch (Launch/
   Relaunch) or Stop the server, **Start/Stop a Claude Code session**

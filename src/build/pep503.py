@@ -20,6 +20,21 @@ def normalize_name(name: str) -> str:
     return _NORMALIZE_RE.sub("-", name).lower()
 
 
+_DIST_FILENAME_RE = re.compile(r"^(?P<name>.+?)-(?P<version>\d[^-]*?)(?:-.*)?\.(?:whl|tar\.gz|zip)$")
+
+
+def parse_distribution_filename(filename: str) -> tuple[str, str] | None:
+    """(name, version) read from a wheel/sdist filename, or None when the
+    filename carries no version (which the index refuses to publish)."""
+    match = _DIST_FILENAME_RE.match(filename)
+    return (match.group("name"), match.group("version")) if match else None
+
+
+def same_version(a: str, b: str) -> bool:
+    """PEP 440 spells 0.1.1-dev.15 as 0.1.1.dev15 in a filename; separators are the only difference."""
+    return _NORMALIZE_RE.sub("", a.lower()) == _NORMALIZE_RE.sub("", b.lower())
+
+
 def render_root_index(project_names: list[str]) -> str:
     links = "\n".join(f'    <a href="{name}/">{name}</a><br/>' for name in project_names)
     return f"<!DOCTYPE html>\n<html>\n  <body>\n{links}\n  </body>\n</html>\n"

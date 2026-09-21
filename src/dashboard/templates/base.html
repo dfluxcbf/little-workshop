@@ -40,6 +40,9 @@
     {% endfor %}
   </nav>
 </header>
+<a class="attention-banner" id="attention-banner" href="/attention"{% if not attention_count %} hidden{% endif %}>
+  <strong id="attention-count">{{ attention_count }}</strong> <span>need{{ '' if attention_count == 1 else 's' }} your attention</span>
+</a>
 <main class="content">
 {% if error %}<div class="card fail"><strong>UNREACHABLE</strong> &mdash; {{ error }}</div>{% endif %}
 {% if message %}<div class="flash">{{ message }}</div>{% endif %}
@@ -68,6 +71,28 @@
     bar.querySelectorAll('.tab-group').forEach(function (b) { b.addEventListener('click', function () { setView(b.dataset.open); }); });
     bar.querySelectorAll('.tab-back').forEach(function (b) { b.addEventListener('click', function () { setView('main'); }); });
   }
+  var banner = document.getElementById('attention-banner');
+  var known = null;
+  var alertBtn = document.getElementById('enable-alerts');
+  if (alertBtn && 'Notification' in window && Notification.permission === 'default') {
+    alertBtn.hidden = false;
+    alertBtn.addEventListener('click', function () { Notification.requestPermission().then(function () { alertBtn.hidden = true; }); });
+  }
+  var poll = function () {
+    fetch('/attention.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+      banner.hidden = d.count === 0;
+      document.getElementById('attention-count').textContent = d.count;
+      banner.querySelector('span').textContent = d.count === 1 ? 'needs your attention' : 'need your attention';
+      var keys = d.items.map(function (i) { return i.kind + '|' + i.project + '|' + i.title; });
+      if (known && 'Notification' in window && Notification.permission === 'granted') {
+        d.items.forEach(function (i, n) {
+          if (known.indexOf(keys[n]) < 0) { try { new Notification(i.title, { body: i.project + (i.detail ? ' — ' + i.detail : '') }); } catch (e) {} }
+        });
+      }
+      known = keys;
+    }).catch(function () {}).then(function () { setTimeout(poll, 20000); });
+  };
+  poll();
   if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {}); }
 })();
 </script>

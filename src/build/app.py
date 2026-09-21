@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from build import db
 from build.models import BuildRun, BuildRunStatus, Package, PackageKind
-from build.pep503 import normalize_name, render_project_index, render_root_index
+from build.pep503 import normalize_name, parse_distribution_filename, render_project_index, render_root_index, same_version
 from build.runner import run_build
 from common.paths import Paths
 from common.worktree_client import WorktreeUnavailable
@@ -91,11 +91,24 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     # -- publishing (fork-safety-gated) --------------------------------------
 
     def _publish(request: JobRequest, kind: PackageKind) -> dict:
-        error = _require(request.params, "build_run_id", "name", "version", "filename", "content_base64") or (
-            None if request.project_id else "missing project_id"
-        )
+        required = ("build_run_id", "filename", "content_base64") if kind == PackageKind.PYPI else (
+            "build_run_id", "name", "version", "filename", "content_base64")
+        error = _require(request.params, *required) or (None if request.project_id else "missing project_id")
         if error:
             return {"outcome": "failed", "error": error}
+
+        name, version = request.params.get("name"), request.params.get("version")
+        if kind == PackageKind.PYPI:
+            parsed = parse_distribution_filename(request.params["filename"])
+            if parsed is None:
+                return {"outcome": "failed", "error": (
+                    f"filename {request.params['filename']!r} does not carry a version; "
+                    "a wheel/sdist must be named <name>-<version>[-<tags>].whl|.tar.gz")}
+            name, version = name or parsed[0], version or parsed[1]
+            if not same_version(version, parsed[1]):
+                return {"outcome": "failed", "error": (
+                    f"version {version!r} does not match the version in filename "
+                    f"{request.params['filename']!r} ({parsed[1]!r})")}
 
         with lock:
             run = db.get_build_run(conn, request.params["build_run_id"])
@@ -117,8 +130,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             blob_path.write_bytes(content)
 
             package = Package(
-                id=db.new_id(), project_id=request.project_id, kind=kind, name=request.params["name"],
-                normalized_name=normalize_name(request.params["name"]), version=request.params["version"],
+                id=db.new_id(), project_id=request.project_id, kind=kind, name=name,
+                normalized_name=normalize_name(name), version=version,
                 filename=filename, source_build_run_id=run.id,
             )
             db.insert_package(conn, package)

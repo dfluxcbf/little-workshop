@@ -506,10 +506,11 @@ def _build_run_status(paths: Paths, args: JSONDict) -> Any:
 
 
 def _build_publish_pypi(paths: Paths, args: JSONDict) -> Any:
-    return _build_job(paths, "build.publish_pypi", args["project_id"], {
-        "build_run_id": args["build_run_id"], "name": args["name"], "version": args["version"],
-        "filename": args["filename"], "content_base64": args["content_base64"],
-    })
+    params = {"build_run_id": args["build_run_id"], "filename": args["filename"], "content_base64": args["content_base64"]}
+    for key in ("name", "version"):
+        if args.get(key):
+            params[key] = args[key]
+    return _build_job(paths, "build.publish_pypi", args["project_id"], params)
 
 
 def _build_publish_vsix(paths: Paths, args: JSONDict) -> Any:
@@ -1000,10 +1001,11 @@ TOOLS: tuple[ToolSpec, ...] = (
              "(the fork-safety gate) unless build_run_id names a real, succeeded, non-fork build run.",
              _schema({
                  "project_id": _PROJECT_ID, "build_run_id": _prop("string", "A succeeded, non-fork build run's id."),
-                 "name": _prop("string", "Package (project) name."), "version": _prop("string", "Package version."),
-                 "filename": _prop("string", "The wheel/sdist filename."),
+                 "name": _prop("string", "Optional: read from the filename when omitted."),
+                 "version": _prop("string", "Optional: read from the filename when omitted; must match it."),
+                 "filename": _prop("string", "The wheel/sdist filename; must carry the version (<name>-<version>-...whl)."),
                  "content_base64": _prop("string", "The file's own bytes, base64-encoded."),
-             }, ["project_id", "build_run_id", "name", "version", "filename", "content_base64"]), _build_publish_pypi),
+             }, ["project_id", "build_run_id", "filename", "content_base64"]), _build_publish_pypi),
     ToolSpec("workshop_build_publish_vsix", "Publish a .vsix VS Code extension. Refused (the fork-safety gate) "
              "unless build_run_id names a real, succeeded, non-fork build run.",
              _schema({

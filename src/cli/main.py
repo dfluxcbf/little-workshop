@@ -865,10 +865,11 @@ def cmd_build_run_status(args: argparse.Namespace) -> int:
 
 def cmd_build_publish_pypi(args: argparse.Namespace) -> int:
     content_base64 = base64.b64encode(Path(args.file).read_bytes()).decode()
-    return _build_job(args, "build.publish_pypi", {
-        "build_run_id": args.build_run_id, "name": args.name, "version": args.version,
-        "filename": Path(args.file).name, "content_base64": content_base64,
-    })
+    params = {"build_run_id": args.build_run_id, "filename": Path(args.file).name, "content_base64": content_base64}
+    for key in ("name", "version"):
+        if getattr(args, key):
+            params[key] = getattr(args, key)
+    return _build_job(args, "build.publish_pypi", params)
 
 
 def cmd_build_publish_vsix(args: argparse.Namespace) -> int:
@@ -2034,9 +2035,9 @@ def build_parser() -> argparse.ArgumentParser:
     build_publish_pypi = build_sub.add_parser("publish-pypi", help="Publish a wheel/sdist to the internal PEP 503 index")
     build_publish_pypi.add_argument("--project-id", required=True)
     build_publish_pypi.add_argument("--build-run-id", required=True)
-    build_publish_pypi.add_argument("name")
-    build_publish_pypi.add_argument("version")
-    build_publish_pypi.add_argument("file")
+    build_publish_pypi.add_argument("file", help="The wheel/sdist; its name and version are read from its filename")
+    build_publish_pypi.add_argument("--name", default=None, help="Override the name read from the filename")
+    build_publish_pypi.add_argument("--version", default=None, help="Must match the version in the filename")
     build_publish_pypi.set_defaults(func=cmd_build_publish_pypi)
 
     build_publish_vsix = build_sub.add_parser("publish-vsix", help="Publish a .vsix extension")

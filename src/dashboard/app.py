@@ -92,6 +92,31 @@ def _back(to: str, message: str) -> RedirectResponse:
     return RedirectResponse(f"{to}{'&' if '?' in to else '?'}message={quote(message)}", status_code=303)
 
 
+def collect_attention(paths: Paths) -> list[dict]:
+    """What needs a human right now: an enabled policy whose latest check on a
+    project failed, and every Job waiting for a confirmation. Both are read
+    live from their owning pillar; a pillar that is down contributes nothing."""
+    items: list[dict] = []
+    policies = {p["id"]: p for p in _try(client.policy_list, paths, default=[])}
+    latest: dict[tuple[str, str], dict] = {}
+    for result in _try(client.policy_check_results, paths, default=[]):  # oldest first
+        latest[(result["policy_id"], result["project_id"])] = result
+    for (policy_id, project), result in latest.items():
+        policy = policies.get(policy_id)
+        if result["outcome"] == "fail" and policy and policy.get("enabled", True):
+            items.append({
+                "kind": "policy", "project": project, "title": f"{policy['topic']} is failing",
+                "detail": (result.get("detail") or "").strip()[:240], "href": f"/policies/{policy_id}",
+                "since": result.get("checked_at"),
+            })
+    for job in _try(lambda: client.list_jobs(paths, status="pending_confirmation"), default=[]):
+        items.append({
+            "kind": "confirmation", "project": job.get("project_id") or "", "title": f"{job['type']} awaits confirmation",
+            "detail": "", "href": "/jobs?status=pending_confirmation", "since": job.get("created_at"),
+        })
+    return items
+
+
 JOB_STATUS_ORDER = ["running", "pending_confirmation", "queued", "failed", "succeeded", "cancelled"]
 JOB_STATUS_LABELS = {
     "running": "Running", "pending_confirmation": "Needs confirmation", "queued": "Queued",
@@ -162,6 +187,7 @@ def build_app(paths: Paths) -> FastAPI:
         context.setdefault("error", None)
         context.setdefault("message", request.query_params.get("message"))
         context.setdefault("nav_active", "")
+        context.setdefault("attention_count", len(collect_attention(paths)))
         return templates.TemplateResponse(request, name, context)
 
     @app.get("/sw.js")
@@ -173,6 +199,16 @@ def build_app(paths: Paths) -> FastAPI:
     @app.get("/offline", response_class=HTMLResponse)
     def offline(request: Request):
         return _render(request, "offline.html")
+
+    @app.get("/attention.json")
+    def attention_json() -> dict:
+        items = collect_attention(paths)
+        return {"count": len(items), "items": items}
+
+    @app.get("/attention", response_class=HTMLResponse)
+    def attention(request: Request):
+        items = collect_attention(paths)
+        return _render(request, "attention.html", items=items, attention_count=len(items), nav_active="dashboard")
 
     def _project_names() -> list[str]:
         return [p["name"] for p in client.list_projects(paths) if p.get("status", "active") == "active"]

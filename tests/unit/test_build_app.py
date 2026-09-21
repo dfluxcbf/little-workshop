@@ -135,6 +135,35 @@ def test_publish_pypi_succeeds_for_a_real_non_fork_succeeded_run(client):
     assert package["normalized_name"] == "pkg"
 
 
+def test_publish_pypi_reads_name_and_version_from_the_wheel_filename(client):
+    run = _run(client)
+    content = base64.b64encode(b"w").decode()
+    response = client.post("/v1/jobs/build.publish_pypi", json={"job_id": "j", "project_id": "p1", "params": {
+        "build_run_id": run["id"], "filename": "little_widget-0.1.1.dev15-py3-none-any.whl", "content_base64": content}})
+    package = response.json()["result"]
+    assert (package["name"], package["version"], package["normalized_name"]) == ("little_widget", "0.1.1.dev15", "little-widget")
+
+
+def test_publish_pypi_accepts_a_semver_dev_version_against_its_pep440_filename(client):
+    run = _run(client)
+    response = _publish_pypi(client, run["id"], name="w", version="0.1.1-dev.15", filename="w-0.1.1.dev15-py3-none-any.whl")
+    assert response.json()["outcome"] == "succeeded"
+
+
+def test_publish_pypi_refused_when_the_filename_carries_no_version(client):
+    run = _run(client)
+    response = _publish_pypi(client, run["id"], name="w", version="1.0.0", filename="w.whl")
+    assert response.json()["outcome"] == "failed"
+    assert "does not carry a version" in response.json()["error"]
+
+
+def test_publish_pypi_refused_when_version_disagrees_with_the_filename(client):
+    run = _run(client)
+    response = _publish_pypi(client, run["id"], name="w", version="2.0.0", filename="w-1.0.0-py3-none-any.whl")
+    assert response.json()["outcome"] == "failed"
+    assert "does not match" in response.json()["error"]
+
+
 def test_publish_pypi_refused_for_a_fork_run(client):
     run = _run(client, from_fork=True)
     response = _publish_pypi(client, run["id"])
@@ -221,7 +250,7 @@ def test_delete_package_fails_cleanly_for_unknown_id(client):
 
 def test_list_packages_filters_by_kind(client):
     run = _run(client)
-    _publish_pypi(client, run["id"], filename="a.whl")
+    _publish_pypi(client, run["id"], filename="pkg-1.0.0.whl")
     content = base64.b64encode(b"x").decode()
     client.post("/v1/jobs/build.publish_vsix", json={
         "job_id": "j", "project_id": "p1",

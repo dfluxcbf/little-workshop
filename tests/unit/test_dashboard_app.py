@@ -355,7 +355,7 @@ def test_status_chips_carry_counts_and_the_active_one_is_marked(test_client, mon
 def test_the_status_filter_is_applied_locally_so_counts_stay_whole(test_client, monkeypatch):
     calls = _stub_jobs(monkeypatch, [_job(1), _job(2, status="failed")])
     test_client.get("/jobs", params={"status": "failed"})
-    assert calls == [None]
+    assert [c for c in calls if c != "pending_confirmation"] == [None]  # the banner's own confirmation read is separate
 
 
 def test_jobs_search_matches_type_project_pillar_creator_and_id(test_client, monkeypatch):
@@ -1184,3 +1184,61 @@ def test_a_regression_outranks_drafts(test_client, monkeypatch):
 def test_a_single_draft_is_worded_in_the_singular(test_client, monkeypatch):
     _, text = _reqs_pill(test_client, monkeypatch, [_req("draft", False)])
     assert "1 draft requirement awaiting review" in text
+
+
+# -- attention: failing checks and jobs awaiting confirmation, pushed to the page ----
+
+
+def _stub_attention(monkeypatch, *, policies, results, jobs):
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: policies)
+    monkeypatch.setattr(client, "policy_check_results", lambda paths: results)
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: jobs if status == "pending_confirmation" else [])
+
+
+def test_attention_lists_a_failing_check_and_a_job_awaiting_confirmation(test_client, monkeypatch):
+    _stub_attention(
+        monkeypatch,
+        policies=[{"id": "p1", "topic": "commit-bumps-version", "enabled": True}],
+        results=[{"policy_id": "p1", "project_id": "little-widget", "outcome": "fail", "detail": "VERSION not bumped", "checked_at": "2026-09-21T10:00:00Z"}],
+        jobs=[{"type": "deployment.deploy", "project_id": "little-widget", "created_at": "2026-09-21T10:00:00Z"}],
+    )
+    body = test_client.get("/attention.json").json()
+    assert body["count"] == 2
+    assert {i["kind"] for i in body["items"]} == {"policy", "confirmation"}
+    page = test_client.get("/attention").text
+    assert "commit-bumps-version is failing" in page and "VERSION not bumped" in page
+    assert "deployment.deploy awaits confirmation" in page
+
+
+def test_attention_uses_only_the_latest_result_and_ignores_disabled_policies(test_client, monkeypatch):
+    _stub_attention(
+        monkeypatch,
+        policies=[{"id": "p1", "topic": "fixed-now", "enabled": True}, {"id": "p2", "topic": "switched-off", "enabled": False}],
+        results=[
+            {"policy_id": "p1", "project_id": "a", "outcome": "fail", "detail": "old", "checked_at": "2026-09-21T09:00:00Z"},
+            {"policy_id": "p1", "project_id": "a", "outcome": "pass", "detail": "", "checked_at": "2026-09-21T10:00:00Z"},
+            {"policy_id": "p2", "project_id": "a", "outcome": "fail", "detail": "x", "checked_at": "2026-09-21T10:00:00Z"},
+        ],
+        jobs=[],
+    )
+    assert test_client.get("/attention.json").json() == {"count": 0, "items": []}
+    assert "Nothing needs you right now" in test_client.get("/attention").text
+
+
+def test_every_page_carries_the_attention_banner_only_when_something_needs_attention(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch)
+    _stub_attention(monkeypatch, policies=[], results=[], jobs=[])
+    assert 'id="attention-banner" href="/attention" hidden' in test_client.get("/").text
+    _stub_attention(monkeypatch, policies=[], results=[], jobs=[{"type": "deployment.deploy", "project_id": "x", "created_at": None}])
+    text = test_client.get("/").text
+    assert 'id="attention-banner" href="/attention">' in text and '<strong id="attention-count">1</strong>' in text
+
+
+def test_attention_degrades_to_nothing_when_the_pillars_are_down(test_client, monkeypatch):
+    def down(*a, **kw):
+        raise client.PillarUnavailable("down")
+
+    monkeypatch.setattr(client, "policy_list", down)
+    monkeypatch.setattr(client, "policy_check_results", down)
+    monkeypatch.setattr(client, "list_jobs", down)
+    assert test_client.get("/attention.json").json() == {"count": 0, "items": []}

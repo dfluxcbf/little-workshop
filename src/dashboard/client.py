@@ -100,6 +100,10 @@ def policy_get(paths: Paths, policy_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "policy", f"/v1/policies/{policy_id}", timeout=timeout)
 
 
+def policy_check_results(paths: Paths, *, timeout: float = 5.0) -> list[dict]:
+    return _get(paths, "policy", "/v1/policy_check_results", timeout=timeout)
+
+
 def policy_drafts(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> list[dict]:
     return _get(paths, "policy", "/v1/policy_drafts", params={"status": status} if status else None, timeout=timeout)
 

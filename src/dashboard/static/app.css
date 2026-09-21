@@ -508,6 +508,17 @@ details.section-panel > summary::-webkit-details-marker { display: none; }
   box-shadow: 0 0 0 1px var(--cyan-soft);
 }
 
+.attention-banner {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px 16px;
+  background: var(--fail-soft);
+  border-bottom: 1px solid var(--fail);
+  color: var(--ink);
+  font-size: 14px;
+  text-decoration: none;
+}
+.attention-banner[hidden] { display: none; }
+
 /* --- bottom tab bar (phone) / hidden on desktop ------------------------- */
 
 nav.tabbar {

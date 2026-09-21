@@ -1,0 +1,16 @@
+{
+  "ears_text": "When a project builds a Python wheel, the wheel's file name shall carry the project's version, in the form <name>-<version>-<tags>.whl, so that the package index can publish it without the version being supplied separately.",
+  "ears_refined": true,
+  "test_script": "\"\"\"Policy `wheel-filename-has-version`: every wheel a project builds is named <name>-<version>-<tags>.whl.\n\nA `py_wheel` rule that declares no `version` yields an unversioned file name,\nwhich the package index refuses to publish. Checked statically on the\nproject's own BUILD files, and on any wheel already built under dist/ or\nbazel-bin/.\"\"\"\n\nimport os\nimport re\nfrom pathlib import Path\n\nimport pytest\n\nPROJECT = Path(os.environ.get(\"POLICY_PROJECT_DIR\", \"/project\"))\nSKIP_DIRS = {\".git\", \"node_modules\", \".venv\", \"venv\", \"__pycache__\"}\nWHEEL_RE = re.compile(r\"^[^-]+-\\d[^-]*(-\\d[^-]*)?-[^-]+-[^-]+-[^-]+\\.whl$\")\nPY_WHEEL_RE = re.compile(r\"\\bpy_wheel\\s*\\(\")\n\n\ndef build_files():\n    for root, dirs, files in os.walk(PROJECT):\n        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(\"bazel-\")]\n        for name in files:\n            if name in (\"BUILD\", \"BUILD.bazel\"):\n                yield Path(root) / name\n\n\ndef py_wheel_blocks():\n    for path in build_files():\n        text = path.read_text(encoding=\"utf-8\", errors=\"replace\")\n        for match in PY_WHEEL_RE.finditer(text):\n            depth, i = 1, match.end()\n            while i < len(text) and depth:\n                depth += {\"(\": 1, \")\": -1}.get(text[i], 0)\n                i += 1\n            yield path, text[match.end():i - 1]\n\n\ndef built_wheels():\n    for base in (\"dist\", \"bazel-bin\"):\n        root = PROJECT / base\n        if root.is_dir():\n            yield from root.rglob(\"*.whl\")\n\n\ndef test_every_py_wheel_declares_a_version():\n    blocks = list(py_wheel_blocks())\n    if not blocks:\n        pytest.skip(\"the project defines no py_wheel\")\n    missing = [str(p.relative_to(PROJECT)) for p, body in blocks if not re.search(r\"\\bversion\\s*=\", body)]\n    assert not missing, f\"py_wheel without a version (its file name would carry none): {missing}\"\n\n\ndef test_every_built_wheel_carries_its_version_in_the_file_name():\n    wheels = list(built_wheels())\n    if not wheels:\n        pytest.skip(\"no wheel has been built yet\")\n    bad = [w.name for w in wheels if not WHEEL_RE.match(w.name)]\n    assert not bad, f\"wheel file names without <name>-<version>-<tags>: {bad}\"\n",
+  "topic": "wheel-filename-has-version",
+  "target_pillar": "build",
+  "scope_level": "all_projects",
+  "scope_target": null,
+  "created_by": "user",
+  "gate_points": [
+    "package_publish"
+  ],
+  "source": "little-workshop REQ-000000166",
+  "notes": "Static check that every py_wheel declares a version, plus a check of any wheel already under dist/ or bazel-bin/. Skips when a project has neither. Suggested gate point: package_publish.",
+  "concerns": false
+}

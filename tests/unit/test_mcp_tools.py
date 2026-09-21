@@ -771,6 +771,13 @@ def test_build_publish_pypi_builds_job(paths, fake_create_job):
     assert call["params"]["build_run_id"] == "r1"
 
 
+def test_build_publish_pypi_needs_only_the_filename_and_content(paths, fake_create_job):
+    spec = tools_mod.TOOLS_BY_NAME["workshop_build_publish_pypi"]
+    assert "name" not in spec.input_schema["required"] and "version" not in spec.input_schema["required"]
+    spec.handler(paths, {"project_id": "p1", "build_run_id": "r1", "filename": "pkg-1.0.0-py3-none-any.whl", "content_base64": "Zm9v"})
+    assert "name" not in fake_create_job[0]["params"] and "version" not in fake_create_job[0]["params"]
+
+
 def test_build_publish_vsix_builds_job(paths, fake_create_job):
     tools_mod.TOOLS_BY_NAME["workshop_build_publish_vsix"].handler(paths, {
         "project_id": "p1", "build_run_id": "r1", "name": "ext", "version": "0.1.0",

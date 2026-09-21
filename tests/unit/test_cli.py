@@ -499,7 +499,7 @@ def test_build_publish_pypi_reports_error_when_daemon_unavailable(tmp_path, caps
     monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
 
     exit_code = main.main([
-        "build", "publish-pypi", "--project-id", "little-widget", "--build-run-id", "r1", "pkg", "1.0.0", str(wheel),
+        "build", "publish-pypi", "--project-id", "little-widget", "--build-run-id", "r1", str(wheel),
     ])
     assert exit_code == 1
     assert "error" in capsys.readouterr().err

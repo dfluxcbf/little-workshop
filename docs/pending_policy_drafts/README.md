@@ -55,3 +55,7 @@ Gate 3; the notes flag the drafts that break it.
 | File (removed) | Topic | Rejected | Why |
 |---|---|---|---|
 | `independence-no-lvx-config.json` | `independence-no-lvx-config` | 2026-09-17 | Not a policy candidate at all, by direct decision: "no `.lvx/config.json`" was a one-time fact about the `little-versions` migration, not an ongoing invariant to check — `docs/governance_policy.md`'s independence principle means "not required to depend on," never "must never contain." Once the migration is complete, whether `.lvx` exists is simply irrelevant — nothing reads it either way. See `docs/requirements.md`'s M15 follow-up section and `docs/governance_policy.md`'s own 2026-09-17 amendment. |
+
+**Added 2026-09-21:** `wheel-filename-has-version` (target pillar `build`, suggested gate point
+`package_publish`) — every `py_wheel` declares a version and every built wheel is named
+`<name>-<version>-<tags>.whl`. Script: `tools/policy_scripts/wheel_filename_has_version.py`.
