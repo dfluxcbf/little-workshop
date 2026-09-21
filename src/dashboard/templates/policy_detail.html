@@ -1,62 +1,88 @@
 {% extends "base.html" %}
-{% block title %}Policy {{ policy.id if policy else "" }}{% endblock %}
+{% block title %}{{ policy.topic if policy else "Policy" }} — little-workshop{% endblock %}
+{% macro dicon(name) -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+{%- if name == 'gate' %}<path d="M4 6h16M4 12h10M4 18h13"></path><circle cx="19" cy="6" r="1.6"></circle><circle cx="16" cy="12" r="1.6"></circle><circle cx="19" cy="18" r="1.6"></circle>
+{%- elif name == 'code' %}<path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"></path>
+{%- elif name == 'waiver' %}<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3Z"></path><path d="M9 12h6"></path>
+{%- elif name == 'chev' %}<path d="M9 6l6 6-6 6"></path>
+{%- endif %}</svg>
+{%- endmacro %}
 {% block content %}
 {% if policy %}
-<h1>{{ policy.ears_text }}</h1>
-<p class="sheet-no">{{ policy.id }} — {{ policy.topic }} — target: {{ policy.target_pillar }}</p>
+<section class="dcard summary">
+  <div class="dcard-top">
+    <span class="dcard-name">{{ policy.topic }}</span>
+    {% if policy.enabled %}<span class="pill ok">enabled</span>{% else %}<span class="pill warn">disabled</span>{% endif %}
+  </div>
+  <p class="dcard-ears">{{ policy.ears_text }}</p>
+  <div class="polcard-meta">
+    <span class="chip">{% if policy.scope_level == "all_projects" %}all projects{% elif policy.scope_target %}{{ policy.scope_target }}{% else %}{{ policy.scope_level }}{% endif %}</span>
+    <span class="chip">{{ policy.target_pillar }}</span>
+    <span class="chip">{{ policy.created_by }}</span>
+    <span class="chip" title="{{ policy.id }}">{{ policy.id[:8] }}</span>
+    {% if policy.amended_at %}<span class="chip" title="Created {{ policy.created_at }}">amended {{ policy.amended_at[:10] }}</span>{% endif %}
+  </div>
+</section>
 
-<form method="post" action="/policies/{{ policy.id }}/configure">
-  <fieldset>
-    <legend>Configuration — never re-runs the four authoring gates</legend>
-    <label>
-      <input type="checkbox" name="enabled" value="true" {% if policy.enabled %}checked{% endif %}>
-      Enabled
-    </label>
-    <label>Gate points (any subset, or none)</label>
+<form class="dcard" method="post" action="/policies/{{ policy.id }}/configure">
+  <div class="dcard-head">
+    <span class="dcard-icon">{{ dicon('gate') }}</span>
+    <span class="dcard-title">Gating</span>
+    <span class="dcard-note" title="Changing these never re-runs the authoring gates">no re-authoring</span>
+  </div>
+  <label class="switch-row">
+    <span>Enabled</span>
+    <input type="checkbox" name="enabled" value="true" {% if policy.enabled %}checked{% endif %}>
+    <span class="switch" aria-hidden="true"></span>
+  </label>
+  <div class="gp-grid">
     {% for gp in gate_point_values %}
-      <label>
-        <input type="checkbox" name="gate_points" value="{{ gp }}"
-               {% if gp in policy.gate_points %}checked{% endif %}>
-        {{ gp }}
-      </label>
+    <label class="gp">
+      <input type="checkbox" name="gate_points" value="{{ gp }}" {% if gp in policy.gate_points %}checked{% endif %}>
+      <span>{{ gp }}</span>
+    </label>
     {% endfor %}
-    <button type="submit">Save configuration</button>
-  </fieldset>
+  </div>
+  <button type="submit" class="primary block">Save</button>
 </form>
 
-<fieldset>
-  <legend>Test script (generated at authoring time, read-only here — edit via `lws policy activate`)</legend>
-  <textarea readonly>{{ policy.test_script }}</textarea>
-</fieldset>
+<details class="dcard collapsible">
+  <summary class="dcard-head">
+    <span class="dcard-icon">{{ dicon('code') }}</span>
+    <span class="dcard-title">Test script</span>
+    <span class="dcard-note" title="Generated at authoring time. Edit it with `lws policy activate`.">read-only · {{ policy.test_script.splitlines() | length }} lines</span>
+    <span class="dcard-chev">{{ dicon('chev') }}</span>
+  </summary>
+  <pre class="code">{{ policy.test_script }}</pre>
+</details>
 
-<fieldset>
-  <legend>Waivers — explicit, auditable, per-project exceptions</legend>
-  <table>
-    <thead><tr><th>Project</th><th>Reason</th><th></th></tr></thead>
-    <tbody>
-    {% for w in waivers %}
-      <tr>
-        <td>{{ w.project_id }}</td>
-        <td>{{ w.reason }}</td>
-        <td>
-          <form method="post" action="/policies/{{ policy.id }}/waivers/{{ w.id }}/revoke">
-            <button type="submit">Revoke</button>
-          </form>
-        </td>
-      </tr>
-    {% else %}
-      <tr><td colspan="3">No waivers granted.</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-
-  <form method="post" action="/policies/{{ policy.id }}/waivers/grant">
-    <label>Project ID <input type="text" name="project_id" required></label>
-    <label>Reason (required — an explicit, auditable exception) <input type="text" name="reason" required></label>
-    <button type="submit">Grant waiver</button>
+<section class="dcard">
+  <div class="dcard-head">
+    <span class="dcard-icon">{{ dicon('waiver') }}</span>
+    <span class="dcard-title">Waivers</span>
+    <span class="dcard-note">{{ waivers | length }}</span>
+  </div>
+  {% for w in waivers %}
+  <div class="waiver-row">
+    <div class="waiver-info">
+      <span class="chip">{{ w.project_id }}</span>
+      <span class="waiver-reason">{{ w.reason }}</span>
+    </div>
+    <form method="post" action="/policies/{{ policy.id }}/waivers/{{ w.id }}/revoke">
+      <button type="submit" class="danger small">Revoke</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="muted empty">No waivers granted.</p>
+  {% endfor %}
+  <form class="waiver-form" method="post" action="/policies/{{ policy.id }}/waivers/grant">
+    <input type="text" name="project_id" placeholder="Project" aria-label="Project" required>
+    <input type="text" name="reason" placeholder="Reason (required)" aria-label="Reason" required>
+    <button type="submit" class="block">Grant waiver</button>
   </form>
-</fieldset>
+</section>
 {% else %}
-<p>Policy not found.</p>
+<p class="muted">Policy not found.</p>
 {% endif %}
 {% endblock %}

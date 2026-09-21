@@ -78,13 +78,17 @@ are the current state of every pillar.
   `ears_text` beneath it, and a row of chips — one per gate point (or
   "no gate"), the scope, the target pillar, and who created it. The
   whole card opens the policy; a disabled policy is dimmed; waivers, if
-  any, follow as compact cards headed by the policy's topic. Each
-  policy's detail page: `ears_text` with a checkbox for
-  its `enabled` toggle, a per-policy gate-point selector (all ten
-  categories, multi-select or none), a read-only view of the generated
-  `test_script` (editing it is `lws policy activate`'s own job, Gate 4's
-  human-review step — never bypassed here), and a per-project waiver
-  grant/revoke view with its required `reason` shown inline. Backed
+  any, follow as compact cards headed by the policy's topic. The
+  policy's detail page (also redesigned 2026-09-21) is four cards, each
+  headed by an icon and a one-word title rather than a boxed sentence:
+  a **summary** (topic, status pill, the full `ears_text`, chips for
+  scope, target pillar, author, short id and amend date); **Gating** — an
+  `enabled` switch and the ten gate points as tappable chips (multi-select
+  or none) with one Save; **Test script** — a collapsed, read-only,
+  scrollable code card with its line count (editing it is `lws policy
+  activate`'s own job, Gate 4's human-review step — never bypassed here);
+  and **Waivers** — one row per waiver with Revoke, plus the grant form
+  with its required `reason`. Backed
   entirely by `policy.configure`/`policy.waiver_grant`/`policy.
   waiver_revoke` Jobs and `GET /v1/policy_waivers` — no new pillar
   mechanism, this milestone is the UI surfacing what M12/M13 already

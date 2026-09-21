@@ -356,6 +356,39 @@ def test_policy_detail_success_renders_script_and_waivers(test_client, monkeypat
     assert "UNREACHABLE" not in response.text
 
 
+def test_policy_detail_is_built_from_cards_not_fieldsets(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_get", lambda paths, policy_id: {
+        "id": "0123456789abcdef", "topic": "commit-bumps-version", "ears_text": "a commit shall bump the version",
+        "target_pillar": "version", "created_by": "user", "scope_level": "project", "scope_target": "little-workshop",
+        "enabled": False, "gate_points": ["branch_finish", "release"], "created_at": "2026-09-16T10:00:00Z",
+        "amended_at": "2026-09-21T15:09:42Z", "test_script": "line1\nline2\nline3\n",
+    })
+    monkeypatch.setattr(client, "policy_list_waivers", lambda paths, policy_id=None, project_id=None: [
+        {"id": "w1", "project_id": "proj-a", "reason": "cannot comply yet"}
+    ])
+    text = test_client.get("/policies/pol1").text
+    assert "<fieldset" not in text and "<legend" not in text and "<h1" not in text
+    assert text.count('class="dcard') >= 4  # summary, gating, test script, waivers
+    assert "commit-bumps-version" in text and "disabled" in text and "little-workshop" in text
+    assert "01234567" in text and "amended 2026-09-21" in text
+    # the configure form still posts the same fields the route reads
+    assert 'action="/policies/pol1/configure"' in text or 'action="/policies/0123456789abcdef/configure"' in text
+    assert 'name="enabled" value="true"' in text and 'name="gate_points" value="branch_finish" checked' in text
+    assert 'name="gate_points" value="release" checked' in text and 'name="gate_points" value="server_stop" checked' not in text
+    assert "3 lines" in text and "line2" in text
+    assert "/waivers/w1/revoke" in text and "/waivers/grant" in text and 'name="reason"' in text
+
+
+def test_policy_detail_without_waivers_says_so(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_get", lambda paths, policy_id: {
+        "id": "abcdef012345", "topic": "t", "ears_text": "x shall y", "target_pillar": "registry", "created_by": "framework",
+        "scope_level": "all_projects", "scope_target": None, "enabled": True, "gate_points": [], "test_script": "",
+    })
+    monkeypatch.setattr(client, "policy_list_waivers", lambda paths, policy_id=None, project_id=None: [])
+    text = test_client.get("/policies/abcdef012345").text
+    assert "No waivers granted." in text and "all projects" in text
+
+
 def test_policy_detail_not_found_renders_a_message_not_a_500(test_client, monkeypatch):
     monkeypatch.setattr(client, "policy_get", lambda paths, policy_id: (_ for _ in ()).throw(client.PillarUnavailable("policy daemon unreachable")))
     monkeypatch.setattr(client, "policy_list_waivers", lambda paths, policy_id=None, project_id=None: [])
