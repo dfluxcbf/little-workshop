@@ -612,3 +612,183 @@ def test_redeploy_reports_core_being_unreachable(test_client, monkeypatch):
     monkeypatch.setattr(client, "core_status", down)
     response = test_client.post("/pillars/redeploy", data={"pillar": "registry"}, follow_redirects=False)
     assert response.status_code == 303 and "Core daemon unreachable" in unquote(response.headers["location"])
+
+
+# -- drafts awaiting approval ------------------------------------------------------
+
+
+def _draft_row(**overrides):
+    base = {
+        "id": "d1", "topic": "version-format", "ears_text": "The VERSION file shall be semver.", "source": "little-versions",
+        "target_pillar": "version", "concerns": False, "ears_refined": True, "notes": "Straightforward.", "status": "pending",
+        "reject_reason": "", "test_script": "def test_x():\n    assert True\n", "gate_points": [], "created_by": "framework",
+        "scope_level": "all_projects", "policy_id": None, "decided_at": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def _stub_drafts(monkeypatch, drafts):
+    monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [d for d in drafts if status is None or d["status"] == status])
+    monkeypatch.setattr(client, "policy_draft", lambda paths, draft_id: next((d for d in drafts if d["id"] == draft_id), None))
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": n, "status": "active"} for n in ("proj-a", "proj-b")])
+
+
+def test_policies_page_announces_drafts_awaiting_approval(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths: [])
+    _stub_drafts(monkeypatch, [_draft_row(id="d1"), _draft_row(id="d2", topic="b"), _draft_row(id="d3", topic="c", status="rejected")])
+    text = test_client.get("/policies").text
+    assert 'href="/policies/drafts"' in text and "2</span>" in text and "policies awaiting your approval" in text
+
+
+def test_policies_page_has_no_banner_when_nothing_is_pending(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths: [])
+    _stub_drafts(monkeypatch, [])
+    assert "awaiting your approval" not in test_client.get("/policies").text
+
+
+def test_policies_page_survives_the_draft_lookup_failing(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths: [])
+
+    def down(paths, status=None):
+        raise client.PillarUnavailable("policy down")
+
+    monkeypatch.setattr(client, "policy_drafts", down)
+    response = test_client.get("/policies")
+    assert response.status_code == 200 and "awaiting your approval" not in response.text
+
+
+def test_drafts_list_shows_pending_cards_and_a_rejected_section(test_client, monkeypatch):
+    _stub_drafts(monkeypatch, [
+        _draft_row(id="d1"), _draft_row(id="d2", topic="production-tag-format", concerns=True),
+        _draft_row(id="d3", topic="old-idea", status="rejected", reject_reason="not needed"),
+    ])
+    text = test_client.get("/policies/drafts").text
+    assert 'href="/policies/drafts/d1"' in text and 'href="/policies/drafts/d2"' in text
+    assert "check notes" in text and "to review" in text and "little-versions" in text and "refined" in text
+    assert "Rejected (1)" in text and "not needed" in text and "/policies/drafts/d3/restore" in text
+    assert 'href="/policies/drafts/d3"' not in text
+
+
+def test_drafts_list_empty_state(test_client, monkeypatch):
+    _stub_drafts(monkeypatch, [])
+    assert "Nothing is waiting for approval." in test_client.get("/policies/drafts").text
+
+
+def test_drafts_route_is_not_mistaken_for_a_policy_id(test_client, monkeypatch):
+    _stub_drafts(monkeypatch, [])
+    monkeypatch.setattr(client, "policy_get", lambda paths, policy_id: (_ for _ in ()).throw(AssertionError("read as a policy id")))
+    assert test_client.get("/policies/drafts").status_code == 200
+
+
+def test_draft_review_page_shows_everything_a_reviewer_needs_and_the_confirmation(test_client, monkeypatch):
+    _stub_drafts(monkeypatch, [_draft_row(concerns=True, notes="Audits every tag in history.")])
+    text = test_client.get("/policies/drafts/d1").text
+    assert "version-format" in text and "The VERSION file shall be semver." in text and "little-versions" in text
+    assert "Audits every tag in history." in text and "needs attention" in text
+    assert "def test_x" in text and "2 lines" in text
+    for gate_point in ("branch_finish", "release", "build_install"):
+        assert f'name="gate_points" value="{gate_point}"' in text
+    assert 'name="project" value="proj-a"' in text and 'name="project" value="proj-b"' in text
+    assert 'name="gating" value="proj-a" checked' in text
+    assert 'name="reviewed"' in text and 'action="/policies/drafts/d1/approve"' in text
+    assert 'formaction="/policies/drafts/d1/reject"' in text
+    assert "<fieldset" not in text and "<h1" not in text
+
+
+def test_draft_review_page_preselects_the_drafts_own_gate_points(test_client, monkeypatch):
+    _stub_drafts(monkeypatch, [_draft_row(gate_points=["release"])])
+    text = test_client.get("/policies/drafts/d1").text
+    assert 'name="gate_points" value="release" checked' in text and 'name="gate_points" value="build_install" checked' not in text
+
+
+def test_a_decided_draft_offers_no_approve_form(test_client, monkeypatch):
+    _stub_drafts(monkeypatch, [
+        _draft_row(id="a", status="approved", policy_id="pol9"), _draft_row(id="r", status="rejected", reject_reason="too vague"),
+    ])
+    approved = test_client.get("/policies/drafts/a").text
+    assert 'href="/policies/pol9"' in approved and "/approve" not in approved and "approved" in approved
+    rejected = test_client.get("/policies/drafts/r").text
+    assert "too vague" in rejected and "/policies/drafts/r/restore" in rejected and "/approve" not in rejected
+
+
+def test_unknown_draft_says_so_and_unreachable_policy_shows_the_banner(test_client, monkeypatch):
+    _stub_drafts(monkeypatch, [])
+    assert "Draft not found." in test_client.get("/policies/drafts/ghost").text
+
+    def down(paths, draft_id):
+        raise client.PillarUnavailable("policy daemon unreachable")
+
+    monkeypatch.setattr(client, "policy_draft", down)
+    response = test_client.get("/policies/drafts/d1")
+    assert response.status_code == 200 and "UNREACHABLE" in response.text
+
+
+def test_approve_without_the_review_confirmation_does_nothing(test_client, monkeypatch):
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **fields: jobs.append(fields))
+    response = test_client.post("/policies/drafts/d1/approve", data={"project": ["proj-a"]}, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"].startswith("/policies/drafts/d1?message=")
+    assert "review" in unquote(response.headers["location"]) and jobs == []
+
+
+def test_approve_sends_the_whole_decision_and_lands_on_the_new_policy(test_client, monkeypatch):
+    captured = {}
+
+    def fake_create_job(paths, **fields):
+        captured.update(fields)
+        return {"status": "succeeded", "result": {"id": "pol-new"}}
+
+    monkeypatch.setattr(client, "create_job", fake_create_job)
+    response = test_client.post(
+        "/policies/drafts/d1/approve",
+        data={"reviewed": "on", "gate_points": ["branch_finish"], "project": ["proj-a", "proj-b", "proj-a"], "gating": ["proj-a"]},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303 and response.headers["location"].startswith("/policies/pol-new?message=")
+    assert captured["type"] == "policy.approve_draft"
+    assert captured["params"] == {
+        "draft_id": "d1", "reviewed": True, "gate_points": ["branch_finish"],
+        "projects": [{"project_id": "proj-a", "gating_enabled": True}, {"project_id": "proj-b", "gating_enabled": False}],
+    }
+
+
+def test_approve_with_nothing_chosen_sends_no_gate_points_and_no_projects(test_client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(client, "create_job", lambda paths, **fields: (captured.update(fields), {"status": "succeeded", "result": {"id": "p"}})[1])
+    test_client.post("/policies/drafts/d1/approve", data={"reviewed": "on"}, follow_redirects=False)
+    assert captured["params"]["gate_points"] == [] and captured["params"]["projects"] == []
+
+
+def test_a_refused_approval_returns_to_the_draft_with_the_reason(test_client, monkeypatch):
+    monkeypatch.setattr(client, "create_job", lambda paths, **fields: {"status": "failed", "error": "Gate 3a rejected: duplicate"})
+    response = test_client.post("/policies/drafts/d1/approve", data={"reviewed": "on"}, follow_redirects=False)
+    location = unquote(response.headers["location"])
+    assert location.startswith("/policies/drafts/d1?message=") and "Gate 3a rejected: duplicate" in location
+
+
+def test_approve_reports_the_policy_pillar_being_unreachable(test_client, monkeypatch):
+    def down(paths, **fields):
+        raise client.PillarUnavailable("orchestration daemon unreachable")
+
+    monkeypatch.setattr(client, "create_job", down)
+    response = test_client.post("/policies/drafts/d1/approve", data={"reviewed": "on"}, follow_redirects=False)
+    assert "Could not approve" in unquote(response.headers["location"])
+
+
+def test_reject_and_restore_post_the_right_jobs(test_client, monkeypatch):
+    seen = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **fields: (seen.append(fields), {"status": "succeeded"})[1])
+    rejected = test_client.post("/policies/drafts/d1/reject", data={"reason": "too vague"}, follow_redirects=False)
+    restored = test_client.post("/policies/drafts/d1/restore", follow_redirects=False)
+    assert rejected.status_code == 303 and rejected.headers["location"].startswith("/policies/drafts?message=")
+    assert restored.status_code == 303 and restored.headers["location"].startswith("/policies/drafts?message=")
+    assert (seen[0]["type"], seen[0]["params"]) == ("policy.reject_draft", {"draft_id": "d1", "reason": "too vague"})
+    assert (seen[1]["type"], seen[1]["params"]) == ("policy.restore_draft", {"draft_id": "d1"})
+
+
+def test_reject_and_restore_report_failures(test_client, monkeypatch):
+    monkeypatch.setattr(client, "create_job", lambda paths, **fields: {"status": "failed", "error": "draft is approved, not pending"})
+    reject = test_client.post("/policies/drafts/d1/reject", data={}, follow_redirects=False)
+    restore = test_client.post("/policies/drafts/d1/restore", follow_redirects=False)
+    assert "not pending" in unquote(reject.headers["location"]) and "Could not restore" in unquote(restore.headers["location"])

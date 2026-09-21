@@ -87,6 +87,38 @@ class Policy(BaseModel):
     amended_at: datetime = Field(default_factory=_now)
 
 
+class DraftStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class PolicyDraft(BaseModel):
+    """Gates 1-3's output, kept for a human to review in the Dashboard before
+    Gate 4. A draft is not a policy: nothing enforces it, and it never becomes
+    one except through `policy.approve_draft`, which only the Dashboard drives.
+    `concerns` flags a draft whose review notes say it needs work before it
+    should be approved; `source` is where the rule came from."""
+    id: str
+    topic: str
+    target_pillar: str
+    ears_text: str
+    ears_refined: bool = False
+    test_script: str
+    scope_level: ScopeLevel = ScopeLevel.ALL_PROJECTS
+    scope_target: str | None = None
+    created_by: CreatedBy = CreatedBy.FRAMEWORK
+    gate_points: list[GatePoint] = Field(default_factory=list)
+    source: str = ""
+    notes: str = ""
+    concerns: bool = False
+    status: DraftStatus = DraftStatus.PENDING
+    policy_id: str | None = None
+    reject_reason: str = ""
+    created_at: datetime = Field(default_factory=_now)
+    decided_at: datetime | None = None
+
+
 class PolicyCheckResult(BaseModel):
     __test__ = False  # not a pytest test class, despite the name
     id: str

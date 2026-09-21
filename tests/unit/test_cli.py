@@ -694,3 +694,19 @@ def test_policy_gating_for_job_reports_error_when_daemon_unavailable(tmp_path, c
     exit_code = main.main(["policy", "gating-for-job", "--project-id", "p1", "--categories", "server_launch"])
     assert exit_code == 1
     assert "error" in capsys.readouterr().err
+
+
+def test_policy_draft_list_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
+    from common.paths import Paths
+    from policy import db as policy_db
+    from policy.models import PolicyDraft
+
+    paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
+    conn = policy_db.connect(paths.pillar_db_path("policy"))
+    policy_db.insert_draft(conn, PolicyDraft(id="d1", topic="t", target_pillar="version", ears_text="e", test_script="s"))
+    conn.close()
+
+    monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
+    assert main.main(["policy", "draft", "list", "--status", "pending"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["source"] == "fallback" and [d["topic"] for d in output["drafts"]] == ["t"]

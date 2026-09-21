@@ -3,24 +3,24 @@
 **Not policies.** Nothing in this directory has any effect on anything —
 these are Gate 1-3 outputs from `policy.author` (EARS-compliance,
 mechanical-enforceability, and conflict checks, plus a generated test
-script), held here purely for human review before Gate 4. `policy.author`
-never saves anything itself; the only path that ever writes a real
-`policies` row is `policy.activate`, and only with an explicit
-`approved: true` (`docs/pillars/policy_compliance.md`'s "stays strictly
-proposals until Gate 4").
+script), kept as reviewable records.
 
-A file here is committed for reviewability (so it's readable as a normal
-diff on GitHub, not a local temp path), not because it's binding. Once a
-draft is reviewed and approved, activate it for real and delete the file
-from here in the same change:
+**Approval happens in the app, not here.** Import the files into
+little-workshop and review them in the Dashboard (Policies → "awaiting your
+approval"), where each draft can be read in full, given gate points and
+projects, then approved or rejected:
 
 ```bash
-lws policy activate docs/pending_policy_drafts/<file>.json
-git rm docs/pending_policy_drafts/<file>.json
+lws policy draft import docs/pending_policy_drafts/*.json
 ```
 
-If a draft is rejected instead, just delete the file — nothing to undo,
-since nothing was ever saved.
+Import is idempotent (a topic already pending is refreshed; one that
+already has a policy is skipped). Each file may carry `source`, `notes`
+(review notes shown on the draft) and `concerns` (true = flagged "check
+notes") alongside the `policy.author` fields. There is no CLI or MCP command
+that approves a draft — `lws policy activate` remains the older, direct
+Gate 4 for a single file, but drafts are meant to be decided in the app.
+A decided draft's file can be deleted; the decision lives in the app.
 
 ## Current drafts
 

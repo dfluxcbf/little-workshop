@@ -253,3 +253,62 @@ def test_connect_drops_an_empty_legacy_waivers_table_but_keeps_one_with_rows(tmp
     conn = db.connect(path)
     assert conn.execute("SELECT COUNT(*) FROM policy_waivers").fetchone()[0] == 1
     conn.close()
+
+
+# -- drafts ---------------------------------------------------------------------
+
+
+def _draft(**overrides):
+    from policy.models import PolicyDraft
+
+    defaults = dict(id="d1", topic="version-format", target_pillar="version", ears_text="x shall y", test_script="def test_x(): pass\n")
+    defaults.update(overrides)
+    return PolicyDraft(**defaults)
+
+
+def test_insert_and_get_draft_round_trips(conn):
+    from policy.models import GatePoint
+
+    db.insert_draft(conn, _draft(source="little-versions", notes="n", concerns=True, ears_refined=True, gate_points=[GatePoint.RELEASE]))
+    fetched = db.get_draft(conn, "d1")
+    assert fetched.topic == "version-format" and fetched.source == "little-versions" and fetched.notes == "n"
+    assert fetched.concerns is True and fetched.ears_refined is True and fetched.gate_points == [GatePoint.RELEASE]
+    assert fetched.status.value == "pending" and fetched.decided_at is None and fetched.policy_id is None
+    assert db.get_draft(conn, "ghost") is None
+
+
+def test_list_drafts_filters_by_status(conn):
+    from policy.models import DraftStatus
+
+    db.insert_draft(conn, _draft(id="d1", topic="a"))
+    db.insert_draft(conn, _draft(id="d2", topic="b"))
+    db.set_draft_decision(conn, "d2", status=DraftStatus.REJECTED, reason="no")
+    assert [d.id for d in db.list_drafts(conn)] == ["d1", "d2"]
+    assert [d.id for d in db.list_drafts(conn, status=DraftStatus.PENDING)] == ["d1"]
+    rejected = db.list_drafts(conn, status=DraftStatus.REJECTED)[0]
+    assert rejected.reject_reason == "no" and rejected.decided_at is not None
+
+
+def test_a_decision_records_the_policy_and_restoring_clears_the_decision_time(conn):
+    from policy.models import DraftStatus
+
+    db.insert_draft(conn, _draft())
+    db.set_draft_decision(conn, "d1", status=DraftStatus.APPROVED, policy_id="pol9")
+    assert (db.get_draft(conn, "d1").status, db.get_draft(conn, "d1").policy_id) == (DraftStatus.APPROVED, "pol9")
+    db.set_draft_decision(conn, "d1", status=DraftStatus.PENDING)
+    restored = db.get_draft(conn, "d1")
+    assert restored.status == DraftStatus.PENDING and restored.decided_at is None
+
+
+def test_find_open_draft_by_topic_ignores_decided_drafts_and_replace_keeps_status(conn):
+    from policy.models import DraftStatus
+
+    db.insert_draft(conn, _draft(id="old", topic="t"))
+    db.set_draft_decision(conn, "old", status=DraftStatus.REJECTED)
+    assert db.find_open_draft_by_topic(conn, "t") is None
+    db.insert_draft(conn, _draft(id="new", topic="t"))
+    assert db.find_open_draft_by_topic(conn, "t").id == "new"
+
+    db.replace_draft_content(conn, _draft(id="new", topic="t", ears_text="reworded", notes="fresh"))
+    refreshed = db.get_draft(conn, "new")
+    assert refreshed.ears_text == "reworded" and refreshed.notes == "fresh" and refreshed.status == DraftStatus.PENDING

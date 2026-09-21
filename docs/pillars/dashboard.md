@@ -68,6 +68,20 @@ are the current state of every pillar.
   sequence from a background thread with Orchestration/Deployment/Core
   last, since redeploying those interrupts the redeploy chain itself.
   `/jobs` and `/policies` hang off the More tab.
+- **Policy drafts** (`/policies/drafts`, `/policies/drafts/{id}`; 2026-09-21)
+  — where Gate 4 happens. `/policies` shows a banner ("N policies
+  awaiting your approval") linking to the list: one card per pending draft
+  (topic, full text, source, target pillar, "refined", and a "check notes"
+  pill when the review notes flag a concern), with rejected drafts folded
+  away and restorable. A draft's page is cards: summary; **Review notes**
+  (amber border when flagged); the **Test script** in full, open by
+  default since it is what is being approved; **Gate points** (none = audit
+  only); **Apply to** (every registered project, each with a Gating
+  switch); and a decision card with an "I have reviewed the policy text and
+  the test script" switch, an optional rejection reason, and Approve /
+  Reject. Approve without the switch does nothing (the route sends no Job);
+  with it, one `policy.approve_draft` Job carries the whole decision. This
+  is the only way to approve a draft — no CLI or MCP path exists.
 - **Jobs** (`/jobs`): the Orchestration queue, optionally filtered by
   status — the same `GET /v1/jobs` the CLI's `lws job list` already
   uses.

@@ -7,5 +7,8 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": []
+  "gate_points": [],
+  "source": "little-runner",
+  "notes": "Checks the file exists. Only meaningful for projects that use issue-driven automation; the script decides that itself \u2014 review how.",
+  "concerns": false
 }

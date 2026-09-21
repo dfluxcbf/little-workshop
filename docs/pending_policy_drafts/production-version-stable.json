@@ -7,5 +7,8 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": []
+  "gate_points": [],
+  "source": "little-versions",
+  "notes": "Reads files only. Straightforward.",
+  "concerns": false
 }

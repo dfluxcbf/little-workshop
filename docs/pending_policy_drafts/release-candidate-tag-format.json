@@ -7,5 +7,8 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": []
+  "gate_points": [],
+  "source": "little-versions",
+  "notes": "Audits every RC tag across every base version (format and counter continuity) \u2014 fails forever on an old mistake. Needs narrowing to the newest candidate vs. its predecessor.",
+  "concerns": true
 }

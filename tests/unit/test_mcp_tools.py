@@ -936,3 +936,32 @@ def test_policy_gating_for_job_calls_client(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "policy_gating_for_job", result=[])
     tools_mod.TOOLS_BY_NAME["workshop_policy_gating_for_job"].handler(paths, {"project_id": "proj-a", "categories": ["server_launch"]})
     assert calls[0] == ((paths, "proj-a", ["server_launch"]), {})
+
+
+def test_policy_draft_import_builds_job(paths, fake_create_job):
+    drafts = [{"topic": "t", "ears_text": "x", "test_script": "s", "target_pillar": "version"}]
+    tools_mod.TOOLS_BY_NAME["workshop_policy_draft_import"].handler(paths, {"drafts": drafts})
+    call = fake_create_job[0]
+    assert call["type"] == "policy.draft_import" and call["params"] == {"drafts": drafts}
+
+
+def test_policy_draft_list_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "policy_list_drafts", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_policy_draft_list"].handler(paths, {"status": "pending"})
+    assert calls[0] == ((paths, "pending"), {})
+
+
+def test_policy_author_can_save_a_draft(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_policy_author"].handler(paths, {
+        "ears_text": "e", "topic": "t", "target_pillar": "version", "scope_level": "all_projects",
+        "save_draft": True, "source": "little-versions",
+    })
+    params = fake_create_job[0]["params"]
+    assert params["save_draft"] is True and params["source"] == "little-versions"
+
+
+def test_no_tool_can_approve_a_draft():
+    """Approval is a human decision made in the Dashboard: no MCP tool may drive it."""
+    assert not [n for n in tools_mod.TOOLS_BY_NAME if "approve" in n]
+    for spec in tools_mod.TOOLS.values() if isinstance(tools_mod.TOOLS, dict) else tools_mod.TOOLS:
+        assert "approve_draft" not in spec.description

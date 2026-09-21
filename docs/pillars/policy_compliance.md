@@ -333,6 +333,26 @@ activates without this. Editing a policy re-runs the entire flow, Gate 4
 included: an edit is "replace this policy's EARS text and script," never
 a shortcut around review.
 
+**Gate 4 happens inside the app (2026-09-21).** Gates 1-3's output is kept
+as a **draft** (`policy_drafts`: EARS text, generated script, source, review
+notes, a `concerns` flag) — via `policy.author` with `save_draft`, or
+`policy.draft_import` for output made elsewhere (e.g. the JSON files in
+`docs/pending_policy_drafts/`, imported with `lws policy draft import`). A
+draft enforces nothing. The Dashboard lists drafts awaiting approval and
+lets the reviewer read the text, the notes and the whole script, choose the
+gate points and the projects to apply it to (with per-project gating), and
+then **Approve** or **Reject**. Approval (`policy.approve_draft`) requires
+the reviewer's explicit `reviewed: true` — the Dashboard only sends it when
+its "I have reviewed the policy text and the test script" switch is on —
+and goes through the very same write as `policy.activate` (Gate 3a's
+duplicate and ownership checks, gate-point validation), so a draft cannot
+become a policy by any path that `activate` would refuse. There is
+deliberately **no CLI command and no MCP tool that approves a draft**:
+`lws policy draft` can only import and list, so approval stays a human act
+made in the app. Rejecting keeps the draft (with an optional reason) and it
+can be restored; re-importing a topic refreshes its pending draft instead
+of duplicating it, and skips a topic that already has a policy.
+
 Two separate Claude CLI calls across Gates 1-3, two different scopes of
 trust, and both stay strictly proposals until Gate 4: the EARS-refinement
 call (Gate 1) is text-in, text-out; the conflict check (Gate 3b) is

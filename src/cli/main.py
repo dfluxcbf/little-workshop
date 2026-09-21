@@ -968,7 +968,30 @@ def cmd_policy_author(args: argparse.Namespace) -> int:
         params["policy_id"] = args.policy_id
     if args.gate_points:
         params["gate_points"] = args.gate_points.split(",")
+    if args.save_draft:
+        params["save_draft"] = True
+        if args.source:
+            params["source"] = args.source
     return _policy_job(args, "policy.author", params)
+
+
+def cmd_policy_draft_import(args: argparse.Namespace) -> int:
+    """Bring Gates 1-3 output (one JSON object per file, or a list) into the app for
+    review. Approval is not available here on purpose: it happens in the Dashboard."""
+    drafts: list[dict] = []
+    for path in args.files:
+        loaded = json.loads(Path(path).read_text(encoding="utf-8"))
+        for draft in (loaded if isinstance(loaded, list) else [loaded]):
+            if args.source and not draft.get("source"):
+                draft["source"] = args.source
+            drafts.append(draft)
+    return _policy_job(args, "policy.draft_import", {"drafts": drafts})
+
+
+def cmd_policy_draft_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    _print(client.policy_list_drafts(paths, args.status))
+    return 0
 
 
 def cmd_policy_activate(args: argparse.Namespace) -> int:
@@ -2073,7 +2096,21 @@ def build_parser() -> argparse.ArgumentParser:
     policy_author.add_argument("--created-by", default="user", choices=["user", "framework"])
     policy_author.add_argument("--policy-id", default=None, help="Editing an existing policy: exclude it from conflict checks")
     policy_author.add_argument("--gate-points", default=None, help="Comma-separated: build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
+    policy_author.add_argument("--save-draft", action="store_true", help="Keep the result as a draft to review and approve in the Dashboard")
+    policy_author.add_argument("--source", default=None, help="With --save-draft: where the rule came from")
     policy_author.set_defaults(func=cmd_policy_author)
+
+    policy_draft = policy_sub.add_parser("draft", help="Drafts awaiting approval — approved only in the Dashboard")
+    policy_draft_sub = policy_draft.add_subparsers(dest="policy_draft_command", required=True)
+
+    policy_draft_import = policy_draft_sub.add_parser("import", help="Bring draft JSON files into the app for review")
+    policy_draft_import.add_argument("files", nargs="+", help="JSON files: policy.author results, optionally with source/notes/concerns")
+    policy_draft_import.add_argument("--source", default=None, help="Default source for drafts that name none")
+    policy_draft_import.set_defaults(func=cmd_policy_draft_import)
+
+    policy_draft_list = policy_draft_sub.add_parser("list", help="List drafts")
+    policy_draft_list.add_argument("--status", default=None, choices=["pending", "approved", "rejected"])
+    policy_draft_list.set_defaults(func=cmd_policy_draft_list)
 
     policy_activate = policy_sub.add_parser("activate", help="Gate 4: save a policy.author draft after human approval")
     policy_activate.add_argument("draft_json", help="Path to a JSON file holding policy.author's own result")

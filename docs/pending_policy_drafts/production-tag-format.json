@@ -7,5 +7,8 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": []
+  "gate_points": [],
+  "source": "little-versions",
+  "notes": "Audits every production tag in history \u2014 a single old badly-named tag would fail it forever. Needs narrowing to the newest tag before activation (the project's own rule: judge only the newest).",
+  "concerns": true
 }

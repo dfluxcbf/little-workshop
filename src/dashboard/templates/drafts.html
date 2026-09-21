@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Awaiting approval — little-workshop{% endblock %}
+{% block content %}
+<div class="policy-list">
+  {% for d in pending %}
+  <a class="polcard" href="/policies/drafts/{{ d.id }}">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ d.topic }}</span>
+      {% if d.concerns %}<span class="pill warn">check notes</span>{% else %}<span class="pill idle">to review</span>{% endif %}
+    </span>
+    <span class="polcard-ears">{{ d.ears_text }}</span>
+    <span class="polcard-meta">
+      {% if d.source %}<span class="chip">{{ d.source }}</span>{% endif %}
+      <span class="chip">{{ d.target_pillar }}</span>
+      {% if d.ears_refined %}<span class="chip" title="Gate 1 rewrote the wording">refined</span>{% endif %}
+    </span>
+  </a>
+  {% else %}
+  <p class="muted">Nothing is waiting for approval.</p>
+  {% endfor %}
+</div>
+
+{% if rejected %}
+<details class="rejected-list">
+  <summary class="section-label">Rejected ({{ rejected | length }})</summary>
+  <div class="policy-list">
+    {% for d in rejected %}
+    <div class="polcard is-off">
+      <span class="polcard-head">
+        <span class="polcard-topic">{{ d.topic }}</span>
+        <form method="post" action="/policies/drafts/{{ d.id }}/restore"><button type="submit" class="small">Restore</button></form>
+      </span>
+      {% if d.reject_reason %}<span class="polcard-ears">{{ d.reject_reason }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+{% endblock %}

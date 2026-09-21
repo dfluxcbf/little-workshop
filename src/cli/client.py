@@ -553,6 +553,23 @@ def policy_list_projects(paths: Paths, policy_id: str | None = None, project_id:
         return {"source": "fallback", "projects": rows}
 
 
+def policy_list_drafts(paths: Paths, status: str | None = None, *, timeout: float = 5.0) -> dict:
+    params = {"status": status} if status else {}
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.get("/v1/policy_drafts", params=params)
+        response.raise_for_status()
+        return {"source": "daemon", "drafts": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        from policy import db as policy_db
+        from policy.models import DraftStatus
+
+        conn = policy_db.connect(paths.pillar_db_path("policy"))
+        drafts = policy_db.list_drafts(conn, status=DraftStatus(status) if status else None)
+        conn.close()
+        return {"source": "fallback", "drafts": [d.model_dump(mode="json") for d in drafts]}
+
+
 def policy_gating_for_job(paths: Paths, project_id: str, categories: list[str], *, timeout: float = 10.0) -> dict:
     try:
         with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:

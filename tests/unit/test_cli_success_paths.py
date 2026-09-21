@@ -1469,3 +1469,41 @@ def test_policy_projects_list_success(paths, capsys, monkeypatch):
 def test_policy_gating_for_job_success(paths, capsys, monkeypatch):
     monkeypatch.setattr(main.client, "policy_gating_for_job", lambda p, project_id, categories: {"policies": []})
     assert main.main(["policy", "gating-for-job", "--project-id", "proj-a", "--categories", "server_launch"]) == 0
+
+
+def test_policy_draft_import_reads_files_and_sends_the_drafts(paths, tmp_path, capsys, monkeypatch):
+    import json as _json
+
+    one = tmp_path / "one.json"
+    one.write_text(_json.dumps({"topic": "a", "ears_text": "x", "test_script": "s", "target_pillar": "version"}), encoding="utf-8")
+    many = tmp_path / "many.json"
+    many.write_text(_json.dumps([
+        {"topic": "b", "ears_text": "y", "test_script": "s", "target_pillar": "version", "source": "kept"},
+        {"topic": "c", "ears_text": "z", "test_script": "s", "target_pillar": "version"},
+    ]), encoding="utf-8")
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "draft", "import", str(one), str(many), "--source", "little-versions"]) == 0
+    assert captured["type"] == "policy.draft_import"
+    drafts = captured["params"]["drafts"]
+    assert [d["topic"] for d in drafts] == ["a", "b", "c"]
+    assert [d["source"] for d in drafts] == ["little-versions", "kept", "little-versions"]
+
+
+def test_policy_draft_list_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "policy_list_drafts", lambda p, status: {"source": "daemon", "drafts": [], "asked": status})
+    assert main.main(["policy", "draft", "list", "--status", "pending"]) == 0
+    assert "pending" in capsys.readouterr().out
+
+
+def test_policy_author_save_draft_flags_are_forwarded(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["policy", "author", "e", "--topic", "t", "--target-pillar", "version", "--scope-level", "all_projects",
+                      "--save-draft", "--source", "little-versions"]) == 0
+    assert captured["params"]["save_draft"] is True and captured["params"]["source"] == "little-versions"
+
+
+def test_there_is_no_cli_command_to_approve_a_draft(paths, capsys):
+    with pytest.raises(SystemExit):
+        main.main(["policy", "draft", "approve", "d1"])

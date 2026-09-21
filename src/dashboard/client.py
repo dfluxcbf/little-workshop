@@ -80,6 +80,14 @@ def policy_get(paths: Paths, policy_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "policy", f"/v1/policies/{policy_id}", timeout=timeout)
 
 
+def policy_drafts(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> list[dict]:
+    return _get(paths, "policy", "/v1/policy_drafts", params={"status": status} if status else None, timeout=timeout)
+
+
+def policy_draft(paths: Paths, draft_id: str, *, timeout: float = 5.0) -> dict | None:
+    return _get_optional(paths, "policy", f"/v1/policy_drafts/{draft_id}", timeout=timeout)
+
+
 def policy_script_link(paths: Paths, script: str, *, timeout: float = 5.0) -> dict | None:
     """The GitHub link to the exact policy test script in use, or None when it
     only lives in the Policy database (or Deployment is unreachable)."""

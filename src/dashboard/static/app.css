@@ -805,3 +805,42 @@ a.linkcard:hover { border-color: var(--cyan-deep); }
 .linkcard .dcard-head { display: flex; }
 .dcard-chev.ext { color: var(--cyan); }
 .linkcard-path { font-family: var(--font-mono); font-size: 12px; color: var(--ink-faint); overflow-wrap: anywhere; }
+
+/* --- drafts awaiting approval ------------------------------------------------ */
+
+.pending-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--cyan);
+  border-radius: var(--radius);
+  background: var(--cyan-soft);
+  color: var(--ink);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.pending-count {
+  min-width: 30px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--cyan);
+  color: oklch(14% 0.02 260);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  text-align: center;
+}
+.pending-text { font-weight: 600; margin-right: auto; }
+.pending-chev { color: var(--cyan); font-size: 22px; line-height: 1; }
+
+.dcard.attention { border-color: var(--warn); }
+.dcard-note.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+.rejected-list { margin-top: 18px; }
+.rejected-list > summary { list-style: none; cursor: pointer; }
+.rejected-list > summary::-webkit-details-marker { display: none; }
+.decision-actions { display: flex; gap: 8px; }
+.decision-actions button { flex: 1; justify-content: center; padding: 12px 14px; }
+form > .dcard { margin-bottom: 10px; }
+.rejected-list > summary::before { content: "▸"; display: inline-block; margin-right: 6px; transition: transform 0.15s; }
+.rejected-list[open] > summary::before { transform: rotate(90deg); }

@@ -22,7 +22,9 @@ from common.paths import Paths
 from common.registry_client import ProjectResolutionError, resolve_project
 from policy import agent_client, db, gates, registry_client, sandbox
 from policy.agent_client import AgentClientError
-from policy.models import CheckOutcome, CreatedBy, GatePoint, Policy, PolicyCheckResult, PolicyProject, ScopeLevel
+from policy.models import (
+    CheckOutcome, CreatedBy, DraftStatus, GatePoint, Policy, PolicyCheckResult, PolicyDraft, PolicyProject, ScopeLevel,
+)
 from policy.precedence import gating_enabled_for, resolve_winning_policy
 from policy.registry_client import RegistryReadError
 from policy.sandbox import SandboxUnavailable
@@ -69,6 +71,23 @@ def _parse_gate_points(raw: object) -> tuple[list[GatePoint], str | None]:
         return [GatePoint(g) for g in raw], None
     except ValueError as exc:
         return [], f"invalid gate_point: {exc}"
+
+
+def _parse_project_entries(raw: object) -> tuple[list[PolicyProject], str | None]:
+    """[{project_id, gating_enabled?}] (a bare string means gating on) -> selection,
+    deduplicated by project. Anything else is rejected outright."""
+    if not isinstance(raw, list):
+        return [], "'projects' must be a list of {project_id, gating_enabled}"
+    selection: dict[str, PolicyProject] = {}
+    for entry in raw:
+        if isinstance(entry, str):
+            entry = {"project_id": entry}
+        if not isinstance(entry, dict) or not entry.get("project_id") or not isinstance(entry["project_id"], str):
+            return [], f"invalid project entry: {entry!r}"
+        selection[entry["project_id"]] = PolicyProject(
+            project_id=entry["project_id"], gating_enabled=bool(entry.get("gating_enabled", True)),
+        )
+    return list(selection.values()), None
 
 
 def _validate_gate_points_against_target(gate_points: list[GatePoint], target_pillar: str) -> str | None:
@@ -193,32 +212,39 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         except AgentClientError as exc:
             return {"outcome": "failed", "error": f"authoring pipeline could not reach Agentic Development: {exc}"}
 
-        return {
-            "outcome": "succeeded",
-            "result": {
-                "ears_text": gate1.ears_text, "ears_refined": gate1.refined, "test_script": test_script,
-                "topic": topic, "target_pillar": target_pillar,
-                "scope_level": scope_level.value, "scope_target": scope_target, "created_by": created_by.value,
-                "gate_points": [g.value for g in gate_points],
-            },
+        result = {
+            "ears_text": gate1.ears_text, "ears_refined": gate1.refined, "test_script": test_script,
+            "topic": topic, "target_pillar": target_pillar,
+            "scope_level": scope_level.value, "scope_target": scope_target, "created_by": created_by.value,
+            "gate_points": [g.value for g in gate_points],
         }
+        if request.params.get("save_draft"):
+            # Kept for a human to review and approve in the Dashboard; still nothing enforced.
+            draft, _ = _draft_from_params({**result, "source": request.params.get("source", "")})
+            with lock:
+                existing_draft = db.find_open_draft_by_topic(conn, topic)
+                if existing_draft is not None:
+                    draft.id = existing_draft.id
+                    db.replace_draft_content(conn, draft)
+                else:
+                    db.insert_draft(conn, draft)
+            result["draft_id"] = draft.id
+        return {"outcome": "succeeded", "result": result}
 
     # -- Gate 4: the only path that ever saves a policy row -----------------
 
-    @app.post("/v1/jobs/policy.activate")
-    def job_activate(request: JobRequest) -> dict:
-        error = _require(request.params, "ears_text", "test_script", "topic", "target_pillar", "created_by")
-        if error:
-            return {"outcome": "failed", "error": error}
-        if not request.params.get("approved"):
-            return {"outcome": "failed", "error": "Gate 4 requires explicit human approval ('approved': true) — nothing is saved otherwise"}
-
-        scope_level, scope_target, scope_error = _parse_scope(request.params)
+    def _save_policy(params: dict, *, projects: list[PolicyProject] | None = None) -> dict:
+        """Gate 4's write: validate, then insert or edit a real policy row. The one
+        place a `policies` row is ever written — `policy.activate` (CLI/MCP, given
+        `approved: true`) and `policy.approve_draft` (the Dashboard) both come here.
+        `projects` sets the selection explicitly; otherwise a new policy is seeded
+        from its authoring scope."""
+        scope_level, scope_target, scope_error = _parse_scope(params)
         if scope_error:
             return {"outcome": "failed", "error": scope_error}
-        target_pillar = request.params["target_pillar"]
+        target_pillar = params["target_pillar"]
         try:
-            created_by = CreatedBy(request.params["created_by"])
+            created_by = CreatedBy(params["created_by"])
         except ValueError:
             return {"outcome": "failed", "error": "invalid 'created_by' (user|framework)"}
 
@@ -228,16 +254,16 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         if created_by == CreatedBy.FRAMEWORK:
             scope_level, scope_target = ScopeLevel.ALL_PROJECTS, None
 
-        policy_id = request.params.get("policy_id")
-        topic = request.params["topic"]
+        policy_id = params.get("policy_id")
+        topic = params["topic"]
 
         with lock:
             existing = db.get_policy(conn, policy_id) if policy_id is not None else None
             if policy_id is not None and existing is None:
                 return {"outcome": "failed", "error": f"policy {policy_id!r} not found — cannot edit"}
 
-            if "gate_points" in request.params:
-                gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
+            if "gate_points" in params:
+                gate_points, gate_points_error = _parse_gate_points(params.get("gate_points"))
                 if gate_points_error:
                     return {"outcome": "failed", "error": gate_points_error}
             else:
@@ -262,7 +288,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
 
             policy = Policy(
                 id=policy_id or db.new_id(), topic=topic, target_pillar=target_pillar,
-                ears_text=request.params["ears_text"], test_script=request.params["test_script"],
+                ears_text=params["ears_text"], test_script=params["test_script"],
                 scope_level=scope_level, scope_target=scope_target, created_by=created_by,
                 gate_points=gate_points,
             )
@@ -271,11 +297,23 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 db.replace_policy(conn, policy)
             else:
                 db.insert_policy(conn, policy)
-        if is_new:
+        if is_new and projects is not None:
+            with lock:
+                db.set_policy_projects(conn, policy.id, projects)
+        elif is_new:
             _seed_unseeded()
         with lock:
             policy = db.get_policy(conn, policy.id)
         return {"outcome": "succeeded", "result": policy.model_dump(mode="json")}
+
+    @app.post("/v1/jobs/policy.activate")
+    def job_activate(request: JobRequest) -> dict:
+        error = _require(request.params, "ears_text", "test_script", "topic", "target_pillar", "created_by")
+        if error:
+            return {"outcome": "failed", "error": error}
+        if not request.params.get("approved"):
+            return {"outcome": "failed", "error": "Gate 4 requires explicit human approval ('approved': true) — nothing is saved otherwise"}
+        return _save_policy(request.params)
 
     @app.post("/v1/jobs/policy.remove")
     def job_remove(request: JobRequest) -> dict:
@@ -287,6 +325,125 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
             db.delete_policy(conn, policy_id)
         return {"outcome": "succeeded", "result": {"policy_id": policy_id}}
+
+    # -- drafts: Gates 1-3 output awaiting a human's Gate 4 in the Dashboard ----
+
+    def _draft_from_params(raw: dict) -> tuple[PolicyDraft | None, str | None]:
+        missing = _require(raw, "topic", "target_pillar", "ears_text", "test_script")
+        if missing:
+            return None, missing
+        try:
+            scope_level = ScopeLevel(raw.get("scope_level", "all_projects"))
+            created_by = CreatedBy(raw.get("created_by", "framework"))
+        except ValueError as exc:
+            return None, f"invalid draft: {exc}"
+        gate_points, gate_points_error = _parse_gate_points(raw.get("gate_points"))
+        if gate_points_error:
+            return None, gate_points_error
+        return PolicyDraft(
+            id=db.new_id(), topic=raw["topic"], target_pillar=raw["target_pillar"], ears_text=raw["ears_text"],
+            ears_refined=bool(raw.get("ears_refined", False)), test_script=raw["test_script"],
+            scope_level=scope_level, scope_target=raw.get("scope_target"), created_by=created_by,
+            gate_points=gate_points, source=str(raw.get("source", "")), notes=str(raw.get("notes", "")),
+            concerns=bool(raw.get("concerns", False)),
+        ), None
+
+    @app.post("/v1/jobs/policy.draft_import")
+    def job_draft_import(request: JobRequest) -> dict:
+        """Bring drafts (Gates 1-3 output, e.g. `docs/pending_policy_drafts/*.json`) into
+        the app for review. Idempotent: a topic that already has a pending draft is
+        refreshed in place; a topic that already has a real policy is skipped."""
+        raw = request.params.get("drafts")
+        if not isinstance(raw, list) or not raw:
+            return {"outcome": "failed", "error": "'drafts' must be a non-empty list"}
+        created: list[str] = []
+        updated: list[str] = []
+        skipped: list[dict] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                return {"outcome": "failed", "error": f"invalid draft entry: {entry!r}"}
+            draft, error = _draft_from_params(entry)
+            if error:
+                return {"outcome": "failed", "error": f"{entry.get('topic', '?')}: {error}"}
+            with lock:
+                if any(p.topic == draft.topic for p in db.list_policies(conn)):
+                    skipped.append({"topic": draft.topic, "reason": "a policy already exists for this topic"})
+                    continue
+                open_draft = db.find_open_draft_by_topic(conn, draft.topic)
+                if open_draft is not None:
+                    draft.id = open_draft.id
+                    db.replace_draft_content(conn, draft)
+                    updated.append(draft.topic)
+                else:
+                    db.insert_draft(conn, draft)
+                    created.append(draft.topic)
+        return {"outcome": "succeeded", "result": {"created": created, "updated": updated, "skipped": skipped}}
+
+    @app.post("/v1/jobs/policy.approve_draft")
+    def job_approve_draft(request: JobRequest) -> dict:
+        """Gate 4 for a draft: the reviewer's explicit confirmation (`reviewed: true`)
+        turns it into a real, active policy applying to the chosen projects. Driven by
+        the Dashboard only — there is deliberately no CLI or MCP wrapper, so approval
+        stays a human act inside the app."""
+        draft_id = request.params.get("draft_id")
+        if not draft_id:
+            return {"outcome": "failed", "error": "missing 'draft_id'"}
+        if request.params.get("reviewed") is not True:
+            return {"outcome": "failed", "error": "approval needs the reviewer's explicit confirmation ('reviewed': true)"}
+        selection, projects_error = _parse_project_entries(request.params.get("projects", []))
+        if projects_error:
+            return {"outcome": "failed", "error": projects_error}
+        with lock:
+            draft = db.get_draft(conn, draft_id)
+        if draft is None:
+            return {"outcome": "failed", "error": f"draft {draft_id!r} not found"}
+        if draft.status != DraftStatus.PENDING:
+            return {"outcome": "failed", "error": f"draft is {draft.status.value}, not pending"}
+        if "gate_points" in request.params:
+            gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
+            if gate_points_error:
+                return {"outcome": "failed", "error": gate_points_error}
+        else:
+            gate_points = draft.gate_points
+        outcome = _save_policy({
+            "ears_text": draft.ears_text, "test_script": draft.test_script, "topic": draft.topic,
+            "target_pillar": draft.target_pillar, "scope_level": draft.scope_level.value,
+            "scope_target": draft.scope_target, "created_by": draft.created_by.value,
+            "gate_points": [g.value for g in gate_points],
+        }, projects=selection)
+        if outcome.get("outcome") != "succeeded":
+            return outcome
+        with lock:
+            db.set_draft_decision(conn, draft_id, status=DraftStatus.APPROVED, policy_id=outcome["result"]["id"])
+        return {"outcome": "succeeded", "result": {**outcome["result"], "draft_id": draft_id}}
+
+    @app.post("/v1/jobs/policy.reject_draft")
+    def job_reject_draft(request: JobRequest) -> dict:
+        draft_id = request.params.get("draft_id")
+        if not draft_id:
+            return {"outcome": "failed", "error": "missing 'draft_id'"}
+        with lock:
+            draft = db.get_draft(conn, draft_id)
+            if draft is None:
+                return {"outcome": "failed", "error": f"draft {draft_id!r} not found"}
+            if draft.status != DraftStatus.PENDING:
+                return {"outcome": "failed", "error": f"draft is {draft.status.value}, not pending"}
+            db.set_draft_decision(conn, draft_id, status=DraftStatus.REJECTED, reason=str(request.params.get("reason", "")).strip())
+            return {"outcome": "succeeded", "result": db.get_draft(conn, draft_id).model_dump(mode="json")}
+
+    @app.post("/v1/jobs/policy.restore_draft")
+    def job_restore_draft(request: JobRequest) -> dict:
+        draft_id = request.params.get("draft_id")
+        if not draft_id:
+            return {"outcome": "failed", "error": "missing 'draft_id'"}
+        with lock:
+            draft = db.get_draft(conn, draft_id)
+            if draft is None:
+                return {"outcome": "failed", "error": f"draft {draft_id!r} not found"}
+            if draft.status != DraftStatus.REJECTED:
+                return {"outcome": "failed", "error": f"draft is {draft.status.value}, only a rejected draft can be restored"}
+            db.set_draft_decision(conn, draft_id, status=DraftStatus.PENDING)
+            return {"outcome": "succeeded", "result": db.get_draft(conn, draft_id).model_dump(mode="json")}
 
     # -- usability: enable/disable and gating behavior, without re-authoring ----
 
@@ -328,21 +485,13 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         raw = request.params.get("projects")
         if not policy_id:
             return {"outcome": "failed", "error": "missing 'policy_id'"}
-        if not isinstance(raw, list):
-            return {"outcome": "failed", "error": "'projects' must be a list of {project_id, gating_enabled}"}
-        selection: dict[str, PolicyProject] = {}
-        for entry in raw:
-            if isinstance(entry, str):
-                entry = {"project_id": entry}
-            if not isinstance(entry, dict) or not entry.get("project_id") or not isinstance(entry["project_id"], str):
-                return {"outcome": "failed", "error": f"invalid project entry: {entry!r}"}
-            selection[entry["project_id"]] = PolicyProject(
-                project_id=entry["project_id"], gating_enabled=bool(entry.get("gating_enabled", True)),
-            )
+        selection, projects_error = _parse_project_entries(raw)
+        if projects_error:
+            return {"outcome": "failed", "error": projects_error}
         with lock:
             if db.get_policy(conn, policy_id) is None:
                 return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
-            db.set_policy_projects(conn, policy_id, list(selection.values()))
+            db.set_policy_projects(conn, policy_id, selection)
             updated = db.get_policy(conn, policy_id)
         return {"outcome": "succeeded", "result": updated.model_dump(mode="json")}
 
@@ -468,6 +617,23 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         if policy is None:
             raise HTTPException(status_code=404, detail="policy not found")
         return policy.model_dump(mode="json")
+
+    @app.get("/v1/policy_drafts")
+    def list_policy_drafts(status: str | None = None) -> list[dict]:
+        try:
+            wanted = DraftStatus(status) if status else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail="status must be pending|approved|rejected")
+        with lock:
+            return [d.model_dump(mode="json") for d in db.list_drafts(conn, status=wanted)]
+
+    @app.get("/v1/policy_drafts/{draft_id}")
+    def get_policy_draft(draft_id: str) -> dict:
+        with lock:
+            draft = db.get_draft(conn, draft_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="draft not found")
+        return draft.model_dump(mode="json")
 
     @app.get("/v1/policy_projects")
     def list_policy_projects(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:

@@ -623,3 +623,185 @@ def test_gating_for_job_still_returns_a_policy_whose_gating_is_off_so_it_runs_fo
     b = client.get("/v1/policies/gating-for-job", params={"project_id": "proj-b", "categories": "server_launch"}).json()
     assert [(p["id"], p["gating"]) for p in a] == [(policy["id"], False)]
     assert [(p["id"], p["gating"]) for p in b] == [(policy["id"], True)]
+
+
+# -- drafts: review and approval ------------------------------------------------
+
+
+def _draft(**overrides):
+    base = {
+        "topic": "version-format", "target_pillar": "version", "ears_text": "The VERSION file shall be semver.",
+        "ears_refined": True, "test_script": "def test_x():\n    assert True\n", "scope_level": "all_projects",
+        "created_by": "framework", "gate_points": [], "source": "little-versions", "notes": "Straightforward.", "concerns": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def _import(client, *drafts):
+    return client.post("/v1/jobs/policy.draft_import", json={"job_id": "j", "params": {"drafts": list(drafts)}})
+
+
+def _approve(client, draft_id, **params):
+    return client.post("/v1/jobs/policy.approve_draft", json={"job_id": "j", "params": {"draft_id": draft_id, **params}})
+
+
+def _pending(client):
+    return client.get("/v1/policy_drafts", params={"status": "pending"}).json()
+
+
+def test_import_stores_pending_drafts_that_enforce_nothing(client, conn):
+    response = _import(client, _draft(), _draft(topic="production-tag-format", concerns=True, notes="audits every tag"))
+    assert response.json()["result"] == {"created": ["version-format", "production-tag-format"], "updated": [], "skipped": []}
+
+    drafts = _pending(client)
+    assert [d["topic"] for d in drafts] == ["production-tag-format", "version-format"] or {d["topic"] for d in drafts} == {"version-format", "production-tag-format"}
+    by_topic = {d["topic"]: d for d in drafts}
+    assert by_topic["version-format"]["status"] == "pending" and by_topic["version-format"]["source"] == "little-versions"
+    assert by_topic["production-tag-format"]["concerns"] is True
+    assert client.get("/v1/policies").json() == []  # a draft is not a policy
+
+
+def test_reimporting_refreshes_a_pending_draft_instead_of_duplicating_it(client, conn):
+    _import(client, _draft())
+    first_id = _pending(client)[0]["id"]
+    again = _import(client, _draft(ears_text="Reworded.", notes="new notes")).json()["result"]
+    assert again == {"created": [], "updated": ["version-format"], "skipped": []}
+    drafts = _pending(client)
+    assert len(drafts) == 1 and drafts[0]["id"] == first_id and drafts[0]["ears_text"] == "Reworded."
+
+
+def test_import_skips_a_topic_that_already_has_a_policy(client, conn):
+    _seed_policy(client, conn, topic="version-format")
+    assert _import(client, _draft()).json()["result"]["skipped"] == [
+        {"topic": "version-format", "reason": "a policy already exists for this topic"}
+    ]
+    assert _pending(client) == []
+
+
+def test_import_validates_its_input(client):
+    assert "non-empty list" in client.post("/v1/jobs/policy.draft_import", json={"job_id": "j", "params": {}}).json()["error"]
+    assert "invalid draft entry" in _import(client, "nope").json()["error"]
+    assert "missing 'test_script'" in _import(client, {k: v for k, v in _draft().items() if k != "test_script"}).json()["error"]
+    assert "invalid gate_point" in _import(client, _draft(gate_points=["nowhere"])).json()["error"]
+
+
+def test_approving_needs_the_reviewers_explicit_confirmation(client, conn):
+    _import(client, _draft())
+    draft_id = _pending(client)[0]["id"]
+    assert "explicit confirmation" in _approve(client, draft_id, projects=[]).json()["error"]
+    assert "explicit confirmation" in _approve(client, draft_id, reviewed="yes", projects=[]).json()["error"]
+    assert client.get("/v1/policies").json() == []
+    assert _pending(client)[0]["status"] == "pending"
+
+
+def test_approving_creates_a_real_policy_with_the_chosen_gate_points_and_projects(client, conn):
+    _import(client, _draft())
+    draft_id = _pending(client)[0]["id"]
+    response = _approve(
+        client, draft_id, reviewed=True, gate_points=["branch_finish"],
+        projects=[{"project_id": "proj-a"}, {"project_id": "proj-b", "gating_enabled": False}],
+    )
+    policy = response.json()["result"]
+    assert response.json()["outcome"] == "succeeded" and policy["draft_id"] == draft_id
+    assert policy["topic"] == "version-format" and policy["enabled"] is True
+    assert policy["gate_points"] == ["branch_finish"] and policy["created_by"] == "framework"
+    assert {(p["project_id"], p["gating_enabled"]) for p in policy["projects"]} == {("proj-a", True), ("proj-b", False)}
+
+    listed = client.get("/v1/policies").json()
+    assert [p["topic"] for p in listed] == ["version-format"]
+    assert listed[0]["test_script"] == "def test_x():\n    assert True\n"
+
+    decided = client.get(f"/v1/policy_drafts/{draft_id}").json()
+    assert decided["status"] == "approved" and decided["policy_id"] == policy["id"] and decided["decided_at"]
+    assert _pending(client) == []
+
+
+def test_approving_keeps_the_drafts_own_gate_points_when_none_are_chosen(client, conn):
+    _import(client, _draft(gate_points=["release"]))
+    draft_id = _pending(client)[0]["id"]
+    assert _approve(client, draft_id, reviewed=True, projects=[]).json()["result"]["gate_points"] == ["release"]
+
+
+def test_approving_with_no_projects_is_allowed_and_leaves_the_policy_applying_to_nothing(client, conn):
+    _import(client, _draft())
+    result = _approve(client, _pending(client)[0]["id"], reviewed=True, projects=[]).json()["result"]
+    assert result["projects"] == []
+
+
+def test_approval_runs_the_same_gate_4_checks_as_activation(client, conn):
+    _import(client, _draft(topic="registration-rule", target_pillar="deployment"))
+    draft_id = _pending(client)[0]["id"]
+    error = _approve(client, draft_id, reviewed=True, gate_points=["project_registration"], projects=[]).json()["error"]
+    assert "project_registration" in error and "framework-bound" in error
+    assert _pending(client)[0]["status"] == "pending" and client.get("/v1/policies").json() == []
+
+
+def test_approving_fails_on_a_duplicate_scope_and_topic_and_leaves_the_draft_pending(client, conn):
+    _import(client, _draft(topic="taken", created_by="framework"))
+    draft_id = _pending(client)[0]["id"]
+    # a policy for the same topic appears after the draft was imported
+    _seed_policy(client, conn, topic="taken", created_by="framework", scope_level="all_projects")
+    result = _approve(client, draft_id, reviewed=True, projects=[]).json()
+    assert result["outcome"] == "failed" and "Gate 3a" in result["error"]
+    assert client.get(f"/v1/policy_drafts/{draft_id}").json()["status"] == "pending"
+
+
+def test_approve_validates_ids_state_and_projects(client, conn):
+    assert "missing 'draft_id'" in client.post("/v1/jobs/policy.approve_draft", json={"job_id": "j", "params": {}}).json()["error"]
+    assert "not found" in _approve(client, "ghost", reviewed=True, projects=[]).json()["error"]
+    _import(client, _draft())
+    draft_id = _pending(client)[0]["id"]
+    assert "must be a list" in _approve(client, draft_id, reviewed=True, projects="proj-a").json()["error"]
+    assert "invalid gate_point" in _approve(client, draft_id, reviewed=True, gate_points=["x"], projects=[]).json()["error"]
+    _approve(client, draft_id, reviewed=True, projects=[])
+    assert "not pending" in _approve(client, draft_id, reviewed=True, projects=[]).json()["error"]  # cannot approve twice
+
+
+def test_reject_and_restore_a_draft(client, conn):
+    _import(client, _draft())
+    draft_id = _pending(client)[0]["id"]
+    rejected = client.post("/v1/jobs/policy.reject_draft", json={"job_id": "j", "params": {"draft_id": draft_id, "reason": "  too vague  "}}).json()
+    assert rejected["result"]["status"] == "rejected" and rejected["result"]["reject_reason"] == "too vague"
+    assert _pending(client) == []
+    assert [d["id"] for d in client.get("/v1/policy_drafts", params={"status": "rejected"}).json()] == [draft_id]
+    assert "not pending" in client.post("/v1/jobs/policy.reject_draft", json={"job_id": "j", "params": {"draft_id": draft_id}}).json()["error"]
+    assert "not pending" in _approve(client, draft_id, reviewed=True, projects=[]).json()["error"]
+
+    restored = client.post("/v1/jobs/policy.restore_draft", json={"job_id": "j", "params": {"draft_id": draft_id}}).json()
+    assert restored["result"]["status"] == "pending" and restored["result"]["decided_at"] is None
+    assert "only a rejected draft" in client.post("/v1/jobs/policy.restore_draft", json={"job_id": "j", "params": {"draft_id": draft_id}}).json()["error"]
+
+
+def test_reject_and_restore_validate_their_input(client):
+    for job in ("policy.reject_draft", "policy.restore_draft"):
+        assert "missing 'draft_id'" in client.post(f"/v1/jobs/{job}", json={"job_id": "j", "params": {}}).json()["error"]
+        assert "not found" in client.post(f"/v1/jobs/{job}", json={"job_id": "j", "params": {"draft_id": "ghost"}}).json()["error"]
+
+
+def test_draft_reads(client):
+    _import(client, _draft())
+    draft_id = _pending(client)[0]["id"]
+    assert client.get(f"/v1/policy_drafts/{draft_id}").json()["topic"] == "version-format"
+    assert client.get("/v1/policy_drafts/ghost").status_code == 404
+    assert client.get("/v1/policy_drafts", params={"status": "bogus"}).status_code == 400
+    assert len(client.get("/v1/policy_drafts").json()) == 1
+
+
+def test_author_can_save_its_result_as_a_draft_for_review(client, conn):
+    response = _author(client, topic="authored-topic", save_draft=True, source="a person")
+    result = response.json()["result"]
+    assert result["draft_id"]
+    drafts = _pending(client)
+    assert [d["topic"] for d in drafts] == ["authored-topic"] and drafts[0]["source"] == "a person"
+    assert drafts[0]["test_script"].startswith("def test_generated")
+    assert client.get("/v1/policies").json() == []  # still nothing enforced
+
+    # authoring the same topic again refreshes the open draft
+    again = _author(client, topic="authored-topic", save_draft=True).json()["result"]
+    assert again["draft_id"] == result["draft_id"] and len(_pending(client)) == 1
+
+
+def test_author_without_save_draft_still_never_saves_anything(client, conn):
+    assert "draft_id" not in _author(client).json()["result"]
+    assert _pending(client) == []

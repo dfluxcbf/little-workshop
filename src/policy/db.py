@@ -11,7 +11,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from policy.models import CheckOutcome, CreatedBy, GatePoint, Policy, PolicyCheckResult, PolicyProject, ScopeLevel
+from policy.models import (
+    CheckOutcome, CreatedBy, DraftStatus, GatePoint, Policy, PolicyCheckResult, PolicyDraft, PolicyProject, ScopeLevel,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS policies (
@@ -44,6 +46,27 @@ CREATE TABLE IF NOT EXISTS policy_projects (
     project_id TEXT NOT NULL,
     gating_enabled INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (policy_id, project_id)
+);
+
+CREATE TABLE IF NOT EXISTS policy_drafts (
+    id TEXT PRIMARY KEY,
+    topic TEXT NOT NULL,
+    target_pillar TEXT NOT NULL,
+    ears_text TEXT NOT NULL,
+    ears_refined INTEGER NOT NULL DEFAULT 0,
+    test_script TEXT NOT NULL,
+    scope_level TEXT NOT NULL,
+    scope_target TEXT,
+    created_by TEXT NOT NULL,
+    gate_points TEXT NOT NULL DEFAULT '[]',
+    source TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    concerns INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    policy_id TEXT,
+    reject_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    decided_at TEXT
 );
 
 -- A policy whose project selection has been initialised (seeded once from
@@ -301,3 +324,84 @@ def latest_check_result(conn: sqlite3.Connection, *, policy_id: str, project_id:
         (policy_id, project_id),
     ).fetchone()
     return _row_to_result(row) if row else None
+
+
+# -- policy drafts: awaiting a human's Gate 4 in the Dashboard ---------------
+
+
+def _row_to_draft(row: sqlite3.Row) -> PolicyDraft:
+    return PolicyDraft(
+        id=row["id"], topic=row["topic"], target_pillar=row["target_pillar"], ears_text=row["ears_text"],
+        ears_refined=bool(row["ears_refined"]), test_script=row["test_script"],
+        scope_level=ScopeLevel(row["scope_level"]), scope_target=row["scope_target"],
+        created_by=CreatedBy(row["created_by"]), gate_points=[GatePoint(g) for g in json.loads(row["gate_points"])],
+        source=row["source"], notes=row["notes"], concerns=bool(row["concerns"]), status=DraftStatus(row["status"]),
+        policy_id=row["policy_id"], reject_reason=row["reject_reason"], created_at=_parse_iso(row["created_at"]),
+        decided_at=_parse_iso(row["decided_at"]) if row["decided_at"] else None,
+    )
+
+
+def insert_draft(conn: sqlite3.Connection, draft: PolicyDraft) -> None:
+    conn.execute(
+        """INSERT INTO policy_drafts
+           (id, topic, target_pillar, ears_text, ears_refined, test_script, scope_level, scope_target, created_by,
+            gate_points, source, notes, concerns, status, policy_id, reject_reason, created_at, decided_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            draft.id, draft.topic, draft.target_pillar, draft.ears_text, int(draft.ears_refined), draft.test_script,
+            draft.scope_level.value, draft.scope_target, draft.created_by.value,
+            json.dumps([g.value for g in draft.gate_points]), draft.source, draft.notes, int(draft.concerns),
+            draft.status.value, draft.policy_id, draft.reject_reason, _iso(draft.created_at),
+            _iso(draft.decided_at) if draft.decided_at else None,
+        ),
+    )
+    conn.commit()
+
+
+def get_draft(conn: sqlite3.Connection, draft_id: str) -> PolicyDraft | None:
+    row = conn.execute("SELECT * FROM policy_drafts WHERE id = ?", (draft_id,)).fetchone()
+    return _row_to_draft(row) if row else None
+
+
+def list_drafts(conn: sqlite3.Connection, *, status: DraftStatus | None = None) -> list[PolicyDraft]:
+    if status is None:
+        rows = conn.execute("SELECT * FROM policy_drafts ORDER BY created_at, topic").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM policy_drafts WHERE status = ? ORDER BY created_at, topic", (status.value,)
+        ).fetchall()
+    return [_row_to_draft(row) for row in rows]
+
+
+def find_open_draft_by_topic(conn: sqlite3.Connection, topic: str) -> PolicyDraft | None:
+    """A draft still awaiting a decision (pending) for this topic — what a
+    re-import replaces instead of duplicating."""
+    row = conn.execute(
+        "SELECT * FROM policy_drafts WHERE topic = ? AND status = 'pending' ORDER BY created_at LIMIT 1", (topic,)
+    ).fetchone()
+    return _row_to_draft(row) if row else None
+
+
+def replace_draft_content(conn: sqlite3.Connection, draft: PolicyDraft) -> None:
+    """Refresh a pending draft's content (a re-import) without touching its status or id."""
+    conn.execute(
+        """UPDATE policy_drafts SET target_pillar = ?, ears_text = ?, ears_refined = ?, test_script = ?, scope_level = ?,
+           scope_target = ?, created_by = ?, gate_points = ?, source = ?, notes = ?, concerns = ? WHERE id = ?""",
+        (
+            draft.target_pillar, draft.ears_text, int(draft.ears_refined), draft.test_script, draft.scope_level.value,
+            draft.scope_target, draft.created_by.value, json.dumps([g.value for g in draft.gate_points]),
+            draft.source, draft.notes, int(draft.concerns), draft.id,
+        ),
+    )
+    conn.commit()
+
+
+def set_draft_decision(
+    conn: sqlite3.Connection, draft_id: str, *, status: DraftStatus, policy_id: str | None = None, reason: str = "",
+) -> None:
+    decided = None if status == DraftStatus.PENDING else _iso(datetime.now(timezone.utc))
+    conn.execute(
+        "UPDATE policy_drafts SET status = ?, policy_id = ?, reject_reason = ?, decided_at = ? WHERE id = ?",
+        (status.value, policy_id, reason, decided, draft_id),
+    )
+    conn.commit()

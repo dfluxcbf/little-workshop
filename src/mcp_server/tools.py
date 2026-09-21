@@ -548,6 +548,10 @@ def _policy_author(paths: Paths, args: JSONDict) -> Any:
         params["policy_id"] = args["policy_id"]
     if "gate_points" in args:
         params["gate_points"] = args["gate_points"]
+    if args.get("save_draft"):
+        params["save_draft"] = True
+        if args.get("source"):
+            params["source"] = args["source"]
     return _policy_job(paths, "policy.author", None, params)
 
 
@@ -576,6 +580,14 @@ def _policy_configure(paths: Paths, args: JSONDict) -> Any:
     if "gate_points" in args:
         params["gate_points"] = args["gate_points"]
     return _policy_job(paths, "policy.configure", None, params)
+
+
+def _policy_draft_import(paths: Paths, args: JSONDict) -> Any:
+    return _policy_job(paths, "policy.draft_import", None, {"drafts": args["drafts"]})
+
+
+def _policy_draft_list(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_list_drafts(paths, args.get("status"))
 
 
 def _policy_projects_set(paths: Paths, args: JSONDict) -> Any:
@@ -1009,8 +1021,8 @@ TOOLS: tuple[ToolSpec, ...] = (
 
     ToolSpec("workshop_policy_author", "Gates 1-3 of the policy authoring pipeline plus test-script drafting — "
              "EARS-compliance, mechanical-enforceability, and non-conflict checks, then a drafted pytest script. "
-             "Never saves anything; the result is a proposal for a human to review and pass to "
-             "workshop_policy_activate.",
+             "Never saves a policy; the result is a proposal for a human to review. With save_draft it is kept "
+             "as a draft in the Dashboard, where a human approves or rejects it.",
              _schema({
                  "ears_text": _prop("string", "The requirement, in plain language or EARS form already."),
                  "topic": _prop("string", "A short, stable topic name, e.g. server-manifest-shape."),
@@ -1020,6 +1032,8 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "created_by": _prop("string", "user|framework. Default: user."),
                  "policy_id": _prop("string", "Editing an existing policy: exclude it from conflict checks."),
                  "gate_points": _GATE_POINTS,
+                 "save_draft": _prop("boolean", "Keep the result as a draft for review in the Dashboard."),
+                 "source": _prop("string", "With save_draft: where the rule came from."),
              }, ["ears_text", "topic", "target_pillar", "scope_level"]), _policy_author),
     ToolSpec("workshop_policy_activate", "Gate 4: save a workshop_policy_author draft as a real, active policy — "
              "only after a human has reviewed both the EARS text and the generated test script. The only path "
@@ -1064,6 +1078,14 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "enabled": _prop("boolean", "Turn the policy on or off. Omit to leave unchanged."),
                  "gate_points": _GATE_POINTS,
              }, ["policy_id"]), _policy_configure),
+    ToolSpec("workshop_policy_draft_list", "List policy drafts awaiting a human's approval in the Dashboard "
+             "(or already decided). A draft enforces nothing. Approval is deliberately not available as a tool: "
+             "it is a human decision made in the Dashboard.",
+             _schema({"status": _prop("string", "pending, approved or rejected. Omit for all.")}), _policy_draft_list),
+    ToolSpec("workshop_policy_draft_import", "Bring drafts (workshop_policy_author results, optionally with "
+             "source/notes/concerns) into the Dashboard for a human to review and approve. Idempotent per topic; "
+             "never activates anything.",
+             _schema({"drafts": _prop("array", "Draft objects.", items={"type": "object"})}, ["drafts"]), _policy_draft_import),
     ToolSpec("workshop_policy_projects_set", "Choose which projects a policy applies to, replacing the whole "
              "selection: a project left out is deselected. Per project, gating can be switched off — the check "
              "still runs and is recorded for analysis, but its failure never blocks. Where a failure would block "

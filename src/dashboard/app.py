@@ -334,10 +334,80 @@ def build_app(paths: Paths) -> FastAPI:
             rows, error = client.policy_list(paths), None
         except client.PillarUnavailable as exc:
             rows, error = [], str(exc)
+        pending = _try(lambda: client.policy_drafts(paths, status="pending"), default=[])
         return _render(
             request, "policies.html", policies=rows, error=error, message=message,
+            pending_drafts=len(pending), gate_point_values=GATE_POINT_VALUES, nav_active="policies",
+        )
+
+    # Drafts awaiting approval. Declared before `/policies/{policy_id}` so "drafts" is never read as an id.
+
+    @app.get("/policies/drafts", response_class=HTMLResponse)
+    def policy_drafts(request: Request, message: str | None = None):
+        try:
+            pending, error = client.policy_drafts(paths, status="pending"), None
+        except client.PillarUnavailable as exc:
+            pending, error = [], str(exc)
+        rejected = _try(lambda: client.policy_drafts(paths, status="rejected"), default=[])
+        return _render(
+            request, "drafts.html", pending=pending, rejected=rejected, error=error, message=message, nav_active="policies",
+        )
+
+    @app.get("/policies/drafts/{draft_id}", response_class=HTMLResponse)
+    def policy_draft_detail(request: Request, draft_id: str):
+        error = None
+        try:
+            draft = client.policy_draft(paths, draft_id)
+        except client.PillarUnavailable as exc:
+            draft, error = None, str(exc)
+        registered = _try(lambda: _project_names(), default=[]) if draft else []
+        return _render(
+            request, "draft_detail.html", draft=draft, projects=sorted(registered), error=error,
             gate_point_values=GATE_POINT_VALUES, nav_active="policies",
         )
+
+    @app.post("/policies/drafts/{draft_id}/approve")
+    def policy_draft_approve(
+        draft_id: str, reviewed: str | None = Form(None), gate_points: list[str] = Form([]),
+        project: list[str] = Form([]), gating: list[str] = Form([]),
+    ):
+        """Gate 4, in the app: only with the reviewer's explicit confirmation."""
+        back = f"/policies/drafts/{draft_id}"
+        if reviewed != "on":
+            return _back(back, "Tick the review box to approve: the policy text and test script must be reviewed first.")
+        chosen = list(dict.fromkeys(project))
+        try:
+            job = client.create_job(
+                paths, type="policy.approve_draft", target_pillar="policy", project_id=None,
+                params={
+                    "draft_id": draft_id, "reviewed": True, "gate_points": gate_points,
+                    "projects": [{"project_id": name, "gating_enabled": name in gating} for name in chosen],
+                },
+                queue_key=None, depends_on=[], created_by="dashboard",
+            )
+        except client.PillarUnavailable as exc:
+            return _back(back, f"Could not approve: {exc}")
+        if job.get("status") != "succeeded":
+            return _back(back, f"Not approved: {job.get('error') or 'the policy pillar refused it'}")
+        return _back(f"/policies/{job['result']['id']}", "Approved and activated.")
+
+    @app.post("/policies/drafts/{draft_id}/reject")
+    def policy_draft_reject(draft_id: str, reason: str = Form("")):
+        job = _try(lambda: client.create_job(
+            paths, type="policy.reject_draft", target_pillar="policy", project_id=None,
+            params={"draft_id": draft_id, "reason": reason}, queue_key=None, depends_on=[], created_by="dashboard",
+        ))
+        ok = job is not None and job.get("status") == "succeeded"
+        return _back("/policies/drafts", "Draft rejected." if ok else f"Could not reject: {(job or {}).get('error', 'policy unreachable')}")
+
+    @app.post("/policies/drafts/{draft_id}/restore")
+    def policy_draft_restore(draft_id: str):
+        job = _try(lambda: client.create_job(
+            paths, type="policy.restore_draft", target_pillar="policy", project_id=None,
+            params={"draft_id": draft_id}, queue_key=None, depends_on=[], created_by="dashboard",
+        ))
+        ok = job is not None and job.get("status") == "succeeded"
+        return _back("/policies/drafts", "Draft restored." if ok else f"Could not restore: {(job or {}).get('error', 'policy unreachable')}")
 
     @app.get("/policies/{policy_id}", response_class=HTMLResponse)
     def policy_detail(request: Request, policy_id: str):

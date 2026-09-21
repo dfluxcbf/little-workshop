@@ -185,6 +185,10 @@ def policy_list_projects(paths: Paths, policy_id: str | None = None, project_id:
     return _get(paths, "policy", "/v1/policy_projects", params=params or None, timeout=timeout)
 
 
+def policy_list_drafts(paths: Paths, status: str | None = None, *, timeout: float = 5.0):
+    return _get(paths, "policy", "/v1/policy_drafts", params={"status": status} if status else None, timeout=timeout)
+
+
 def policy_gating_for_job(paths: Paths, project_id: str, categories: list[str], *, timeout: float = 10.0):
     return _get(paths, "policy", "/v1/policies/gating-for-job", params={"project_id": project_id, "categories": ",".join(categories)}, timeout=timeout)
 
