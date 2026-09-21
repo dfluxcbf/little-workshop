@@ -31,8 +31,10 @@ identical reason.
 from __future__ import annotations
 
 import importlib.resources
+import json
 import os
 import threading
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -90,10 +92,62 @@ def _back(to: str, message: str) -> RedirectResponse:
     return RedirectResponse(f"{to}{'&' if '?' in to else '?'}message={quote(message)}", status_code=303)
 
 
+JOB_STATUS_ORDER = ["running", "pending_confirmation", "queued", "failed", "succeeded", "cancelled"]
+JOB_STATUS_LABELS = {
+    "running": "Running", "pending_confirmation": "Needs confirmation", "queued": "Queued",
+    "failed": "Failed", "succeeded": "Succeeded", "cancelled": "Cancelled",
+}
+JOB_ACTIVE_STATUSES = {"running", "queued", "pending_confirmation"}
+JOBS_PAGE_SIZE = 50
+
+
+def _parse_time(value: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
+def relative_time(value: str | None, *, now: datetime | None = None) -> str:
+    """'just now', '5m ago', '3h ago', '2d ago' — for a job's timestamp."""
+    moment = _parse_time(value)
+    if moment is None:
+        return ""
+    seconds = int(((now or datetime.now(timezone.utc)) - moment).total_seconds())
+    if seconds < 45:
+        return "just now"
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds // size}{unit} ago"
+    return "just now"
+
+
+def job_duration(created: str | None, updated: str | None) -> str:
+    """How long a finished job took: '0.4s', '12s', '3m 05s', '1h 02m'."""
+    start, end = _parse_time(created), _parse_time(updated)
+    if start is None or end is None:
+        return ""
+    seconds = max((end - start).total_seconds(), 0.0)
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m {int(seconds % 60):02d}s"
+    return f"{int(seconds // 3600)}h {int(seconds % 3600 // 60):02d}m"
+
+
+def pretty_json(value) -> str:
+    return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+
+
 def build_app(paths: Paths) -> FastAPI:
     app = FastAPI(title="little-workshop Dashboard")
     templates = _templates()
     static_dir = importlib.resources.files("dashboard") / "static"
+    templates.env.filters["reltime"] = relative_time
+    templates.env.filters["pretty"] = pretty_json
+    templates.env.globals["job_duration"] = job_duration
     templates.env.globals["static_v"] = int(os.path.getmtime(str(static_dir / "app.css")))
     # follow_symlink: Bazel runfiles trees are symlink forests.
     app.mount("/static", StaticFiles(directory=str(static_dir), follow_symlink=True), name="static")
@@ -321,12 +375,28 @@ def build_app(paths: Paths) -> FastAPI:
         return _back("/pillars", f"Redeploy of {', '.join(chosen)} ({commit}) started — progress is on the Jobs page.")
 
     @app.get("/jobs", response_class=HTMLResponse)
-    def jobs(request: Request, status: str | None = None):
+    def jobs(request: Request, status: str | None = None, q: str | None = None, limit: int = JOBS_PAGE_SIZE):
         try:
-            rows, error = client.list_jobs(paths, status=status), None
+            everything, error = client.list_jobs(paths), None
         except client.PillarUnavailable as exc:
-            rows, error = [], str(exc)
-        return _render(request, "jobs.html", jobs=rows, status=status, error=error, nav_active="jobs")
+            everything, error = [], str(exc)
+        counts = {name: 0 for name in JOB_STATUS_ORDER}
+        for job in everything:
+            counts[job["status"]] = counts.get(job["status"], 0) + 1
+        matching = [j for j in everything if not status or j["status"] == status]
+        needle = (q or "").strip().lower()
+        if needle:
+            matching = [
+                j for j in matching
+                if needle in " ".join(str(j.get(k) or "") for k in ("type", "project_id", "target_pillar", "created_by", "id")).lower()
+            ]
+        matching.sort(key=lambda j: j.get("created_at") or "", reverse=True)
+        limit = max(JOBS_PAGE_SIZE, min(limit, 1000))
+        return _render(
+            request, "jobs.html", jobs=matching[:limit], total=len(matching), limit=limit, next_limit=limit + JOBS_PAGE_SIZE,
+            status=status, q=q or "", all_count=len(everything),
+            counts=[(name, JOB_STATUS_LABELS.get(name, name), counts[name]) for name in [*JOB_STATUS_ORDER, *[k for k in counts if k not in JOB_STATUS_ORDER]] if counts[name]],
+            active=sum(counts.get(name, 0) for name in JOB_ACTIVE_STATUSES), error=error, nav_active="jobs")
 
     @app.get("/policies", response_class=HTMLResponse)
     def policies(request: Request, message: str | None = None):

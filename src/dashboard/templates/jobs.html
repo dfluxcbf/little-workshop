@@ -1,26 +1,92 @@
 {% extends "base.html" %}
-{% block title %}Jobs{% endblock %}
+{% block title %}Jobs — little-workshop{% endblock %}
+{% macro fchip(label, href, count, on) -%}
+<a class="fchip{{ ' on' if on }}" href="{{ href }}">{{ label }}<span class="fchip-n">{{ count }}</span></a>
+{%- endmacro %}
 {% block content %}
-<h1>Jobs{% if status %} — {{ status }}{% endif %}</h1>
-<table>
-  <thead><tr><th>Type</th><th>Target pillar</th><th>Project</th><th>Status</th><th>ID</th></tr></thead>
-  <tbody>
-  {% for j in jobs %}
-    <tr>
-      <td>{{ j.type }}</td>
-      <td>{{ j.target_pillar }}</td>
-      <td>{{ j.project_id or "—" }}</td>
-      <td>
-        {% if j.status == "succeeded" %}<span class="pill ok">succeeded</span>
-        {% elif j.status in ("failed",) %}<span class="pill fail">failed</span>
-        {% elif j.status == "pending_confirmation" %}<span class="pill warn">pending confirmation</span>
-        {% else %}<span class="pill warn">{{ j.status }}</span>{% endif %}
-      </td>
-      <td class="sheet-no">{{ j.id }}</td>
-    </tr>
-  {% else %}
-    <tr><td colspan="5">No jobs.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+<form class="jobs-search" method="get" action="/jobs" role="search">
+  {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+  <input type="search" name="q" value="{{ q }}" placeholder="Search type, project, id…" aria-label="Search jobs" autocomplete="off">
+  {% if active %}<span class="live" title="Refreshing every few seconds while jobs are active"><span class="live-dot"></span>live</span>{% endif %}
+</form>
+
+<div id="jobs-live">
+  <nav class="jobs-filters" aria-label="Filter by status">
+    {{ fchip("All", "/jobs" ~ ("?q=" ~ q|urlencode if q else ""), all_count, not status) }}
+    {% for name, label, n in counts %}
+    {{ fchip(label, "/jobs?status=" ~ name ~ ("&q=" ~ q|urlencode if q else ""), n, status == name) }}
+    {% endfor %}
+  </nav>
+
+  <div class="job-list">
+    {% for j in jobs %}
+    {% set parts = j.type.split(".", 1) %}
+    {% set finished = j.status in ("succeeded", "failed", "cancelled") %}
+    <details class="jobcard s-{{ j.status }}">
+      <summary>
+        <span class="job-line">
+          <span class="job-type">{% if parts | length > 1 %}<span class="job-ns">{{ parts[0] }}.</span>{{ parts[1] }}{% else %}{{ j.type }}{% endif %}</span>
+          {% if j.status == "succeeded" %}<span class="pill ok">succeeded</span>
+          {% elif j.status == "failed" %}<span class="pill fail">failed</span>
+          {% elif j.status == "running" %}<span class="pill run">running</span>
+          {% elif j.status == "pending_confirmation" %}<span class="pill warn">needs confirmation</span>
+          {% else %}<span class="pill idle">{{ j.status }}</span>{% endif %}
+        </span>
+        <span class="job-line">
+          <span class="job-tags">
+            {% if j.project_id %}<span class="chip">{{ j.project_id }}</span>{% endif %}
+            <span class="job-meta">{{ [j.created_at | reltime, job_duration(j.created_at, j.updated_at) if finished else "", j.created_by] | select | join(" · ") }}</span>
+          </span>
+        </span>
+        {% if j.error %}<span class="job-error">{{ j.error }}</span>{% endif %}
+      </summary>
+      <div class="job-body">
+        <dl class="kv">
+          <dt>ID</dt><dd><code>{{ j.id }}</code></dd>
+          <dt>Target</dt><dd>{{ j.target_pillar }}</dd>
+          {% if j.queue_key %}<dt>Queue</dt><dd>{{ j.queue_key }}</dd>{% endif %}
+          <dt>Created</dt><dd>{{ j.created_at }}</dd>
+          <dt>Updated</dt><dd>{{ j.updated_at }}</dd>
+          {% if j.depends_on %}<dt>Waits on</dt><dd>{% for d in j.depends_on %}<code>{{ d[:8] }}</code> {% endfor %}</dd>{% endif %}
+        </dl>
+        {% if j.params %}<h4 class="job-h">Params</h4><pre class="code">{{ j.params | pretty }}</pre>{% endif %}
+        {% if j.result %}<h4 class="job-h">Result</h4><pre class="code">{{ j.result | pretty }}</pre>{% endif %}
+        {% if j.error %}<h4 class="job-h">Error</h4><pre class="code err">{{ j.error }}</pre>{% endif %}
+      </div>
+    </details>
+    {% else %}
+    <p class="muted empty">{% if status or q %}No jobs match.{% else %}No jobs yet.{% endif %}</p>
+    {% endfor %}
+  </div>
+
+  {% if total > jobs | length %}
+  <div class="job-more">
+    <span class="muted">Showing {{ jobs | length }} of {{ total }}</span>
+    <a class="btn" href="/jobs?limit={{ next_limit }}{{ '&status=' ~ status if status }}{{ '&q=' ~ q|urlencode if q }}">Show more</a>
+  </div>
+  {% elif jobs %}
+  <p class="muted job-count">{{ total }} job{{ '' if total == 1 else 's' }}</p>
+  {% endif %}
+</div>
+
+{% if active %}
+<script>
+(function () {
+  var timer = setInterval(function () {
+    var region = document.getElementById("jobs-live");
+    var searching = document.activeElement && document.activeElement.name === "q";
+    if (!region || searching || region.querySelector("details[open]")) return;
+    fetch(location.href, { credentials: "same-origin", headers: { "X-Requested-With": "fetch" } })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (html) {
+        if (!html) return;
+        var fresh = new DOMParser().parseFromString(html, "text/html").getElementById("jobs-live");
+        if (fresh && !region.querySelector("details[open]")) region.innerHTML = fresh.innerHTML;
+      })
+      .catch(function () {});
+  }, 5000);
+  window.addEventListener("pagehide", function () { clearInterval(timer); });
+})();
+</script>
+{% endif %}
 {% endblock %}

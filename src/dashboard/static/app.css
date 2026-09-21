@@ -846,3 +846,71 @@ a.linkcard:hover { border-color: var(--cyan-deep); }
 form > .dcard { margin-bottom: 10px; }
 .rejected-list > summary::before { content: "▸"; display: inline-block; margin-right: 6px; transition: transform 0.15s; }
 .rejected-list[open] > summary::before { transform: rotate(90deg); }
+
+/* --- jobs ----------------------------------------------------------------------- */
+
+.pill.run { color: var(--cyan); background: var(--cyan-soft); }
+.pill.run::before { animation: pulse 1.4s ease-in-out infinite; }
+
+.jobs-search { position: relative; margin: 0 0 10px; }
+.jobs-search input[type="search"] { width: 100%; padding-right: 64px; }
+.live { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--cyan); pointer-events: none; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); animation: pulse 1.4s ease-in-out infinite; }
+
+.jobs-filters { display: flex; gap: 6px; margin: 0 -12px 12px; padding: 2px 12px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.jobs-filters::-webkit-scrollbar { display: none; }
+.fchip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.fchip-n { font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); }
+.fchip.on { border-color: var(--cyan); background: var(--cyan-soft); color: var(--ink); }
+.fchip.on .fchip-n { color: var(--cyan); }
+
+.job-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: 8px; align-items: start; }
+.jobcard {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.jobcard.s-succeeded { border-left-color: var(--ok); }
+.jobcard.s-failed { border-left-color: var(--fail); }
+.jobcard.s-running { border-left-color: var(--cyan); }
+.jobcard.s-pending_confirmation { border-left-color: var(--warn); }
+.jobcard > summary { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; list-style: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.jobcard > summary::-webkit-details-marker { display: none; }
+.jobcard[open] > summary { border-bottom: 1px solid var(--border-soft); }
+.job-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.job-type { font-family: var(--font-mono); font-size: 14px; font-weight: 700; overflow-wrap: anywhere; min-width: 0; }
+.job-ns { color: var(--ink-faint); font-weight: 400; }
+.job-tags { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.job-meta { font-size: 12px; color: var(--ink-faint); }
+.job-error { font-size: 12.5px; color: var(--fail); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.jobcard[open] .job-error { display: none; }
+.job-body { padding: 4px 12px 12px; }
+.job-body dl.kv { margin: 6px 0 4px; font-size: 13px; }
+.job-body dd { overflow-wrap: anywhere; min-width: 0; }
+.job-h { margin: 12px 0 6px; font-family: var(--font-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); }
+.job-body pre.code { max-height: 220px; font-size: 11.5px; }
+.job-body pre.code.err { color: var(--fail); white-space: pre-wrap; overflow-wrap: anywhere; }
+.job-more { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.job-count { margin: 12px 2px 0; font-size: 12.5px; }
+
+@media (max-width: 680px) {
+  .job-list { grid-template-columns: minmax(0, 1fr); }
+  .job-more .btn { flex: none; }
+}

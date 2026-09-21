@@ -295,18 +295,154 @@ def test_policies_renders_error_banner_when_policy_unreachable(test_client, monk
     assert "UNREACHABLE" in response.text
 
 
-def test_jobs_passes_through_status_filter(test_client, monkeypatch):
-    captured = {}
+def _job(i, **overrides):
+    base = {
+        "id": f"{i:08d}aaaabbbbccccdddd", "type": "deployment.redeploy_pillar", "target_pillar": "deployment", "project_id": "dashboard",
+        "params": {"pillar": "dashboard", "commit": "abc123"}, "status": "succeeded", "queue_key": "dashboard", "depends_on": [],
+        "created_by": "mcp", "result": {"version": "0.1.1"}, "error": None,
+        "created_at": f"2026-09-21T10:{i:02d}:00.000000Z", "updated_at": f"2026-09-21T10:{i:02d}:02.500000Z",
+    }
+    base.update(overrides)
+    return base
+
+
+def _stub_jobs(monkeypatch, jobs):
+    calls = []
 
     def fake_list_jobs(paths, status=None):
-        captured["status"] = status
-        return [{"id": "j1", "type": "policy.configure", "target_pillar": "policy", "project_id": None, "status": "succeeded"}]
+        calls.append(status)
+        return list(jobs)
 
     monkeypatch.setattr(client, "list_jobs", fake_list_jobs)
-    response = test_client.get("/jobs", params={"status": "failed"})
-    assert response.status_code == 200
-    assert captured["status"] == "failed"
-    assert "policy.configure" in response.text
+    return calls
+
+
+def test_jobs_lists_newest_first_as_expandable_cards(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1, type="policy.configure"), _job(2, type="version.feature_finish"), _job(3, type="build.run")])
+    text = test_client.get("/jobs").text
+    assert text.count('class="jobcard ') == 3 and "<table" not in text and "<h1" not in text
+    assert text.index("build.") < text.index("version.") < text.index("policy.")  # newest created_at first
+    assert '<span class="job-ns">policy.</span>configure' in text
+    assert "dashboard</span>" in text and "mcp" in text and "2.5s" in text
+
+
+def test_a_job_card_expands_to_ids_timestamps_params_and_result(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(7, depends_on=["1234567890abcdef"], queue_key="dashboard")])
+    text = test_client.get("/jobs").text
+    assert "00000007aaaabbbbccccdddd" in text and "2026-09-21T10:07:00.000000Z" in text
+    assert "Waits on" in text and "<code>12345678</code>" in text
+    assert "&#34;commit&#34;: &#34;abc123&#34;" in text and "&#34;version&#34;: &#34;0.1.1&#34;" in text
+    assert ">Params<" in text and ">Result<" in text
+
+
+def test_failed_jobs_show_their_error_on_the_card_and_in_full_inside(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1, status="failed", result=None, error="Gate 2 rejected: not enforceable <b>")])
+    text = test_client.get("/jobs").text
+    assert text.count("Gate 2 rejected: not enforceable &lt;b&gt;") == 2  # card summary + the Error block, escaped
+    assert 'pill fail">failed' in text and ">Error<" in text
+
+
+def test_status_chips_carry_counts_and_the_active_one_is_marked(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1), _job(2), _job(3, status="failed"), _job(4, status="running", result=None), _job(5, status="pending_confirmation", result=None)])
+    text = test_client.get("/jobs", params={"status": "failed"}).text
+    assert 'class="fchip"' in text and 'class="fchip on" href="/jobs?status=failed"' in text
+    for label, n in (("All", 5), ("Running", 1), ("Needs confirmation", 1), ("Failed", 1), ("Succeeded", 2)):
+        assert re.search(rf'{label}<span class="fchip-n">{n}</span>', text), (label, n)
+    assert "Queued" not in text  # no chip for a status nothing has
+    assert text.count('class="jobcard ') == 1 and "pill fail" in text
+
+
+def test_the_status_filter_is_applied_locally_so_counts_stay_whole(test_client, monkeypatch):
+    calls = _stub_jobs(monkeypatch, [_job(1), _job(2, status="failed")])
+    test_client.get("/jobs", params={"status": "failed"})
+    assert calls == [None]
+
+
+def test_jobs_search_matches_type_project_pillar_creator_and_id(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [
+        _job(1, type="policy.configure", project_id=None, target_pillar="policy", created_by="dashboard"),
+        _job(2, type="build.run", project_id="little-meals", target_pillar="build", created_by="lws"),
+    ])
+    def cards(query):
+        return re.findall(r'class="jobcard s-\w+"', test_client.get("/jobs", params={"q": query}).text)
+    assert len(cards("MEALS")) == 1 and len(cards("policy")) == 1 and len(cards("lws")) == 1 and len(cards("00000002")) == 1
+    assert len(cards("nothing-like-this")) == 0
+    assert "No jobs match." in test_client.get("/jobs", params={"q": "nothing-like-this"}).text
+
+
+def test_search_and_status_combine_and_survive_in_the_chip_links(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1, type="a.x", status="failed"), _job(2, type="a.y"), _job(3, type="b.z", status="failed")])
+    text = test_client.get("/jobs", params={"status": "failed", "q": "a."}).text
+    assert len(re.findall(r'class="jobcard ', text)) == 1
+    assert '<span class="job-ns">a.</span>x' in text and '<span class="job-ns">a.</span>y' not in text and '<span class="job-ns">b.</span>' not in text
+    assert 'href="/jobs?status=failed&amp;q=a."' in text or 'href="/jobs?status=failed&q=a."' in text
+    assert 'name="status" value="failed"' in text and 'value="a."' in text
+
+
+def test_jobs_are_paged_with_a_show_more_link(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(i % 60, id=f"id{i:04d}") for i in range(120)])
+    first = test_client.get("/jobs").text
+    assert first.count('class="jobcard ') == 50 and "Showing 50 of 120" in first and "limit=100" in first
+    more = test_client.get("/jobs", params={"limit": 100}).text
+    assert more.count('class="jobcard ') == 100 and "Showing 100 of 120" in more
+    everything = test_client.get("/jobs", params={"limit": 150}).text
+    assert everything.count('class="jobcard ') == 120 and "Show more" not in everything and "120 jobs" in everything
+
+
+def test_show_more_keeps_the_filters(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(i % 60, id=f"id{i:04d}", status="failed", result=None) for i in range(80)])
+    text = test_client.get("/jobs", params={"status": "failed", "q": "redeploy"}).text
+    assert "limit=100&amp;status=failed&amp;q=redeploy" in text or "limit=100&status=failed&q=redeploy" in text
+
+
+def test_the_page_refreshes_itself_only_while_jobs_are_active(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1, status="running", result=None)])
+    busy = test_client.get("/jobs").text
+    assert "setInterval" in busy and 'class="live"' in busy and 'id="jobs-live"' in busy and "pill run" in busy
+
+    _stub_jobs(monkeypatch, [_job(1), _job(2, status="failed")])
+    idle = test_client.get("/jobs").text
+    assert "setInterval" not in idle and 'class="live"' not in idle
+
+
+def test_a_queued_and_a_pending_confirmation_job_count_as_active(test_client, monkeypatch):
+    for status in ("queued", "pending_confirmation"):
+        _stub_jobs(monkeypatch, [_job(1, status=status, result=None)])
+        assert "setInterval" in test_client.get("/jobs").text
+
+
+def test_empty_states(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [])
+    assert "No jobs yet." in test_client.get("/jobs").text
+
+
+def test_a_job_with_no_dotted_type_still_renders(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1, type="ping", params={}, result=None)])
+    text = test_client.get("/jobs").text
+    assert '<span class="job-type">ping</span>' in text and ">Params<" not in text and ">Result<" not in text
+
+
+def test_the_meta_line_skips_missing_parts_instead_of_showing_stray_dots(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1, status="cancelled", created_at="not-a-time", updated_at="also-not", created_by="mcp")])
+    text = test_client.get("/jobs").text
+    assert '<span class="job-meta">mcp</span>' in text and "· ·" not in text
+
+
+def test_relative_time_and_duration_helpers():
+    from datetime import datetime, timezone
+    from dashboard.app import job_duration, relative_time
+
+    now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=timezone.utc)
+    assert relative_time("2026-09-21T11:59:50Z", now=now) == "just now"
+    assert relative_time("2026-09-21T11:55:00Z", now=now) == "5m ago"
+    assert relative_time("2026-09-21T09:00:00Z", now=now) == "3h ago"
+    assert relative_time("2026-09-19T09:00:00Z", now=now) == "2d ago"
+    assert relative_time(None) == "" and relative_time("garbage") == ""
+    assert job_duration("2026-09-21T10:00:00Z", "2026-09-21T10:00:00.4Z") == "0.4s"
+    assert job_duration("2026-09-21T10:00:00Z", "2026-09-21T10:00:12Z") == "12s"
+    assert job_duration("2026-09-21T10:00:00Z", "2026-09-21T10:03:05Z") == "3m 05s"
+    assert job_duration("2026-09-21T10:00:00Z", "2026-09-21T11:02:00Z") == "1h 02m"
+    assert job_duration(None, "2026-09-21T11:02:00Z") == "" and job_duration("2026-09-21T11:02:00Z", "2026-09-21T10:00:00Z") == "0.0s"
 
 
 def _policy(**overrides):

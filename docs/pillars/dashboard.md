@@ -82,9 +82,21 @@ are the current state of every pillar.
   Reject. Approve without the switch does nothing (the route sends no Job);
   with it, one `policy.approve_draft` Job carries the whole decision. This
   is the only way to approve a draft — no CLI or MCP path exists.
-- **Jobs** (`/jobs`): the Orchestration queue, optionally filtered by
-  status — the same `GET /v1/jobs` the CLI's `lws job list` already
-  uses.
+- **Jobs** (`/jobs`, redesigned 2026-09-21): the Orchestration queue as a
+  list of expandable cards, newest first, phone-first (no table, no page
+  heading). A search box (type, project, pillar, creator or id) and a strip
+  of status chips with counts — All, Running, Needs confirmation, Queued,
+  Failed, Succeeded, Cancelled, only those that exist; the strip scrolls
+  sideways on a phone. A card shows the job type (namespace dimmed), a
+  status pill, the project, how long ago it was created, how long it took
+  once finished, who created it, and a failed job's error in red; the left
+  edge is coloured by status. Tapping a card expands the id, target,
+  queue, timestamps, what it waits on, and the params, result and error as
+  formatted blocks. 50 jobs per page with "Show more" (filters preserved).
+  While anything is running, queued or awaiting confirmation the page marks
+  itself "live" and re-fetches its list every 5 seconds — never while a card
+  is expanded or the search box has focus. Filtering and searching are done
+  on the full list, so the counts always describe everything.
 - **Policy management** (`/policies`, `/policies/{id}`) — the concrete,
   fully-specified panel `docs/milestones.md` M14 called out. The list
   (redesigned 2026-09-21) is one card per policy, no page heading: the
