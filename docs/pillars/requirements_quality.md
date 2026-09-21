@@ -20,6 +20,31 @@ and `milestones` are their own tables, each optionally linked from a
 execution) — work that was scoped in the standalone tool but never
 landed.
 
+## Importing existing projects
+
+`tools/import_requirements.py` (2026-09-21) loads a project into this pillar
+from real evidence, re-runnably (requirements, suites and links matched by key
+or name; every run records a fresh batch of results; `--dry-run` writes
+nothing):
+
+- `lreq` — a project tracked by the old `little-requirements` tool. Its
+  database gives the requirements (draft stays draft, published is published),
+  the suites and which tests verify which requirement; a JUnit report of a real
+  run gives what the tests did. The old tool identified a test by the sha256 of
+  its node id (`tests/test_x.py::Class::test`, or `classname::name` for
+  vitest); the importer reproduces those ids and reports how many matched, and
+  which known tests were missing from the run. Each suite's results are the
+  tests that verify its requirements; tests no requirement points at go to a
+  "Tests without a requirement link" suite so nothing real is left out.
+- `register` — little-workshop's own `docs/requirements.md`, which has no
+  per-requirement test links: milestones are created from its sections, `done`
+  rows are published, and every done requirement is linked to one "Unit tests"
+  suite holding the whole real run (so a failing test anywhere makes them all
+  not done — coarse, and honest about it).
+
+A suite passes only if every test in its latest run passed; a skipped test does
+not count as passing.
+
 ## Purpose & goal
 
 "Every behavior that matters has an auditable answer to 'is this

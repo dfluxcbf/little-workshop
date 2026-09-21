@@ -1145,3 +1145,42 @@ def test_control_still_offers_launch_and_stop_for_an_ordinary_server(test_client
     text = test_client.get("/control").text
     assert "/projects/little-widget/deploy" in text and "/projects/little-widget/stop" in text
     assert "Managed outside Deployment" not in text and "<dt>Version</dt>" in text and "<dt>Branch</dt>" in text
+
+
+# -- requirements pill: draft is not failing ----------------------------------------------------
+
+
+def _req(status, done):
+    return {"status": status, "done": done}
+
+
+def _reqs_pill(test_client, monkeypatch, items):
+    _one_project(monkeypatch, report={"requirements": items})
+    text = test_client.get("/").text
+    return re.search(r'<span class="pill (\w+)"[^>]*>(\d+/\d+) done</span>', text), text
+
+
+def test_every_requirement_done_is_green(test_client, monkeypatch):
+    match, text = _reqs_pill(test_client, monkeypatch, [_req("published", True)] * 3)
+    assert match.group(1, 2) == ("ok", "3/3") and " draft" not in text
+
+
+def test_a_published_requirement_that_is_not_passing_is_red(test_client, monkeypatch):
+    match, _ = _reqs_pill(test_client, monkeypatch, [_req("published", True), _req("published", False)])
+    assert match.group(1, 2) == ("fail", "1/2")
+
+
+def test_requirements_that_are_only_drafts_are_neutral_and_say_so(test_client, monkeypatch):
+    match, text = _reqs_pill(test_client, monkeypatch, [_req("published", True), _req("draft", False), _req("draft", False)])
+    assert match.group(1, 2) == ("idle", "1/3")
+    assert '<span class="fact-v">2 draft</span>' in text and "2 draft requirements awaiting review" in text
+
+
+def test_a_regression_outranks_drafts(test_client, monkeypatch):
+    match, _ = _reqs_pill(test_client, monkeypatch, [_req("published", False), _req("draft", False)])
+    assert match.group(1) == "fail"
+
+
+def test_a_single_draft_is_worded_in_the_singular(test_client, monkeypatch):
+    _, text = _reqs_pill(test_client, monkeypatch, [_req("draft", False)])
+    assert "1 draft requirement awaiting review" in text

@@ -199,7 +199,14 @@ def build_app(paths: Paths) -> FastAPI:
             reqs = None
             if report is not None:
                 items = report.get("requirements", [])
-                reqs = {"total": len(items), "done": sum(1 for r in items if r.get("done"))}
+                published = [r for r in items if r.get("status") == "published"]
+                reqs = {
+                    "total": len(items), "done": sum(1 for r in items if r.get("done")),
+                    # a draft is awaiting review, not failing; only a published requirement that is not
+                    # passing is a problem worth colouring
+                    "drafts": len(items) - len(published),
+                    "failing": sum(1 for r in published if not r.get("done")),
+                }
             rows.append({
                 "name": name, "server": server, "session": session, "awaiting": awaiting, "running": running,
                 "reqs": reqs, "ci": _try(client.agent_latest_ci_check, paths, name),

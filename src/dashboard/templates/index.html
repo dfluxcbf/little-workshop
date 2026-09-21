@@ -42,7 +42,8 @@
       </span>
       {% if r.reqs and r.reqs.total %}
       <span class="fact"><span class="fact-k">Requirements</span>
-        <span class="pill {{ 'ok' if r.reqs.done == r.reqs.total else 'warn' }}">{{ r.reqs.done }}/{{ r.reqs.total }} done</span>
+        <span class="pill {{ 'ok' if r.reqs.done == r.reqs.total else ('fail' if r.reqs.failing else 'idle') }}"{% if r.reqs.drafts %} title="{{ r.reqs.drafts }} draft requirement{{ '' if r.reqs.drafts == 1 else 's' }} awaiting review"{% endif %}>{{ r.reqs.done }}/{{ r.reqs.total }} done</span>
+        {% if r.reqs.drafts %}<span class="fact-v">{{ r.reqs.drafts }} draft</span>{% endif %}
       </span>
       {% endif %}
       {% if r.ci is not none %}

@@ -40,7 +40,10 @@ are the current state of every pillar.
   card per registered project. A card lists only the facts that exist —
   server up/down (with version), Claude session (running / idle /
   untrusted), tasks awaiting finish or running, requirements done/total,
-  latest CI — as a plain-text label beside a status pill, never a row of
+  latest CI — as a plain-text label beside a status pill (requirements are
+  green when all are done, red when a *published* requirement is not passing,
+  and neutral when the only shortfall is drafts awaiting review, counted as
+  "N draft"), never a row of
   "—" placeholders; a project with something to act on (an untrusted
   session, a task awaiting finish, a failing CI) gets an amber edge. Each
   panel is its own live read; a pillar that is down degrades that fact
