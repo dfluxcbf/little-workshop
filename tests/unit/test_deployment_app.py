@@ -404,3 +404,32 @@ def test_pillars_endpoint_lists_recent_commits_with_their_versions(paths, conn, 
     assert [c["subject"] for c in commits] == ["no version here", "bump", "first"]
     assert [c["version"] for c in commits] == [None, "1.1.0", "1.0.0"]
     assert all(len(c["sha"]) == 40 for c in commits)
+
+
+def test_policy_script_locate_returns_a_github_url_for_a_committed_script(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    (repo / "tools" / "policy_scripts").mkdir(parents=True)
+    (repo / "tools" / "policy_scripts" / "x.py").write_text("print('x')\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "add script"], repo)
+    _git(["remote", "add", "origin", "git@github.com:dfluxcbf/little-workshop.git"], repo)
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(repo))
+    client, _ = make_client(paths, conn, repo)
+
+    hit = client.post("/v1/policy-scripts/locate", json={"script": "print('x')\n"}).json()
+    assert hit["found"] is True and hit["version"] == "1.0.0"
+    assert hit["url"] == f"https://github.com/dfluxcbf/little-workshop/blob/{commit}/tools/policy_scripts/x.py"
+
+    assert client.post("/v1/policy-scripts/locate", json={"script": "something else\n"}).json() == {"found": False}
+
+
+def test_policy_script_locate_is_not_found_without_a_github_remote(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    (repo / "tools" / "policy_scripts").mkdir(parents=True)
+    (repo / "tools" / "policy_scripts" / "x.py").write_text("x\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "add"], repo)
+    monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(repo))
+    client, _ = make_client(paths, conn, repo)
+    assert client.post("/v1/policy-scripts/locate", json={"script": "x\n"}).json() == {"found": False}

@@ -992,17 +992,15 @@ def cmd_policy_configure(args: argparse.Namespace) -> int:
     return _policy_job(args, "policy.configure", params)
 
 
-def cmd_policy_waiver_grant(args: argparse.Namespace) -> int:
-    return _policy_job(args, "policy.waiver_grant", {"policy_id": args.policy_id, "reason": args.reason})
+def cmd_policy_projects_set(args: argparse.Namespace) -> int:
+    projects = [{"project_id": name, "gating_enabled": True} for name in args.project or []]
+    projects += [{"project_id": name, "gating_enabled": False} for name in args.project_no_gating or []]
+    return _policy_job(args, "policy.set_projects", {"policy_id": args.policy_id, "projects": projects})
 
 
-def cmd_policy_waiver_revoke(args: argparse.Namespace) -> int:
-    return _policy_job(args, "policy.waiver_revoke", {"waiver_id": args.waiver_id})
-
-
-def cmd_policy_waiver_list(args: argparse.Namespace) -> int:
+def cmd_policy_projects_list(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
-    _print(client.policy_list_waivers(paths, args.policy_id, args.project_id))
+    _print(client.policy_list_projects(paths, args.policy_id, args.project_id))
     return 0
 
 
@@ -2091,23 +2089,24 @@ def build_parser() -> argparse.ArgumentParser:
     policy_configure.add_argument("--gate-points", default=None, help="Comma-separated (or '' for none): which action categories this policy gates on failure")
     policy_configure.set_defaults(func=cmd_policy_configure)
 
-    policy_waiver = policy_sub.add_parser("waiver", help="Per-project exceptions to a policy — explicit and auditable, never silent")
-    policy_waiver_sub = policy_waiver.add_subparsers(dest="policy_waiver_command", required=True)
+    policy_projects = policy_sub.add_parser("projects", help="Which projects a policy applies to, and whether gating is on for each")
+    policy_projects_sub = policy_projects.add_subparsers(dest="policy_projects_command", required=True)
 
-    policy_waiver_grant = policy_waiver_sub.add_parser("grant", help="Exempt one project from one policy")
-    policy_waiver_grant.add_argument("policy_id")
-    policy_waiver_grant.add_argument("--project-id", required=True)
-    policy_waiver_grant.add_argument("--reason", required=True)
-    policy_waiver_grant.set_defaults(func=cmd_policy_waiver_grant)
+    policy_projects_set = policy_projects_sub.add_parser(
+        "set", help="Replace a policy's project selection (a project left out is deselected)"
+    )
+    policy_projects_set.add_argument("policy_id")
+    policy_projects_set.add_argument("--project", action="append", default=[], help="Select a project with gating on (repeatable)")
+    policy_projects_set.add_argument(
+        "--project-no-gating", action="append", default=[],
+        help="Select a project with gating off: still checked and recorded, never blocks (repeatable)",
+    )
+    policy_projects_set.set_defaults(func=cmd_policy_projects_set)
 
-    policy_waiver_revoke = policy_waiver_sub.add_parser("revoke", help="Remove a waiver")
-    policy_waiver_revoke.add_argument("waiver_id")
-    policy_waiver_revoke.set_defaults(func=cmd_policy_waiver_revoke)
-
-    policy_waiver_list = policy_waiver_sub.add_parser("list", help="List waivers")
-    policy_waiver_list.add_argument("--policy-id", default=None)
-    policy_waiver_list.add_argument("--project-id", default=None)
-    policy_waiver_list.set_defaults(func=cmd_policy_waiver_list)
+    policy_projects_list = policy_projects_sub.add_parser("list", help="List project selections")
+    policy_projects_list.add_argument("--policy-id", default=None)
+    policy_projects_list.add_argument("--project-id", default=None)
+    policy_projects_list.set_defaults(func=cmd_policy_projects_list)
 
     policy_gating_for_job = policy_sub.add_parser("gating-for-job", help="Which policies currently gate a project for a given set of action categories")
     policy_gating_for_job.add_argument("--project-id", required=True)

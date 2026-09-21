@@ -1,6 +1,6 @@
 """Policy & Compliance's own models — `docs/pillars/policy_compliance.md`'s
-"Data model" section: `policies` and `policy_check_results`, both real
-tables this pillar owns. `project_sets` is deliberately NOT here — it's
+"Data model" section: `policies`, `policy_projects` (the projects a policy
+applies to) and `policy_check_results`, all real tables this pillar owns. `project_sets` is deliberately NOT here — it's
 Registry & Portfolio's own table, reached through that pillar's Pillar
 Interface whenever a project-set-scoped policy's targets need resolving.
 """
@@ -61,6 +61,16 @@ class GatePoint(str, Enum):
     PROJECT_REGISTRATION = "project_registration"
 
 
+class PolicyProject(BaseModel):
+    """One project a policy applies to, selected explicitly by the user.
+    `gating_enabled` is per project and independent of the policy's own
+    `gate_points` (where a failure would block is a property of the policy,
+    never chosen per project). With gating off the check still runs and is
+    recorded — for analysis — but its failure never holds a Job."""
+    project_id: str
+    gating_enabled: bool = True
+
+
 class Policy(BaseModel):
     id: str
     topic: str
@@ -72,22 +82,9 @@ class Policy(BaseModel):
     created_by: CreatedBy
     enabled: bool = True
     gate_points: list[GatePoint] = Field(default_factory=list)
+    projects: list[PolicyProject] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now)
     amended_at: datetime = Field(default_factory=_now)
-
-
-class PolicyWaiver(BaseModel):
-    """An explicit, auditable exception: this one project doesn't have
-    to comply with this one policy — never a silent bypass, and never a
-    change to the policy itself (which stays exactly what it is for
-    every other project). Framework tier still means "can't be shadowed
-    by a lower-scope policy" — a waiver is a different, explicit act,
-    granted per project, not a scope-precedence outcome."""
-    id: str
-    policy_id: str
-    project_id: str
-    reason: str
-    created_at: datetime = Field(default_factory=_now)
 
 
 class PolicyCheckResult(BaseModel):

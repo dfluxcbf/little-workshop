@@ -61,10 +61,11 @@ without someone finding out" (`docs/architecture.md`).
   can now be held by more than one policy at once. Fail-closed, with a
   10-minute human-override flow.
 - **Usability controls** — a policy can be enabled/disabled without
-  re-authoring, and a project that genuinely can't comply can be granted
-  an explicit, auditable, reversible **waiver** against one policy —
-  distinct from scope precedence: framework tier still can't be
-  silently shadowed by a lower-scope policy. Added 2026-09-16.
+  re-authoring, and the user **selects which projects it applies to**,
+  switching gating on or off per project (a check with gating off still
+  runs and is recorded, for analysis — it just can't block). This
+  replaced the per-project waiver on 2026-09-21; see "Project selection
+  replaces waivers" below.
 - **Definition-of-done and policy-conflict resolution** — the multi-pillar
   half of "is this actually done," paired with Requirements & Quality's
   own M10 implementation of the same concept from its side.
@@ -593,18 +594,40 @@ target project, becomes one of its governing checks.
 This also resolved the usability gap the original all-or-nothing
 "framework policies are never overridden" design left open: **a policy
 can now be disabled** (`enabled: bool`, toggled without re-running any
-gate — neither field is about the requirement's own meaning) and **a
-project can be granted an explicit, auditable waiver** against a
-specific policy (a reason is required; never a silent bypass, and never
-a change to the policy for any other project). Both are skipped by
-precedence resolution and fall through to whatever the next-lower-
-precedence policy on that topic is — framework tier still means "can't
-be shadowed by a lower-scope policy"; a waiver is a distinct, explicit
-act, not a scope-precedence outcome. **Resolved 2026-09-17** (`docs/
-open_questions.md`'s `OQ-13`): this stays exactly as built — a reason
-and a timestamp are the whole audit trail, and any caller with Pillar
-Interface access can grant or revoke freely, the same trust model as
-everything else in this single-user household system.
+gate — neither field is about the requirement's own meaning). A
+disabled policy is skipped by precedence resolution and falls through to
+whatever the next-lower-precedence policy on that topic is.
+
+**Project selection replaces waivers (2026-09-21).** The 2026-09-16
+per-project *waiver* (an exception granted against a policy, with a
+reason) is gone. Instead the user **selects the projects a policy applies
+to** — `policy_projects`, one row per selected project — and, per
+selected project, switches **gating** on or off:
+
+- *Applicability is the selection.* A policy is a candidate for a project
+  only if that project is selected for it. Deselecting a project is what
+  a waiver used to do. Scope level (`project` / `project_set` /
+  `all_projects`) survives only as authoring intent: it seeds the initial
+  selection once (at activation, or at the first start after upgrading),
+  and it orders precedence among several selected policies on one topic
+  (framework > project > project set > all projects). A project registered
+  later is not selected automatically.
+- *Gating is per project; where it gates is not.* `gate_points` stays a
+  property of the policy — never chosen per project. Per project there is
+  only on/off.
+- *Gating off still checks.* Orchestration still creates the
+  `policy.check_project` Job for a project whose gating is off, so the
+  result is recorded in `policy_check_results` and visible for analysis;
+  the Job is tagged `gating: false` and its verdict is ignored when
+  deciding whether to hold the action in `pending_confirmation`.
+- Changed with one Job, `policy.set_projects`, which replaces the whole
+  selection (`{project_id, gating_enabled}` per project). Deselecting every
+  project is a real choice and survives restarts. There is no reason
+  field and no separate audit record; the trust model is unchanged from
+  `OQ-13` (any caller with Pillar Interface access, single-user household
+  system).
+- Existing rows: a legacy `policy_waivers` table is dropped only if empty;
+  one holding rows is left untouched and unused.
 
 **`project_registration` is a structurally different gate point, resolved
 2026-09-17** (`OQ-15`): every other category gates a Job *before*
@@ -831,9 +854,12 @@ Supersedes the placeholder `policy_rules`, `policy_check_results` pair in
   amended_at.
 - `policy_check_results` — policy id, project id, outcome (`pass` | `fail`
   | `not_applicable`), checked_at, job id.
-- `policy_waivers` (added 2026-09-16) — id, policy id, project id,
-  reason, created_at. An explicit, auditable per-project exception —
-  see "Action-gating checks."
+- `policy_projects` (added 2026-09-21, replacing `policy_waivers`) —
+  policy id, project id, `gating_enabled`. The projects a policy applies
+  to, and whether its failure may block each one; see "Project selection
+  replaces waivers" under "Action-gating checks." A companion
+  `policy_seeded` table records which policies have had their selection
+  initialised, so deselecting everything is never undone by a restart.
 
 `project_sets` is **not** this pillar's table — it lives in Registry &
 Portfolio (`docs/architecture.md`'s Data model), reached through that

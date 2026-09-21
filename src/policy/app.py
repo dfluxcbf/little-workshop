@@ -22,8 +22,8 @@ from common.paths import Paths
 from common.registry_client import ProjectResolutionError, resolve_project
 from policy import agent_client, db, gates, registry_client, sandbox
 from policy.agent_client import AgentClientError
-from policy.models import CheckOutcome, CreatedBy, GatePoint, Policy, PolicyCheckResult, PolicyWaiver, ScopeLevel
-from policy.precedence import resolve_winning_policy
+from policy.models import CheckOutcome, CreatedBy, GatePoint, Policy, PolicyCheckResult, PolicyProject, ScopeLevel
+from policy.precedence import gating_enabled_for, resolve_winning_policy
 from policy.registry_client import RegistryReadError
 from policy.sandbox import SandboxUnavailable
 
@@ -94,14 +94,32 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     def query_fn(prompt: str) -> str:
         return agent_client.query(paths, prompt)
 
-    def project_sets_for_project(project_id: str) -> list[str]:
+    def _scope_project_ids(policy: Policy) -> list[str] | None:
+        """The projects a policy's authoring scope covers right now, used
+        only to seed its selection once. None when Registry & Portfolio
+        cannot be reached (the policy stays unseeded and is retried)."""
         try:
-            return registry_client.project_sets_containing(paths, project_id)
+            if policy.scope_level == ScopeLevel.PROJECT:
+                return [policy.scope_target] if policy.scope_target else []
+            if policy.scope_level == ScopeLevel.PROJECT_SET:
+                return registry_client.project_set_members(paths, policy.scope_target)
+            return registry_client.list_active_project_ids(paths)
         except RegistryReadError:
-            # Degrade gracefully: a framework or all-projects policy must
-            # still resolve even if Registry & Portfolio is unreachable
-            # right now — only project-set-scoped precedence is unavailable.
-            return []
+            return None
+
+    def _seed_unseeded() -> None:
+        """Every policy starts with its authoring scope as its project
+        selection; from then on only `policy.set_projects` changes it."""
+        with lock:
+            pending = db.unseeded_policies(conn)
+        for policy in pending:
+            ids = _scope_project_ids(policy)
+            if ids is None:
+                continue
+            with lock:
+                db.set_policy_projects(conn, policy.id, [PolicyProject(project_id=pid) for pid in dict.fromkeys(ids)])
+
+    _seed_unseeded()
 
     @app.get("/v1/health")
     def health() -> dict:
@@ -248,11 +266,15 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 scope_level=scope_level, scope_target=scope_target, created_by=created_by,
                 gate_points=gate_points,
             )
+            is_new = policy_id is None
             if policy_id is not None:
                 db.replace_policy(conn, policy)
-                policy = db.get_policy(conn, policy_id)
             else:
                 db.insert_policy(conn, policy)
+        if is_new:
+            _seed_unseeded()
+        with lock:
+            policy = db.get_policy(conn, policy.id)
         return {"outcome": "succeeded", "result": policy.model_dump(mode="json")}
 
     @app.post("/v1/jobs/policy.remove")
@@ -295,35 +317,34 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             updated = db.get_policy(conn, policy_id)
         return {"outcome": "succeeded", "result": updated.model_dump(mode="json")}
 
-    @app.post("/v1/jobs/policy.waiver_grant")
-    def job_waiver_grant(request: JobRequest) -> dict:
-        """An explicit, auditable exception — never a silent bypass.
-        `reason` is required: a waiver with no stated reason is exactly
-        the kind of casual runtime toggle this pillar's whole design
-        exists to avoid."""
-        error = _require(request.params, "policy_id", "reason") or (None if request.project_id else "missing project_id")
-        if error:
-            return {"outcome": "failed", "error": error}
-        policy_id = request.params["policy_id"]
+    @app.post("/v1/jobs/policy.set_projects")
+    def job_set_projects(request: JobRequest) -> dict:
+        """The projects this policy applies to, replacing the whole
+        selection: each entry is `{"project_id": ..., "gating_enabled": bool}`
+        (gating defaults on). A project left out is deselected. Where a
+        failure would block is the policy's own `gate_points`, never chosen
+        per project — only whether gating is on for that project."""
+        policy_id = request.params.get("policy_id")
+        raw = request.params.get("projects")
+        if not policy_id:
+            return {"outcome": "failed", "error": "missing 'policy_id'"}
+        if not isinstance(raw, list):
+            return {"outcome": "failed", "error": "'projects' must be a list of {project_id, gating_enabled}"}
+        selection: dict[str, PolicyProject] = {}
+        for entry in raw:
+            if isinstance(entry, str):
+                entry = {"project_id": entry}
+            if not isinstance(entry, dict) or not entry.get("project_id") or not isinstance(entry["project_id"], str):
+                return {"outcome": "failed", "error": f"invalid project entry: {entry!r}"}
+            selection[entry["project_id"]] = PolicyProject(
+                project_id=entry["project_id"], gating_enabled=bool(entry.get("gating_enabled", True)),
+            )
         with lock:
             if db.get_policy(conn, policy_id) is None:
                 return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
-            if db.find_waiver(conn, policy_id=policy_id, project_id=request.project_id) is not None:
-                return {"outcome": "failed", "error": f"project {request.project_id!r} already holds a waiver against policy {policy_id!r}"}
-            waiver = PolicyWaiver(id=db.new_id(), policy_id=policy_id, project_id=request.project_id, reason=request.params["reason"])
-            db.insert_waiver(conn, waiver)
-        return {"outcome": "succeeded", "result": waiver.model_dump(mode="json")}
-
-    @app.post("/v1/jobs/policy.waiver_revoke")
-    def job_waiver_revoke(request: JobRequest) -> dict:
-        waiver_id = request.params.get("waiver_id")
-        if not waiver_id:
-            return {"outcome": "failed", "error": "missing 'waiver_id'"}
-        with lock:
-            if db.get_waiver(conn, waiver_id) is None:
-                return {"outcome": "failed", "error": f"waiver {waiver_id!r} not found"}
-            db.delete_waiver(conn, waiver_id)
-        return {"outcome": "succeeded", "result": {"waiver_id": waiver_id}}
+            db.set_policy_projects(conn, policy_id, list(selection.values()))
+            updated = db.get_policy(conn, policy_id)
+        return {"outcome": "succeeded", "result": updated.model_dump(mode="json")}
 
     # -- enforcement ------------------------------------------------------------
 
@@ -386,15 +407,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         if policy is None:
             return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
 
-        try:
-            if policy.scope_level == ScopeLevel.PROJECT:
-                project_ids = [policy.scope_target]
-            elif policy.scope_level == ScopeLevel.PROJECT_SET:
-                project_ids = registry_client.project_set_members(paths, policy.scope_target)
-            else:
-                project_ids = registry_client.list_active_project_ids(paths)
-        except RegistryReadError as exc:
-            return {"outcome": "failed", "error": str(exc)}
+        project_ids = [sel.project_id for sel in policy.projects]
 
         from common.pillar_socket import resolve_pillar_socket
         from common.uds_client import client_for_socket
@@ -426,31 +439,27 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     @app.get("/v1/policies/winning")
     def get_winning_policy(topic: str, project_id: str) -> dict:
         with lock:
-            policy = resolve_winning_policy(
-                conn, topic=topic, project_id=project_id, project_sets_for_project=project_sets_for_project,
-            )
+            policy = resolve_winning_policy(conn, topic=topic, project_id=project_id)
         return {"topic": topic, "project_id": project_id, "policy": policy.model_dump(mode="json") if policy else None}
 
     @app.get("/v1/policies/gating-for-job")
     def get_gating_for_job(project_id: str, categories: str) -> list[dict]:
         """Every currently-winning policy, for this project, whose own
         `gate_points` intersects the requested categories — Orchestration's
-        own entry point for "which policies, if any, gate this Job."
-        Disabled and waived policies are already excluded by
-        `resolve_winning_policy` itself; a Job can now be gated by more
-        than one policy at once (one per topic), never just the single
-        fixed mapping the original design had."""
+        own entry point for "which policies, if any, apply to this Job."
+        Each carries `gating`: whether a failure may hold the Job. With
+        gating off for this project the check is still returned so it runs
+        (for analysis) — it just cannot block."""
         requested = {GatePoint(c) for c in categories.split(",") if c}
+        _seed_unseeded()
         with lock:
             topics = {p.topic for p in db.list_policies(conn) if requested & set(p.gate_points)}
             winners = []
             for topic in sorted(topics):
-                winner = resolve_winning_policy(
-                    conn, topic=topic, project_id=project_id, project_sets_for_project=project_sets_for_project,
-                )
+                winner = resolve_winning_policy(conn, topic=topic, project_id=project_id)
                 if winner is not None and requested & set(winner.gate_points):
-                    winners.append(winner)
-        return [w.model_dump(mode="json") for w in winners]
+                    winners.append({**winner.model_dump(mode="json"), "gating": gating_enabled_for(winner, project_id)})
+        return winners
 
     @app.get("/v1/policies/{policy_id}")
     def get_policy(policy_id: str) -> dict:
@@ -460,18 +469,10 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             raise HTTPException(status_code=404, detail="policy not found")
         return policy.model_dump(mode="json")
 
-    @app.get("/v1/policy_waivers")
-    def list_waivers(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:
+    @app.get("/v1/policy_projects")
+    def list_policy_projects(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:
         with lock:
-            return [w.model_dump(mode="json") for w in db.list_waivers(conn, policy_id=policy_id, project_id=project_id)]
-
-    @app.get("/v1/policy_waivers/{waiver_id}")
-    def get_waiver(waiver_id: str) -> dict:
-        with lock:
-            waiver = db.get_waiver(conn, waiver_id)
-        if waiver is None:
-            raise HTTPException(status_code=404, detail="waiver not found")
-        return waiver.model_dump(mode="json")
+            return db.list_policy_projects(conn, policy_id=policy_id, project_id=project_id)
 
     @app.get("/v1/policy_check_results")
     def list_check_results(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:

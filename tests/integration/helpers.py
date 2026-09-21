@@ -20,6 +20,7 @@ reusable pieces here instead of being the thing test files import from.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -55,8 +56,27 @@ def _systemd_user_available() -> bool:
     return result.stdout.strip() in ("running", "degraded")
 
 
+def _live_workshop_running() -> bool:
+    """The integration tests start real `little-workshop-<pillar>` units and stop
+    them on teardown — the same fixed names a live install uses, so running them
+    beside a live Core would kill the live pillars (it did, once). Opt in with
+    LWS_ALLOW_INTEGRATION_ON_LIVE=1 only on a machine with nothing live to lose."""
+    if os.environ.get("LWS_ALLOW_INTEGRATION_ON_LIVE") == "1":
+        return False
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", "little-workshop.service"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return result.stdout.strip() == "active"
+
+
 requires_systemd_user = pytest.mark.skipif(
-    not _systemd_user_available(), reason="systemd --user session not available"
+    not _systemd_user_available() or _live_workshop_running(),
+    reason="systemd --user unavailable, or a live little-workshop is running whose units these tests would stop "
+           "(set LWS_ALLOW_INTEGRATION_ON_LIVE=1 to override)",
 )
 
 # Confirm-gated deploys arm a watchdog by dispatching `lws deployment

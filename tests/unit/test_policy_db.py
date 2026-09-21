@@ -1,7 +1,7 @@
 import pytest
 
 from policy import db
-from policy.models import CheckOutcome, CreatedBy, Policy, PolicyCheckResult, PolicyWaiver, ScopeLevel
+from policy.models import CheckOutcome, CreatedBy, Policy, PolicyCheckResult, PolicyProject, ScopeLevel
 
 
 @pytest.fixture
@@ -185,47 +185,71 @@ def test_set_policy_configuration_is_a_noop_for_unknown_policy(conn):
     db.set_policy_configuration(conn, "ghost", enabled=False)  # must not raise
 
 
-def test_insert_and_get_waiver_round_trips(conn):
+def test_a_new_policy_has_no_projects_and_is_unseeded(conn):
     db.insert_policy(conn, _policy())
-    db.insert_waiver(conn, PolicyWaiver(id="w1", policy_id="p1", project_id="proj-a", reason="can't comply"))
-    fetched = db.get_waiver(conn, "w1")
-    assert fetched.policy_id == "p1"
-    assert fetched.project_id == "proj-a"
-    assert fetched.reason == "can't comply"
+    assert db.get_policy(conn, "p1").projects == []
+    assert [p.id for p in db.unseeded_policies(conn)] == ["p1"]
 
 
-def test_get_waiver_returns_none_for_unknown_id(conn):
-    assert db.get_waiver(conn, "ghost") is None
-
-
-def test_find_waiver_matches_policy_and_project(conn):
+def test_set_policy_projects_round_trips_with_per_project_gating(conn):
     db.insert_policy(conn, _policy())
-    db.insert_waiver(conn, PolicyWaiver(id="w1", policy_id="p1", project_id="proj-a", reason="x"))
-    assert db.find_waiver(conn, policy_id="p1", project_id="proj-a").id == "w1"
-    assert db.find_waiver(conn, policy_id="p1", project_id="proj-b") is None
+    db.set_policy_projects(conn, "p1", [PolicyProject(project_id="proj-b", gating_enabled=False), PolicyProject(project_id="proj-a")])
+    projects = db.get_policy(conn, "p1").projects
+    assert [(p.project_id, p.gating_enabled) for p in projects] == [("proj-a", True), ("proj-b", False)]
+    assert db.unseeded_policies(conn) == []
 
 
-def test_list_waivers_filters_by_policy_and_project(conn):
+def test_set_policy_projects_replaces_the_whole_selection(conn):
+    db.insert_policy(conn, _policy())
+    db.set_policy_projects(conn, "p1", [PolicyProject(project_id="proj-a"), PolicyProject(project_id="proj-b")])
+    db.set_policy_projects(conn, "p1", [PolicyProject(project_id="proj-b", gating_enabled=False)])
+    assert [(p.project_id, p.gating_enabled) for p in db.get_policy(conn, "p1").projects] == [("proj-b", False)]
+
+
+def test_deselecting_every_project_is_a_real_choice_not_unseeded(conn):
+    db.insert_policy(conn, _policy())
+    db.set_policy_projects(conn, "p1", [PolicyProject(project_id="proj-a")])
+    db.set_policy_projects(conn, "p1", [])
+    assert db.get_policy(conn, "p1").projects == []
+    assert db.unseeded_policies(conn) == []
+
+
+def test_find_and_list_policy_projects_filter_by_policy_and_project(conn):
     db.insert_policy(conn, _policy(id="p1"))
     db.insert_policy(conn, _policy(id="p2"))
-    db.insert_waiver(conn, PolicyWaiver(id="w1", policy_id="p1", project_id="proj-a", reason="x"))
-    db.insert_waiver(conn, PolicyWaiver(id="w2", policy_id="p2", project_id="proj-a", reason="y"))
-    db.insert_waiver(conn, PolicyWaiver(id="w3", policy_id="p1", project_id="proj-b", reason="z"))
+    db.set_policy_projects(conn, "p1", [PolicyProject(project_id="proj-a"), PolicyProject(project_id="proj-b", gating_enabled=False)])
+    db.set_policy_projects(conn, "p2", [PolicyProject(project_id="proj-a")])
 
-    assert {w.id for w in db.list_waivers(conn, policy_id="p1")} == {"w1", "w3"}
-    assert {w.id for w in db.list_waivers(conn, project_id="proj-a")} == {"w1", "w2"}
-    assert len(db.list_waivers(conn)) == 3
+    assert db.find_policy_project(conn, policy_id="p1", project_id="proj-b").gating_enabled is False
+    assert db.find_policy_project(conn, policy_id="p1", project_id="proj-c") is None
+    assert {(r["policy_id"], r["project_id"]) for r in db.list_policy_projects(conn, project_id="proj-a")} == {("p1", "proj-a"), ("p2", "proj-a")}
+    assert len(db.list_policy_projects(conn, policy_id="p1")) == 2
+    assert len(db.list_policy_projects(conn)) == 3
 
 
-def test_delete_waiver_removes_it(conn):
+def test_delete_policy_removes_its_project_selection_too(conn):
     db.insert_policy(conn, _policy())
-    db.insert_waiver(conn, PolicyWaiver(id="w1", policy_id="p1", project_id="proj-a", reason="x"))
-    db.delete_waiver(conn, "w1")
-    assert db.get_waiver(conn, "w1") is None
-
-
-def test_delete_policy_cascades_waivers_too(conn):
-    db.insert_policy(conn, _policy())
-    db.insert_waiver(conn, PolicyWaiver(id="w1", policy_id="p1", project_id="proj-a", reason="x"))
+    db.set_policy_projects(conn, "p1", [PolicyProject(project_id="proj-a")])
     db.delete_policy(conn, "p1")
-    assert db.list_waivers(conn, policy_id="p1") == []
+    assert db.list_policy_projects(conn, policy_id="p1") == []
+    assert conn.execute("SELECT COUNT(*) FROM policy_seeded").fetchone()[0] == 0
+
+
+def test_connect_drops_an_empty_legacy_waivers_table_but_keeps_one_with_rows(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE policy_waivers (id TEXT, policy_id TEXT, project_id TEXT, reason TEXT, created_at TEXT)")
+    raw.commit(); raw.close()
+    conn = db.connect(path)
+    assert conn.execute("SELECT name FROM sqlite_master WHERE name='policy_waivers'").fetchone() is None
+    conn.close()
+
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE policy_waivers (id TEXT, policy_id TEXT, project_id TEXT, reason TEXT, created_at TEXT)")
+    raw.execute("INSERT INTO policy_waivers VALUES ('w1','p1','proj-a','recorded','t')")
+    raw.commit(); raw.close()
+    conn = db.connect(path)
+    assert conn.execute("SELECT COUNT(*) FROM policy_waivers").fetchone()[0] == 1
+    conn.close()

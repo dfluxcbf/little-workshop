@@ -738,3 +738,70 @@ pre.code {
   .waiver-form input { flex: 1; min-width: 0; }
   .waiver-form button.block { width: auto; padding: 9px 16px; }
 }
+
+/* --- policy projects card + script link card ------------------------------- */
+
+.chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+
+.prow-list { display: flex; flex-direction: column; gap: 6px; }
+.prow { display: flex; align-items: stretch; gap: 6px; }
+.prow-select {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink-soft);
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.prow-select input { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; padding: 0; border: 0; }
+.prow-name { overflow-wrap: anywhere; }
+.prow-check { margin-left: auto; color: var(--cyan); font-weight: 700; opacity: 0; }
+.prow-select:has(input:checked) { border-color: var(--cyan); background: var(--cyan-soft); color: var(--ink); }
+.prow-select:has(input:checked) .prow-check { opacity: 1; }
+.prow-select:has(input:focus-visible) { box-shadow: 0 0 0 3px var(--cyan-soft); }
+.prow-gate {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink-soft);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.prow-gate input { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; padding: 0; border: 0; }
+.prow-gate input:checked + .switch { background: var(--cyan-soft); border-color: var(--cyan); }
+.prow-gate input:checked + .switch::after { transform: translateX(18px); background: var(--cyan); }
+.prow-gate .switch { width: 40px; height: 24px; }
+.prow-gate .switch::after { width: 18px; height: 18px; }
+.prow-gate input:checked + .switch::after { transform: translateX(16px); }
+.prow:not(:has(.prow-select input:checked)) .prow-gate { opacity: 0.35; pointer-events: none; }
+
+a.linkcard { text-decoration: none; color: inherit; gap: 8px; transition: border-color 0.15s; }
+a.linkcard:hover { border-color: var(--cyan-deep); }
+.linkcard .dcard-head { display: flex; }
+.dcard-chev.ext { color: var(--cyan); }
+.linkcard-path { font-family: var(--font-mono); font-size: 12px; color: var(--ink-faint); overflow-wrap: anywhere; }

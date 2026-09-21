@@ -2,7 +2,7 @@
 `systemd --user` unit (bound to a real Unix domain socket, resolving
 every other pillar's own socket live through a real Core), rendering the
 concrete policy-management panel `docs/milestones.md` M14 calls out —
-enabling/disabling, per-policy gate points, and per-project waivers —
+enabling/disabling, per-policy gate points, and per-project selection with gating —
 driven entirely through real HTTP form posts against real Registry,
 Orchestration, and Policy & Compliance units, never a mock of any of
 them. Reuses `test_policy_end_to_end.py`'s own `_Session`/fake-`claude`
@@ -125,7 +125,7 @@ def _author_and_activate(workshop_env, **params):
 
 
 @requires_systemd_user
-def test_dashboard_renders_real_panels_and_mutates_policy_configuration_and_waivers(tmp_path, workshop_env, monkeypatch):
+def test_dashboard_renders_real_panels_and_mutates_policy_configuration_and_project_selection(tmp_path, workshop_env, monkeypatch):
     fake_bin = tmp_path / "fakebin"
     fake_bin.mkdir()
     _write_fake_claude(fake_bin)
@@ -169,22 +169,22 @@ def test_dashboard_renders_real_panels_and_mutates_policy_configuration_and_waiv
             assert fetched["enabled"] is True
             assert set(fetched["gate_points"]) == {"release", "branch_finish"}
 
-            grant = http.post(
-                f"/policies/{policy_id}/waivers/grant",
-                data={"project_id": "proj-a", "reason": "cannot comply yet"},
+            # The whole selection in one form post: proj-a selected with gating on,
+            # proj-b selected with gating off (its switch was left unchecked).
+            selected = http.post(
+                f"/policies/{policy_id}/projects", data={"project": ["proj-a", "proj-b"], "gating": ["proj-a"]},
             )
-            assert grant.status_code == 303
-            waivers = cli_client.policy_list_waivers(workshop_env.paths, policy_id=policy_id)["waivers"]
-            assert len(waivers) == 1
-            assert waivers[0]["reason"] == "cannot comply yet"
+            assert selected.status_code == 303
+            rows = cli_client.policy_list_projects(workshop_env.paths, policy_id=policy_id)["projects"]
+            assert {(r["project_id"], r["gating_enabled"]) for r in rows} == {("proj-a", True), ("proj-b", False)}
 
-            detail_with_waiver = http.get(f"/policies/{policy_id}")
-            assert "cannot comply yet" in detail_with_waiver.text
+            detail_with_projects = http.get(f"/policies/{policy_id}")
+            assert 'name="project" value="proj-a" checked' in detail_with_projects.text
 
-            revoke = http.post(f"/policies/{policy_id}/waivers/{waivers[0]['id']}/revoke")
-            assert revoke.status_code == 303
-            waivers_after = cli_client.policy_list_waivers(workshop_env.paths, policy_id=policy_id)["waivers"]
-            assert waivers_after == []
+            # A project left out of the next post is deselected.
+            http.post(f"/policies/{policy_id}/projects", data={"project": ["proj-b"]})
+            rows_after = cli_client.policy_list_projects(workshop_env.paths, policy_id=policy_id)["projects"]
+            assert [(r["project_id"], r["gating_enabled"]) for r in rows_after] == [("proj-b", False)]
 
 
 @requires_systemd_user

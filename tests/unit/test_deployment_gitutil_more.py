@@ -112,3 +112,70 @@ def test_current_commit_returns_placeholder_outside_a_repo(tmp_path):
     empty = tmp_path / "not-a-repo"
     empty.mkdir()
     assert gitutil.current_commit(empty) == "?"
+
+
+# -- policy script locator + GitHub URL ---------------------------------------
+
+
+def _script_repo(tmp_path):
+    repo = tmp_path / "workshop"
+    (repo / "tools" / "policy_scripts").mkdir(parents=True)
+    _git(["init", "-b", "dev"], repo)
+    _git(["config", "user.email", "t@example.com"], repo)
+    _git(["config", "user.name", "T"], repo)
+    return repo
+
+
+def _commit_script(repo, name, text, version):
+    (repo / "tools" / "policy_scripts" / name).write_text(text, encoding="utf-8")
+    (repo / "VERSION").write_text(version + "\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", f"{name} {version}"], repo)
+    return gitutil.run(["git", "rev-parse", "HEAD"], repo).stdout.strip()
+
+
+def test_locate_file_version_finds_the_commit_that_holds_exactly_that_content(tmp_path):
+    repo = _script_repo(tmp_path)
+    first = _commit_script(repo, "a.py", "v1\n", "0.1.1-dev.1")
+    second = _commit_script(repo, "a.py", "v2\n", "0.1.1-dev.2")
+    _commit_script(repo, "b.py", "other\n", "0.1.1-dev.3")  # a later commit that leaves a.py alone
+
+    current = gitutil.locate_file_version(repo, "v2\n", "tools/policy_scripts")
+    assert current == {"path": "tools/policy_scripts/a.py", "commit": second, "version": "0.1.1-dev.2"}
+
+    # an older version that is still what a policy runs links to the commit that had it, not today's file
+    older = gitutil.locate_file_version(repo, "v1\n", "tools/policy_scripts")
+    assert older["commit"] == first and older["version"] == "0.1.1-dev.1"
+
+
+def test_locate_file_version_is_none_for_content_that_was_never_committed(tmp_path):
+    repo = _script_repo(tmp_path)
+    _commit_script(repo, "a.py", "v1\n", "0.1.1-dev.1")
+    assert gitutil.locate_file_version(repo, "v1\n# edited\n", "tools/policy_scripts") is None
+    assert gitutil.locate_file_version(repo, "v1\n", "no/such/dir") is None
+
+
+def test_locate_file_version_reports_no_version_when_the_commit_has_no_version_file(tmp_path):
+    repo = _script_repo(tmp_path)
+    (repo / "tools" / "policy_scripts" / "a.py").write_text("v1\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "no version"], repo)
+    assert gitutil.locate_file_version(repo, "v1\n", "tools/policy_scripts")["version"] is None
+
+
+@pytest.mark.parametrize("remote,expected", [
+    ("git@github.com:dfluxcbf/little-workshop.git", "https://github.com/dfluxcbf/little-workshop"),
+    ("https://github.com/dfluxcbf/little-workshop.git", "https://github.com/dfluxcbf/little-workshop"),
+    ("https://github.com/dfluxcbf/little-workshop", "https://github.com/dfluxcbf/little-workshop"),
+    ("ssh://git@github.com/o/r.git", "https://github.com/o/r"),
+    ("git@gitlab.com:o/r.git", None),
+    ("https://github.com/only-owner", None),
+])
+def test_github_base_url_normalises_ssh_and_https_remotes(tmp_path, remote, expected):
+    repo = _script_repo(tmp_path)
+    _git(["remote", "add", "origin", remote], repo)
+    assert gitutil.github_base_url(repo) == expected
+
+
+def test_github_base_url_is_none_without_an_origin_remote(tmp_path):
+    assert gitutil.github_base_url(_script_repo(tmp_path)) is None

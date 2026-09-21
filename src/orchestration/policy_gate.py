@@ -3,10 +3,12 @@
 gating is a per-*policy*, user-chosen set of `GatePoint` categories
 (`policy/models.py`), not a fixed Job-type-to-topic table — a Job type
 just declares which categories it belongs to (`JOB_TYPE_CATEGORIES`
-below), and *any* currently-winning, enabled, non-waived policy that
-gates one of those categories, for that project, gets checked. A Job can
+below), and *any* currently-winning, enabled policy selected for that
+project that gates one of those categories gets checked. A Job can
 now be gated by more than one policy at once (one `policy.check_project`
-dependency per gating policy), never just a single fixed one.
+dependency per gating policy), never just a single fixed one. A policy
+whose gating is switched off for this project is still checked — for
+analysis, the result is recorded — but its verdict never holds the Job.
 
 Category strings are a shared vocabulary through the Pillar Interface's
 own JSON, matching `policy.models.GatePoint`'s values exactly — never a
@@ -81,7 +83,9 @@ POST_COMPLETION_VERIFY_JOB_TYPES: dict[str, set[str]] = {
 }
 
 
-def resolve_gating_policy_ids(socket_lookup: SocketLookup, project_id: str, categories: set[str], *, timeout: float = 10.0) -> list[str]:
+def resolve_gating_policies(socket_lookup: SocketLookup, project_id: str, categories: set[str], *, timeout: float = 10.0) -> list[dict]:
+    """[{"id": policy id, "gating": whether a failure may hold the Job}] —
+    every policy selected for this project that covers these categories."""
     socket_path = socket_lookup("policy")
     if socket_path is None:
         return []
@@ -97,7 +101,7 @@ def resolve_gating_policy_ids(socket_lookup: SocketLookup, project_id: str, cate
         # section), not the spec's full fail-closed-on-unreachable
         # behavior.
         return []
-    return [p["id"] for p in response.json()]
+    return [{"id": p["id"], "gating": bool(p.get("gating", True))} for p in response.json()]
 
 
 def attach_policy_gate(conn: sqlite3.Connection, socket_lookup: SocketLookup, job: Job) -> Job:
@@ -110,13 +114,13 @@ def attach_policy_gate(conn: sqlite3.Connection, socket_lookup: SocketLookup, jo
     categories = JOB_TYPE_CATEGORIES.get(job.type)
     if not categories or not job.project_id:
         return job
-    policy_ids = resolve_gating_policy_ids(socket_lookup, job.project_id, categories)
-    if not policy_ids:
+    policies = resolve_gating_policies(socket_lookup, job.project_id, categories)
+    if not policies:
         return job
-    for policy_id in policy_ids:
+    for policy in policies:
         check_job = Job(
             type="policy.check_project", target_pillar="policy", project_id=job.project_id,
-            params={"policy_id": policy_id}, created_by="orchestration-gate",
+            params={"policy_id": policy["id"], "gating": policy["gating"]}, created_by="orchestration-gate",
         )
         insert_job(conn, check_job)
         job.depends_on = [*job.depends_on, check_job.id]
@@ -137,11 +141,10 @@ def verify_after_completion(conn: sqlite3.Connection, socket_lookup: SocketLooku
     if job.status != JobStatus.SUCCEEDED or job.type not in POST_COMPLETION_VERIFY_JOB_TYPES or not job.project_id:
         return job
     categories = POST_COMPLETION_VERIFY_JOB_TYPES[job.type]
-    policy_ids = resolve_gating_policy_ids(socket_lookup, job.project_id, categories)
-    for policy_id in policy_ids:
+    for policy in resolve_gating_policies(socket_lookup, job.project_id, categories):
         check_job = Job(
             type="policy.check_project", target_pillar="policy", project_id=job.project_id,
-            params={"policy_id": policy_id}, created_by="orchestration-post-registration-verify",
+            params={"policy_id": policy["id"], "gating": policy["gating"]}, created_by="orchestration-post-registration-verify",
         )
         insert_job(conn, check_job)
     return job
@@ -149,12 +152,15 @@ def verify_after_completion(conn: sqlite3.Connection, socket_lookup: SocketLooku
 
 def _policy_check_verdicts(conn: sqlite3.Connection, job: Job) -> list[str]:
     """The outcome ('pass'/'fail'/'not_applicable') of every
-    `policy.check_project` Job among this Job's dependencies — a gated
-    Job can now hold more than one, one per gating policy."""
+    `policy.check_project` Job among this Job's dependencies that is allowed
+    to gate — a check whose project has gating switched off still ran (its
+    result is recorded for analysis) but never counts here."""
     verdicts = []
     for dep_id in job.depends_on:
         dep = get_job(conn, dep_id)
         if dep is not None and dep.type == "policy.check_project" and dep.status == JobStatus.SUCCEEDED and dep.result:
+            if dep.params.get("gating") is False:
+                continue
             outcome = dep.result.get("outcome")
             if outcome is not None:
                 verdicts.append(outcome)

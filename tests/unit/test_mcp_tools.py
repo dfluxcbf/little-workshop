@@ -908,25 +908,28 @@ def test_policy_configure_gate_points_only(paths, fake_create_job):
     assert fake_create_job[0]["params"] == {"policy_id": "pol1", "gate_points": ["release"]}
 
 
-def test_policy_waiver_grant_builds_job(paths, fake_create_job):
-    tools_mod.TOOLS_BY_NAME["workshop_policy_waiver_grant"].handler(
-        paths, {"policy_id": "pol1", "project_id": "proj-a", "reason": "cannot comply"}
-    )
+def test_policy_projects_set_builds_job(paths, fake_create_job):
+    projects = [{"project_id": "proj-a"}, {"project_id": "proj-b", "gating_enabled": False}]
+    tools_mod.TOOLS_BY_NAME["workshop_policy_projects_set"].handler(paths, {"policy_id": "pol1", "projects": projects})
     call = fake_create_job[0]
-    assert call["type"] == "policy.waiver_grant"
-    assert call["project_id"] == "proj-a"
-    assert call["params"] == {"policy_id": "pol1", "reason": "cannot comply"}
+    assert call["type"] == "policy.set_projects"
+    assert call["params"] == {"policy_id": "pol1", "projects": projects}
 
 
-def test_policy_waiver_revoke_builds_job(paths, fake_create_job):
-    tools_mod.TOOLS_BY_NAME["workshop_policy_waiver_revoke"].handler(paths, {"waiver_id": "w1"})
-    assert fake_create_job[0]["params"] == {"waiver_id": "w1"}
+def test_policy_projects_set_schema_lets_gating_be_chosen_per_project_but_not_gate_points():
+    schema = tools_mod.TOOLS_BY_NAME["workshop_policy_projects_set"].input_schema
+    item = schema["properties"]["projects"]["items"]
+    assert set(item["properties"]) == {"project_id", "gating_enabled"}
+    assert "gate_points" not in schema["properties"] and "gate_points" not in item["properties"]
 
 
-def test_policy_waiver_list_calls_client(paths, monkeypatch):
-    calls = _fake_client_call(monkeypatch, "policy_list_waivers", result=[])
-    tools_mod.TOOLS_BY_NAME["workshop_policy_waiver_list"].handler(paths, {"policy_id": "pol1"})
+def test_policy_projects_list_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "policy_list_projects", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_policy_projects_list"].handler(paths, {"policy_id": "pol1"})
     assert calls[0] == ((paths, "pol1", None), {})
+
+def test_waiver_tools_are_gone():
+    assert not [n for n in tools_mod.TOOLS_BY_NAME if "waiver" in n]
 
 
 def test_policy_gating_for_job_calls_client(paths, monkeypatch):

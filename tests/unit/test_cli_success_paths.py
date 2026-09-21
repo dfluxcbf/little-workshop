@@ -1444,25 +1444,26 @@ def test_policy_configure_empty_gate_points_clears_them(paths, capsys, monkeypat
     assert captured["params"]["gate_points"] == []
 
 
-def test_policy_waiver_grant_builds_expected_job_params(paths, capsys, monkeypatch):
+def test_policy_projects_set_builds_expected_job_params(paths, capsys, monkeypatch):
     captured = {}
     monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
-    assert main.main(["policy", "waiver", "grant", "pol1", "--project-id", "proj-a", "--reason", "cannot comply"]) == 0
-    assert captured["type"] == "policy.waiver_grant"
-    assert captured["project_id"] == "proj-a"
-    assert captured["params"] == {"policy_id": "pol1", "reason": "cannot comply"}
+    assert main.main(["policy", "projects", "set", "pol1", "--project", "proj-a", "--project-no-gating", "proj-b"]) == 0
+    assert captured["type"] == "policy.set_projects"
+    assert captured["params"] == {"policy_id": "pol1", "projects": [
+        {"project_id": "proj-a", "gating_enabled": True}, {"project_id": "proj-b", "gating_enabled": False},
+    ]}
 
 
-def test_policy_waiver_revoke_builds_expected_job_params(paths, capsys, monkeypatch):
+def test_policy_projects_set_with_no_projects_deselects_everything(paths, capsys, monkeypatch):
     captured = {}
     monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
-    assert main.main(["policy", "waiver", "revoke", "w1"]) == 0
-    assert captured["params"] == {"waiver_id": "w1"}
+    assert main.main(["policy", "projects", "set", "pol1"]) == 0
+    assert captured["params"] == {"policy_id": "pol1", "projects": []}
 
 
-def test_policy_waiver_list_success(paths, capsys, monkeypatch):
-    monkeypatch.setattr(main.client, "policy_list_waivers", lambda p, policy_id, project_id: {"source": "daemon", "waivers": []})
-    assert main.main(["policy", "waiver", "list"]) == 0
+def test_policy_projects_list_success(paths, capsys, monkeypatch):
+    monkeypatch.setattr(main.client, "policy_list_projects", lambda p, policy_id, project_id: {"source": "daemon", "projects": []})
+    assert main.main(["policy", "projects", "list"]) == 0
 
 
 def test_policy_gating_for_job_success(paths, capsys, monkeypatch):

@@ -266,10 +266,11 @@ supersede the first round's "Module" concept.
   policy documents, which remain the human-readable rationale, not the
   enforcement mechanism. Carries `enabled` (a toggle, no re-authoring)
   and `gate_points` (which of six action categories it gates on
-  failure, user-chosen) — refined 2026-09-16 so a project that
-  genuinely can't fulfill a policy has a real, auditable way to say so:
-  a **waiver**, a distinct per-project/per-policy exception that never
-  changes the policy itself. A small number of existing rules —
+  failure, user-chosen) — refined 2026-09-16, and again 2026-09-21: the
+  user **selects which projects a policy applies to** and switches
+  gating on or off per project (a check with gating off still runs and
+  is recorded for analysis, it just cannot block) — which replaced the
+  per-project waiver. A small number of existing rules —
   automation never merges/deletes/finishes on its own initiative; the
   agent never touches branches when a Job specifies them — are
   hard-coded invariants inside the Orchestration and Agentic Development

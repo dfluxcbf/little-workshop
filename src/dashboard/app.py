@@ -331,29 +331,38 @@ def build_app(paths: Paths) -> FastAPI:
     @app.get("/policies", response_class=HTMLResponse)
     def policies(request: Request, message: str | None = None):
         try:
-            rows = client.policy_list(paths)
-            waivers = client.policy_list_waivers(paths)
-            error = None
+            rows, error = client.policy_list(paths), None
         except client.PillarUnavailable as exc:
-            rows, waivers, error = [], [], str(exc)
+            rows, error = [], str(exc)
         return _render(
-            request, "policies.html",
-            policies=rows, waivers=waivers, error=error, message=message,
-            topics={r["id"]: r.get("topic") or r["id"] for r in rows},
+            request, "policies.html", policies=rows, error=error, message=message,
             gate_point_values=GATE_POINT_VALUES, nav_active="policies",
         )
 
     @app.get("/policies/{policy_id}", response_class=HTMLResponse)
     def policy_detail(request: Request, policy_id: str):
+        script_link = None
+        registered: list[str] = []
         try:
             policy = client.policy_get(paths, policy_id)
-            waivers = client.policy_list_waivers(paths, policy_id=policy_id)
             error = None
         except client.PillarUnavailable as exc:
-            policy, waivers, error = None, [], str(exc)
+            policy, error = None, str(exc)
+        if policy is not None:
+            registered = _try(lambda: _project_names(), default=[])
+            script_link = _try(client.policy_script_link, paths, policy.get("test_script", ""), default=None)
+            selected = {p["project_id"]: p for p in policy.get("projects", [])}
+            names = list(dict.fromkeys([*registered, *selected]))
+            project_rows = [
+                {"name": n, "selected": n in selected, "gating": selected.get(n, {}).get("gating_enabled", True),
+                 "registered": n in registered}
+                for n in sorted(names)
+            ]
+        else:
+            project_rows = []
         return _render(
-            request, "policy_detail.html",
-            policy=policy, waivers=waivers, error=error, gate_point_values=GATE_POINT_VALUES, nav_active="policies",
+            request, "policy_detail.html", policy=policy, project_rows=project_rows, script_link=script_link,
+            error=error, gate_point_values=GATE_POINT_VALUES, nav_active="policies",
         )
 
     @app.post("/policies/{policy_id}/configure")
@@ -365,20 +374,17 @@ def build_app(paths: Paths) -> FastAPI:
         )
         return RedirectResponse(f"/policies/{policy_id}", status_code=303)
 
-    @app.post("/policies/{policy_id}/waivers/grant")
-    def waiver_grant(policy_id: str, project_id: str = Form(...), reason: str = Form(...)):
+    @app.post("/policies/{policy_id}/projects")
+    def policy_projects(policy_id: str, project: list[str] = Form([]), gating: list[str] = Form([])):
+        """The whole selection at once: `project` are the selected projects,
+        `gating` the subset whose gating stays on."""
+        chosen = list(dict.fromkeys(project))
         client.create_job(
-            paths, type="policy.waiver_grant", target_pillar="policy", project_id=project_id,
-            params={"policy_id": policy_id, "reason": reason},
-            queue_key=None, depends_on=[], created_by="dashboard",
-        )
-        return RedirectResponse(f"/policies/{policy_id}", status_code=303)
-
-    @app.post("/policies/{policy_id}/waivers/{waiver_id}/revoke")
-    def waiver_revoke(policy_id: str, waiver_id: str):
-        client.create_job(
-            paths, type="policy.waiver_revoke", target_pillar="policy", project_id=None,
-            params={"waiver_id": waiver_id},
+            paths, type="policy.set_projects", target_pillar="policy", project_id=None,
+            params={
+                "policy_id": policy_id,
+                "projects": [{"project_id": name, "gating_enabled": name in gating} for name in chosen],
+            },
             queue_key=None, depends_on=[], created_by="dashboard",
         )
         return RedirectResponse(f"/policies/{policy_id}", status_code=303)

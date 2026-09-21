@@ -77,22 +77,27 @@ are the current state of every pillar.
   topic as the card's header with an enabled/disabled pill, the full
   `ears_text` beneath it, and a row of chips — one per gate point (or
   "no gate"), the scope, the target pillar, and who created it. The
-  whole card opens the policy; a disabled policy is dimmed; waivers, if
-  any, follow as compact cards headed by the policy's topic. The
+  whole card opens the policy; a disabled policy is dimmed. The chips
+  show how many projects the policy applies to (or the one project's
+  name) and, when any, how many have gating off. The
   policy's detail page (also redesigned 2026-09-21) is four cards, each
   headed by an icon and a one-word title rather than a boxed sentence:
   a **summary** (topic, status pill, the full `ears_text`, chips for
-  scope, target pillar, author, short id and amend date); **Gating** — an
+  target pillar, author, short id and amend date); **Gate points** — an
   `enabled` switch and the ten gate points as tappable chips (multi-select
-  or none) with one Save; **Test script** — a collapsed, read-only,
-  scrollable code card with its line count (editing it is `lws policy
-  activate`'s own job, Gate 4's human-review step — never bypassed here);
-  and **Waivers** — one row per waiver with Revoke, plus the grant form
-  with its required `reason`. Backed
-  entirely by `policy.configure`/`policy.waiver_grant`/`policy.
-  waiver_revoke` Jobs and `GET /v1/policy_waivers` — no new pillar
-  mechanism, this milestone is the UI surfacing what M12/M13 already
-  built.
+  or none) with one Save; **Test script** — a link card to the exact file
+  on GitHub, at the commit whose blob equals the script the policy
+  actually runs, showing that commit's `VERSION` and short SHA (Deployment
+  finds it by git blob hash under `tools/policy_scripts/`; a script that
+  lives only in the Policy database falls back to a collapsed inline code
+  card; editing is `lws policy activate`'s own job, Gate 4's
+  human-review step — never bypassed here); and **Projects** — every
+  registered project as a tappable row (selected = the policy applies to
+  it) with a per-project **Gating** switch, one Save (`policy.set_projects`,
+  the whole selection at once). Gate points are never chosen per project.
+  Backed entirely by `policy.configure`/`policy.set_projects` Jobs and
+  reads of `GET /v1/policies` — no new pillar mechanism beyond Deployment's
+  `POST /v1/policy-scripts/locate`.
 - **Unreachable-pillar handling**: since this app holds no domain data
   and applies no local fallback (unlike the CLI, which falls back to a
   direct database read when a daemon is down — a Dashboard user is
@@ -104,8 +109,8 @@ are the current state of every pillar.
 
 - **Calls**: every other pillar's Pillar Interface, read-only for
   status/listing panels; Orchestration's `POST /v1/jobs` for every
-  mutation (`policy.configure`, `policy.waiver_grant`, `policy.
-  waiver_revoke` today — the same pattern any future panel's own
+  mutation (`policy.configure`, `policy.set_projects` today — the same
+  pattern any future panel's own
   mutations would follow). `dashboard/client.py` is a deliberate
   duplicate of `cli/client.py`'s and `mcp_server/client.py`'s HTTP glue,
   never a shared import — the same "no shared Python import path

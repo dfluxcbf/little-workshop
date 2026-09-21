@@ -656,33 +656,33 @@ def test_policy_configure_reports_error_when_daemon_unavailable(tmp_path, capsys
     assert "error" in capsys.readouterr().err
 
 
-def test_policy_waiver_grant_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
+def test_policy_projects_set_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):
     from common.paths import Paths
 
     paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
     monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
 
-    exit_code = main.main(["policy", "waiver", "grant", "pol1", "--project-id", "p1", "--reason", "x"])
+    exit_code = main.main(["policy", "projects", "set", "pol1", "--project", "p1"])
     assert exit_code == 1
     assert "error" in capsys.readouterr().err
 
 
-def test_policy_waiver_list_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
+def test_policy_projects_list_falls_back_to_direct_db_read(tmp_path, capsys, monkeypatch):
     from common.paths import Paths
     from policy import db as policy_db
-    from policy.models import PolicyWaiver
+    from policy.models import PolicyProject
 
     paths = Paths(config_home=tmp_path / "config", state_home=tmp_path / "state")
     conn = policy_db.connect(paths.pillar_db_path("policy"))
-    policy_db.insert_waiver(conn, PolicyWaiver(id="w1", policy_id="pol1", project_id="proj-a", reason="x"))
+    policy_db.set_policy_projects(conn, "pol1", [PolicyProject(project_id="proj-a", gating_enabled=False)])
     conn.close()
 
     monkeypatch.setattr(main.Paths, "from_env", staticmethod(lambda: paths))
-    exit_code = main.main(["policy", "waiver", "list"])
+    exit_code = main.main(["policy", "projects", "list"])
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert output["source"] == "fallback"
-    assert len(output["waivers"]) == 1
+    assert output["projects"] == [{"policy_id": "pol1", "project_id": "proj-a", "gating_enabled": False}]
 
 
 def test_policy_gating_for_job_reports_error_when_daemon_unavailable(tmp_path, capsys, monkeypatch):

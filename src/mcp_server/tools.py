@@ -578,16 +578,12 @@ def _policy_configure(paths: Paths, args: JSONDict) -> Any:
     return _policy_job(paths, "policy.configure", None, params)
 
 
-def _policy_waiver_grant(paths: Paths, args: JSONDict) -> Any:
-    return _policy_job(paths, "policy.waiver_grant", args["project_id"], {"policy_id": args["policy_id"], "reason": args["reason"]})
+def _policy_projects_set(paths: Paths, args: JSONDict) -> Any:
+    return _policy_job(paths, "policy.set_projects", None, {"policy_id": args["policy_id"], "projects": args["projects"]})
 
 
-def _policy_waiver_revoke(paths: Paths, args: JSONDict) -> Any:
-    return _policy_job(paths, "policy.waiver_revoke", None, {"waiver_id": args["waiver_id"]})
-
-
-def _policy_waiver_list(paths: Paths, args: JSONDict) -> Any:
-    return client.policy_list_waivers(paths, args.get("policy_id"), args.get("project_id"))
+def _policy_projects_list(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_list_projects(paths, args.get("policy_id"), args.get("project_id"))
 
 
 def _policy_gating_for_job(paths: Paths, args: JSONDict) -> Any:
@@ -1068,17 +1064,25 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "enabled": _prop("boolean", "Turn the policy on or off. Omit to leave unchanged."),
                  "gate_points": _GATE_POINTS,
              }, ["policy_id"]), _policy_configure),
-    ToolSpec("workshop_policy_waiver_grant", "Grant one project an explicit, auditable exception to one policy "
-             "— never a silent bypass, and never a change to the policy itself for any other project.",
+    ToolSpec("workshop_policy_projects_set", "Choose which projects a policy applies to, replacing the whole "
+             "selection: a project left out is deselected. Per project, gating can be switched off — the check "
+             "still runs and is recorded for analysis, but its failure never blocks. Where a failure would block "
+             "is the policy's own gate_points, never chosen per project.",
              _schema({
-                 "policy_id": _prop("string", "The policy's id."), "project_id": _PROJECT_ID,
-                 "reason": _prop("string", "Why this project can't comply — required, never blank."),
-             }, ["policy_id", "project_id", "reason"]), _policy_waiver_grant),
-    ToolSpec("workshop_policy_waiver_revoke", "Remove a waiver, restoring normal precedence for that project.",
-             _schema({"waiver_id": _prop("string", "The waiver's id.")}, ["waiver_id"]), _policy_waiver_revoke),
-    ToolSpec("workshop_policy_waiver_list", "List waivers, optionally filtered by policy and/or project.",
+                 "policy_id": _prop("string", "The policy's id."),
+                 "projects": _prop("array", "The selected projects.", items={
+                     "type": "object",
+                     "properties": {
+                         "project_id": _prop("string", "The project's registered name."),
+                         "gating_enabled": _prop("boolean", "Whether a failure may block this project's Jobs. Default true."),
+                     },
+                     "required": ["project_id"], "additionalProperties": False,
+                 }),
+             }, ["policy_id", "projects"]), _policy_projects_set),
+    ToolSpec("workshop_policy_projects_list", "List which projects each policy applies to and whether gating is on "
+             "for each, optionally filtered by policy and/or project.",
              _schema({"policy_id": _prop("string", "Filter by policy."),
-                      "project_id": _prop("string", "Filter by project.")}), _policy_waiver_list),
+                      "project_id": _prop("string", "Filter by project.")}), _policy_projects_list),
     ToolSpec("workshop_policy_gating_for_job", "Which currently-winning policies gate a project for a given set "
              "of action categories — what Orchestration itself consults before dispatching a Job.",
              _schema({"project_id": _PROJECT_ID, "categories": _GATE_POINTS}, ["project_id", "categories"]),

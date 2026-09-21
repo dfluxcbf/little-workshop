@@ -62,6 +62,48 @@ def recent_commits(repo_dir: Path, limit: int = 10) -> list[dict]:
     return commits
 
 
+def github_base_url(repo_dir: Path) -> str | None:
+    """`https://github.com/<owner>/<repo>` from the `origin` remote, whether it
+    is an SSH (`git@github.com:o/r.git`) or an HTTPS URL; None if not GitHub."""
+    result = subprocess.run(["git", "remote", "get-url", "origin"], cwd=str(repo_dir), capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    url = result.stdout.strip()
+    for prefix in ("git@github.com:", "ssh://git@github.com/", "https://github.com/", "http://github.com/"):
+        if url.startswith(prefix):
+            path = url.removeprefix(prefix).removesuffix(".git").strip("/")
+            return f"https://github.com/{path}" if path.count("/") == 1 else None
+    return None
+
+
+def locate_file_version(repo_dir: Path, content: str, directory: str) -> dict | None:
+    """Which file under `directory`, at which commit, holds exactly `content`?
+    Matches by git blob hash, and returns the newest commit that has that exact
+    version of the file — so a link built from it shows what is actually in use,
+    not whatever the file has become since. `None` when no committed file matches."""
+    hashed = subprocess.run(
+        ["git", "hash-object", "--stdin"], cwd=str(repo_dir), input=content, capture_output=True, text=True,
+    )
+    if hashed.returncode != 0:
+        return None
+    blob = hashed.stdout.strip()
+    tracked = run(["git", "ls-tree", "-r", "--name-only", "HEAD", "--", directory], repo_dir).stdout.split()
+    for path in tracked:
+        for commit in run(["git", "log", "--format=%H", "--", path], repo_dir).stdout.split():
+            found = subprocess.run(
+                ["git", "rev-parse", f"{commit}:{path}"], cwd=str(repo_dir), capture_output=True, text=True,
+            )
+            if found.returncode == 0 and found.stdout.strip() == blob:
+                version = subprocess.run(
+                    ["git", "show", f"{commit}:VERSION"], cwd=str(repo_dir), capture_output=True, text=True,
+                )
+                return {
+                    "path": path, "commit": commit,
+                    "version": version.stdout.strip() if version.returncode == 0 and version.stdout.strip() else None,
+                }
+    return None
+
+
 def branch_location(project_dir: Path, branch: str) -> str | None:
     """Assumes `git fetch origin` has already run. When the branch is only
     on the remote and no tracking ref exists, one is fetched so the

@@ -1,5 +1,5 @@
-"""Policy & Compliance's own SQLite file — `policies` and
-`policy_check_results` (docs/pillars/policy_compliance.md's Data
+"""Policy & Compliance's own SQLite file — `policies`, `policy_projects`
+and `policy_check_results` (docs/pillars/policy_compliance.md's Data
 model). WAL mode, one file, opened only by this pillar.
 """
 
@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from policy.models import CheckOutcome, CreatedBy, GatePoint, Policy, PolicyCheckResult, PolicyWaiver, ScopeLevel
+from policy.models import CheckOutcome, CreatedBy, GatePoint, Policy, PolicyCheckResult, PolicyProject, ScopeLevel
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS policies (
@@ -39,12 +39,18 @@ CREATE TABLE IF NOT EXISTS policy_check_results (
     checked_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS policy_waivers (
-    id TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS policy_projects (
     policy_id TEXT NOT NULL,
     project_id TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    gating_enabled INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (policy_id, project_id)
+);
+
+-- A policy whose project selection has been initialised (seeded once from
+-- its authoring scope, or set explicitly) — so deselecting every project is
+-- a real choice that a restart never undoes.
+CREATE TABLE IF NOT EXISTS policy_seeded (
+    policy_id TEXT PRIMARY KEY
 );
 """
 
@@ -55,6 +61,11 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    # Waivers were replaced by explicit project selection; drop the legacy
+    # table only when it holds nothing, never discarding a recorded exception.
+    legacy = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='policy_waivers'").fetchone()
+    if legacy and conn.execute("SELECT COUNT(*) FROM policy_waivers").fetchone()[0] == 0:
+        conn.execute("DROP TABLE policy_waivers")
     conn.commit()
     return conn
 
@@ -129,19 +140,27 @@ def set_policy_configuration(
     conn.commit()
 
 
-def _row_to_policy(row: sqlite3.Row) -> Policy:
+def _projects_of(conn: sqlite3.Connection, policy_id: str) -> list[PolicyProject]:
+    rows = conn.execute(
+        "SELECT project_id, gating_enabled FROM policy_projects WHERE policy_id = ? ORDER BY project_id", (policy_id,)
+    ).fetchall()
+    return [PolicyProject(project_id=r["project_id"], gating_enabled=bool(r["gating_enabled"])) for r in rows]
+
+
+def _row_to_policy(conn: sqlite3.Connection, row: sqlite3.Row) -> Policy:
     return Policy(
         id=row["id"], topic=row["topic"], target_pillar=row["target_pillar"], ears_text=row["ears_text"],
         test_script=row["test_script"], scope_level=ScopeLevel(row["scope_level"]), scope_target=row["scope_target"],
         created_by=CreatedBy(row["created_by"]), enabled=bool(row["enabled"]),
         gate_points=[GatePoint(g) for g in json.loads(row["gate_points"])],
+        projects=_projects_of(conn, row["id"]),
         created_at=_parse_iso(row["created_at"]), amended_at=_parse_iso(row["amended_at"]),
     )
 
 
 def get_policy(conn: sqlite3.Connection, policy_id: str) -> Policy | None:
     row = conn.execute("SELECT * FROM policies WHERE id = ?", (policy_id,)).fetchone()
-    return _row_to_policy(row) if row else None
+    return _row_to_policy(conn, row) if row else None
 
 
 def list_policies(conn: sqlite3.Connection, *, topic: str | None = None) -> list[Policy]:
@@ -149,7 +168,7 @@ def list_policies(conn: sqlite3.Connection, *, topic: str | None = None) -> list
         rows = conn.execute("SELECT * FROM policies ORDER BY created_at").fetchall()
     else:
         rows = conn.execute("SELECT * FROM policies WHERE topic = ? ORDER BY created_at", (topic,)).fetchall()
-    return [_row_to_policy(row) for row in rows]
+    return [_row_to_policy(conn, row) for row in rows]
 
 
 def find_by_scope(
@@ -164,7 +183,7 @@ def find_by_scope(
         query += " AND id != ?"
         params.append(exclude_id)
     row = conn.execute(query, params).fetchone()
-    return _row_to_policy(row) if row else None
+    return _row_to_policy(conn, row) if row else None
 
 
 def find_topic_owner_conflict(
@@ -178,50 +197,44 @@ def find_topic_owner_conflict(
         query += " AND id != ?"
         params.append(exclude_id)
     row = conn.execute(query, params).fetchone()
-    return _row_to_policy(row) if row else None
+    return _row_to_policy(conn, row) if row else None
 
 
 def delete_policy(conn: sqlite3.Connection, policy_id: str) -> None:
     conn.execute("DELETE FROM policies WHERE id = ?", (policy_id,))
     conn.execute("DELETE FROM policy_check_results WHERE policy_id = ?", (policy_id,))
-    conn.execute("DELETE FROM policy_waivers WHERE policy_id = ?", (policy_id,))
+    conn.execute("DELETE FROM policy_projects WHERE policy_id = ?", (policy_id,))
+    conn.execute("DELETE FROM policy_seeded WHERE policy_id = ?", (policy_id,))
     conn.commit()
 
 
-# -- policy waivers ------------------------------------------------------------
+# -- policy projects: the explicit selection a policy applies to ---------------
 
 
-def insert_waiver(conn: sqlite3.Connection, waiver: PolicyWaiver) -> None:
-    conn.execute(
-        "INSERT INTO policy_waivers (id, policy_id, project_id, reason, created_at) VALUES (?, ?, ?, ?, ?)",
-        (waiver.id, waiver.policy_id, waiver.project_id, waiver.reason, _iso(waiver.created_at)),
-    )
+def set_policy_projects(conn: sqlite3.Connection, policy_id: str, projects: list[PolicyProject]) -> None:
+    """Replace the whole selection — a project left out is deselected."""
+    conn.execute("DELETE FROM policy_projects WHERE policy_id = ?", (policy_id,))
+    for project in projects:
+        conn.execute(
+            "INSERT OR REPLACE INTO policy_projects (policy_id, project_id, gating_enabled) VALUES (?, ?, ?)",
+            (policy_id, project.project_id, int(project.gating_enabled)),
+        )
+    conn.execute("INSERT OR IGNORE INTO policy_seeded (policy_id) VALUES (?)", (policy_id,))
     conn.commit()
 
 
-def _row_to_waiver(row: sqlite3.Row) -> PolicyWaiver:
-    return PolicyWaiver(
-        id=row["id"], policy_id=row["policy_id"], project_id=row["project_id"], reason=row["reason"],
-        created_at=_parse_iso(row["created_at"]),
-    )
-
-
-def get_waiver(conn: sqlite3.Connection, waiver_id: str) -> PolicyWaiver | None:
-    row = conn.execute("SELECT * FROM policy_waivers WHERE id = ?", (waiver_id,)).fetchone()
-    return _row_to_waiver(row) if row else None
-
-
-def find_waiver(conn: sqlite3.Connection, *, policy_id: str, project_id: str) -> PolicyWaiver | None:
+def find_policy_project(conn: sqlite3.Connection, *, policy_id: str, project_id: str) -> PolicyProject | None:
     row = conn.execute(
-        "SELECT * FROM policy_waivers WHERE policy_id = ? AND project_id = ?", (policy_id, project_id)
+        "SELECT project_id, gating_enabled FROM policy_projects WHERE policy_id = ? AND project_id = ?",
+        (policy_id, project_id),
     ).fetchone()
-    return _row_to_waiver(row) if row else None
+    return PolicyProject(project_id=row["project_id"], gating_enabled=bool(row["gating_enabled"])) if row else None
 
 
-def list_waivers(
+def list_policy_projects(
     conn: sqlite3.Connection, *, policy_id: str | None = None, project_id: str | None = None
-) -> list[PolicyWaiver]:
-    query = "SELECT * FROM policy_waivers WHERE 1=1"
+) -> list[dict]:
+    query = "SELECT policy_id, project_id, gating_enabled FROM policy_projects WHERE 1=1"
     params: list[str] = []
     if policy_id is not None:
         query += " AND policy_id = ?"
@@ -229,14 +242,18 @@ def list_waivers(
     if project_id is not None:
         query += " AND project_id = ?"
         params.append(project_id)
-    query += " ORDER BY created_at"
-    rows = conn.execute(query, params).fetchall()
-    return [_row_to_waiver(row) for row in rows]
+    query += " ORDER BY policy_id, project_id"
+    return [
+        {"policy_id": r["policy_id"], "project_id": r["project_id"], "gating_enabled": bool(r["gating_enabled"])}
+        for r in conn.execute(query, params).fetchall()
+    ]
 
 
-def delete_waiver(conn: sqlite3.Connection, waiver_id: str) -> None:
-    conn.execute("DELETE FROM policy_waivers WHERE id = ?", (waiver_id,))
-    conn.commit()
+def unseeded_policies(conn: sqlite3.Connection) -> list[Policy]:
+    rows = conn.execute(
+        "SELECT * FROM policies WHERE id NOT IN (SELECT policy_id FROM policy_seeded) ORDER BY created_at"
+    ).fetchall()
+    return [_row_to_policy(conn, row) for row in rows]
 
 
 # -- policy check results -----------------------------------------------------

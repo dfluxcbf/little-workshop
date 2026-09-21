@@ -46,11 +46,6 @@ def test_policy_get_raises_when_policy_unreachable(paths):
         client.policy_get(paths, "pol1")
 
 
-def test_policy_list_waivers_raises_when_policy_unreachable(paths):
-    with pytest.raises(client.PillarUnavailable):
-        client.policy_list_waivers(paths)
-
-
 def test_deployment_status_raises_when_deployment_unreachable(paths):
     with pytest.raises(client.PillarUnavailable):
         client.deployment_status(paths, "little-widget")
@@ -140,16 +135,22 @@ def test_policy_get_success(paths, monkeypatch):
     assert client.policy_get(paths, "pol1") == {"id": "pol1"}
 
 
-def test_policy_list_waivers_success_filters_by_policy_and_project(paths, monkeypatch):
+def test_policy_script_link_returns_the_match_or_none(paths, monkeypatch):
     app = FastAPI()
 
-    @app.get("/v1/policy_waivers")
-    def list_waivers(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:
-        return [{"policy_id": policy_id, "project_id": project_id}]
+    @app.post("/v1/policy-scripts/locate")
+    def locate(body: dict) -> dict:
+        if body["script"] == "known":
+            return {"found": True, "path": "tools/policy_scripts/x.py", "commit": "abc1234", "version": "0.1.1-dev.2", "url": "https://github.com/o/r/blob/abc1234/tools/policy_scripts/x.py"}
+        return {"found": False}
 
-    _rig(paths, monkeypatch, "policy", app)
-    result = client.policy_list_waivers(paths, policy_id="pol1", project_id="proj-a")
-    assert result == [{"policy_id": "pol1", "project_id": "proj-a"}]
+    _rig(paths, monkeypatch, "deployment", app)
+    assert client.policy_script_link(paths, "known")["url"].endswith("/x.py")
+    assert client.policy_script_link(paths, "unknown") is None
+
+
+def test_policy_script_link_is_none_when_deployment_is_unreachable(paths):
+    assert client.policy_script_link(paths, "anything") is None
 
 
 def test_deployment_status_success(paths, monkeypatch):

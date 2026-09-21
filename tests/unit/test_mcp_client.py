@@ -587,9 +587,9 @@ def test_policy_confirm_job_success(paths, monkeypatch):
     assert client.policy_confirm_job(paths, "j1") == {"confirmed": True, "job_id": "j1"}
 
 
-def test_policy_list_waivers_raises_when_policy_unreachable(paths):
+def test_policy_list_projects_raises_when_policy_unreachable(paths):
     with pytest.raises(client.PillarUnavailable):
-        client.policy_list_waivers(paths)
+        client.policy_list_projects(paths)
 
 
 def test_policy_gating_for_job_raises_when_policy_unreachable(paths):
@@ -597,15 +597,15 @@ def test_policy_gating_for_job_raises_when_policy_unreachable(paths):
         client.policy_gating_for_job(paths, "proj-a", ["server_launch"])
 
 
-def test_policy_list_waivers_success(paths, monkeypatch):
+def test_policy_list_projects_success(paths, monkeypatch):
     app = FastAPI()
 
-    @app.get("/v1/policy_waivers")
-    def list_waivers(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:
-        return [{"id": "w1", "policy_id": policy_id}]
+    @app.get("/v1/policy_projects")
+    def list_projects(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:
+        return [{"policy_id": policy_id, "project_id": "proj-a", "gating_enabled": True}]
 
     _rig(paths, monkeypatch, "policy", app)
-    assert client.policy_list_waivers(paths, "pol1") == [{"id": "w1", "policy_id": "pol1"}]
+    assert client.policy_list_projects(paths, "pol1") == [{"policy_id": "pol1", "project_id": "proj-a", "gating_enabled": True}]
 
 
 def test_policy_gating_for_job_success(paths, monkeypatch):

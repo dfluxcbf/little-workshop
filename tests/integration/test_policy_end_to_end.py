@@ -370,7 +370,7 @@ stop_timeout_seconds = 15
 
 
 @requires_systemd_user
-def test_waiving_a_project_lets_its_deploy_through_while_others_stay_gated(tmp_path, workshop_env, monkeypatch):
+def test_turning_gating_off_for_a_project_lets_its_deploy_through_but_still_checks_it(tmp_path, workshop_env, monkeypatch):
     fake_bin = tmp_path / "fakebin"
     fake_bin.mkdir()
     _write_fake_claude(fake_bin)
@@ -383,17 +383,21 @@ def test_waiving_a_project_lets_its_deploy_through_while_others_stay_gated(tmp_p
 
         author = _author(
             workshop_env, ears_text="ALWAYS_FAIL: deploys are always blocked for this test",
-            topic="deployment-policy-waiver-test", target_pillar="deployment", scope_level="all_projects",
+            topic="deployment-policy-gating-off-test", target_pillar="deployment", scope_level="all_projects",
             gate_points=["server_launch", "deploy_redeploy"],
         )
         policy_id = _activate(workshop_env, author["result"])["result"]["id"]
 
-        waived = cli_client.create_job(
-            workshop_env.paths, type="policy.waiver_grant", target_pillar="policy", project_id=waived_project,
-            params={"policy_id": policy_id, "reason": "this project genuinely cannot comply"},
+        # Both projects were registered before activation, so both are selected (gating on);
+        # switch gating off for one of them only.
+        selection = cli_client.create_job(
+            workshop_env.paths, type="policy.set_projects", target_pillar="policy",
+            params={"policy_id": policy_id, "projects": [
+                {"project_id": waived_project, "gating_enabled": False}, {"project_id": gated_project, "gating_enabled": True},
+            ]},
             queue_key=None, depends_on=[], created_by="integration-test",
         )
-        assert waived["status"] == "succeeded", waived
+        assert selection["status"] == "succeeded", selection
 
         waived_port = PORT + 3
         for project_id, port in ((waived_project, waived_port), (gated_project, PORT + 4)):
@@ -413,8 +417,11 @@ stop_timeout_seconds = 15
             workshop_env.paths, type="deployment.deploy", target_pillar="deployment", project_id=waived_project,
             params={"branch": "master"}, queue_key=waived_project, depends_on=[], created_by="integration-test",
         )
-        assert waived_deploy["status"] == "succeeded", waived_deploy  # never gated: waived
+        assert waived_deploy["status"] == "succeeded", waived_deploy  # its failing check is analysis only
         assert port_is_listening(waived_port)
+        # ...but the check still ran and its failure was recorded.
+        results = cli_client.policy_check_results(workshop_env.paths, policy_id=policy_id, project_id=waived_project)["results"]
+        assert results and results[-1]["outcome"] == "fail"
 
         gated_deploy = cli_client.create_job(
             workshop_env.paths, type="deployment.deploy", target_pillar="deployment", project_id=gated_project,
@@ -626,12 +633,12 @@ def test_a_disabled_policy_is_invisible_to_winning_policy_resolution(tmp_path, w
 
 
 @requires_systemd_user
-def test_a_waiver_on_a_project_set_scoped_policy_falls_through_to_all_projects(tmp_path, workshop_env, monkeypatch):
-    """Combines two mechanisms this pass proved separately (scope
-    precedence and waivers): a waived project-set policy doesn't just
-    stop winning, it falls all the way through to whatever the next
-    lower-precedence policy is — never leaving the waived project with
-    no policy at all when one genuinely exists underneath."""
+def test_deselecting_a_project_from_a_set_scoped_policy_falls_through_to_all_projects(tmp_path, workshop_env, monkeypatch):
+    """Combines scope precedence and project selection: a project deselected
+    from a project-set policy doesn't just stop being governed, it falls all
+    the way through to whatever the next lower-precedence policy selected for
+    it is — never leaving it with no policy when one genuinely exists
+    underneath. A project never selected for anything has no policy at all."""
     fake_bin = tmp_path / "fakebin"
     fake_bin.mkdir()
     _write_fake_claude(fake_bin)
@@ -645,84 +652,87 @@ def test_a_waiver_on_a_project_set_scoped_policy_falls_through_to_all_projects(t
             http.post("/v1/project_sets", json={"name": "widgets-team", "project_names": ["little-widget"]})
 
         all_projects_draft = _author(
-            workshop_env, ears_text="EARS_OK: all-projects fallback", topic="waiver-precedence-topic",
+            workshop_env, ears_text="EARS_OK: all-projects fallback", topic="selection-precedence-topic",
             target_pillar="registry", scope_level="all_projects",
         )
         all_projects_policy = _activate(workshop_env, all_projects_draft["result"])["result"]
 
         set_draft = _author(
-            workshop_env, ears_text="EARS_OK: widgets-team override", topic="waiver-precedence-topic",
+            workshop_env, ears_text="EARS_OK: widgets-team override", topic="selection-precedence-topic",
             target_pillar="registry", scope_level="project_set", scope_target="widgets-team",
         )
         set_policy = _activate(workshop_env, set_draft["result"])["result"]
 
-        winning = cli_client.policy_winning(workshop_env.paths, "waiver-precedence-topic", "little-widget")
+        winning = cli_client.policy_winning(workshop_env.paths, "selection-precedence-topic", "little-widget")
         assert winning["policy"]["id"] == set_policy["id"]
 
-        waiver = cli_client.create_job(
-            workshop_env.paths, type="policy.waiver_grant", target_pillar="policy", project_id="little-widget",
-            params={"policy_id": set_policy["id"], "reason": "widgets-team policy doesn't fit this project"},
+        deselected = cli_client.create_job(
+            workshop_env.paths, type="policy.set_projects", target_pillar="policy",
+            params={"policy_id": set_policy["id"], "projects": []},
             queue_key=None, depends_on=[], created_by="integration-test",
         )
-        assert waiver["status"] == "succeeded", waiver
+        assert deselected["status"] == "succeeded", deselected
 
-        winning_after_waiver = cli_client.policy_winning(workshop_env.paths, "waiver-precedence-topic", "little-widget")
-        assert winning_after_waiver["policy"]["id"] == all_projects_policy["id"]
+        winning_after = cli_client.policy_winning(workshop_env.paths, "selection-precedence-topic", "little-widget")
+        assert winning_after["policy"]["id"] == all_projects_policy["id"]
 
-        # A project never in the set, and never waived, only ever saw the
-        # all-projects fallback in the first place — the waiver above
-        # changed nothing about it.
-        untouched = cli_client.policy_winning(workshop_env.paths, "waiver-precedence-topic", "little-gadget")
-        assert untouched["policy"]["id"] == all_projects_policy["id"]
+        # A project that was never registered was never selected for anything.
+        untouched = cli_client.policy_winning(workshop_env.paths, "selection-precedence-topic", "little-gadget")
+        assert untouched["policy"] is None
 
 
 @requires_systemd_user
-def test_granting_a_second_waiver_for_the_same_project_and_policy_is_rejected(tmp_path, workshop_env, monkeypatch):
+def test_setting_projects_replaces_the_selection_and_survives_reads(tmp_path, workshop_env, monkeypatch):
     fake_bin = tmp_path / "fakebin"
     fake_bin.mkdir()
     _write_fake_claude(fake_bin)
 
     with _Session(workshop_env, fake_bin, monkeypatch):
+        _bootstrap(tmp_path, workshop_env, "little-widget")
         draft = _author(
-            workshop_env, ears_text="EARS_OK: a waivable policy", topic="double-waiver-topic",
+            workshop_env, ears_text="EARS_OK: a selectable policy", topic="selectable-topic",
             target_pillar="registry", scope_level="all_projects",
         )
         policy_id = _activate(workshop_env, draft["result"])["result"]["id"]
 
+        seeded = cli_client.policy_list_projects(workshop_env.paths, policy_id=policy_id)["projects"]
+        assert [(r["project_id"], r["gating_enabled"]) for r in seeded] == [("little-widget", True)]  # from the all-projects scope
+
         first = cli_client.create_job(
-            workshop_env.paths, type="policy.waiver_grant", target_pillar="policy", project_id="little-widget",
-            params={"policy_id": policy_id, "reason": "first reason"},
+            workshop_env.paths, type="policy.set_projects", target_pillar="policy",
+            params={"policy_id": policy_id, "projects": [
+                {"project_id": "little-widget", "gating_enabled": False}, {"project_id": "little-other"},
+            ]},
             queue_key=None, depends_on=[], created_by="integration-test",
         )
         assert first["status"] == "succeeded", first
+        rows = cli_client.policy_list_projects(workshop_env.paths, policy_id=policy_id)["projects"]
+        assert {(r["project_id"], r["gating_enabled"]) for r in rows} == {("little-widget", False), ("little-other", True)}
 
-        second = cli_client.create_job(
-            workshop_env.paths, type="policy.waiver_grant", target_pillar="policy", project_id="little-widget",
-            params={"policy_id": policy_id, "reason": "a second, different reason"},
+        replaced = cli_client.create_job(
+            workshop_env.paths, type="policy.set_projects", target_pillar="policy",
+            params={"policy_id": policy_id, "projects": [{"project_id": "little-other"}]},
             queue_key=None, depends_on=[], created_by="integration-test",
         )
-        assert second["status"] == "failed", second
-        assert "already holds a waiver" in second["error"]
-
-        waivers = cli_client.policy_list_waivers(workshop_env.paths, policy_id=policy_id, project_id="little-widget")
-        assert len(waivers["waivers"]) == 1
-        assert waivers["waivers"][0]["reason"] == "first reason"
+        assert replaced["status"] == "succeeded", replaced
+        rows = cli_client.policy_list_projects(workshop_env.paths, policy_id=policy_id)["projects"]
+        assert [r["project_id"] for r in rows] == ["little-other"]
 
 
 @requires_systemd_user
-def test_revoking_an_unknown_waiver_fails_cleanly(tmp_path, workshop_env, monkeypatch):
+def test_setting_projects_for_an_unknown_policy_fails_cleanly(tmp_path, workshop_env, monkeypatch):
     fake_bin = tmp_path / "fakebin"
     fake_bin.mkdir()
     _write_fake_claude(fake_bin)
 
     with _Session(workshop_env, fake_bin, monkeypatch):
-        revoked = cli_client.create_job(
-            workshop_env.paths, type="policy.waiver_revoke", target_pillar="policy",
-            params={"waiver_id": "not-a-real-waiver-id"},
+        result = cli_client.create_job(
+            workshop_env.paths, type="policy.set_projects", target_pillar="policy",
+            params={"policy_id": "not-a-real-policy-id", "projects": []},
             queue_key=None, depends_on=[], created_by="integration-test",
         )
-        assert revoked["status"] == "failed", revoked
-        assert "not found" in revoked["error"]
+        assert result["status"] == "failed", result
+        assert "not found" in result["error"]
 
 
 @requires_systemd_user

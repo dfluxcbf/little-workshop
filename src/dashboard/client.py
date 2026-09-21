@@ -80,9 +80,20 @@ def policy_get(paths: Paths, policy_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "policy", f"/v1/policies/{policy_id}", timeout=timeout)
 
 
-def policy_list_waivers(paths: Paths, *, policy_id: str | None = None, project_id: str | None = None, timeout: float = 5.0) -> list[dict]:
-    params = {k: v for k, v in {"policy_id": policy_id, "project_id": project_id}.items() if v}
-    return _get(paths, "policy", "/v1/policy_waivers", params=params, timeout=timeout)
+def policy_script_link(paths: Paths, script: str, *, timeout: float = 5.0) -> dict | None:
+    """The GitHub link to the exact policy test script in use, or None when it
+    only lives in the Policy database (or Deployment is unreachable)."""
+    socket_path = resolve_pillar_socket(paths, "deployment", timeout=timeout)
+    if socket_path is None:
+        return None
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.post("/v1/policy-scripts/locate", json={"script": script})
+        response.raise_for_status()
+        body = response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError, ValueError):
+        return None
+    return body if body.get("found") else None
 
 
 def deployment_status(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:

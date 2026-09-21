@@ -37,6 +37,8 @@ def client(conn, paths, monkeypatch):
         return "unexpected prompt shape"
 
     monkeypatch.setattr(app_module.agent_client, "query", fake_query)
+    monkeypatch.setattr(app_module.registry_client, "list_active_project_ids", lambda paths, **kw: ["proj-a", "proj-b"])
+    monkeypatch.setattr(app_module.registry_client, "project_set_members", lambda paths, name, **kw: ["proj-a"] if name == "household" else [])
     return TestClient(build_app(conn, paths))
 
 
@@ -494,87 +496,88 @@ def test_disabled_policy_never_wins_precedence(client, conn, monkeypatch):
     assert winning["policy"] is None
 
 
-# -- waivers ---------------------------------------------------------------
+# -- project selection ---------------------------------------------------
 
 
-def test_waiver_grant_and_it_falls_through_precedence(client, conn, monkeypatch):
-    monkeypatch.setattr(app_module.registry_client, "project_sets_containing", lambda paths, project_id, **kw: [])
+def _set_projects(client, policy_id, projects):
+    return client.post("/v1/jobs/policy.set_projects", json={"job_id": "j", "params": {"policy_id": policy_id, "projects": projects}})
+
+
+def test_activating_seeds_the_selection_from_the_authoring_scope(client, conn):
+    all_projects = _seed_policy(client, conn, topic="a")
+    assert {p["project_id"] for p in all_projects["projects"]} == {"proj-a", "proj-b"}
+    assert all(p["gating_enabled"] for p in all_projects["projects"])
+
+    single = _seed_policy(client, conn, topic="b", scope_level="project", scope_target="proj-b")
+    assert [p["project_id"] for p in single["projects"]] == ["proj-b"]
+
+    in_set = _seed_policy(client, conn, topic="c", scope_level="project_set", scope_target="household")
+    assert [p["project_id"] for p in in_set["projects"]] == ["proj-a"]
+
+
+def test_a_policy_is_left_unseeded_while_the_registry_is_unreachable_and_seeded_later(client, conn, monkeypatch):
+    from policy.registry_client import RegistryReadError
+
+    def down(paths, **kw):
+        raise RegistryReadError("registry down")
+
+    monkeypatch.setattr(app_module.registry_client, "list_active_project_ids", down)
     policy = _seed_policy(client, conn)
+    assert policy["projects"] == []
 
-    response = client.post("/v1/jobs/policy.waiver_grant", json={
-        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"], "reason": "cannot comply"},
-    })
+    monkeypatch.setattr(app_module.registry_client, "list_active_project_ids", lambda paths, **kw: ["proj-a"])
+    client.get("/v1/policies/gating-for-job", params={"project_id": "proj-a", "categories": "release"})
+    assert [p["project_id"] for p in client.get(f"/v1/policies/{policy['id']}").json()["projects"]] == ["proj-a"]
+
+
+def test_set_projects_replaces_the_selection_and_records_per_project_gating(client, conn):
+    policy = _seed_policy(client, conn)
+    response = _set_projects(client, policy["id"], [
+        {"project_id": "proj-b", "gating_enabled": False}, {"project_id": "proj-c"}, "proj-d",
+    ])
     assert response.json()["outcome"] == "succeeded"
-    assert response.json()["result"]["reason"] == "cannot comply"
-
-    winning_for_waived = client.get("/v1/policies/winning", params={"topic": policy["topic"], "project_id": "proj-a"}).json()
-    assert winning_for_waived["policy"] is None
-
-    winning_elsewhere = client.get("/v1/policies/winning", params={"topic": policy["topic"], "project_id": "proj-b"}).json()
-    assert winning_elsewhere["policy"]["id"] == policy["id"]
+    projects = {p["project_id"]: p["gating_enabled"] for p in response.json()["result"]["projects"]}
+    assert projects == {"proj-b": False, "proj-c": True, "proj-d": True}
+    assert "proj-a" not in projects
 
 
-def test_waiver_grant_requires_a_reason(client, conn):
+def test_set_projects_can_deselect_everything_and_it_sticks(client, conn):
     policy = _seed_policy(client, conn)
-    response = client.post("/v1/jobs/policy.waiver_grant", json={
-        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]},
-    })
-    assert response.json()["outcome"] == "failed"
+    assert _set_projects(client, policy["id"], []).json()["result"]["projects"] == []
+    assert client.get(f"/v1/policies/{policy['id']}").json()["projects"] == []
 
 
-def test_waiver_grant_fails_cleanly_for_unknown_policy(client):
-    response = client.post("/v1/jobs/policy.waiver_grant", json={
-        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": "ghost", "reason": "x"},
-    })
-    assert response.json()["outcome"] == "failed"
-
-
-def test_waiver_grant_refuses_a_duplicate(client, conn):
+def test_a_deselected_selection_survives_a_restart_of_the_pillar(client, conn, paths):
     policy = _seed_policy(client, conn)
-    client.post("/v1/jobs/policy.waiver_grant", json={
-        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"], "reason": "first"},
-    })
-    response = client.post("/v1/jobs/policy.waiver_grant", json={
-        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"], "reason": "second"},
-    })
-    assert response.json()["outcome"] == "failed"
-    assert "already holds a waiver" in response.json()["error"]
+    _set_projects(client, policy["id"], [])
+    restarted = TestClient(build_app(conn, paths))  # a fresh app on the same database re-runs startup seeding
+    assert restarted.get(f"/v1/policies/{policy['id']}").json()["projects"] == []
 
 
-def test_waiver_revoke_restores_precedence(client, conn, monkeypatch):
-    monkeypatch.setattr(app_module.registry_client, "project_sets_containing", lambda paths, project_id, **kw: [])
+def test_set_projects_validates_its_input(client, conn):
     policy = _seed_policy(client, conn)
-    granted = client.post("/v1/jobs/policy.waiver_grant", json={
-        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"], "reason": "x"},
-    }).json()["result"]
-
-    response = client.post("/v1/jobs/policy.waiver_revoke", json={"job_id": "j", "params": {"waiver_id": granted["id"]}})
-    assert response.json()["outcome"] == "succeeded"
-
-    winning = client.get("/v1/policies/winning", params={"topic": policy["topic"], "project_id": "proj-a"}).json()
-    assert winning["policy"]["id"] == policy["id"]
+    assert "missing 'policy_id'" in client.post("/v1/jobs/policy.set_projects", json={"job_id": "j", "params": {"projects": []}}).json()["error"]
+    assert "must be a list" in _set_projects(client, policy["id"], "proj-a").json()["error"]
+    assert "invalid project entry" in _set_projects(client, policy["id"], [{"gating_enabled": True}]).json()["error"]
+    assert "invalid project entry" in _set_projects(client, policy["id"], [42]).json()["error"]
+    assert "not found" in _set_projects(client, "ghost", []).json()["error"]
 
 
-def test_waiver_revoke_fails_cleanly_for_unknown_id(client):
-    response = client.post("/v1/jobs/policy.waiver_revoke", json={"job_id": "j", "params": {"waiver_id": "ghost"}})
-    assert response.json()["outcome"] == "failed"
-
-
-def test_list_and_get_waivers(client, conn):
+def test_list_policy_projects_filters_by_policy_and_project(client, conn):
     policy = _seed_policy(client, conn)
-    granted = client.post("/v1/jobs/policy.waiver_grant", json={
-        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"], "reason": "x"},
-    }).json()["result"]
-
-    listed = client.get("/v1/policy_waivers", params={"policy_id": policy["id"]}).json()
-    assert [w["id"] for w in listed] == [granted["id"]]
-
-    fetched = client.get(f"/v1/policy_waivers/{granted['id']}").json()
-    assert fetched["project_id"] == "proj-a"
+    _set_projects(client, policy["id"], [{"project_id": "proj-a"}, {"project_id": "proj-b", "gating_enabled": False}])
+    listed = client.get("/v1/policy_projects", params={"policy_id": policy["id"]}).json()
+    assert {(r["project_id"], r["gating_enabled"]) for r in listed} == {("proj-a", True), ("proj-b", False)}
+    only_b = client.get("/v1/policy_projects", params={"project_id": "proj-b"}).json()
+    assert [r["policy_id"] for r in only_b] == [policy["id"]]
 
 
-def test_get_waiver_404s_for_unknown_id(client):
-    assert client.get("/v1/policy_waivers/ghost").status_code == 404
+def test_check_all_fans_out_over_the_selected_projects_only(client, conn, monkeypatch):
+    policy = _seed_policy(client, conn)
+    _set_projects(client, policy["id"], [{"project_id": "proj-b"}])
+    monkeypatch.setattr("common.pillar_socket.resolve_pillar_socket", lambda paths, name, timeout=5.0: None)
+    result = client.post("/v1/jobs/policy.check_all", json={"job_id": "j", "params": {"policy_id": policy["id"]}}).json()["result"]
+    assert result["project_ids"] == ["proj-b"]
 
 
 # -- gating-for-job -------------------------------------------------------
@@ -601,16 +604,22 @@ def test_gating_for_job_excludes_a_policy_that_does_not_gate_that_category(clien
     assert matching == []
 
 
-def test_gating_for_job_excludes_a_waived_policy(client, conn, monkeypatch):
-    monkeypatch.setattr(app_module.registry_client, "project_sets_containing", lambda paths, project_id, **kw: [])
+def test_gating_for_job_excludes_a_project_the_policy_is_not_selected_for(client, conn):
     draft = _author(client, gate_points=["server_launch"]).json()["result"]
     policy = _activate(client, draft).json()["result"]
-    client.post("/v1/jobs/policy.waiver_grant", json={
-        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"], "reason": "x"},
-    })
+    _set_projects(client, policy["id"], [{"project_id": "proj-b"}])
 
-    matching = client.get("/v1/policies/gating-for-job", params={"project_id": "proj-a", "categories": "server_launch"}).json()
-    assert matching == []
-
+    assert client.get("/v1/policies/gating-for-job", params={"project_id": "proj-a", "categories": "server_launch"}).json() == []
     elsewhere = client.get("/v1/policies/gating-for-job", params={"project_id": "proj-b", "categories": "server_launch"}).json()
     assert [p["id"] for p in elsewhere] == [policy["id"]]
+
+
+def test_gating_for_job_still_returns_a_policy_whose_gating_is_off_so_it_runs_for_analysis(client, conn):
+    draft = _author(client, gate_points=["server_launch"]).json()["result"]
+    policy = _activate(client, draft).json()["result"]
+    _set_projects(client, policy["id"], [{"project_id": "proj-a", "gating_enabled": False}, {"project_id": "proj-b"}])
+
+    a = client.get("/v1/policies/gating-for-job", params={"project_id": "proj-a", "categories": "server_launch"}).json()
+    b = client.get("/v1/policies/gating-for-job", params={"project_id": "proj-b", "categories": "server_launch"}).json()
+    assert [(p["id"], p["gating"]) for p in a] == [(policy["id"], False)]
+    assert [(p["id"], p["gating"]) for p in b] == [(policy["id"], True)]

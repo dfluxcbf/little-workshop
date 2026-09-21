@@ -224,9 +224,9 @@ def _make_stub_app(paths: Paths | None = None) -> FastAPI:
     def policy_confirm_timeout(job_id: str):
         return {"timed_out": True, "job_id": job_id}
 
-    @app.get("/v1/policy_waivers")
-    def list_waivers(policy_id: str | None = None, project_id: str | None = None):
-        return [{"id": "w1", "policy_id": policy_id}]
+    @app.get("/v1/policy_projects")
+    def list_policy_projects(policy_id: str | None = None, project_id: str | None = None):
+        return [{"policy_id": policy_id, "project_id": "proj-a", "gating_enabled": True}]
 
     return app
 
@@ -423,10 +423,10 @@ def test_policy_confirm_timeout_job_hits_the_real_orchestration_socket(paths_wit
     assert result["timed_out"] is True
 
 
-def test_policy_list_waivers_reports_daemon_source(paths_with_live_daemons):
-    result = client.policy_list_waivers(paths_with_live_daemons, "pol1")
+def test_policy_list_projects_reports_daemon_source(paths_with_live_daemons):
+    result = client.policy_list_projects(paths_with_live_daemons, "pol1")
     assert result["source"] == "daemon"
-    assert result["waivers"][0]["policy_id"] == "pol1"
+    assert result["projects"][0]["policy_id"] == "pol1"
 
 
 def test_policy_gating_for_job_hits_the_real_policy_socket(paths_with_live_daemons):

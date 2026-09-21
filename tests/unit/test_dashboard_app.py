@@ -309,89 +309,125 @@ def test_jobs_passes_through_status_filter(test_client, monkeypatch):
     assert "policy.configure" in response.text
 
 
-def test_policies_renders_one_card_per_policy_with_chips_and_waivers(test_client, monkeypatch):
+def _policy(**overrides):
+    base = {
+        "id": "pol1", "topic": "project-has-name", "ears_text": "every project shall have a name", "enabled": True,
+        "gate_points": ["server_launch", "release"], "scope_level": "all_projects", "scope_target": None,
+        "target_pillar": "registry", "created_by": "framework",
+        "projects": [{"project_id": "proj-a", "gating_enabled": True}, {"project_id": "proj-b", "gating_enabled": False}],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_policies_renders_one_card_per_policy_with_chips(test_client, monkeypatch):
     monkeypatch.setattr(client, "policy_list", lambda paths: [
-        {"id": "pol1", "topic": "project-has-name", "ears_text": "every project shall have a name", "enabled": True,
-         "gate_points": ["server_launch", "release"], "scope_level": "all_projects", "scope_target": None,
-         "target_pillar": "registry", "created_by": "framework"},
-        {"id": "pol2", "topic": "keep-docs", "ears_text": "docs shall exist", "enabled": False,
-         "gate_points": [], "scope_level": "project", "scope_target": "little-widget",
-         "target_pillar": "registry", "created_by": "user"},
-    ])
-    monkeypatch.setattr(client, "policy_list_waivers", lambda paths: [
-        {"policy_id": "pol1", "project_id": "proj-a", "reason": "cannot comply yet"}
+        _policy(),
+        _policy(id="pol2", topic="keep-docs", ears_text="docs shall exist", enabled=False, gate_points=[],
+                created_by="user", projects=[{"project_id": "little-widget", "gating_enabled": True}]),
     ])
     response = test_client.get("/policies")
     text = response.text
     assert response.status_code == 200 and "<h1" not in text
-    assert len(re.findall(r'class="polcard[ "]', text)) == 3  # two policies + one waiver
+    assert len(re.findall(r'class="polcard[ "]', text)) == 2
     assert 'href="/policies/pol1"' in text and 'href="/policies/pol2"' in text
     assert "project-has-name" in text and "every project shall have a name" in text
     assert '<span class="chip gate">server_launch</span>' in text and '<span class="chip gate">release</span>' in text
-    assert ">no gate<" in text and ">all projects<" in text and ">little-widget<" in text
+    assert ">no gate<" in text
+    assert "2 projects" in text and "gating off: 1" in text
+    assert "1 project: little-widget" in text
     assert "polcard is-off" in text and "disabled" in text
-    assert "cannot comply yet" in text and "Waivers" in text
+    assert "aiver" not in text and "Waivers" not in text
 
 
-def test_policies_hides_the_waivers_section_when_there_are_none(test_client, monkeypatch):
+def test_policies_with_no_projects_selected_says_zero(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths: [_policy(projects=[])])
+    assert "0 projects" in test_client.get("/policies").text
+
+
+def test_policies_empty_state(test_client, monkeypatch):
     monkeypatch.setattr(client, "policy_list", lambda paths: [])
-    monkeypatch.setattr(client, "policy_list_waivers", lambda paths: [])
-    text = test_client.get("/policies").text
-    assert "No policies authored yet." in text and "Waivers" not in text
+    assert "No policies authored yet." in test_client.get("/policies").text
 
 
-def test_policy_detail_success_renders_script_and_waivers(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_get", lambda paths, policy_id: {
-        "id": policy_id, "ears_text": "every project shall have a name", "topic": "t",
-        "target_pillar": "registry", "enabled": True, "gate_points": ["server_launch"],
-        "test_script": "def test_x():\n    assert True\n",
-    })
-    monkeypatch.setattr(client, "policy_list_waivers", lambda paths, policy_id=None, project_id=None: [
-        {"id": "w1", "project_id": "proj-a", "reason": "cannot comply yet"}
-    ])
-    response = test_client.get("/policies/pol1")
-    assert response.status_code == 200
-    assert "def test_x" in response.text
-    assert "cannot comply yet" in response.text
-    assert "UNREACHABLE" not in response.text
+def _stub_detail(monkeypatch, *, policy=None, registered=("proj-a", "proj-b", "proj-c"), link=None):
+    detail = {**_policy(id="0123456789abcdef", topic="commit-bumps-version", ears_text="a commit shall bump the version",
+                        created_by="user", enabled=False, gate_points=["branch_finish", "release"],
+                        created_at="2026-09-16T10:00:00Z", amended_at="2026-09-21T15:09:42Z",
+                        test_script="line1\nline2\nline3\n"), **(policy or {})}
+    monkeypatch.setattr(client, "policy_get", lambda paths, policy_id: detail)
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": n, "status": "active"} for n in registered])
+    monkeypatch.setattr(client, "policy_script_link", lambda paths, script: link)
 
 
 def test_policy_detail_is_built_from_cards_not_fieldsets(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_get", lambda paths, policy_id: {
-        "id": "0123456789abcdef", "topic": "commit-bumps-version", "ears_text": "a commit shall bump the version",
-        "target_pillar": "version", "created_by": "user", "scope_level": "project", "scope_target": "little-workshop",
-        "enabled": False, "gate_points": ["branch_finish", "release"], "created_at": "2026-09-16T10:00:00Z",
-        "amended_at": "2026-09-21T15:09:42Z", "test_script": "line1\nline2\nline3\n",
-    })
-    monkeypatch.setattr(client, "policy_list_waivers", lambda paths, policy_id=None, project_id=None: [
-        {"id": "w1", "project_id": "proj-a", "reason": "cannot comply yet"}
-    ])
+    _stub_detail(monkeypatch)
     text = test_client.get("/policies/pol1").text
     assert "<fieldset" not in text and "<legend" not in text and "<h1" not in text
-    assert text.count('class="dcard') >= 4  # summary, gating, test script, waivers
-    assert "commit-bumps-version" in text and "disabled" in text and "little-workshop" in text
+    assert text.count('class="dcard') >= 4  # summary, gate points, test script, projects
+    assert "commit-bumps-version" in text and "disabled" in text
     assert "01234567" in text and "amended 2026-09-21" in text
-    # the configure form still posts the same fields the route reads
-    assert 'action="/policies/pol1/configure"' in text or 'action="/policies/0123456789abcdef/configure"' in text
+    assert 'action="/policies/0123456789abcdef/configure"' in text
     assert 'name="enabled" value="true"' in text and 'name="gate_points" value="branch_finish" checked' in text
     assert 'name="gate_points" value="release" checked' in text and 'name="gate_points" value="server_stop" checked' not in text
-    assert "3 lines" in text and "line2" in text
-    assert "/waivers/w1/revoke" in text and "/waivers/grant" in text and 'name="reason"' in text
+    assert "aiver" not in text
 
 
-def test_policy_detail_without_waivers_says_so(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_get", lambda paths, policy_id: {
-        "id": "abcdef012345", "topic": "t", "ears_text": "x shall y", "target_pillar": "registry", "created_by": "framework",
-        "scope_level": "all_projects", "scope_target": None, "enabled": True, "gate_points": [], "test_script": "",
-    })
-    monkeypatch.setattr(client, "policy_list_waivers", lambda paths, policy_id=None, project_id=None: [])
-    text = test_client.get("/policies/abcdef012345").text
-    assert "No waivers granted." in text and "all projects" in text
+def test_policy_detail_lists_every_registered_project_with_selection_and_gating(test_client, monkeypatch):
+    _stub_detail(monkeypatch)
+    text = test_client.get("/policies/pol1").text
+    assert 'action="/policies/0123456789abcdef/projects"' in text
+    for name in ("proj-a", "proj-b", "proj-c"):
+        assert f'name="project" value="{name}"' in text
+    assert 'name="project" value="proj-a" checked' in text and 'name="project" value="proj-b" checked' in text
+    assert 'name="project" value="proj-c" checked' not in text
+    assert 'name="gating" value="proj-a" checked' in text and 'name="gating" value="proj-b" checked' not in text
+    assert "2 of 3" in text
+    assert "unregistered" not in text
+
+
+def test_policy_detail_keeps_a_selected_project_that_is_no_longer_registered(test_client, monkeypatch):
+    _stub_detail(monkeypatch, registered=("proj-a",))
+    text = test_client.get("/policies/pol1").text
+    assert 'name="project" value="proj-b" checked' in text and "unregistered" in text
+
+
+def test_policy_detail_script_is_a_github_link_when_a_committed_file_matches(test_client, monkeypatch):
+    link = {"found": True, "path": "tools/policy_scripts/commit_bumps_version.py", "version": "0.1.1-dev.2",
+            "commit": "ad943c6e1fcfc66482282a2ec9c2b81162d5c38a",
+            "url": "https://github.com/dfluxcbf/little-workshop/blob/ad943c6e/tools/policy_scripts/commit_bumps_version.py"}
+    _stub_detail(monkeypatch, link=link)
+    text = test_client.get("/policies/pol1").text
+    assert f'href="{link["url"]}"' in text and 'target="_blank"' in text and 'rel="noopener noreferrer"' in text
+    assert "v0.1.1-dev.2" in text and "ad943c6" in text and "tools/policy_scripts/commit_bumps_version.py" in text
+    assert "<pre" not in text  # the code itself is not inlined
+
+
+def test_policy_detail_script_falls_back_to_inline_code_when_no_file_matches(test_client, monkeypatch):
+    _stub_detail(monkeypatch, link=None)
+    text = test_client.get("/policies/pol1").text
+    assert "<pre" in text and "line2" in text and "db only" in text and "3 lines" in text
+
+
+def test_policy_detail_survives_deployment_being_down(test_client, monkeypatch):
+    _stub_detail(monkeypatch)
+
+    def down(paths, script):
+        raise client.PillarUnavailable("deployment daemon unreachable")
+
+    monkeypatch.setattr(client, "policy_script_link", down)
+    response = test_client.get("/policies/pol1")
+    assert response.status_code == 200 and "<pre" in response.text
+
+
+def test_policy_detail_without_projects_selected(test_client, monkeypatch):
+    _stub_detail(monkeypatch, policy={"projects": [], "scope_level": "all_projects"})
+    text = test_client.get("/policies/pol1").text
+    assert "0 of 3" in text and 'name="project" value="proj-a" checked' not in text
 
 
 def test_policy_detail_not_found_renders_a_message_not_a_500(test_client, monkeypatch):
     monkeypatch.setattr(client, "policy_get", lambda paths, policy_id: (_ for _ in ()).throw(client.PillarUnavailable("policy daemon unreachable")))
-    monkeypatch.setattr(client, "policy_list_waivers", lambda paths, policy_id=None, project_id=None: [])
     response = test_client.get("/policies/nonexistent")
     assert response.status_code == 200
     assert "UNREACHABLE" in response.text
@@ -426,7 +462,7 @@ def test_policy_configure_checked_checkbox_means_enabled(test_client, monkeypatc
     assert captured["params"]["gate_points"] == []
 
 
-def test_waiver_grant_posts_reason_and_project(test_client, monkeypatch):
+def test_policy_projects_post_sends_the_whole_selection(test_client, monkeypatch):
     captured = {}
 
     def fake_create_job(paths, **fields):
@@ -435,26 +471,25 @@ def test_waiver_grant_posts_reason_and_project(test_client, monkeypatch):
 
     monkeypatch.setattr(client, "create_job", fake_create_job)
     response = test_client.post(
-        "/policies/pol1/waivers/grant", data={"project_id": "proj-a", "reason": "cannot comply yet"}, follow_redirects=False
+        "/policies/pol1/projects", data={"project": ["proj-a", "proj-b", "proj-a"], "gating": ["proj-a", "proj-z"]},
+        follow_redirects=False,
     )
-    assert response.status_code == 303
-    assert captured["type"] == "policy.waiver_grant"
-    assert captured["project_id"] == "proj-a"
-    assert captured["params"] == {"policy_id": "pol1", "reason": "cannot comply yet"}
+    assert response.status_code == 303 and response.headers["location"] == "/policies/pol1"
+    assert captured["type"] == "policy.set_projects"
+    assert captured["params"] == {"policy_id": "pol1", "projects": [
+        {"project_id": "proj-a", "gating_enabled": True}, {"project_id": "proj-b", "gating_enabled": False},
+    ]}
 
 
-def test_waiver_revoke_posts_waiver_id(test_client, monkeypatch):
+def test_policy_projects_post_with_nothing_selected_deselects_everything(test_client, monkeypatch):
     captured = {}
+    monkeypatch.setattr(client, "create_job", lambda paths, **fields: (captured.update(fields), {"status": "succeeded"})[1])
+    test_client.post("/policies/pol1/projects", data={}, follow_redirects=False)
+    assert captured["params"] == {"policy_id": "pol1", "projects": []}
 
-    def fake_create_job(paths, **fields):
-        captured.update(fields)
-        return {"status": "succeeded"}
 
-    monkeypatch.setattr(client, "create_job", fake_create_job)
-    response = test_client.post("/policies/pol1/waivers/waiver-1/revoke", follow_redirects=False)
-    assert response.status_code == 303
-    assert captured["type"] == "policy.waiver_revoke"
-    assert captured["params"] == {"waiver_id": "waiver-1"}
+def test_waiver_routes_are_gone(test_client):
+    assert test_client.post("/policies/pol1/waivers/grant", data={"project_id": "p", "reason": "r"}).status_code == 404
 
 
 def test_stylesheet_carries_no_violet(test_client):

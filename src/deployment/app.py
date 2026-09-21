@@ -36,6 +36,10 @@ class JobRequest(BaseModel):
     params: dict[str, Any] = {}
 
 
+class LocateScriptRequest(BaseModel):
+    script: str
+
+
 class RollbackTimeoutRequest(BaseModel):
     deploy_id: str
 
@@ -240,6 +244,21 @@ def build_app(
             "repo_head": head,
             "commits": commits,
         }
+
+    @app.post("/v1/policy-scripts/locate")
+    def locate_policy_script(request: LocateScriptRequest) -> dict:
+        """Where in this repository, on GitHub, is the exact policy test
+        script that is in use? `found: false` for a script that only lives in
+        the Policy database (e.g. one drafted at authoring time)."""
+        repo = workshop_repo_dir()
+        try:
+            hit = gitutil.locate_file_version(repo, request.script, "tools/policy_scripts")
+            base = gitutil.github_base_url(repo)
+        except Exception:
+            hit, base = None, None
+        if hit is None or base is None:
+            return {"found": False}
+        return {"found": True, **hit, "url": f"{base}/blob/{hit['commit']}/{hit['path']}"}
 
     @app.get("/v1/deployments/{project_id}")
     def deployments(project_id: str) -> list[dict]:
