@@ -553,7 +553,14 @@ nav.tabbar .tab.tab-back { color: var(--ink-faint); }
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin: 0;
   padding: 12px 14px;
+  /* A card is a <label> (so tapping selects it) but is not a form-field label: opt out of that styling. */
+  font-size: 14px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -563,7 +570,7 @@ nav.tabbar .tab.tab-back { color: var(--ink-faint); }
   transition: border-color 0.15s, background 0.15s;
 }
 .pcard:hover { border-color: var(--cyan-deep); }
-.pcard .pick { position: absolute; opacity: 0; pointer-events: none; }
+.pcard .pick { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; padding: 0; border: 0; }
 .pcard:has(.pick:checked) { border-color: var(--cyan); background: var(--cyan-soft); box-shadow: 0 0 0 1px var(--cyan); }
 .pcard:has(.pick:focus-visible) { box-shadow: 0 0 0 3px var(--cyan-soft); }
 .pcard.is-disabled { opacity: 0.5; cursor: default; }

@@ -1012,3 +1012,21 @@ def test_cleanup_reports_orchestration_being_unreachable(test_client, monkeypatc
     monkeypatch.setattr(client, "job_cleanup", down)
     location = unquote(test_client.post("/jobs/cleanup", data={"days": "7"}, follow_redirects=False).headers["location"])
     assert "Could not delete jobs" in location and "unreachable" in location
+
+
+@pytest.mark.parametrize("selector", [".pcard", ".gp", ".prow-select", ".prow-gate", ".switch-row"])
+def test_label_based_components_opt_out_of_the_global_form_label_style(test_client, selector):
+    """These are <label>s (a tap selects them) but not form-field labels; without an explicit
+    reset they inherit the global `label` rule's uppercase text and 16px top margin."""
+    css = test_client.get("/static/app.css").text
+    rule = re.search(rf"(?m)^{re.escape(selector)} \{{(.*?)\n\}}|^{re.escape(selector)} \{{([^}}]*)\}}", css, re.S)
+    assert rule, f"no rule for {selector}"
+    body = rule.group(1) or rule.group(2)
+    assert "margin: 0" in body and "text-transform: none" in body and "letter-spacing: normal" in body
+
+
+def test_hidden_selection_inputs_are_zero_sized_so_they_cannot_widen_the_page(test_client):
+    css = test_client.get("/static/app.css").text
+    for selector in (".pcard .pick", ".gp input", ".prow-select input", ".prow-gate input", ".switch-row input"):
+        line = next(l for l in css.splitlines() if l.startswith(selector + " {"))
+        assert "width: 0" in line and "padding: 0" in line, selector
