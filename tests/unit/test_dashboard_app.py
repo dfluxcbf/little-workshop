@@ -414,4 +414,21 @@ def test_stylesheet_carries_no_violet(test_client):
 
 
 def test_service_worker_cache_name_is_bumped_with_the_icons(test_client):
-    assert "workshop-shell-v3" in test_client.get("/sw.js").text
+    assert "workshop-shell-v4" in test_client.get("/sw.js").text
+
+
+def test_every_icon_fills_its_whole_canvas_with_the_dark_ground():
+    """Regression: the 192/180/64px icons were once rendered with the
+    background rect left at 512 units, leaving most of the canvas white."""
+    import importlib.resources
+    import io
+
+    Image = pytest.importorskip("PIL.Image")  # not a project dependency; skips where absent
+
+    icons = importlib.resources.files("dashboard") / "static" / "icons"
+    for name in ("icon-192", "icon-512", "icon-192-maskable", "icon-512-maskable", "apple-touch-icon", "favicon-64"):
+        image = Image.open(io.BytesIO((icons / f"{name}.png").read_bytes())).convert("RGB")
+        w, h = image.size
+        for corner in ((2, 2), (w - 3, 2), (2, h - 3), (w - 3, h - 3)):
+            r, g, b = image.getpixel(corner)
+            assert max(r, g, b) < 60, f"{name} corner {corner} is not the dark ground: {(r, g, b)}"
