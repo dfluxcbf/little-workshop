@@ -49,7 +49,7 @@ def main() -> None:
 
     conn = db.connect(paths.pillar_db_path("orchestration"))
     socket_lookup = make_core_socket_lookup(paths)
-    app = build_app(conn, socket_lookup)
+    app = build_app(conn, socket_lookup, paths)
 
     # docs/milestones.md M9: one tick loop per process, started here so
     # its one-time startup check (a firing missed while little-workshop

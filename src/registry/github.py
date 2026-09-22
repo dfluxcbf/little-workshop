@@ -33,6 +33,27 @@ def gh_available() -> bool:
     return result.returncode == 0
 
 
+def github_token_status() -> dict:
+    """{"present", "valid", "expires_at", "detail"} for the host's own `gh`
+    CLI credential — never reads or reports the token itself, only whether it
+    authenticates and (from GitHub's own `github-authentication-token-expiration`
+    response header, present only for a token that carries an expiration —
+    a fine-grained PAT, or a classic PAT with one set) when it expires."""
+    if shutil.which("gh") is None:
+        return {"present": False, "valid": False, "expires_at": None, "detail": "gh CLI not installed"}
+    auth = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, check=False)
+    if auth.returncode != 0:
+        return {"present": True, "valid": False, "expires_at": None, "detail": (auth.stderr or auth.stdout).strip()[:300]}
+    probe = subprocess.run(["gh", "api", "-i", "/user"], capture_output=True, text=True, check=False)
+    expires_at = None
+    if probe.returncode == 0:
+        for line in probe.stdout.splitlines():
+            if line.lower().startswith("github-authentication-token-expiration:"):
+                expires_at = line.split(":", 1)[1].strip()
+                break
+    return {"present": True, "valid": True, "expires_at": expires_at, "detail": "no expiration set" if expires_at is None else ""}
+
+
 def create_repository_with_gh(
     name: str, owner: str, *, private: bool = True, description: str = ""
 ) -> dict:

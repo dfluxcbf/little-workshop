@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from common.paths import Paths
+from common.incident import install_incident_reporting
 from common.projectfiles import ProjectFilesClient
 from common.registry_client import ProjectResolutionError, resolve_project_path
 from deployment import db, gitutil, worktrees
@@ -68,6 +69,7 @@ def build_app(
     paths: Paths, conn: sqlite3.Connection, resolve: ResolveFn = resolve_project_path, flow: DeploymentFlow | None = None
 ) -> FastAPI:
     app = FastAPI(title="little-workshop Deployment & Servers")
+    install_incident_reporting(app, paths, pillar="deployment")
     lock = threading.Lock()
     flow = flow or DeploymentFlow(paths=paths)
 

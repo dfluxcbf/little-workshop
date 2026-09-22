@@ -21,6 +21,7 @@ from build.models import BuildRun, BuildRunStatus, Package, PackageKind
 from build.pep503 import normalize_name, parse_distribution_filename, render_project_index, render_root_index, same_version
 from build.runner import run_build
 from common.paths import Paths
+from common.incident import install_incident_reporting
 from common.worktree_client import WorktreeUnavailable
 
 
@@ -39,6 +40,7 @@ def _require(params: dict, *names: str) -> str | None:
 
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     app = FastAPI(title="little-workshop Build & Packages")
+    install_incident_reporting(app, paths, pillar="build")
     lock = threading.Lock()
 
     @app.get("/v1/health")

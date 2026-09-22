@@ -1,6 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Pillars — little-workshop{% endblock %}
 {% block content %}
+{% if secrets %}
+<h2 class="section-label">Secrets</h2>
+<div class="report-list" style="margin-bottom:20px">
+  {% for s in secrets %}
+  <article class="report-item">
+    <span class="report-head"><span class="report-title">{{ s.name }}</span>
+      <span class="pill {{ 'ok' if s.valid else 'fail' }}">{{ 'valid' if s.valid else 'invalid' }}</span></span>
+    <span class="report-desc">
+      {% if not s.present %}not configured
+      {% elif s.expires_at %}expires {{ s.expires_at }}
+      {% else %}{{ s.detail or 'no expiration set' }}{% endif %}
+    </span>
+  </article>
+  {% endfor %}
+</div>
+{% endif %}
 <form method="post" action="/pillars/redeploy" id="redeploy-form">
 <div class="pillar-grid">
   {% for name, entry in pillars.items() %}

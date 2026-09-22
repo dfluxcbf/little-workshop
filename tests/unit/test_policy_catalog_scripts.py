@@ -128,3 +128,68 @@ def test_release_candidate_tag_format_ignores_an_old_gap_once_fixed(tmp_path):
     repo = _repo(tmp_path)
     _release_branch_with_rcs(repo, 1, 2, 4, 5)  # the old rc.3 gap is history now
     assert _run(script, repo).returncode == 0  # only rc.4 -> rc.5 (the newest transition) is judged
+
+
+# -- python-test-coverage: a real project's own pytest --cov run, newest only -----------
+
+
+def _write_coverage_script(tmp_path):
+    script = Path("tools/policy_scripts/python_test_coverage.py").read_text()
+    path = tmp_path / "python_test_coverage.py"
+    path.write_text(script)
+    return path
+
+
+def _python_project(tmp_path, *, pyproject=True, src=True, tests=True):
+    project = tmp_path / "proj"
+    project.mkdir()
+    if pyproject:
+        (project / "pyproject.toml").write_text('[project]\nname = "proj"\n')
+    if src:
+        pkg = project / "src" / "proj"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n")
+    if tests:
+        (project / "tests").mkdir()
+        (project / "tests" / "test_add.py").write_text(
+            "from proj import add, sub\n\n\ndef test_add():\n    assert add(1, 2) == 3\n\n\ndef test_sub():\n    assert sub(3, 1) == 2\n"
+        )
+    return project
+
+
+def _run_coverage(script_path, project_dir):
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", str(script_path), "-q", "-p", "no:cacheprovider", "-rs"],
+        capture_output=True, text=True, env={**dict(__import__("os").environ), "POLICY_PROJECT_DIR": str(project_dir)},
+    )
+
+
+def test_python_test_coverage_skips_a_non_python_project(tmp_path):
+    script = _write_coverage_script(tmp_path)
+    project = _python_project(tmp_path, pyproject=False)
+    result = _run_coverage(script, project)
+    assert result.returncode == 0 and "not a Python project" in result.stdout
+
+
+def test_python_test_coverage_skips_a_project_with_no_tests(tmp_path):
+    script = _write_coverage_script(tmp_path)
+    project = _python_project(tmp_path, tests=False)
+    result = _run_coverage(script, project)
+    assert result.returncode == 0 and "no tests/" in result.stdout
+
+
+def test_python_test_coverage_fails_below_the_threshold(tmp_path):
+    script = _write_coverage_script(tmp_path)
+    project = _python_project(tmp_path)
+    (project / "src" / "proj" / "__init__.py").write_text(
+        "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n\n\ndef mul(a, b):\n    return a * b\n"
+    )
+    result = _run_coverage(script, project)
+    assert result.returncode != 0 and "below the required 90%" in result.stdout
+
+
+def test_python_test_coverage_passes_when_fully_covered(tmp_path):
+    script = _write_coverage_script(tmp_path)
+    project = _python_project(tmp_path)
+    result = _run_coverage(script, project)
+    assert result.returncode == 0 and "passed" in result.stdout

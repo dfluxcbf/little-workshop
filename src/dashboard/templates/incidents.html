@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Incidents — little-workshop{% endblock %}
+{% block content %}
+<form class="report-filter" method="get" action="/incidents">
+  <select name="status" aria-label="Status" onchange="this.form.submit()">
+    <option value="open" {{ 'selected' if status == 'open' }}>Open</option>
+    <option value="confirmed" {{ 'selected' if status == 'confirmed' }}>Confirmed</option>
+    <option value="dismissed" {{ 'selected' if status == 'dismissed' }}>Dismissed</option>
+    <option value="" {{ 'selected' if not status }}>All</option>
+  </select>
+</form>
+<div class="policy-list">
+  {% for i in incidents %}
+  <a class="polcard" href="/incidents/{{ i.id }}">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ i.exception_type }} in {{ i.pillar }}</span>
+      <span class="pill {{ 'fail' if i.status == 'open' else ('ok' if i.status == 'confirmed' else 'idle') }}">{{ i.status }}</span>
+    </span>
+    <span class="polcard-ears">{{ i.message }}</span>
+    <span class="polcard-meta">
+      <span class="chip">{{ i.project_id }}</span>
+      <span class="chip">{{ i.created_at | reltime }}</span>
+    </span>
+  </a>
+  {% else %}
+  <p class="muted">No {{ status or '' }} incidents.</p>
+  {% endfor %}
+</div>
+{% endblock %}

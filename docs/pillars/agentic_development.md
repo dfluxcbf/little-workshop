@@ -278,3 +278,35 @@ id `workspace` (`common/workspace.py`), which is never looked up in Registry & P
 the projects root directory — the parent of the workshop checkout, or `LITTLE_WORKSHOP_WORKSPACE_DIR`.
 It gives the user one Claude Code session above every project for cross-project work, with the same
 one-session limit, trust check and detached lifetime as a project session.
+
+## Incidents: an unhandled exception, awaiting the user's confirmation (2026-09-22)
+
+`POST /v1/incidents` (called directly, never through Orchestration — a crash reporter
+must survive Orchestration itself being unreachable) records an open incident: project,
+raising component ("pillar" — one of little-workshop's own 10, or a child project's own
+app), context (`METHOD /path`), exception type/message, and a truncated traceback.
+`GET /v1/incidents` (optional `status` filter) and `GET /v1/incidents/{id}` are plain
+reads. Two Jobs settle an open incident:
+
+- `agent.confirm_incident` — starts a real `agent.run_task` (the exact same dispatch path
+  `agent.run_task` itself uses) on the incident's own project, `intent="bug"`, title and
+  description built from the exception, `review_mode` taken from the caller (default
+  `auto_approve`) — then links the incident to the new run.
+- `agent.dismiss_incident` — marks it dismissed; no task is ever created.
+
+An incident is never auto-dispatched — the same "propose, a human decides" discipline
+policy drafts and redeploy confirmations already follow.
+
+**Reporting side**: `common/incident.py` is installed into all 10 of little-workshop's
+own FastAPI apps (`install_incident_reporting`, one line each) as ASGI middleware — an
+unhandled exception is reported once, then re-raised unchanged, so the pillar's own error
+response is exactly what it would have been otherwise. `no_auto_incident()` (a context
+manager) marks a block whose exceptions are part of normal, expected control flow, never
+worth a bug task. `tools/incident_reporter.py` is a dependency-light, vendorable copy of
+the same idea for a *child* project's own app (little-meals, little-home, ...) — copied
+into that project's own tree, matching this project's "no shared Python import across
+repos" convention, posting over little-workshop's own Agentic Development Unix socket
+(`LITTLE_WORKSHOP_AGENT_SOCKET` override; defaults to the well-known
+`~/.local/state/little-workshop/sockets/agent.sock`). Delivered as a tested, ready-to-adopt
+module in this pass; wiring it into each child project's own repository is that project's
+own follow-up commit, not part of little-workshop's own codebase.

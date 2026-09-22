@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from common.paths import Paths
+from common.incident import install_incident_reporting
 from version.commands.config import cmd_config_add_hook, cmd_config_list, cmd_config_remove_hook
 from version.commands.hotfix import cmd_hotfix_finish, cmd_hotfix_start, cmd_hotfix_status
 from version.commands.init import cmd_init
@@ -156,6 +157,7 @@ STATUS_HANDLERS: dict[str, Callable[[Path], CommandResult]] = {
 
 def build_app(paths: Paths, resolve: Callable[[Paths, str | None], Path] = resolve_project_path) -> FastAPI:
     app = FastAPI(title="little-workshop Version Control & Release")
+    install_incident_reporting(app, paths, pillar="version")
 
     @app.get("/v1/health")
     def health() -> dict:

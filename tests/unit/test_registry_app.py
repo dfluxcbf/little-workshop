@@ -323,3 +323,11 @@ def test_job_import_nonexistent_path_fails_cleanly(client):
     body = response.json()
     assert body["outcome"] == "failed"
     assert "does not exist" in body["error"]
+
+
+def test_secrets_reports_the_github_token_status(client, monkeypatch):
+    app_client, _ = client
+    from registry import github
+
+    monkeypatch.setattr(github, "github_token_status", lambda: {"present": True, "valid": True, "expires_at": None, "detail": "no expiration set"})
+    assert app_client.get("/v1/secrets").json() == [{"name": "github", "present": True, "valid": True, "expires_at": None, "detail": "no expiration set"}]

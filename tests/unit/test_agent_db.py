@@ -100,3 +100,35 @@ def test_create_run_stores_source_json(conn):
     run = db.get_run(conn, run_id)
     assert run["status"] == db.RUNNING
     assert run["source_json"] == '{"type": "github_issue", "number": 3}'
+
+
+# -- incidents --------------------------------------------------------------------------
+
+
+def test_create_and_get_incident_round_trips(conn):
+    incident_id = db.new_incident_id()
+    db.create_incident(
+        conn, incident_id, project_id="p", pillar="agent", context="POST /x",
+        exception_type="ValueError", message="boom", traceback="tb...",
+    )
+    incident = db.get_incident(conn, incident_id)
+    assert incident["status"] == "open" and incident["project_id"] == "p" and incident["run_id"] is None
+
+
+def test_list_incidents_filters_and_orders_newest_first(conn):
+    first = db.new_incident_id()
+    db.create_incident(conn, first, project_id="p", pillar="agent", context="", exception_type="A", message="", traceback="")
+    second = db.new_incident_id()
+    db.create_incident(conn, second, project_id="p", pillar="agent", context="", exception_type="B", message="", traceback="")
+    db.decide_incident(conn, first, status="dismissed")
+    assert [i["id"] for i in db.list_incidents(conn)] == [second, first]
+    assert [i["id"] for i in db.list_incidents(conn, status="open")] == [second]
+    assert [i["id"] for i in db.list_incidents(conn, status="dismissed")] == [first]
+
+
+def test_decide_incident_records_the_linked_run(conn):
+    incident_id = db.new_incident_id()
+    db.create_incident(conn, incident_id, project_id="p", pillar="agent", context="", exception_type="A", message="", traceback="")
+    db.decide_incident(conn, incident_id, status="confirmed", run_id="run-1")
+    incident = db.get_incident(conn, incident_id)
+    assert incident["status"] == "confirmed" and incident["run_id"] == "run-1" and incident["decided_at"] is not None

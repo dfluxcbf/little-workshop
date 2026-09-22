@@ -51,6 +51,20 @@ CREATE TABLE IF NOT EXISTS poll_cursors (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS incidents (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    pillar TEXT NOT NULL,
+    context TEXT NOT NULL DEFAULT '',
+    exception_type TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    traceback TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    run_id TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS ci_checks (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -134,6 +148,46 @@ def list_runs(conn: sqlite3.Connection, project_id: str, *, status: str | None =
             (project_id, status),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+# -- incidents: an unhandled exception, awaiting the user's confirmation --
+
+
+def new_incident_id() -> str:
+    return uuid.uuid4().hex
+
+
+def create_incident(
+    conn: sqlite3.Connection, incident_id: str, *, project_id: str, pillar: str, context: str,
+    exception_type: str, message: str, traceback: str,
+) -> None:
+    conn.execute(
+        """INSERT INTO incidents (id, project_id, pillar, context, exception_type, message, traceback, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)""",
+        (incident_id, project_id, pillar, context, exception_type, message, traceback, _now()),
+    )
+    conn.commit()
+
+
+def get_incident(conn: sqlite3.Connection, incident_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_incidents(conn: sqlite3.Connection, *, status: str | None = None) -> list[dict]:
+    if status is None:
+        rows = conn.execute("SELECT * FROM incidents ORDER BY created_at DESC").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM incidents WHERE status = ? ORDER BY created_at DESC", (status,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def decide_incident(conn: sqlite3.Connection, incident_id: str, *, status: str, run_id: str | None = None) -> None:
+    conn.execute(
+        "UPDATE incidents SET status = ?, run_id = ?, decided_at = ? WHERE id = ?",
+        (status, run_id, _now(), incident_id),
+    )
+    conn.commit()
 
 
 # -- remote_control_sessions ----------------------------------------------

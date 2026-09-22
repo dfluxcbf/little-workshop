@@ -17,7 +17,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ValidationError
 
 from common.paths import Paths
-from registry import db, gitops, version_client
+from common.incident import install_incident_reporting
+from registry import db, github, gitops, version_client
 from registry.bootstrap import BootstrapError, bootstrap_project
 from registry.import_ import ProjectImportError, import_project
 from registry.models import BootstrapParams, ImportParams, ProjectSet, ProjectStatus, Ticket
@@ -42,6 +43,7 @@ class CreateTicketRequest(BaseModel):
 
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     app = FastAPI(title="little-workshop Registry & Portfolio")
+    install_incident_reporting(app, paths, pillar="registry")
     lock = threading.Lock()
 
     @app.get("/v1/health")
@@ -173,5 +175,11 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     def list_tickets(project_name: str | None = None) -> list[dict]:
         with lock:
             return [t.model_dump(mode="json") for t in db.list_tickets(conn, project_name=project_name)]
+
+    @app.get("/v1/secrets")
+    def list_secrets() -> list[dict]:
+        """System health's own secrets/tokens panel — never the token itself,
+        only whether it authenticates and, when it carries one, its expiration."""
+        return [{"name": "github", **github.github_token_status()}]
 
     return app

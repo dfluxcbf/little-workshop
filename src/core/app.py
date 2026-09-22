@@ -9,11 +9,15 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from common.incident import install_incident_reporting
+from common.paths import Paths
 from core.supervisor import Supervisor
 
 
-def build_app(supervisor: Supervisor) -> FastAPI:
+def build_app(supervisor: Supervisor, paths: Paths | None = None) -> FastAPI:
     app = FastAPI(title="little-workshop Core")
+    if paths is not None:
+        install_incident_reporting(app, paths, pillar="core")
 
     @app.get("/v1/health")
     def health() -> dict:

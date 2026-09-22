@@ -43,6 +43,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from common.paths import Paths
+from common.incident import install_incident_reporting
 from common.workspace import WORKSPACE_ID, workspace_dir
 from dashboard import client, prefs
 
@@ -141,6 +142,22 @@ def build_report(paths: Paths, project: str) -> dict:
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
+POINTER_CATALOG_ENTRIES = [
+    {"name": "Requirements and their verdicts", "pillar": "requirements", "endpoint": "GET /v1/report?project_id={project}"},
+    {"name": "Requirements (full records)", "pillar": "requirements", "endpoint": "GET /v1/requirements?project_id={project}"},
+    {"name": "Test results", "pillar": "requirements", "endpoint": "GET /v1/test_results?project_id={project}"},
+    {"name": "Test suites", "pillar": "requirements", "endpoint": "GET /v1/test_suites?project_id={project}"},
+    {"name": "Agent task runs", "pillar": "agent", "endpoint": "GET /v1/runs/{project}"},
+    {"name": "Incidents", "pillar": "agent", "endpoint": "GET /v1/incidents"},
+    {"name": "Jobs", "pillar": "orchestration", "endpoint": "GET /v1/jobs"},
+    {"name": "Policies", "pillar": "policy", "endpoint": "GET /v1/policies"},
+    {"name": "Policy check results", "pillar": "policy", "endpoint": "GET /v1/policy_check_results"},
+    {"name": "Policy drafts", "pillar": "policy", "endpoint": "GET /v1/policy_drafts"},
+    {"name": "Packages (wheels, vsix)", "pillar": "build", "endpoint": "GET /v1/packages"},
+    {"name": "Deploy history", "pillar": "deployment", "endpoint": "GET /v1/deployments?project_id={project}"},
+]
+
+
 PILLAR_NAMES = {
     "orchestration": "Orchestration", "policy": "Policy & Compliance", "registry": "Registry & Portfolio",
     "requirements": "Requirements & Quality", "version": "Version Control & Release", "build": "Build & Packages",
@@ -174,6 +191,13 @@ def collect_attention(paths: Paths) -> list[dict]:
         items.append({
             "kind": "confirmation", "project": job.get("project_id") or "", "title": f"{job['type']} awaits confirmation",
             "detail": "", "href": "/jobs?status=pending_confirmation", "since": job.get("created_at"),
+        })
+    for incident in _try(lambda: client.list_incidents(paths, status="open"), default=[]):
+        items.append({
+            "kind": "incident", "project": incident["project_id"],
+            "title": f"{incident['exception_type']} in {incident['pillar']}",
+            "detail": incident.get("message", "")[:240], "href": f"/incidents/{incident['id']}",
+            "since": incident.get("created_at"),
         })
     return items
 
@@ -231,6 +255,7 @@ def pretty_json(value) -> str:
 
 def build_app(paths: Paths) -> FastAPI:
     app = FastAPI(title="little-workshop Dashboard")
+    install_incident_reporting(app, paths, pillar="dashboard")
     templates = _templates()
     static_dir = importlib.resources.files("dashboard") / "static"
     templates.env.filters["reltime"] = relative_time
@@ -271,6 +296,60 @@ def build_app(paths: Paths) -> FastAPI:
     def attention(request: Request):
         items = collect_attention(paths)
         return _render(request, "attention.html", items=items, attention_count=len(items), nav_active="attention")
+
+    # -- Data catalog: every kind of data little-workshop holds, and how to find it --
+
+    @app.get("/data", response_class=HTMLResponse)
+    def data_catalog(request: Request):
+        try:
+            names = _project_names()
+        except client.PillarUnavailable:
+            names = []
+        inline_rows = []
+        for name in names:
+            server = _try(client.deployment_status_optional, paths, name)
+            inline_rows.append({
+                "project": name, "version": (server or {}).get("version") if server else None,
+                "listening": (server or {}).get("listening") if server else None,
+            })
+        secrets = _try(client.list_secrets, paths, default=[])
+        return _render(
+            request, "data_catalog.html", pointer_entries=POINTER_CATALOG_ENTRIES,
+            inline_rows=inline_rows, secrets=secrets, nav_active="data",
+        )
+
+    # -- Incidents: an unhandled exception, awaiting the user's confirmation -----
+
+    @app.get("/incidents", response_class=HTMLResponse)
+    def incidents(request: Request, status: str = "open"):
+        rows = _try(lambda: client.list_incidents(paths, status=status or None), default=[])
+        return _render(request, "incidents.html", incidents=rows, status=status, nav_active="incidents")
+
+    @app.get("/incidents/{incident_id}", response_class=HTMLResponse)
+    def incident_detail(request: Request, incident_id: str):
+        incident = _try(lambda: client.get_incident(paths, incident_id), default=None)
+        return _render(request, "incident_detail.html", incident=incident, nav_active="incidents")
+
+    @app.post("/incidents/{incident_id}/confirm")
+    def incident_confirm(incident_id: str, review_mode: str = Form("auto_approve")):
+        result = _try(lambda: client.create_job(
+            paths, type="agent.confirm_incident", target_pillar="agent", project_id=None,
+            params={"incident_id": incident_id, "review_mode": review_mode},
+            queue_key=None, depends_on=[], created_by="dashboard",
+        ))
+        if result is None or result.get("status") not in ("running", "succeeded"):
+            return _back(f"/incidents/{incident_id}", f"Could not confirm: {(result or {}).get('error', 'agent pillar unreachable')}")
+        return _back("/tasks", "Confirmed — the fix is under way.")
+
+    @app.post("/incidents/{incident_id}/dismiss")
+    def incident_dismiss(incident_id: str):
+        result = _try(lambda: client.create_job(
+            paths, type="agent.dismiss_incident", target_pillar="agent", project_id=None,
+            params={"incident_id": incident_id}, queue_key=None, depends_on=[], created_by="dashboard",
+        ))
+        if result is None or result.get("status") != "succeeded":
+            return _back(f"/incidents/{incident_id}", f"Could not dismiss: {(result or {}).get('error', 'agent pillar unreachable')}")
+        return _back("/incidents", "Dismissed.")
 
     def _project_names() -> list[str]:
         return [p["name"] for p in client.list_projects(paths) if p.get("status", "active") == "active"]
@@ -604,10 +683,11 @@ def build_app(paths: Paths) -> FastAPI:
             entries, error = {}, str(exc)
         deployed = _try(client.deployment_pillars, paths, default=None)
         commits = (deployed or {}).get("commits", [])
+        secrets = _try(client.list_secrets, paths, default=[])
         return _render(
             request, "pillars.html", pillars=entries, error=error, nav_active="pillars",
             deployed=(deployed or {}).get("pillars", {}), repo_head=(deployed or {}).get("repo_head"),
-            deployment_known=deployed is not None, commits=commits,
+            deployment_known=deployed is not None, commits=commits, secrets=secrets,
             versions={c["sha"]: c["version"] for c in commits if c.get("version")},
         )
 

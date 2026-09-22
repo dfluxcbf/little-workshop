@@ -94,3 +94,13 @@ against that same lock otherwise).
   Core's very first registry entries, since Version Control & Release
   and Deployment & Servers both need it resolvable from the moment they
   themselves start.
+
+## Secrets and token validity (2026-09-22)
+
+`GET /v1/secrets` — System health's own secrets panel (the Dashboard's Pillars page).
+Today, one entry: the host's `gh` CLI credential (`registry/github.py`'s
+`github_token_status`) — `gh auth status`'s own exit code for valid/invalid, and, only
+when the credential carries one, its expiration date read from GitHub's own
+`github-authentication-token-expiration` response header on a real `gh api /user` call.
+The token itself is never read, stored, or returned — only whether it authenticates and
+when it expires.

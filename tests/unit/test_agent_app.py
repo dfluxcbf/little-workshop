@@ -684,3 +684,100 @@ def test_workspace_dir_defaults_to_the_parent_of_the_workshop_checkout(monkeypat
     monkeypatch.delenv("LITTLE_WORKSHOP_WORKSPACE_DIR", raising=False)
     monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(tmp_path / "little-workshop"))
     assert workspace_dir() == tmp_path.resolve()
+
+
+# -- incidents: an unhandled exception, awaiting the user's confirmation --------------
+
+
+def _report(client, **overrides):
+    body = {"project_id": "little-widget", "pillar": "agent", "context": "POST /v1/jobs/x",
+            "exception_type": "ValueError", "message": "boom", "traceback": "Traceback...\nValueError: boom"}
+    body.update(overrides)
+    return client.post("/v1/incidents", json=body)
+
+
+def test_report_incident_creates_an_open_incident(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    incident_id = _report(client).json()["id"]
+    incident = client.get(f"/v1/incidents/{incident_id}").json()
+    assert incident["status"] == "open" and incident["project_id"] == "little-widget"
+    assert incident["exception_type"] == "ValueError" and incident["message"] == "boom"
+
+
+def test_report_incident_requires_the_essentials(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    assert client.post("/v1/incidents", json={"pillar": "agent"}).status_code == 422
+
+
+def test_list_incidents_filters_by_status(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    a = _report(client).json()["id"]
+    _report(client)
+    client.post("/v1/jobs/agent.dismiss_incident", json={"job_id": "j", "params": {"incident_id": a}})
+    assert len(client.get("/v1/incidents", params={"status": "open"}).json()) == 1
+    assert len(client.get("/v1/incidents", params={"status": "dismissed"}).json()) == 1
+    assert len(client.get("/v1/incidents").json()) == 2
+
+
+def test_get_unknown_incident_404s(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    assert client.get("/v1/incidents/ghost").status_code == 404
+
+
+def test_dismiss_incident_discards_it_without_a_task(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    incident_id = _report(client).json()["id"]
+    response = client.post("/v1/jobs/agent.dismiss_incident", json={"job_id": "j", "params": {"incident_id": incident_id}})
+    assert response.json()["outcome"] == "succeeded"
+    assert client.get(f"/v1/incidents/{incident_id}").json()["status"] == "dismissed"
+    assert client.get("/v1/runs/little-widget").json() == []
+
+
+def test_dismiss_unknown_or_already_decided_incident_fails_cleanly(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    assert client.post("/v1/jobs/agent.dismiss_incident", json={"job_id": "j", "params": {"incident_id": "ghost"}}).json()["outcome"] == "failed"
+    incident_id = _report(client).json()["id"]
+    client.post("/v1/jobs/agent.dismiss_incident", json={"job_id": "j", "params": {"incident_id": incident_id}})
+    second = client.post("/v1/jobs/agent.dismiss_incident", json={"job_id": "j", "params": {"incident_id": incident_id}})
+    assert second.json()["outcome"] == "failed" and "already" in second.json()["error"]
+
+
+def test_confirm_incident_starts_a_bug_task_and_links_the_run(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    incident_id = _report(client, project_id="little-meals").json()["id"]
+    response = client.post("/v1/jobs/agent.confirm_incident", json={"job_id": "j", "params": {"incident_id": incident_id}})
+    body = response.json()
+    assert body["outcome"] == "accepted"
+    run_id = body["result"]["run_id"]
+
+    run = _wait_for_run(client, "little-meals", run_id)
+    assert run["intent"] == "bug" and "ValueError" in run["title"]
+
+    incident = client.get(f"/v1/incidents/{incident_id}").json()
+    assert incident["status"] == "confirmed" and incident["run_id"] == run_id
+
+
+def test_confirm_incident_honors_the_chosen_review_mode(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch, status="done")
+    incident_id = _report(client, project_id="little-meals").json()["id"]
+    response = client.post("/v1/jobs/agent.confirm_incident", json={"job_id": "j", "params": {"incident_id": incident_id, "review_mode": "auto_approve"}})
+    run_id = response.json()["result"]["run_id"]
+    run = _wait_for_run(client, "little-meals", run_id)
+    assert run["review_mode"] == "auto_approve"
+
+
+def test_confirm_incident_defaults_to_auto_approve(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch, status="done")
+    incident_id = _report(client, project_id="little-meals").json()["id"]
+    response = client.post("/v1/jobs/agent.confirm_incident", json={"job_id": "j", "params": {"incident_id": incident_id}})
+    run = _wait_for_run(client, "little-meals", response.json()["result"]["run_id"])
+    assert run["review_mode"] == "auto_approve"
+
+
+def test_confirm_unknown_or_already_decided_incident_fails_cleanly(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    assert client.post("/v1/jobs/agent.confirm_incident", json={"job_id": "j", "params": {"incident_id": "ghost"}}).json()["outcome"] == "failed"
+    incident_id = _report(client).json()["id"]
+    client.post("/v1/jobs/agent.dismiss_incident", json={"job_id": "j", "params": {"incident_id": incident_id}})
+    second = client.post("/v1/jobs/agent.confirm_incident", json={"job_id": "j", "params": {"incident_id": incident_id}})
+    assert second.json()["outcome"] == "failed" and "already" in second.json()["error"]

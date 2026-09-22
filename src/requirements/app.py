@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from common.paths import Paths
+from common.incident import install_incident_reporting
 from common.worktree_client import WorktreeUnavailable
 from requirements import db
 from requirements.ears import ears_error
@@ -48,6 +49,7 @@ def _require(params: dict, *names: str) -> str | None:
 
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     app = FastAPI(title="little-workshop Requirements & Quality")
+    install_incident_reporting(app, paths, pillar="requirements")
     lock = threading.Lock()
 
     @app.get("/v1/health")

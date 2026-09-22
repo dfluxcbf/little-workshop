@@ -905,3 +905,22 @@ need resolving.
 document as the authoritative detail for this pillar specifically, per
 this ecosystem's own documentation policy ("don't duplicate content across
 files; link to the authoritative one instead").
+
+## Python test coverage policy, and the sandbox's own dependency limit (2026-09-22)
+
+`python-test-coverage` (`tools/policy_scripts/python_test_coverage.py`, `target_pillar`
+`requirements`, gate point `branch_finish`): runs a Python project's own real `pytest`
+suite with `--cov=src` inside the sandbox and reads pytest-cov's own `TOTAL` line,
+failing below 90%. Judges only the current run, the same "a past mistake never fails
+forever" rule `commit-bumps-version` already established. Skips cleanly (never fails) for
+a project that isn't Python in this ecosystem's own convention (no `pyproject.toml`,
+sidestepping a false match on a project like little-home that happens to have its own
+`src/`/`tests/` directories for TypeScript) or has no `tests/`/`src/`.
+
+**The sandbox's `--network none` is a real limit here**: running a project's actual test
+suite means its test-time imports must already be present in the image, since nothing can
+be `pip install`ed at check time. Image `:3` bakes in this ecosystem's own shared runtime
+stack (fastapi, uvicorn, pydantic, httpx, jinja2, python-multipart, pyyaml, apscheduler)
+alongside `pytest`/`pytest-cov`/`coverage`. A project needing a dependency outside that
+list fails the check with the pytest output attached, rather than silently reporting a
+pass it never actually measured.

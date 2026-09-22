@@ -14,6 +14,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from common.incident import install_incident_reporting
+from common.paths import Paths
 from orchestration import db, policy_gate
 from orchestration.dispatch import SocketLookup, complete_job, dispatch_ready_jobs, stop_job
 from orchestration.models import (
@@ -79,8 +81,10 @@ class SetQueueCapacityRequest(BaseModel):
     capacity: int
 
 
-def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup) -> FastAPI:
+def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Paths | None = None) -> FastAPI:
     app = FastAPI(title="little-workshop Orchestration")
+    if paths is not None:
+        install_incident_reporting(app, paths, pillar="orchestration")
     # FastAPI runs sync endpoint functions in a threadpool, so concurrent
     # requests could otherwise touch the one sqlite3 connection from more
     # than one thread at once — serialize every request's db work here.

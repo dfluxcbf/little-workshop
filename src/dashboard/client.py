@@ -117,6 +117,10 @@ def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5
     return _get(paths, "registry", "/v1/projects", params={"status": status} if status else None, timeout=timeout)
 
 
+def list_secrets(paths: Paths, *, timeout: float = 5.0) -> list[dict]:
+    return _get(paths, "registry", "/v1/secrets", timeout=timeout)
+
+
 def policy_list(paths: Paths, *, topic: str | None = None, timeout: float = 5.0) -> list[dict]:
     return _get(paths, "policy", "/v1/policies", params={"topic": topic} if topic else None, timeout=timeout)
 
@@ -205,6 +209,14 @@ def agent_run(paths: Paths, project_id: str, run_id: str) -> dict | None:
 
 def agent_latest_ci_check(paths: Paths, project_id: str) -> dict | None:
     return _get_optional(paths, "agent", f"/v1/ci_checks/{project_id}/latest")
+
+
+def list_incidents(paths: Paths, *, status: str | None = None) -> list[dict]:
+    return _get(paths, "agent", "/v1/incidents", params={"status": status} if status else None)
+
+
+def get_incident(paths: Paths, incident_id: str) -> dict | None:
+    return _get_optional(paths, "agent", f"/v1/incidents/{incident_id}")
 
 
 def requirements_report(paths: Paths, project_id: str) -> dict:

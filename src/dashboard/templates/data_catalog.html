@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Data — little-workshop{% endblock %}
+{% block content %}
+<h1>Data catalog</h1>
+<p class="lede">Every kind of data little-workshop holds. Pointer entries (large — e.g. all of a project's requirements and tests) name the live endpoint that holds them; inline entries (small, at most 1KB) show the value itself, always read live, so nothing here is ever stale.</p>
+
+<h2 class="section-label">Inline <span class="dim">the data itself</span></h2>
+<div class="report-list" style="margin-bottom:20px">
+  <article class="report-item">
+    <span class="report-head"><span class="report-title">Secrets and tokens</span><span class="chip">registry</span></span>
+    {% for s in secrets %}<span class="report-desc">{{ s.name }}: {{ 'valid' if s.valid else 'invalid' }}{% if s.expires_at %}, expires {{ s.expires_at }}{% endif %}</span>{% endfor %}
+  </article>
+  {% for r in inline_rows %}
+  <article class="report-item">
+    <span class="report-head"><span class="report-title">{{ r.project }} — server version</span><span class="chip">deployment</span></span>
+    <span class="report-desc">{{ r.version or 'unknown' }}{% if r.listening is not none %} &mdash; {{ 'up' if r.listening else 'down' }}{% endif %}</span>
+  </article>
+  {% endfor %}
+</div>
+
+<h2 class="section-label">Pointer <span class="dim">where to find it</span></h2>
+<div class="report-list">
+  {% for e in pointer_entries %}
+  <article class="report-item">
+    <span class="report-head"><span class="report-title">{{ e.name }}</span><span class="chip">{{ e.pillar }}</span></span>
+    <span class="report-desc"><code>{{ e.endpoint }}</code></span>
+  </article>
+  {% endfor %}
+</div>
+{% endblock %}

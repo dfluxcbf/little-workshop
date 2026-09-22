@@ -1228,10 +1228,11 @@ def test_a_single_draft_is_worded_in_the_singular(test_client, monkeypatch):
 # -- attention: failing checks and jobs awaiting confirmation, pushed to the page ----
 
 
-def _stub_attention(monkeypatch, *, policies, results, jobs):
+def _stub_attention(monkeypatch, *, policies, results, jobs, incidents=()):
     monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: policies)
     monkeypatch.setattr(client, "policy_check_results", lambda paths: results)
     monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: jobs if status == "pending_confirmation" else [])
+    monkeypatch.setattr(client, "list_incidents", lambda paths, status=None: list(incidents) if status == "open" else [])
 
 
 def test_attention_lists_a_failing_check_and_a_job_awaiting_confirmation(test_client, monkeypatch):
@@ -1280,7 +1281,20 @@ def test_attention_degrades_to_nothing_when_the_pillars_are_down(test_client, mo
     monkeypatch.setattr(client, "policy_list", down)
     monkeypatch.setattr(client, "policy_check_results", down)
     monkeypatch.setattr(client, "list_jobs", down)
+    monkeypatch.setattr(client, "list_incidents", down)
     assert test_client.get("/attention.json").json() == {"count": 0, "items": []}
+
+
+def test_attention_lists_an_open_incident_as_a_bug(test_client, monkeypatch):
+    _stub_attention(
+        monkeypatch, policies=[], results=[], jobs=[],
+        incidents=[{"id": "i1", "project_id": "little-widget", "pillar": "agent", "exception_type": "ValueError",
+                    "message": "boom", "created_at": "2026-09-22T10:00:00Z"}],
+    )
+    body = test_client.get("/attention.json").json()
+    assert body["count"] == 1 and body["items"][0]["kind"] == "incident"
+    page = test_client.get("/attention").text
+    assert "ValueError in agent" in page and "boom" in page and 'href="/incidents/i1"' in page and ">bug<" in page
 
 
 # -- pillar names ---------------------------------------------------------------
@@ -1670,3 +1684,156 @@ def test_report_hides_the_self_application_aggregate_suite_from_the_tests_tab(te
     text = test_client.get("/report").text
     assert ">Unit tests<" not in text
     assert text.count("report-test-name") == 1 and "test_widget" in text
+
+
+# -- incidents page: list, detail, confirm/dismiss --------------------------------------
+
+
+def _incident_row(**overrides):
+    base = {
+        "id": "inc1", "project_id": "little-widget", "pillar": "agent", "context": "POST /v1/jobs/x",
+        "exception_type": "ValueError", "message": "boom", "traceback": "Traceback...\nValueError: boom",
+        "status": "open", "run_id": None, "created_at": "2026-09-22T10:00:00Z", "decided_at": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_incidents_page_lists_open_by_default(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_incidents", lambda paths, status=None: [_incident_row()] if status == "open" else [])
+    text = test_client.get("/incidents").text
+    assert "ValueError in agent" in text and "boom" in text and 'href="/incidents/inc1"' in text
+
+
+def test_incidents_page_status_filter(test_client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(client, "list_incidents", lambda paths, status=None: calls.append(status) or [])
+    test_client.get("/incidents", params={"status": "dismissed"})
+    assert "dismissed" in calls
+    calls.clear()
+    test_client.get("/incidents", params={"status": ""})
+    assert None in calls  # "All" -> no status filter, distinct from the banner's own "open" call
+
+
+def test_incident_detail_shows_traceback_and_the_confirm_form(test_client, monkeypatch):
+    monkeypatch.setattr(client, "get_incident", lambda paths, incident_id: _incident_row())
+    text = test_client.get("/incidents/inc1").text
+    assert "Traceback..." in text and 'action="/incidents/inc1/confirm"' in text and 'action="/incidents/inc1/dismiss"' in text
+    assert 'value="auto_approve"' in text
+
+
+def test_a_decided_incident_offers_no_confirm_form(test_client, monkeypatch):
+    monkeypatch.setattr(client, "get_incident", lambda paths, incident_id: _incident_row(status="confirmed", run_id="run-1"))
+    text = test_client.get("/incidents/inc1").text
+    assert "/confirm" not in text and "/dismiss" not in text
+    assert 'href="/tasks/little-widget/run-1"' in text
+
+
+def test_unknown_incident_says_so(test_client, monkeypatch):
+    monkeypatch.setattr(client, "get_incident", lambda paths, incident_id: None)
+    assert "Incident not found." in test_client.get("/incidents/ghost").text
+
+
+def test_confirming_an_incident_submits_the_chosen_review_mode(test_client, monkeypatch):
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (jobs.append(kw), {"status": "running", "result": {"run_id": "run-1"}})[1])
+    response = test_client.post("/incidents/inc1/confirm", data={"review_mode": "manual"}, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"].startswith("/tasks?message=")
+    job = jobs[0]
+    assert job["type"] == "agent.confirm_incident" and job["params"] == {"incident_id": "inc1", "review_mode": "manual"}
+
+
+def test_confirming_defaults_to_auto_approve(test_client, monkeypatch):
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (jobs.append(kw), {"status": "running", "result": {"run_id": "run-1"}})[1])
+    test_client.post("/incidents/inc1/confirm", data={})
+    assert jobs[0]["params"]["review_mode"] == "auto_approve"
+
+
+def test_a_refused_confirm_returns_to_the_incident(test_client, monkeypatch):
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: {"status": "failed", "error": "no such incident"})
+    response = test_client.post("/incidents/inc1/confirm", data={}, follow_redirects=False)
+    assert response.headers["location"].startswith("/incidents/inc1?message=") and "no such incident" in unquote(response.headers["location"])
+
+
+def test_dismissing_an_incident_redirects_to_the_list(test_client, monkeypatch):
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (jobs.append(kw), {"status": "succeeded"})[1])
+    response = test_client.post("/incidents/inc1/dismiss", follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"].startswith("/incidents?message=")
+    assert jobs[0]["type"] == "agent.dismiss_incident" and jobs[0]["params"] == {"incident_id": "inc1"}
+
+
+def test_a_refused_dismiss_returns_to_the_incident(test_client, monkeypatch):
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: {"status": "failed", "error": "already decided"})
+    response = test_client.post("/incidents/inc1/dismiss", follow_redirects=False)
+    assert response.headers["location"].startswith("/incidents/inc1?message=") and "already decided" in unquote(response.headers["location"])
+
+
+# -- secrets: token validity, on the Pillars page (System health) -----------------------
+
+
+def test_pillars_page_shows_a_valid_token_with_no_expiration(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_secrets", lambda paths: [{"name": "github", "present": True, "valid": True, "expires_at": None, "detail": "no expiration set"}])
+    text = test_client.get("/pillars").text
+    assert "github" in text and 'class="pill ok">valid' in text and "no expiration set" in text
+
+
+def test_pillars_page_shows_the_expiration_when_the_token_has_one(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_secrets", lambda paths: [{"name": "github", "present": True, "valid": True, "expires_at": "2026-12-31 00:00:00 UTC", "detail": ""}])
+    text = test_client.get("/pillars").text
+    assert "expires 2026-12-31 00:00:00 UTC" in text
+
+
+def test_pillars_page_shows_an_invalid_token(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_secrets", lambda paths: [{"name": "github", "present": True, "valid": False, "expires_at": None, "detail": "not logged in"}])
+    text = test_client.get("/pillars").text
+    assert 'class="pill fail">invalid' in text
+
+
+def test_pillars_page_hides_the_secrets_section_when_none_are_configured(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_secrets", lambda paths: [])
+    assert "Secrets" not in test_client.get("/pillars").text
+
+
+def test_pillars_page_survives_registry_being_down_for_secrets(test_client, monkeypatch):
+    def down(paths):
+        raise client.PillarUnavailable("registry daemon unreachable")
+
+    monkeypatch.setattr(client, "list_secrets", down)
+    assert test_client.get("/pillars").status_code == 200
+
+
+# -- data catalog: pointer vs inline data, live -----------------------------------------
+
+
+def test_data_catalog_shows_pointer_entries(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [])
+    monkeypatch.setattr(client, "list_secrets", lambda paths: [])
+    text = test_client.get("/data").text
+    assert "Requirements and their verdicts" in text and "GET /v1/report?project_id={project}" in text
+    assert "requirements" in text and "Incidents" in text
+
+
+def test_data_catalog_shows_each_projects_inline_version(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    monkeypatch.setattr(client, "deployment_status_optional", lambda paths, name: {"version": "1.2.3", "listening": True})
+    monkeypatch.setattr(client, "list_secrets", lambda paths: [])
+    text = test_client.get("/data").text
+    assert "little-widget — server version" in text and "1.2.3" in text and "up" in text
+
+
+def test_data_catalog_shows_secrets_status(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [])
+    monkeypatch.setattr(client, "list_secrets", lambda paths: [{"name": "github", "valid": True, "expires_at": "2026-12-31 00:00:00 UTC"}])
+    text = test_client.get("/data").text
+    assert "github: valid, expires 2026-12-31 00:00:00 UTC" in text
+
+
+def test_data_catalog_survives_pillars_being_down(test_client, monkeypatch):
+    def down(*a, **kw):
+        raise client.PillarUnavailable("down")
+
+    monkeypatch.setattr(client, "list_projects", down)
+    monkeypatch.setattr(client, "list_secrets", down)
+    assert test_client.get("/data").status_code == 200

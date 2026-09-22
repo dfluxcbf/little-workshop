@@ -38,7 +38,7 @@ def main() -> None:
     if socket_path.exists():
         socket_path.unlink()
 
-    app = build_app(supervisor)
+    app = build_app(supervisor, paths)
     try:
         uvicorn.run(app, uds=str(socket_path), log_level="info")
     finally:

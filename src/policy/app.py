@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from common.paths import Paths
+from common.incident import install_incident_reporting
 from common.registry_client import ProjectResolutionError, resolve_project
 from policy import agent_client, db, gates, registry_client, sandbox
 from policy.agent_client import AgentClientError
@@ -108,6 +109,7 @@ def _validate_gate_points_against_target(gate_points: list[GatePoint], target_pi
 
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     app = FastAPI(title="little-workshop Policy & Compliance")
+    install_incident_reporting(app, paths, pillar="policy")
     lock = threading.Lock()
 
     def query_fn(prompt: str) -> str:

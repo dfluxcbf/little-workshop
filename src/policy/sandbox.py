@@ -24,14 +24,21 @@ from pathlib import Path
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from policy.models import CheckOutcome
 
-IMAGE_TAG = "little-workshop-policy-sandbox:2"
+IMAGE_TAG = "little-workshop-policy-sandbox:3"
 DEFAULT_CHECK_TIMEOUT_SECONDS = 1800.0
 
 # git: version policies compare a commit with its parent, which needs real history.
+# pytest-cov and this ecosystem's own common runtime stack: the python-test-coverage
+# policy runs a project's real test suite to measure its own statement coverage —
+# added in image :3. --network none means every dependency a project's own tests
+# might import must already be baked in here; this is every little-* project's
+# shared stack today (docs/pillars/policy_compliance.md's own coverage policy note
+# has the full reasoning and its limits).
 _DOCKERFILE = (
     "FROM python:3.12-slim\n"
     "RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*\n"
-    "RUN pip install --no-cache-dir pytest\n"
+    "RUN pip install --no-cache-dir pytest pytest-cov coverage "
+    "fastapi uvicorn pydantic httpx jinja2 python-multipart pyyaml apscheduler\n"
 )
 
 _FAILED_RE = re.compile(r"(\d+) failed")

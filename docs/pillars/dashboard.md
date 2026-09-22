@@ -126,7 +126,31 @@ are the current state of every pillar.
   one `deployment.redeploy_pillar` Job per selected pillar, submitted in
   sequence from a background thread with Orchestration/Deployment/Core
   last, since redeploying those interrupts the redeploy chain itself.
-  `/jobs` and `/policies` hang off the More tab.
+  `/jobs` and `/policies` hang off the More tab. **Secrets** (2026-09-22): a
+  card above the pillar grid, one row per configured secret (today: the
+  host's `gh` CLI token) with a valid/invalid pill and, when it has one,
+  its expiration date — never the secret's own value (Registry &
+  Portfolio's `GET /v1/secrets`); hidden entirely when nothing is
+  configured.
+- **Incidents** (`/incidents`, `/incidents/{id}`; 2026-09-22) — an
+  unhandled exception, anywhere in this ecosystem, awaiting the user's
+  confirmation before it becomes a bug task. The list (status filter:
+  open/confirmed/dismissed/all) is one card per incident — exception type,
+  raising component, message, project, age. A card's own page shows the
+  full traceback (open by default) and, while still open, a review-mode
+  choice (auto-approve or manual, defaulting to auto-approve) with Confirm
+  (`agent.confirm_incident`, starting a real bug-intent task and linking
+  it here) or Dismiss (`agent.dismiss_incident`, discarded, no task). An
+  open incident also appears on **Needs Attention** as a "bug" chip. See
+  `docs/pillars/agentic_development.md`'s own "Incidents" section for the
+  reporting side.
+- **Data catalog** (`/data`; 2026-09-22) — every kind of data
+  little-workshop holds. **Inline** entries (at most 1KB — a project's own
+  server version, the secrets panel) show the value itself, read live on
+  every visit, so there is nothing separate for CI to keep fresh.
+  **Pointer** entries (larger — a project's whole set of requirements and
+  test results, its job history, its policy checks) name the owning
+  pillar and the live endpoint that holds them, never a copy.
 - **Policy drafts** (`/policies/drafts`, `/policies/drafts/{id}`; 2026-09-21)
   — where Gate 4 happens. `/policies` shows a banner ("N policies
   awaiting your approval") linking to the list: one card per pending draft

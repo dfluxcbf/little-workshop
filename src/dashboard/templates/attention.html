@@ -6,7 +6,9 @@
   <a class="polcard" href="{{ i.href }}">
     <span class="polcard-head">
       <span class="polcard-topic">{{ i.title }}</span>
-      <span class="pill {{ 'fail' if i.kind == 'policy' else 'warn' }}">{{ 'failing' if i.kind == 'policy' else 'confirm' }}</span>
+      {% if i.kind == 'policy' %}<span class="pill fail">failing</span>
+      {% elif i.kind == 'incident' %}<span class="pill fail">bug</span>
+      {% else %}<span class="pill warn">confirm</span>{% endif %}
     </span>
     {% if i.detail %}<span class="polcard-ears">{{ i.detail }}</span>{% endif %}
     <span class="polcard-meta">
@@ -15,7 +17,7 @@
     </span>
   </a>
   {% else %}
-  <p class="muted">Nothing needs you right now: every enabled policy check passes and no job is waiting for confirmation.</p>
+  <p class="muted">Nothing needs you right now: every enabled policy check passes, no job is waiting for confirmation, and no incident is open.</p>
   {% endfor %}
 </div>
 <p class="muted"><button type="button" class="btn" id="enable-alerts" hidden>Alert me on this device when something new fails</button></p>

@@ -237,3 +237,71 @@ def test_ensure_label_raises_when_the_patch_fallback_also_fails(monkeypatch):
     monkeypatch.setattr(github.urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(github.GitHubError):
         github.ensure_label("dfluxcbf/little-widget", "fake-token", "claude", "7057ff", "desc")
+
+
+# -- github_token_status: valid/invalid, expiration when the token has one -----------
+
+
+def test_token_status_reports_absent_when_gh_is_not_installed(monkeypatch):
+    monkeypatch.setattr(github.shutil, "which", lambda name: None)
+    status = github.github_token_status()
+    assert status == {"present": False, "valid": False, "expires_at": None, "detail": "gh CLI not installed"}
+
+
+def test_token_status_reports_invalid_when_not_logged_in(monkeypatch):
+    monkeypatch.setattr(github.shutil, "which", lambda name: "/usr/bin/gh")
+
+    def fake_run(args, capture_output, text, check):
+        if args[:2] == ["gh", "auth"]:
+            return subprocess.CompletedProcess(args, returncode=1, stdout="", stderr="not logged in")
+        raise AssertionError(f"unexpected call: {args}")
+
+    monkeypatch.setattr(github.subprocess, "run", fake_run)
+    status = github.github_token_status()
+    assert status["present"] is True and status["valid"] is False and "not logged in" in status["detail"]
+
+
+def test_token_status_reports_valid_with_no_expiration(monkeypatch):
+    monkeypatch.setattr(github.shutil, "which", lambda name: "/usr/bin/gh")
+
+    def fake_run(args, capture_output, text, check):
+        if args[:2] == ["gh", "auth"]:
+            return subprocess.CompletedProcess(args, returncode=0, stdout="logged in", stderr="")
+        if args[:2] == ["gh", "api"]:
+            return subprocess.CompletedProcess(args, returncode=0, stdout="HTTP/2.0 200 OK\r\nDate: now\r\n", stderr="")
+        raise AssertionError(f"unexpected call: {args}")
+
+    monkeypatch.setattr(github.subprocess, "run", fake_run)
+    status = github.github_token_status()
+    assert status == {"present": True, "valid": True, "expires_at": None, "detail": "no expiration set"}
+
+
+def test_token_status_reports_the_expiration_when_present(monkeypatch):
+    monkeypatch.setattr(github.shutil, "which", lambda name: "/usr/bin/gh")
+
+    def fake_run(args, capture_output, text, check):
+        if args[:2] == ["gh", "auth"]:
+            return subprocess.CompletedProcess(args, returncode=0, stdout="logged in", stderr="")
+        if args[:2] == ["gh", "api"]:
+            return subprocess.CompletedProcess(
+                args, returncode=0,
+                stdout="HTTP/2.0 200 OK\r\nGithub-Authentication-Token-Expiration: 2026-12-31 00:00:00 UTC\r\n", stderr="",
+            )
+        raise AssertionError(f"unexpected call: {args}")
+
+    monkeypatch.setattr(github.subprocess, "run", fake_run)
+    status = github.github_token_status()
+    assert status["valid"] is True and status["expires_at"] == "2026-12-31 00:00:00 UTC" and status["detail"] == ""
+
+
+def test_token_status_never_includes_the_token_itself(monkeypatch):
+    monkeypatch.setattr(github.shutil, "which", lambda name: "/usr/bin/gh")
+
+    def fake_run(args, capture_output, text, check):
+        if args[:2] == ["gh", "auth"]:
+            return subprocess.CompletedProcess(args, returncode=0, stdout="Token: gho_secretsecretsecret", stderr="")
+        return subprocess.CompletedProcess(args, returncode=0, stdout="HTTP/2.0 200 OK\r\n", stderr="")
+
+    monkeypatch.setattr(github.subprocess, "run", fake_run)
+    status = github.github_token_status()
+    assert "gho_secretsecretsecret" not in json.dumps(status)

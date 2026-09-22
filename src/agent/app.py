@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from common.paths import Paths
+from common.incident import install_incident_reporting
 from common.pillar_socket import resolve_pillar_socket
 from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
@@ -53,6 +54,7 @@ def build_app(
     paths: Paths, conn: sqlite3.Connection, flow: AgentFlow | None = None, session_flow: SessionFlow | None = None,
 ) -> FastAPI:
     app = FastAPI(title="little-workshop Agentic Development")
+    install_incident_reporting(app, paths, pillar="agent")
     lock = threading.Lock()
     flow = flow or AgentFlow(paths=paths)
     session_flow = session_flow or SessionFlow(paths=paths)
@@ -80,21 +82,19 @@ def build_app(
     def health() -> dict:
         return {"ok": True}
 
-    @app.post("/v1/jobs/agent.run_task")
-    def job_run_task(request: JobRequest) -> dict:
-        if not request.project_id:
-            return {"outcome": "failed", "error": "missing project_id"}
+    def _dispatch_run_task(project_id: str, job_id: str, params: dict) -> dict:
+        """Shared by `agent.run_task` and `agent.confirm_incident` — an incident's
+        confirmed fix is an ordinary task, started the same way, just with its
+        title/description/intent already filled in from the incident."""
         try:
-            project = resolve_project(paths, request.project_id)
+            project = resolve_project(paths, project_id)
         except ProjectResolutionError as exc:
             return {"outcome": "failed", "error": str(exc)}
 
-        params = dict(request.params)
-        params.setdefault("job_id", request.job_id)
+        params = dict(params)
+        params.setdefault("job_id", job_id)
         project_dir = Path(project["path"])
         repo_url = project.get("repo_url")
-        project_id = request.project_id
-        job_id = request.job_id
         run_id = db.new_run_id()
 
         def worker() -> None:
@@ -113,6 +113,12 @@ def build_app(
 
         threading.Thread(target=worker, daemon=True).start()
         return {"outcome": "accepted", "result": {"dispatched": True, "run_id": run_id}}
+
+    @app.post("/v1/jobs/agent.run_task")
+    def job_run_task(request: JobRequest) -> dict:
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        return _dispatch_run_task(request.project_id, request.job_id, request.params)
 
     @app.post("/v1/jobs/agent.query")
     def job_query(request: JobRequest) -> dict:
@@ -240,5 +246,74 @@ def build_app(
             "project_id": project_id, "running": running, "trusted": trusted,
             "session_name": session_name_for(project_id) if running else None,
         }
+
+    # -- incidents: an unhandled exception, awaiting the user's confirmation ----
+
+    @app.post("/v1/incidents")
+    def report_incident(body: dict) -> dict:
+        """Called directly by `common/incident.py`'s reporter — never a Job (see
+        that module's own docstring for why): recording a crash must survive
+        Orchestration itself being unreachable."""
+        missing = [k for k in ("project_id", "pillar", "exception_type") if not body.get(k)]
+        if missing:
+            raise HTTPException(status_code=422, detail=f"missing: {', '.join(missing)}")
+        incident_id = db.new_incident_id()
+        with lock:
+            db.create_incident(
+                conn, incident_id, project_id=body["project_id"], pillar=body["pillar"],
+                context=body.get("context", ""), exception_type=body["exception_type"],
+                message=body.get("message", ""), traceback=body.get("traceback", ""),
+            )
+        return {"id": incident_id}
+
+    @app.get("/v1/incidents")
+    def list_incidents(status: str | None = None) -> list[dict]:
+        return read(db.list_incidents, status=status)
+
+    @app.get("/v1/incidents/{incident_id}")
+    def get_incident(incident_id: str) -> dict:
+        incident = read(db.get_incident, incident_id)
+        if incident is None:
+            raise HTTPException(status_code=404, detail="incident not found")
+        return incident
+
+    @app.post("/v1/jobs/agent.confirm_incident")
+    def job_confirm_incident(request: JobRequest) -> dict:
+        incident_id = request.params.get("incident_id")
+        if not incident_id:
+            return {"outcome": "failed", "error": "missing params.incident_id"}
+        with lock:
+            incident = db.get_incident(conn, incident_id)
+        if incident is None:
+            return {"outcome": "failed", "error": f"no such incident {incident_id!r}"}
+        if incident["status"] != "open":
+            return {"outcome": "failed", "error": f"incident already {incident['status']}"}
+        review_mode = request.params.get("review_mode", "auto_approve")
+        title = f"Fix: {incident['exception_type']} in {incident['pillar']}"
+        description = (
+            f"An unhandled {incident['exception_type']} was raised in the {incident['pillar']} pillar "
+            f"({incident['context']}): {incident['message']}\n\nTraceback:\n{incident['traceback']}"
+        )
+        result = _dispatch_run_task(incident["project_id"], request.job_id, {
+            "title": title, "description": description, "intent": "bug", "review_mode": review_mode,
+        })
+        if result["outcome"] == "accepted":
+            with lock:
+                db.decide_incident(conn, incident_id, status="confirmed", run_id=result["result"]["run_id"])
+        return result
+
+    @app.post("/v1/jobs/agent.dismiss_incident")
+    def job_dismiss_incident(request: JobRequest) -> dict:
+        incident_id = request.params.get("incident_id")
+        if not incident_id:
+            return {"outcome": "failed", "error": "missing params.incident_id"}
+        with lock:
+            incident = db.get_incident(conn, incident_id)
+            if incident is None:
+                return {"outcome": "failed", "error": f"no such incident {incident_id!r}"}
+            if incident["status"] != "open":
+                return {"outcome": "failed", "error": f"incident already {incident['status']}"}
+            db.decide_incident(conn, incident_id, status="dismissed")
+        return {"outcome": "succeeded", "result": {"incident_id": incident_id}}
 
     return app
