@@ -76,4 +76,4 @@ def test_init_succeeds_with_explicit_valid_branches(tmp_path):
 
     result = cmd_init(repo, production_branch="master", integration_branch="dev")
     assert result.success, result.message
-    assert result.data == {"production_branch": "master", "integration_branch": "dev"}
+    assert result.data == {"production_branch": "master", "integration_branch": "dev", "hook_installed": False}

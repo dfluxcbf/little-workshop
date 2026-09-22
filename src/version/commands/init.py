@@ -1,10 +1,14 @@
-"""`version.init` — ported from `little-versions`' `commands/init.py`."""
+"""`version.init` — ported from `little-versions`' `commands/init.py`, plus
+one addition with no little-versions equivalent: installing the
+`.githooks/pre-commit` hook (`sync_version_files.install_pre_commit_hook`)
+that keeps VERSION correct on every working-branch commit going forward."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from version.branches import INTEGRATION_BRANCHES, PRODUCTION_BRANCHES
+from version.commands.sync_version_files import install_pre_commit_hook
 from version.common import CommandResult
 from version.configstore import write_config
 from version.gitops import branch_exists, has_commits, is_git_repo
@@ -12,7 +16,10 @@ from version.schema import default_config
 
 
 def cmd_init(
-    repo_root: Path, production_branch: str | None = None, integration_branch: str | None = None
+    repo_root: Path,
+    production_branch: str | None = None,
+    integration_branch: str | None = None,
+    project_id: str | None = None,
 ) -> CommandResult:
     if not is_git_repo(repo_root):
         return CommandResult(success=False, message=f"Not a git repository: {repo_root}")
@@ -49,10 +56,24 @@ def cmd_init(
         return CommandResult(success=False, message=f"Integration branch {integration_branch!r} does not exist.")
 
     cfg = default_config(production_branch=production_branch, integration_branch=integration_branch)
+    if project_id:
+        cfg["project_id"] = project_id
     write_config(repo_root, cfg)
 
+    hook_installed = False
+    if project_id:
+        install_pre_commit_hook(repo_root, project_id)
+        hook_installed = True
+
+    message = f"Initialized version control: production={production_branch!r}, integration={integration_branch!r}"
+    if hook_installed:
+        message += "; installed .githooks/pre-commit (core.hooksPath)"
     return CommandResult(
         success=True,
-        message=f"Initialized version control: production={production_branch!r}, integration={integration_branch!r}",
-        data={"production_branch": production_branch, "integration_branch": integration_branch},
+        message=message,
+        data={
+            "production_branch": production_branch,
+            "integration_branch": integration_branch,
+            "hook_installed": hook_installed,
+        },
     )

@@ -282,7 +282,7 @@ def test_version_init_passes_branch_names(paths, monkeypatch):
         "version", "init", "--project-id", "little-widget",
         "--production-branch", "master", "--integration-branch", "dev",
     ])
-    assert captured["params"] == {"production_branch": "master", "integration_branch": "dev"}
+    assert captured["params"] == {"production_branch": "master", "integration_branch": "dev", "project_id": "little-widget"}
 
 
 def test_version_feature_start_success_with_issue(paths, monkeypatch):

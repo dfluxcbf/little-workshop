@@ -295,7 +295,15 @@ def _version_job(args: argparse.Namespace, job_type: str, params: dict) -> int:
 
 
 def cmd_version_init(args: argparse.Namespace) -> int:
-    return _version_job(args, "version.init", {"production_branch": args.production_branch, "integration_branch": args.integration_branch})
+    return _version_job(
+        args,
+        "version.init",
+        {"production_branch": args.production_branch, "integration_branch": args.integration_branch, "project_id": args.project_id},
+    )
+
+
+def cmd_version_sync_version_files(args: argparse.Namespace) -> int:
+    return _version_job(args, "version.sync_version_files", {})
 
 
 def cmd_version_topic_start(args: argparse.Namespace) -> int:
@@ -1728,6 +1736,13 @@ def build_parser() -> argparse.ArgumentParser:
     v_init.add_argument("--production-branch", default=None)
     v_init.add_argument("--integration-branch", default=None)
     v_init.set_defaults(func=cmd_version_init)
+
+    sync_version_files = version_sub.add_parser(
+        "sync-version-files",
+        help="Compute and write the current working branch's VERSION, propagate it via version_hooks, and stage everything touched",
+    )
+    sync_version_files.add_argument("--project-id", required=True)
+    sync_version_files.set_defaults(func=cmd_version_sync_version_files)
 
     def _add_topic_commands(prefix: str) -> None:
         start = version_sub.add_parser(f"{prefix}-start", help=f"Start a {prefix}/* branch")
