@@ -7,9 +7,11 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": [],
+  "gate_points": [
+    "branch_finish"
+  ],
   "source": "little-versions",
-  "notes": "Gate 3 turned this into a static scan of the project's source/docs text, not a history check \u2014 a weak proxy for the stated rule. Review whether it should be dropped or rewritten against merge commits.",
+  "notes": "Gate 3 turned this into a static scan of the project's source/docs text, not a history check \u2014 a weak proxy for the stated rule. Review whether it should be dropped or rewritten against merge commits. Gate point set 2026-09-22 at the user's request; the test script itself is still a weak static-text-scan proxy for the real git-history check this rule needs \u2014 worth rewriting or dropping before this ever runs for real.",
   "concerns": true,
   "projects": [
     {

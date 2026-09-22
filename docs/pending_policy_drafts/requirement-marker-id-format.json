@@ -7,9 +7,11 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": [],
+  "gate_points": [
+    "branch_finish"
+  ],
   "source": "little-requirements",
-  "notes": "Scans test files for `requirement(\"...\")` markers. Format only \u2014 cannot verify the ID exists in the requirements record.",
+  "notes": "Scans test files for `requirement(\"...\")` markers. Format only \u2014 cannot verify the ID exists in the requirements record. Gate point set 2026-09-22: branch_finish, alongside this project's other pre-finish content checks (commit-cites-requirement).",
   "concerns": false,
   "projects": [
     {

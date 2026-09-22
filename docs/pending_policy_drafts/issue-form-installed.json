@@ -7,9 +7,11 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": [],
+  "gate_points": [
+    "project_registration"
+  ],
   "source": "little-runner",
-  "notes": "Checks the file exists. Only meaningful for projects that use issue-driven automation; the script decides that itself \u2014 review how.",
+  "notes": "Checks the file exists. Only meaningful for projects that use issue-driven automation; the script decides that itself \u2014 review how. Gate point set 2026-09-22: project_registration, since that's the natural moment to check a project's issue-automation setup; the script itself already skips (not_applicable) for a project that hasn't opted into issue-driven automation, so gating never blocks one that doesn't use it.",
   "concerns": false,
   "projects": [
     {

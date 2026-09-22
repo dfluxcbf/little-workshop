@@ -68,16 +68,19 @@ also narrowed to judge only the newest tag (of the current release line, for RCs
 auditing full tag history, so one old mistake never fails them forever — the same principle
 `commit-bumps-version` already applies to commits.
 
-Left **audit-only** (`gate_points: []`) on purpose, not an oversight:
-- `back-merge-no-ff`, `hotfix-propagates-by-merge`: their own review notes flag the check as a
-  weak static-text-scan proxy standing in for a real git-history check that wasn't built. Gating
-  on a weak proxy risks blocking real work for the wrong reason; decide whether to rewrite or
-  drop the mechanism before ever gating on it.
-- `issue-form-installed`: only meaningful for a project that has opted into issue-driven
-  automation; not every project has, or should.
-- `requirement-marker-id-format`, `requirement-marker-registered`: format-only checks that
-  can't verify the referenced requirement actually exists; useful as a guideline, not yet a
-  gate.
+**Update 2026-09-22**: every pending draft now has a real gate point (none left
+audit-only), at the user's request. Two of them still carry an open caveat worth reading
+before approving:
+- `back-merge-no-ff`, `hotfix-propagates-by-merge` (`branch_finish`): their own review notes
+  flag the test script as a weak static-text-scan proxy standing in for a real git-history
+  check that was never built. Gating on a weak proxy risks blocking real work for the wrong
+  reason — consider rewriting or dropping the mechanism, gate point aside.
+- `issue-form-installed` (`project_registration`): the script already reports `not_applicable`
+  for a project that hasn't opted into issue-driven automation, so gating never blocks one that
+  doesn't use it.
+- `requirement-marker-id-format`, `requirement-marker-registered` (`branch_finish`): format-only
+  checks that can't verify the referenced requirement actually exists — gated alongside this
+  project's other pre-finish content checks (`commit-cites-requirement`).
 
 A parsing bug in Gate 1 (`src/policy/gates.py`) leaked a model's own reasoning preamble into
 `production-version-stable`'s stored `ears_text` when the reply didn't start with the marker

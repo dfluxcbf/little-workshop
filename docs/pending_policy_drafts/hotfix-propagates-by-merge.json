@@ -7,9 +7,11 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": [],
+  "gate_points": [
+    "branch_finish"
+  ],
   "source": "little-versions",
-  "notes": "Same as `back-merge-no-ff`: scans project source and docs for the word \"cherry-pick\". Weak proxy; review or drop.",
+  "notes": "Same as `back-merge-no-ff`: scans project source and docs for the word \"cherry-pick\". Weak proxy; review or drop. Gate point set 2026-09-22 at the user's request; same weak-proxy caveat as back-merge-no-ff.",
   "concerns": true,
   "projects": [
     {

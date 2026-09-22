@@ -7,9 +7,11 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": [],
+  "gate_points": [
+    "branch_finish"
+  ],
   "source": "little-requirements",
-  "notes": "File scan of pytest config; no git. Straightforward.",
+  "notes": "File scan of pytest config; no git. Straightforward. Gate point set 2026-09-22: branch_finish, for the same reason as requirement-marker-id-format.",
   "concerns": false,
   "projects": [
     {
