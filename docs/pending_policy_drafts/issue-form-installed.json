@@ -8,10 +8,10 @@
   "scope_target": null,
   "created_by": "framework",
   "gate_points": [
-    "project_registration"
+    "branch_finish"
   ],
   "source": "little-runner",
-  "notes": "Checks the file exists. Only meaningful for projects that use issue-driven automation; the script decides that itself \u2014 review how. Gate point set 2026-09-22: project_registration, since that's the natural moment to check a project's issue-automation setup; the script itself already skips (not_applicable) for a project that hasn't opted into issue-driven automation, so gating never blocks one that doesn't use it.",
+  "notes": "Checks the file exists. Only meaningful for projects that use issue-driven automation; the script decides that itself \u2014 review how. Gate point set 2026-09-22: project_registration, since that's the natural moment to check a project's issue-automation setup; the script itself already skips (not_applicable) for a project that hasn't opted into issue-driven automation, so gating never blocks one that doesn't use it. Corrected 2026-09-22: project_registration is invalid here \u2014 that gate point only works on a framework-bound policy (target_pillar == 'policy'); a project-bound check like this one has no project to inspect yet at registration time. Moved to branch_finish, alongside this project's other repo-content checks.",
   "concerns": false,
   "projects": [
     {

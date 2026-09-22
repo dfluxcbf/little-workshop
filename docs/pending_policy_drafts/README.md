@@ -75,12 +75,22 @@ before approving:
   flag the test script as a weak static-text-scan proxy standing in for a real git-history
   check that was never built. Gating on a weak proxy risks blocking real work for the wrong
   reason — consider rewriting or dropping the mechanism, gate point aside.
-- `issue-form-installed` (`project_registration`): the script already reports `not_applicable`
-  for a project that hasn't opted into issue-driven automation, so gating never blocks one that
-  doesn't use it.
+- `issue-form-installed` (`branch_finish` — corrected 2026-09-22 from an invalid
+  `project_registration`, which only works on a framework-bound policy; see below): the script
+  already reports `not_applicable` for a project that hasn't opted into issue-driven automation,
+  so gating never blocks one that doesn't use it.
 - `requirement-marker-id-format`, `requirement-marker-registered` (`branch_finish`): format-only
   checks that can't verify the referenced requirement actually exists — gated alongside this
   project's other pre-finish content checks (`commit-cites-requirement`).
+
+**Correction 2026-09-22**: `project_registration` is only valid on a framework-bound policy
+(`target_pillar == "policy"`) — a project-bound check has no project to inspect yet at the
+moment of registration (a chicken-and-egg problem `src/policy/app.py`'s own
+`_validate_gate_points_against_target` already guards against, per `docs/open_questions.md`'s
+`OQ-15`). Two project-bound drafts had wrongly been given it: `issue-form-installed`
+(target_pillar `agent`) and `ssh-remotes-no-embedded-credentials` (target_pillar `registry`).
+The app itself refused approval with a clear error rather than silently accepting either; both
+are now `branch_finish`.
 
 A parsing bug in Gate 1 (`src/policy/gates.py`) leaked a model's own reasoning preamble into
 `production-version-stable`'s stored `ears_text` when the reply didn't start with the marker
