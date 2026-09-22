@@ -103,6 +103,9 @@ def requirement_verdict(row: dict) -> str:
     return "failing" if row.get("tested") else "no tests"
 
 
+AGGREGATE_SUITE_NAME = "Unit tests"  # tools/import_requirements.py's REGISTER_SUITE, kept in sync by name
+
+
 def build_report(paths: Paths, project: str) -> dict:
     """Every requirement (description, verdict) and every test (name, verdict — the latest run) of one project."""
     rows = {r["requirement_id"]: r for r in client.requirements_report(paths, project).get("requirements", [])}
@@ -113,14 +116,22 @@ def build_report(paths: Paths, project: str) -> dict:
             "key": req["key"], "title": req.get("title", ""), "description": req.get("description", ""),
             "verdict": requirement_verdict({**row, "status": row.get("status", req.get("status"))}),
         })
-    suites = {s["id"]: s["name"] for s in client.requirements_suites(paths, project)}
+    all_suites = {s["id"]: s["name"] for s in client.requirements_suites(paths, project)}
+    # AGGREGATE_SUITE_NAME ("Unit tests", tools/import_requirements.py's REGISTER_SUITE): a
+    # self-application project's own whole-test-run bucket, used only for a requirement's
+    # done/passing state — every real test is also recorded under its own per-module suite
+    # (tools/import_requirements.py's import_module_suites), which is what a human wants to
+    # browse here; the aggregate would otherwise duplicate every test under one giant heading.
+    suites = {sid: name for sid, name in all_suites.items() if name != AGGREGATE_SUITE_NAME}
     latest: dict[tuple[str, str], dict] = {}
     for result in client.requirements_test_results(paths, project):
+        if result["suite_id"] not in suites:
+            continue
         key = (result["suite_id"], result["test_name"])
         if key not in latest or result["executed_at"] >= latest[key]["executed_at"]:
             latest[key] = result
     tests = [
-        {"suite": suites.get(sid, sid), "name": name, "verdict": r["verdict"], "detail": r.get("detail", "")}
+        {"suite": suites[sid], "name": name, "verdict": r["verdict"], "detail": r.get("detail", "")}
         for (sid, name), r in latest.items()
     ]
     tests.sort(key=lambda t: (t["suite"], t["name"]))

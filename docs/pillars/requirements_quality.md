@@ -41,6 +41,14 @@ nothing):
   rows are published, and every done requirement is linked to one "Unit tests"
   suite holding the whole real run (so a failing test anywhere makes them all
   not done — coarse, and honest about it).
+- `module-suites` — for a project already imported another way (`register`,
+  typically): one Suite per real test module (`test_foo.py` -> suite
+  `test_foo`, folding a class-based test's trailing class name into its
+  module), recording that module's own results — never linked to any
+  requirement, so a requirement's done/passing state is unaffected. Exists
+  purely so the Dashboard's Report page can show tests grouped by real file
+  instead of one flattened bucket (`REQ-000000215`, correcting `REQ-000000212`'s
+  first pass, which reused the coarse `register` suite literally).
 
 A suite passes only if every test in its latest run passed; a skipped test does
 not count as passing.

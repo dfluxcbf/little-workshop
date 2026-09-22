@@ -241,3 +241,47 @@ def test_register_import_is_idempotent_and_a_failure_turns_everything_not_done(p
     again = run_register(pillar_client, (("tests.unit.test_a", "test_1", "failed"),))
     assert (again["requirements_created"], again["suites_created"], again["links_created"], again["milestones_created"] if "milestones_created" in again else 0) == (0, 0, 0, 0)
     assert pillar_client.get("/v1/report", params={"project_id": "w"}).json()["done_count"] == 0
+
+
+# -- module suites: real per-test-file grouping for the Report page's Tests tab ----------
+
+
+def test_module_name_drops_a_trailing_class_and_keeps_the_module():
+    assert imp.module_name(imp.Case("tests.unit.test_common_shell", "test_a", None)) == "test_common_shell"
+    assert imp.module_name(imp.Case("tests.unit.test_common_shell.TestFoo", "test_a", None)) == "test_common_shell"
+    assert imp.module_name(imp.Case("", "test_a", None)) == "test_a"
+
+
+def test_import_module_suites_creates_one_suite_per_module_and_records_results(pillar_client, tmp_path):
+    path = write_junit(tmp_path, *CASES)
+    cases = imp.read_junit(path)
+    pillar = imp.Pillar(pillar_client)
+    summary = imp.start_summary("p", "module-suites")
+    imp.import_module_suites(pillar, "p", cases, summary)
+
+    suites = {s["name"]: s for s in pillar_client.get("/v1/test_suites", params={"project_id": "p"}).json()}
+    assert set(suites) == {"test_x", "test_y", "test_z"}  # TestC's tests.test_x.TestC case folds into test_x
+    results = pillar_client.get("/v1/test_results", params={"project_id": "p", "suite_id": suites["test_x"]["id"]}).json()
+    assert {r["test_name"] for r in results} == {"tests.test_x::test_a", "tests.test_x.TestC::test_b"}
+    assert summary["suites_created"] == 3 and summary["results_imported"] == 4
+
+
+def test_import_module_suites_never_links_a_requirement(pillar_client, tmp_path):
+    path = write_junit(tmp_path, *CASES)
+    cases = imp.read_junit(path)
+    pillar = imp.Pillar(pillar_client)
+    req = pillar_client.post("/v1/jobs/requirements.create_requirement", json={
+        "job_id": "j", "project_id": "p", "params": {"key": "REQ-1", "title": "t", "description": "The system shall work."}}).json()["result"]
+    imp.import_module_suites(pillar, "p", cases, imp.start_summary("p", "module-suites"))
+    assert pillar_client.get("/v1/report", params={"project_id": "p"}).json()["requirements"][0]["suite_ids"] == []
+    assert req["id"]  # sanity: the requirement really was created
+
+
+def test_import_module_suites_is_idempotent(pillar_client, tmp_path):
+    path = write_junit(tmp_path, *CASES)
+    cases = imp.read_junit(path)
+    pillar = imp.Pillar(pillar_client)
+    imp.import_module_suites(pillar, "p", cases, imp.start_summary("p", "module-suites"))
+    imp.import_module_suites(pillar, "p", cases, imp.start_summary("p", "module-suites"))
+    suites = pillar_client.get("/v1/test_suites", params={"project_id": "p"}).json()
+    assert len(suites) == 3

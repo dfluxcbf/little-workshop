@@ -1359,7 +1359,7 @@ def _stub_report(monkeypatch):
         {"id": "r3", "key": "REQ-3", "title": "Exports", "description": "The Widget shall export things.", "status": "published"},
         {"id": "r4", "key": "REQ-4", "title": "Prints", "description": "The Widget shall print things.", "status": "draft"},
     ])
-    monkeypatch.setattr(client, "requirements_suites", lambda paths, project: [{"id": "s1", "name": "Unit tests"}])
+    monkeypatch.setattr(client, "requirements_suites", lambda paths, project: [{"id": "s1", "name": "test_widget"}])
     monkeypatch.setattr(client, "requirements_test_results", lambda paths, project: [
         {"suite_id": "s1", "test_name": "t::a", "verdict": "failed", "executed_at": "2026-09-21T09:00:00Z"},
         {"suite_id": "s1", "test_name": "t::a", "verdict": "passed", "executed_at": "2026-09-21T10:00:00Z"},
@@ -1383,7 +1383,7 @@ def test_report_lists_every_test_with_its_latest_verdict(test_client, monkeypatc
     assert re.search(r'report-test-name">t::a</span>\s*<span class="pill ok">passed', text)  # the later pass replaces the earlier failure
     assert re.search(r'report-test-name">t::b</span>\s*<span class="pill fail">failed', text)
     assert re.search(r'report-test-name">t::c</span>\s*<span class="pill idle">skipped', text)
-    assert "Unit tests" in text and text.count("report-test-name") == 3
+    assert "test_widget" in text and text.count("report-test-name") == 3
 
 
 def test_report_filters_by_search_and_verdict(test_client, monkeypatch):
@@ -1430,7 +1430,7 @@ def test_report_tests_are_grouped_into_collapsible_suites_with_one_card_per_test
     text = test_client.get("/report").text
     tests_panel = text[text.index('data-panel="tests"'):]
     suite = tests_panel[tests_panel.index("<details class=\"report-suite\""):]
-    assert "<summary>" in suite and "Unit tests" in suite[:suite.index("</summary>")]
+    assert "<summary>" in suite and "test_widget" in suite[:suite.index("</summary>")]
     assert suite.count('class="report-item report-test-card"') == 3
 
 
@@ -1622,3 +1622,19 @@ def test_a_project_cannot_be_bootstrapped_under_the_reserved_workspace_name(test
     monkeypatch.setattr(client, "create_job", lambda paths, **kw: jobs.append(kw))
     location = unquote(test_client.post("/projects/new", data={"name": "workspace"}, follow_redirects=False).headers["location"])
     assert "reserved" in location and jobs == []
+
+
+def test_report_hides_the_self_application_aggregate_suite_from_the_tests_tab(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    monkeypatch.setattr(client, "requirements_report", lambda paths, project: {"requirements": []})
+    monkeypatch.setattr(client, "requirements_list", lambda paths, project: [])
+    monkeypatch.setattr(client, "requirements_suites", lambda paths, project: [
+        {"id": "agg", "name": "Unit tests"}, {"id": "s1", "name": "test_widget"},
+    ])
+    monkeypatch.setattr(client, "requirements_test_results", lambda paths, project: [
+        {"suite_id": "agg", "test_name": "tests.unit.test_widget::test_a", "verdict": "passed", "executed_at": "2026-09-22T10:00:00Z"},
+        {"suite_id": "s1", "test_name": "test_a", "verdict": "passed", "executed_at": "2026-09-22T10:00:00Z"},
+    ])
+    text = test_client.get("/report").text
+    assert ">Unit tests<" not in text
+    assert text.count("report-test-name") == 1 and "test_widget" in text

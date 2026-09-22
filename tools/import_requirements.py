@@ -189,6 +189,30 @@ def ensure_suite(pillar: Pillar, project: str, suites: dict, name: str, descript
     return suites[name]["id"]
 
 
+def module_name(case: Case) -> str:
+    """The test module a case belongs to (`tests.unit.test_common_shell` -> `test_common_shell`;
+    a class-based test's `...test_x.TestC` -> `test_x`, dropping the class), for grouping by real
+    test file rather than one all-tests bucket."""
+    parts = case.classname.split(".") if case.classname else []
+    while parts and parts[-1][:1].isupper():
+        parts.pop()
+    return parts[-1] if parts else (case.name or "tests")
+
+
+def import_module_suites(pillar: Pillar, project: str, cases: list[Case], summary: dict) -> None:
+    """One Suite per test module (`test_foo.py` -> suite "test_foo"), purely so the Report
+    page's Tests tab can group by real test file. Never linked to a requirement — the
+    per-requirement "done" suite (REGISTER_SUITE, or whatever a project's own import already
+    links) is untouched, so this has no effect on any requirement's done/passing state."""
+    suites = {s["name"]: s for s in pillar.get("/v1/test_suites", project_id=project)}
+    by_module: dict[str, list[Case]] = {}
+    for case in cases:
+        by_module.setdefault(module_name(case), []).append(case)
+    for name, module_cases in sorted(by_module.items()):
+        suite_id = ensure_suite(pillar, project, suites, name, "Test module, for browsing on the Report page.", summary)
+        record_results(pillar, project, suite_id, name, module_cases, summary)
+
+
 def link(pillar: Pillar, project: str, requirement_id: str, suite_id: str, linked: set, summary: dict) -> None:
     if (requirement_id, suite_id) in linked:
         return
@@ -334,7 +358,7 @@ def _connect():
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="source", required=True)
-    for name in ("lreq", "register"):
+    for name in ("lreq", "register", "module-suites"):
         p = sub.add_parser(name)
         p.add_argument("--project", required=True)
         p.add_argument("--junit", type=Path, required=True, help="JUnit XML of a real run of the project's tests")
@@ -351,8 +375,11 @@ def main(argv: list[str] | None = None) -> int:
         pillar = Pillar(client, dry_run=args.dry_run)
         if args.source == "lreq":
             summary = import_lreq(pillar, args.project, load_lreq(args.lreq_db), cases, args.repo, args.style)
-        else:
+        elif args.source == "register":
             summary = import_register(pillar, args.project, parse_register(args.register.read_text(encoding="utf-8")), cases)
+        else:
+            summary = start_summary(args.project, "module-suites")
+            import_module_suites(pillar, args.project, cases, summary)
     summary["dry_run"] = args.dry_run
     print(json.dumps(summary, indent=2))
     return 0

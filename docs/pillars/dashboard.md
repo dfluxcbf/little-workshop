@@ -88,9 +88,16 @@ are the current state of every pillar.
     any project.
   - **Report** (`/report`): for one project, Requirements and Tests as two tabs. The Requirements
     tab lists every requirement as a collapsible card — key, title and verdict always visible,
-    description shown only when expanded. The Tests tab groups tests into collapsible suites (the
-    same suite grouping the Requirements tab's own suite links use), one card per test with its
-    name and latest verdict. A search box and a verdict filter apply to both tabs.
+    description shown only when expanded. The Tests tab groups tests into collapsible suites, one
+    card per test with its name and latest verdict; for a self-application project (whose own
+    `docs/requirements.md` carries no per-requirement test mapping — REQ-000000149's own honest
+    gap), that grouping is by real test module (`tools/import_requirements.py`'s
+    `import_module_suites` — `test_foo.py` becomes suite `test_foo`), never the one all-tests
+    bucket (`AGGREGATE_SUITE_NAME`, `dashboard/app.py`) that suite is linked to a requirement's
+    own done/passing state and is hidden from this tab so it doesn't duplicate every test under
+    one giant heading (REQ-000000215, correcting REQ-000000212's own "same suite grouping"
+    wording — module suites are never linked to a requirement, so they don't affect done/passing).
+    A search box and a verdict filter apply to both tabs.
   - **New project** (`/projects/new`): the form behind `project.bootstrap` — creates the basic files,
     a git repository on `dev` with version tracking, and registers it under the workspace directory;
     a GitHub repository is created only when the box is ticked.
