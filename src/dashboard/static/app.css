@@ -541,7 +541,18 @@ nav.tabbar .tabbar-row {
   transform: translateY(6px);
   transition: opacity .18s ease, transform .18s ease;
   pointer-events: none;
+  /* A row with more tabs than fit a phone's width scrolls sideways within
+     itself (same pattern the Jobs page's own status-chip strip already
+     uses) instead of overflowing the row's own box — an overflowing fixed
+     element otherwise widens the whole page's layout viewport on a real
+     phone, which is what caused both the phantom horizontal scroll and the
+     top/bottom bars scrolling away with the page (2026-09-23). */
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+nav.tabbar .tabbar-row::-webkit-scrollbar { display: none; }
 nav.tabbar .tabbar-row.tabbar-row-active {
   opacity: 1;
   transform: translateY(0);
@@ -561,6 +572,7 @@ nav.tabbar .tab {
   background: none;
   border: none;
   font-family: inherit;
+  flex: 0 0 auto;
 }
 nav.tabbar .tab svg { width: 20px; height: 20px; }
 nav.tabbar .tab.tab-active { color: var(--cyan); }
@@ -1016,16 +1028,25 @@ form > .dcard { margin-bottom: 10px; }
 
 details.report-item {
   padding: 0; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  min-width: 0; max-width: 100%;
 }
 details.report-item summary {
   list-style: none; cursor: pointer; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px;
+  min-width: 0;
 }
 details.report-item summary::-webkit-details-marker { display: none; }
 details.report-item > p.report-desc { margin: 0; padding: 0 12px 10px; }
-article.report-item { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; }
-.report-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.report-title { font-weight: 600; }
-.report-desc { color: var(--ink-soft); font-size: 13.5px; overflow-wrap: anywhere; }
+article.report-item { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; min-width: 0; max-width: 100%; }
+/* Flex children default to min-width:auto (their content's own natural width),
+   which lets a long, low-wrap-opportunity requirement title or test name push
+   this card — and, on a real phone, the whole page's layout viewport — wider
+   than the screen even though nothing looks visibly clipped (2026-09-23's
+   "phantom horizontal scroll" report). min-width:0 plus overflow-wrap lets
+   these actually wrap instead. */
+.report-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.report-head code { overflow-wrap: anywhere; }
+.report-title { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+.report-desc { color: var(--ink-soft); font-size: 13.5px; overflow-wrap: anywhere; min-width: 0; }
 .report-suite { background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); margin-bottom: 8px; }
 .report-suite summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; }
 .report-suite summary::-webkit-details-marker { display: none; }
