@@ -156,8 +156,9 @@ def pillar_name(identifier: str) -> str:
 
 def collect_attention(paths: Paths) -> list[dict]:
     """What needs a human right now: an enabled policy whose latest check on a
-    project failed, and every Job waiting for a confirmation. Both are read
-    live from their owning pillar; a pillar that is down contributes nothing."""
+    project still currently associated with it failed, and every Job waiting
+    for a confirmation. Both are read live from their owning pillar; a pillar
+    that is down contributes nothing."""
     items: list[dict] = []
     policies = {p["id"]: p for p in _try(client.policy_list, paths, default=[])}
     latest: dict[tuple[str, str], dict] = {}
@@ -165,12 +166,23 @@ def collect_attention(paths: Paths) -> list[dict]:
         latest[(result["policy_id"], result["project_id"])] = result
     for (policy_id, project), result in latest.items():
         policy = policies.get(policy_id)
-        if result["outcome"] == "fail" and policy and policy.get("enabled", True):
-            items.append({
-                "kind": "policy", "project": project, "title": f"{policy['topic']} is failing",
-                "detail": (result.get("detail") or "").strip()[:240], "href": f"/policies/{policy_id}",
-                "since": result.get("checked_at"),
-            })
+        if not (result["outcome"] == "fail" and policy and policy.get("enabled", True)):
+            continue
+        # A stale result from before the project was removed from this
+        # policy's own `projects` list (policy.set_projects) must not keep
+        # showing up forever -- 2026-09-22's finding: disassociating
+        # back-merge-no-ff from little-home/little-meals/little-mindcheck
+        # (a category error for apps that don't implement gitflow themselves)
+        # left their old fail results still in the history table, and this
+        # function never checked current association at all.
+        associated = {p["project_id"] for p in policy.get("projects", [])}
+        if associated and project not in associated:
+            continue
+        items.append({
+            "kind": "policy", "project": project, "title": f"{policy['topic']} is failing",
+            "detail": (result.get("detail") or "").strip()[:240], "href": f"/policies/{policy_id}",
+            "since": result.get("checked_at"),
+        })
     for job in _try(lambda: client.list_jobs(paths, status="pending_confirmation"), default=[]):
         items.append({
             "kind": "confirmation", "project": job.get("project_id") or "", "title": f"{job['type']} awaits confirmation",
