@@ -745,9 +745,21 @@ a.polcard:hover { border-color: var(--cyan-deep); }
 .dcard-chev svg { width: 16px; height: 16px; }
 details.collapsible { display: block; }
 details.collapsible[open] .dcard-chev { transform: rotate(90deg); }
-details.collapsible[open] > pre.code { margin-top: 12px; }
+details.collapsible[open] > pre.code, details.collapsible[open] > .dcard-body { margin-top: 12px; }
 details.collapsible > summary { list-style: none; cursor: pointer; }
 details.collapsible > summary::-webkit-details-marker { display: none; }
+/* A collapsible panel's own content, one level deeper than the old bare
+   .dcard direct-children shape (policy_detail.html's description/status/
+   gate-points/project-governance panels, 2026-09-23) -- same flex/gap
+   layout .dcard itself gives its children, so nesting a level doesn't
+   change how anything inside visually spaces out. */
+.dcard-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.pstatus-row {
+  display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+  background: var(--surface-alt); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.pstatus-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 
 .switch-row { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: normal; color: var(--ink); cursor: pointer; padding: 2px 0; }
 .switch-row input { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; padding: 0; border: 0; }

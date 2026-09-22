@@ -13,7 +13,8 @@
   <a class="polcard{{ ' is-off' if not p.enabled }}" href="/policies/{{ p.id }}">
     <span class="polcard-head">
       <span class="polcard-topic">{{ p.topic }}</span>
-      {% if p.enabled %}<span class="pill ok">enabled</span>{% else %}<span class="pill warn">disabled</span>{% endif %}
+      {% if p.failing_count %}<span class="pill fail">{{ p.failing_count }} failing</span>
+      {% elif p.enabled %}<span class="pill ok">enabled</span>{% else %}<span class="pill warn">disabled</span>{% endif %}
     </span>
     <span class="polcard-ears">{{ p.ears_text }}</span>
     <span class="polcard-meta">

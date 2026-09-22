@@ -500,6 +500,28 @@ def test_policies_empty_state(test_client, monkeypatch):
     assert "No policies authored yet." in test_client.get("/policies").text
 
 
+def test_policies_card_shows_failing_count_from_associated_projects_only(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths: [
+        _policy(projects=[{"project_id": "proj-a", "gating_enabled": True}, {"project_id": "proj-b", "gating_enabled": True}]),
+    ])
+    monkeypatch.setattr(client, "policy_check_results", lambda paths: [
+        {"policy_id": "pol1", "project_id": "proj-a", "outcome": "fail", "detail": "boom", "checked_at": "2026-09-23T10:00:00Z"},
+        {"policy_id": "pol1", "project_id": "proj-b", "outcome": "pass", "detail": "", "checked_at": "2026-09-23T10:00:00Z"},
+        # Not associated with pol1's own projects list -- must not inflate the count.
+        {"policy_id": "pol1", "project_id": "proj-c", "outcome": "fail", "detail": "", "checked_at": "2026-09-23T10:00:00Z"},
+    ])
+    text = test_client.get("/policies").text
+    assert "1 failing" in text
+    assert "2 failing" not in text
+
+
+def test_policies_card_shows_enabled_when_nothing_is_failing(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths: [_policy()])
+    monkeypatch.setattr(client, "policy_check_results", lambda paths: [])
+    text = test_client.get("/policies").text
+    assert "failing" not in text and ">enabled<" in text
+
+
 def _stub_detail(monkeypatch, *, policy=None, registered=("proj-a", "proj-b", "proj-c"), link=None):
     detail = {**_policy(id="0123456789abcdef", topic="commit-bumps-version", ears_text="a commit shall bump the version",
                         created_by="user", enabled=False, gate_points=["branch_finish", "release"],
@@ -534,6 +556,49 @@ def test_policy_detail_lists_every_registered_project_with_selection_and_gating(
     assert 'name="gating" value="proj-a" checked' in text and 'name="gating" value="proj-b" checked' not in text
     assert "2 of 3" in text
     assert "unregistered" not in text
+    assert "Project governance" in text and ">Projects<" not in text
+
+
+def test_policy_detail_panels_are_collapsible_in_order(test_client, monkeypatch):
+    _stub_detail(monkeypatch)
+    text = test_client.get("/policies/pol1").text
+    titles_in_order = re.findall(r'class="dcard-title">([^<]+)<', text)
+    assert titles_in_order == ["Policy description", "Policy status", "Gate points", "Test script", "Project governance"]
+    assert text.count('class="dcard collapsible"') >= 4  # description, status, gate points, project governance
+
+
+def test_policy_detail_status_panel_shows_pass_fail_and_stdout_on_failure(test_client, monkeypatch):
+    _stub_detail(monkeypatch)
+    monkeypatch.setattr(client, "policy_check_results", lambda paths: [
+        {"policy_id": "0123456789abcdef", "project_id": "proj-a", "outcome": "fail",
+         "detail": "AssertionError: boom", "checked_at": "2026-09-23T10:00:00Z"},
+        {"policy_id": "0123456789abcdef", "project_id": "proj-b", "outcome": "pass",
+         "detail": "", "checked_at": "2026-09-23T10:00:00Z"},
+    ])
+    text = test_client.get("/policies/pol1").text
+    assert "1 failing" in text
+    assert "AssertionError: boom" in text
+    assert '<pre class="code err">' in text
+    assert "proj-a" in text and "proj-b" in text
+
+
+def test_policy_detail_status_panel_says_all_passing_when_nothing_fails(test_client, monkeypatch):
+    _stub_detail(monkeypatch)
+    monkeypatch.setattr(client, "policy_check_results", lambda paths: [
+        {"policy_id": "0123456789abcdef", "project_id": "proj-a", "outcome": "pass", "detail": "", "checked_at": "2026-09-23T10:00:00Z"},
+        {"policy_id": "0123456789abcdef", "project_id": "proj-b", "outcome": "pass", "detail": "", "checked_at": "2026-09-23T10:00:00Z"},
+    ])
+    text = test_client.get("/policies/pol1").text
+    assert "all passing" in text
+    assert "failing" not in text
+    assert "<pre class=\"code err\">" not in text
+
+
+def test_policy_detail_status_panel_survives_no_check_results_yet(test_client, monkeypatch):
+    _stub_detail(monkeypatch)
+    monkeypatch.setattr(client, "policy_check_results", lambda paths: [])
+    text = test_client.get("/policies/pol1").text
+    assert "no data yet" in text
 
 
 def test_policy_detail_keeps_a_selected_project_that_is_no_longer_registered(test_client, monkeypatch):

@@ -154,6 +154,21 @@ def pillar_name(identifier: str) -> str:
     return PILLAR_NAMES.get(identifier, identifier)
 
 
+def _latest_policy_results(paths: Paths) -> dict[tuple[str, str], dict]:
+    """{(policy_id, project_id): latest recorded check result}, across every
+    policy and project that has ever been checked. Shared by collect_attention
+    and both policies pages so "what's currently failing" is computed the
+    same way everywhere."""
+    latest: dict[tuple[str, str], dict] = {}
+    for result in _try(client.policy_check_results, paths, default=[]):  # oldest first
+        latest[(result["policy_id"], result["project_id"])] = result
+    return latest
+
+
+def _policy_associated_projects(policy: dict) -> set[str]:
+    return {p["project_id"] for p in policy.get("projects", [])}
+
+
 def collect_attention(paths: Paths) -> list[dict]:
     """What needs a human right now: an enabled policy whose latest check on a
     project still currently associated with it failed, and every Job waiting
@@ -161,9 +176,7 @@ def collect_attention(paths: Paths) -> list[dict]:
     that is down contributes nothing."""
     items: list[dict] = []
     policies = {p["id"]: p for p in _try(client.policy_list, paths, default=[])}
-    latest: dict[tuple[str, str], dict] = {}
-    for result in _try(client.policy_check_results, paths, default=[]):  # oldest first
-        latest[(result["policy_id"], result["project_id"])] = result
+    latest = _latest_policy_results(paths)
     for (policy_id, project), result in latest.items():
         policy = policies.get(policy_id)
         if not (result["outcome"] == "fail" and policy and policy.get("enabled", True)):
@@ -175,7 +188,7 @@ def collect_attention(paths: Paths) -> list[dict]:
         # (a category error for apps that don't implement gitflow themselves)
         # left their old fail results still in the history table, and this
         # function never checked current association at all.
-        associated = {p["project_id"] for p in policy.get("projects", [])}
+        associated = _policy_associated_projects(policy)
         if associated and project not in associated:
             continue
         items.append({
@@ -847,6 +860,14 @@ def build_app(paths: Paths) -> FastAPI:
         except client.PillarUnavailable as exc:
             rows, error = [], str(exc)
         pending = _try(lambda: client.policy_drafts(paths, status="pending"), default=[])
+        if rows:
+            latest = _latest_policy_results(paths)
+            for p in rows:
+                associated = _policy_associated_projects(p)
+                p["failing_count"] = sum(
+                    1 for (pid, proj), r in latest.items()
+                    if pid == p["id"] and proj in associated and r["outcome"] == "fail"
+                )
         return _render(
             request, "policies.html", policies=rows, error=error, message=message,
             pending_drafts=len(pending), gate_point_values=GATE_POINT_VALUES, nav_active="policies",
@@ -996,6 +1017,8 @@ def build_app(paths: Paths) -> FastAPI:
     def policy_detail(request: Request, policy_id: str):
         script_link = None
         registered: list[str] = []
+        project_status: list[dict] = []
+        failing_count = 0
         try:
             policy = client.policy_get(paths, policy_id)
             error = None
@@ -1011,10 +1034,22 @@ def build_app(paths: Paths) -> FastAPI:
                  "registered": n in registered}
                 for n in sorted(names)
             ]
+            latest = _latest_policy_results(paths)
+            for name in sorted(selected):
+                result = latest.get((policy["id"], name))
+                outcome = result.get("outcome") if result else None
+                if outcome == "fail":
+                    failing_count += 1
+                project_status.append({
+                    "name": name, "gating": selected[name].get("gating_enabled", True),
+                    "outcome": outcome, "detail": (result.get("detail") or "").strip() if result else "",
+                    "checked_at": result.get("checked_at") if result else None,
+                })
         else:
             project_rows = []
         return _render(
             request, "policy_detail.html", policy=policy, project_rows=project_rows, script_link=script_link,
+            project_status=project_status, failing_count=failing_count,
             error=error, gate_point_values=GATE_POINT_VALUES, nav_active="policies",
         )
 
