@@ -14,7 +14,7 @@ from pathlib import Path
 
 from common.paths import Paths
 
-ORDERED_PAGES = ("dashboard", "control")
+ORDERED_PAGES = ("dashboard",)
 
 
 def _file(paths: Paths) -> Path:

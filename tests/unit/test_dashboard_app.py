@@ -109,40 +109,47 @@ def test_pillars_page_renders_error_banner_when_core_unreachable(test_client, mo
     assert "UNREACHABLE" in text and "Core daemon unreachable" in text
 
 
-def test_control_offers_launch_and_session_start(test_client, monkeypatch):
+def test_dashboard_card_offers_launch_and_session_start_when_expanded(test_client, monkeypatch):
     _stub_project_panels(
         monkeypatch, server={"listening": False, "version": "0.3.1", "unit": "inactive", "branch": "dev", "tailscale": "off"},
         session={"running": False, "trusted": True},
     )
-    text = test_client.get("/control").text
+    text = test_client.get("/").text
     assert "/projects/little-widget/deploy" in text and "Launch" in text
     assert "/projects/little-widget/session/start" in text and "Start session" in text
 
 
-def test_control_explains_an_untrusted_project(test_client, monkeypatch):
+def test_dashboard_card_explains_an_untrusted_project(test_client, monkeypatch):
     _stub_project_panels(monkeypatch, session={"running": False, "trusted": False})
-    text = test_client.get("/control").text
+    text = test_client.get("/").text
     assert "not trusted" in text.lower() and "/session/start" not in text
 
 
-def test_control_shows_stop_for_a_running_session_and_server(test_client, monkeypatch):
+def test_dashboard_card_shows_stop_for_a_running_session_and_server(test_client, monkeypatch):
     _stub_project_panels(
         monkeypatch, server={"listening": True, "version": "1", "unit": "active", "branch": "dev", "tailscale": "mapped"},
         session={"running": True, "trusted": True},
     )
-    text = test_client.get("/control").text
+    text = test_client.get("/").text
     assert "/projects/little-widget/stop" in text and "/projects/little-widget/session/stop" in text
     assert "lws-little-widget-session" in text
 
 
-def test_control_without_a_manifest_says_how_to_add_one(test_client, monkeypatch):
+def test_dashboard_card_without_a_manifest_says_how_to_add_one(test_client, monkeypatch):
     _stub_project_panels(monkeypatch, server=None, session={"running": False, "trusted": True})
-    assert "set-manifest" in test_client.get("/control").text
+    assert "set-manifest" in test_client.get("/").text
 
 
-def test_projects_redirects_to_control(test_client):
+def test_projects_redirects_to_dashboard(test_client):
     response = test_client.get("/projects", follow_redirects=False)
-    assert response.status_code == 307 and response.headers["location"] == "/control"
+    assert response.status_code == 307 and response.headers["location"] == "/"
+
+
+def test_dashboard_card_is_a_details_element_that_expands_to_show_controls(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch, server={"listening": True, "version": "1", "unit": "active", "branch": "dev", "tailscale": "off"})
+    text = test_client.get("/").text
+    assert '<details class="proj-card" id="little-widget"' in text
+    assert text.index('id="little-widget"') < text.index("/projects/little-widget/deploy")
 
 
 def test_deploy_submits_the_job_without_blocking(test_client, monkeypatch):
@@ -1043,17 +1050,17 @@ def test_dashboard_shows_projects_as_cards_not_a_table(test_client, monkeypatch)
     _one_project(monkeypatch, names=("little-widget", "little-gadget"))
     text = test_client.get("/").text
     assert "<table" not in text and "<h2" not in text
-    assert text.count('class="proj-card') == 2
-    assert 'href="/control#little-widget"' in text and 'class="proj-name"' in text
+    assert len(_names(text, r'<details class="proj-card(?: attn)?" id="(?!workspace)[\w-]+"')) == 2
+    assert '<details class="proj-card" id="little-widget"' in text and 'class="proj-name"' in text
 
 
 def test_a_project_card_only_lists_the_facts_that_exist(test_client, monkeypatch):
     _one_project(monkeypatch, server=None, report=None, ci=None, session={"running": False, "trusted": True})
     text = test_client.get("/").text
-    assert ">Session<" in text and ">Tasks<" in text
-    assert ">Server<" not in text and ">Requirements<" not in text and ">CI<" not in text
-    main = text.split('<main class="content">', 1)[1].split("</main>", 1)[0]
-    assert "&mdash;" not in main and "—" not in main  # no placeholder dashes standing in for missing data
+    assert '<span class="fact-k">Session</span>' in text and '<span class="fact-k">Tasks</span>' in text
+    assert '<span class="fact-k">Server</span>' not in text and '<span class="fact-k">Requirements</span>' not in text and '<span class="fact-k">CI</span>' not in text
+    summary = text[text.index('id="little-widget"'):text.index("proj-body")]
+    assert "&mdash;" not in summary and "—" not in summary  # no placeholder dashes standing in for missing data
 
 
 def test_a_project_card_shows_every_fact_when_present(test_client, monkeypatch):
@@ -1125,24 +1132,24 @@ def test_an_ordinary_running_server_still_shows_its_known_version(test_client, m
     assert "v0.3.1" in test_client.get("/").text
 
 
-def test_control_offers_no_launch_or_stop_for_an_external_server(test_client, monkeypatch):
+def test_dashboard_card_offers_no_launch_or_stop_for_an_external_server(test_client, monkeypatch):
     _stub_project_panels(
         monkeypatch, session={"running": False, "trusted": True},
         server={"listening": True, "version": "?", "branch": "?", "unit": "active", "tailscale": "mapped", "external": True, "managed_unit": "little-workshop-dashboard-bridge.service"},
     )
-    text = test_client.get("/control").text
+    text = test_client.get("/").text
     assert "Managed outside Deployment" in text and "little-workshop-dashboard-bridge.service" in text
     assert "/projects/little-widget/deploy" not in text and "/projects/little-widget/stop" not in text
     assert ">Launch<" not in text and ">Relaunch<" not in text and ">Stop<" not in text
     assert "<dt>Version</dt>" not in text and "<dt>Branch</dt>" not in text
 
 
-def test_control_still_offers_launch_and_stop_for_an_ordinary_server(test_client, monkeypatch):
+def test_dashboard_card_still_offers_launch_and_stop_for_an_ordinary_server(test_client, monkeypatch):
     _stub_project_panels(
         monkeypatch, session={"running": False, "trusted": True},
         server={"listening": True, "version": "0.3.1", "unit": "active", "branch": "dev", "tailscale": "off"},
     )
-    text = test_client.get("/control").text
+    text = test_client.get("/").text
     assert "/projects/little-widget/deploy" in text and "/projects/little-widget/stop" in text
     assert "Managed outside Deployment" not in text and "<dt>Version</dt>" in text and "<dt>Branch</dt>" in text
 
@@ -1274,12 +1281,12 @@ def test_bottom_toolbar_groups_related_pages_under_one_button(test_client, monke
     monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
     text = test_client.get("/policies").text
     bar = text[text.index('<nav class="tabbar"'):]
-    assert bar.count('data-open="tasks"') == 1 and bar.count('data-open="projects"') == 1 and bar.count('data-open="system"') == 1
+    assert bar.count('data-open="tasks"') == 1 and bar.count('data-open="dashboard"') == 1 and bar.count('data-open="system"') == 1
     tasks_row = re.search(r'data-view="tasks">(.*?)</div>', bar, re.S).group(1)
     for href, label in (("/tasks", "Task list"), ("/tasks/new", "New task"), ("/tasks/queue", "Queue task"), ("/tasks/schedule", "Schedule task"), ("/jobs", "Jobs")):
         assert f'href="{href}"' in tasks_row and f"<span>{label}</span>" in tasks_row
-    projects_row = re.search(r'data-view="projects">(.*?)</div>', bar, re.S).group(1)
-    assert all(h in projects_row for h in ('href="/control"', 'href="/report"', 'href="/projects/new"'))
+    dashboard_row = re.search(r'data-view="dashboard">(.*?)</div>', bar, re.S).group(1)
+    assert all(h in dashboard_row for h in ('href="/"', 'href="/report"', 'href="/projects/new"'))
 
 
 def test_the_group_of_the_current_page_is_open_and_highlighted(test_client, monkeypatch):
@@ -1291,29 +1298,23 @@ def test_the_group_of_the_current_page_is_open_and_highlighted(test_client, monk
     assert 'class="subnav-link is-active" href="/policies"' in text.replace('href="/policies" class="subnav-link is-active"', 'class="subnav-link is-active" href="/policies"')
 
 
-# -- arranging project cards (Dashboard and Control) -----------------------------
+# -- arranging project cards (Dashboard) -----------------------------------------
 
 
 def _names(text, pattern):
     return re.findall(pattern, text)
 
 
+_CARD_ID_RE = r'<details class="proj-card(?: attn)?" id="(?!workspace)([\w-]+)"'
+
+
 def test_dashboard_cards_follow_the_saved_order_and_the_order_survives_visits(test_client, monkeypatch):
     _stub_project_panels(monkeypatch, names=("a-app", "b-app", "c-app"))
-    assert _names(test_client.get("/").text, r'class="proj-name" href="/control#([\w-]+)"') == ["a-app", "b-app", "c-app"]
+    assert _names(test_client.get("/").text, _CARD_ID_RE) == ["a-app", "b-app", "c-app"]
     response = test_client.post("/order/dashboard/c-app/up", follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"] == "/?arrange=1"
     test_client.post("/order/dashboard/c-app/up", follow_redirects=False)
-    assert _names(test_client.get("/").text, r'class="proj-name" href="/control#([\w-]+)"') == ["c-app", "a-app", "b-app"]
-
-
-def test_control_order_is_independent_of_the_dashboard_order(test_client, monkeypatch):
-    _stub_project_panels(monkeypatch, names=("a-app", "b-app"))
-    test_client.post("/order/dashboard/b-app/up")
-    assert _names(test_client.get("/control").text, r'<details class="project-panel" id="(?!workspace)([\w-]+)"') == ["a-app", "b-app"]
-    test_client.post("/order/control/b-app/up")
-    assert _names(test_client.get("/control").text, r'<details class="project-panel" id="(?!workspace)([\w-]+)"') == ["b-app", "a-app"]
-    assert _names(test_client.get("/").text, r'class="proj-name" href="/control#([\w-]+)"') == ["b-app", "a-app"]
+    assert _names(test_client.get("/").text, _CARD_ID_RE) == ["c-app", "a-app", "b-app"]
 
 
 def test_arrange_mode_lists_projects_with_move_buttons(test_client, monkeypatch):
@@ -1321,14 +1322,13 @@ def test_arrange_mode_lists_projects_with_move_buttons(test_client, monkeypatch)
     text = test_client.get("/?arrange=1").text
     assert 'action="/order/dashboard/a-app/down"' in text and 'action="/order/dashboard/b-app/up"' in text
     assert re.search(r'aria-label="Move a-app up" disabled', text) and re.search(r'aria-label="Move b-app down" disabled', text)
-    assert "/order/control/" in test_client.get("/control?arrange=1").text
 
 
 def test_a_new_project_appears_after_the_placed_ones_and_a_bad_move_is_refused(test_client, monkeypatch):
     _stub_project_panels(monkeypatch, names=("a-app", "b-app"))
     test_client.post("/order/dashboard/b-app/up")
     _stub_project_panels(monkeypatch, names=("a-app", "b-app", "new-app"))
-    assert _names(test_client.get("/").text, r'class="proj-name" href="/control#([\w-]+)"') == ["b-app", "a-app", "new-app"]
+    assert _names(test_client.get("/").text, _CARD_ID_RE) == ["b-app", "a-app", "new-app"]
     refused = test_client.post("/order/dashboard/ghost/up", follow_redirects=False).headers["location"]
     assert "Could not reorder" in unquote(refused)
     assert "Could not reorder" in unquote(test_client.post("/order/elsewhere/a-app/up", follow_redirects=False).headers["location"])
@@ -1339,7 +1339,7 @@ def test_a_damaged_preferences_file_means_the_default_order(test_client, monkeyp
     prefs_file = paths.state_home / "dashboard" / "prefs.json"
     prefs_file.parent.mkdir(parents=True)
     prefs_file.write_text("{not json")
-    assert _names(test_client.get("/").text, r'class="proj-name" href="/control#([\w-]+)"') == ["a-app", "b-app"]
+    assert _names(test_client.get("/").text, _CARD_ID_RE) == ["a-app", "b-app"]
 
 
 # -- report: requirements (description, verdict) and tests (name, verdict) ---------------
@@ -1395,6 +1395,45 @@ def test_report_filters_by_search_and_verdict(test_client, monkeypatch):
     assert "t::a" not in test_client.get("/report", params={"verdict": "failed"}).text
 
 
+def test_report_splits_requirements_and_tests_into_two_tabs(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/report").text
+    assert len(re.findall(r'class="report-tab( is-active)?"', text)) == 2
+    assert re.search(r'class="report-tab is-active"[^>]*data-tab="requirements"', text)
+    assert re.search(r'class="report-tab"[^>]*data-tab="tests"', text)
+    req_panel = re.search(r'data-panel="requirements">(.*?)<section class="report-panel" data-panel="tests"', text, re.S).group(1)
+    tests_panel = text[text.index('data-panel="tests"'):]
+    assert "REQ-1" in req_panel and "REQ-1" not in tests_panel
+    assert "t::a" in tests_panel and "t::a" not in req_panel
+    assert 'data-panel="tests" hidden' in text  # tests tab starts hidden; requirements tab starts visible
+
+
+def _requirement_card(text, key):
+    start = text.rindex('<details class="report-item">', 0, text.index(f"<code>{key}</code>"))
+    end = text.index("</details>", start) + len("</details>")
+    return text[start:end]
+
+
+def test_report_requirement_cards_are_collapsible_and_hide_the_description_until_expanded(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/report").text
+    details = _requirement_card(text, "REQ-1")
+    assert "<summary>" in details and "</summary>" in details
+    summary = details[details.index("<summary>"):details.index("</summary>")]
+    body = details[details.index("</summary>") + len("</summary>"):]
+    assert "REQ-1" in summary and "passing" in summary
+    assert "The Widget shall list things." not in summary and "The Widget shall list things." in body
+
+
+def test_report_tests_are_grouped_into_collapsible_suites_with_one_card_per_test(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/report").text
+    tests_panel = text[text.index('data-panel="tests"'):]
+    suite = tests_panel[tests_panel.index("<details class=\"report-suite\""):]
+    assert "<summary>" in suite and "Unit tests" in suite[:suite.index("</summary>")]
+    assert suite.count('class="report-item report-test-card"') == 3
+
+
 def test_report_shows_a_pillar_outage_as_an_error_not_a_500(test_client, monkeypatch):
     _stub_report(monkeypatch)
 
@@ -1409,10 +1448,10 @@ def test_report_shows_a_pillar_outage_as_an_error_not_a_500(test_client, monkeyp
 # -- new project (bootstrap) from the toolbar ----------------------------------------
 
 
-def test_new_project_form_is_reachable_from_the_projects_group(test_client):
+def test_new_project_form_is_reachable_from_the_dashboard_group(test_client):
     text = test_client.get("/projects/new").text
     assert 'action="/projects/new"' in text and 'name="create_github_repo"' in text
-    assert 'href="/projects/new"' in text  # the toolbar's Projects group offers it
+    assert 'href="/projects/new"' in text  # the toolbar's Dashboard group offers it
 
 
 def test_new_project_submits_a_bootstrap_job_into_the_workspace(test_client, monkeypatch, tmp_path):
@@ -1420,7 +1459,7 @@ def test_new_project_submits_a_bootstrap_job_into_the_workspace(test_client, mon
     jobs = []
     monkeypatch.setattr(client, "create_job", lambda paths, **kw: (jobs.append(kw), {"status": "succeeded", "result": {"path": f"{tmp_path}/little-new"}})[1])
     response = test_client.post("/projects/new", data={"name": "little-new", "description": "A thing"}, follow_redirects=False)
-    assert response.status_code == 303 and response.headers["location"].startswith("/control?message=")
+    assert response.status_code == 303 and response.headers["location"].startswith("/?message=")
     job = jobs[0]
     assert job["type"] == "project.bootstrap" and job["target_pillar"] == "registry"
     assert job["params"] == {"name": "little-new", "dest_dir": str(tmp_path), "description": "A thing", "create_github_repo": False, "public": False}
@@ -1549,26 +1588,25 @@ def test_schedule_page_lists_scheduled_agent_tasks_and_removes_one(test_client, 
     assert removed == ["t1"] and response.status_code == 303
 
 
-# -- workspace-level session on Control ------------------------------------------------
+# -- workspace-level session on the Dashboard ------------------------------------------
 
-
-def test_control_offers_a_workspace_session_above_the_projects(test_client, monkeypatch, tmp_path):
+def test_dashboard_offers_a_workspace_session_above_the_projects(test_client, monkeypatch, tmp_path):
     monkeypatch.setenv("LITTLE_WORKSHOP_WORKSPACE_DIR", str(tmp_path))
     _stub_project_panels(monkeypatch, session={"running": False, "trusted": True})
-    text = test_client.get("/control").text
+    text = test_client.get("/").text
     assert text.index('id="workspace"') < text.index('id="little-widget"')
     assert str(tmp_path) in text and 'action="/projects/workspace/session/start"' in text and "Start workspace session" in text
 
 
 def test_a_running_workspace_session_offers_stop_and_its_name(test_client, monkeypatch):
     _stub_project_panels(monkeypatch, session={"running": True, "trusted": True})
-    text = test_client.get("/control").text
+    text = test_client.get("/").text
     assert 'action="/projects/workspace/session/stop"' in text and "lws-workspace-session" in text
 
 
 def test_an_untrusted_workspace_says_how_to_trust_it(test_client, monkeypatch):
     _stub_project_panels(monkeypatch, session={"running": False, "trusted": False})
-    assert "accept the trust prompt" in test_client.get("/control").text
+    assert "accept the trust prompt" in test_client.get("/").text
 
 
 def test_starting_the_workspace_session_submits_an_agent_job_for_the_reserved_id(test_client, monkeypatch):
@@ -1576,7 +1614,7 @@ def test_starting_the_workspace_session_submits_an_agent_job_for_the_reserved_id
     monkeypatch.setattr(client, "create_job", lambda paths, **kw: (jobs.append(kw), {"status": "succeeded", "result": {"session_name": "lws-workspace-session"}})[1])
     response = test_client.post("/projects/workspace/session/start", follow_redirects=False)
     assert jobs[0]["type"] == "agent.session_start" and jobs[0]["project_id"] == "workspace"
-    assert response.headers["location"].startswith("/control?project=workspace")
+    assert response.headers["location"].startswith("/?expand=workspace")
 
 
 def test_a_project_cannot_be_bootstrapped_under_the_reserved_workspace_name(test_client, monkeypatch):

@@ -365,3 +365,30 @@ Requested directly, same day as the usability refinement above: the original six
 | REQ-000000196 | **A real defect found while building it**: Agentic Development's read endpoints (`/v1/runs`, `/v1/ci_checks`) took the same lock `agent.run_task`'s worker holds for the entire run (up to an hour), so the Dashboard's task and CI panels would time out and mark the pillar unreachable for exactly as long as it was busiest. Reads now use a short-lived read-only connection and never queue behind a run. | done |
 | REQ-000000197 | Proven at the unit level (`test_dashboard_app.py`: the project dashboard, per-panel degradation when a pillar is down, unhealthy-pillar banner, Control's launch/stop/session controls and the untrusted explanation, non-blocking deploy submission, session start/stop, task list/new/detail/finish/skip, manifest/icons/service worker/offline; `test_dashboard_client.py`: 404-as-absent vs. outage; `test_agent_app.py`: `trusted`, and a run-lock regression test that reads a run while another blocks) and end-to-end (`test_dashboard_end_to_end.py` against real units), plus a phone-width screenshot of the live install. | done |
 
+
+## Workbench usability: ordering, workspace session, reporting, bootstrap, scheduling (2026-09-21)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000198 | **Requirements must follow EARS.** When a requirement is created or its description is edited, the Requirements pillar shall refuse a description that is not in EARS form and state how to correct it, except for requirements imported in bulk from another tool (`requirements/ears.py`). | done |
+| REQ-000000199 | **Order of project cards on the Dashboard.** When the user moves a project card up or down on the Dashboard, the Dashboard shall remember that order and show the project cards in it on every later visit (`dashboard/prefs.py`). | done |
+| REQ-000000201 | **Workspace-level Claude session.** When the user starts the workspace session, the Agentic Development pillar shall launch one Claude Code session in the projects root directory, outside any single project (`common/workspace.py`, the reserved project id `workspace`). | done |
+| REQ-000000202 | **Requirements and tests report.** When the user opens the Report page for a project, the Dashboard shall list every requirement with its description and verdict and every test with its name and verdict. | done |
+| REQ-000000203 | **Bootstrap a project from the toolbar.** When the user submits the New project form, the Dashboard shall submit a `project.bootstrap` job that creates the project's basic files and registers it. | done |
+| REQ-000000204 | **Schedule a task.** When the user submits the Schedule task form, the Dashboard shall create a scheduled task that starts the described agent task once at a chosen time or on chosen weekdays each week. | done |
+| REQ-000000205 | **Queue a task behind a predecessor.** When the user submits the Queue task form with a predecessor task, the Dashboard shall submit the new task so it starts only after the predecessor has succeeded (a job with `depends_on`). | done |
+| REQ-000000206 | **Queueing requires a predecessor.** If the user submits the Queue task form without a predecessor task, then the Dashboard shall refuse the submission and shall not create a job. | done |
+| REQ-000000207 | **Full pillar names.** The Pillars page shall show each pillar under its full name with capital letters, such as Policy & Compliance, instead of its short identifier. | done |
+| REQ-000000208 | **Grouped bottom toolbar.** When the user taps a group button on the bottom toolbar, the Dashboard shall reveal that group's related pages, so that Tasks offers the task list, Jobs, New task, Queue task and Schedule task. | done |
+| REQ-000000209 | **Delete jobs older than 12 hours.** When the user chooses 12 hours in Delete old jobs, the Orchestration pillar shall delete every finished job older than 12 hours and keep those that active work still depends on. | done |
+| REQ-000000200 | **Order of project cards on Control** — superseded, not implemented as its own thing: the separate Control page this requirement named no longer exists (REQ-000000214), folded into the Dashboard's own single order (REQ-000000199). | removed 2026-09-22 — superseded by REQ-000000214 (Control page merged into the Dashboard) |
+
+## Report and Dashboard redesign: tabs, collapsible cards, Control merged in (2026-09-22)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000210 | **Report page splits requirements and tests into tabs.** When the user opens the Report page, the Dashboard shall present Requirements and Tests as separate tabs and show only the selected tab's content. | done |
+| REQ-000000211 | **Requirement cards are collapsible on the Report page.** When the user taps a requirement's card on the Requirements tab, the Report page shall expand or collapse that requirement's description while its key, title and verdict stay visible. | done |
+| REQ-000000212 | **Tests are grouped into collapsible suites with one card per test.** On the Tests tab, the Dashboard shall group tests into collapsible suites, using the same test-suite grouping as the Requirements tab, and shall show each test in its own card. | done |
+| REQ-000000213 | **Dashboard project cards expand to show controls.** When the user taps a project card on the Dashboard, the Dashboard shall expand it to show that project's server, Claude Code session and task controls, and collapse it back to the summary when tapped again. Implemented as a native `<details>`/`<summary>` card. | done |
+| REQ-000000214 | **Control page merged into the Dashboard.** The Dashboard is the only page that shows a project's server, Claude Code session and task controls; the separate `/control` page and its route are removed, and the workspace session panel moved to the top of the Dashboard. | done |

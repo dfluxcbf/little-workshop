@@ -19,8 +19,7 @@
 {%- endmacro %}
 {# Each group is (key, label, landing href, icon, [(page key, href, label, icon)]). A one-page group is a plain link. #}
 {% set groups = [
-  ('dashboard', 'Dashboard', '/', 'dashboard', [('dashboard', '/', 'Dashboard', 'dashboard')]),
-  ('projects', 'Projects', '/control', 'projects', [('control', '/control', 'Control', 'control'), ('report', '/report', 'Report', 'report'), ('new-project', '/projects/new', 'New project', 'plus')]),
+  ('dashboard', 'Dashboard', '/', 'dashboard', [('dashboard', '/', 'Dashboard', 'dashboard'), ('report', '/report', 'Report', 'report'), ('new-project', '/projects/new', 'New project', 'plus')]),
   ('tasks', 'Tasks', '/tasks', 'tasks', [('tasks', '/tasks', 'Task list', 'tasks'), ('new-task', '/tasks/new', 'New task', 'plus'), ('queue-task', '/tasks/queue', 'Queue task', 'queue'), ('schedule-task', '/tasks/schedule', 'Schedule task', 'schedule'), ('jobs', '/jobs', 'Jobs', 'jobs')]),
   ('system', 'System', '/pillars', 'system', [('pillars', '/pillars', 'Pillars', 'pillars'), ('policies', '/policies', 'Policies', 'policies'), ('attention', '/attention', 'Attention', 'alert')]),
 ] %}

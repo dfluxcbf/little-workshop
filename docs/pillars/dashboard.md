@@ -33,23 +33,34 @@ are the current state of every pillar.
 
 ## Responsibilities
 
-- **Dashboard** (`/`, redesigned 2026-09-21): a project-management
-  overview that fits a phone screen. Five stat tiles (projects, servers up,
-  Claude sessions, active tasks, pillars healthy — the last links to
-  Pillars and turns red when any pillar is not healthy), then one compact
-  card per registered project. A card lists only the facts that exist —
-  server up/down (with version), Claude session (running / idle /
-  untrusted), tasks awaiting finish or running, requirements done/total,
-  latest CI — as a plain-text label beside a status pill (requirements are
-  green when all are done, red when a *published* requirement is not passing,
-  and neutral when the only shortfall is drafts awaiting review, counted as
-  "N draft"), never a row of
-  "—" placeholders; a project with something to act on (an untrusted
-  session, a task awaiting finish, a failing CI) gets an amber edge. Each
-  panel is its own live read; a pillar that is down degrades that fact
-  only ("unavailable"), never a 500. Small text is kept legible: dim text
-  is a lighter grey than before (`--ink-faint`), and stat labels are plain
-  13px text rather than tiny uppercase.
+- **Dashboard** (`/`, redesigned 2026-09-21, cards made expandable and Control
+  folded in 2026-09-22): a project-management overview that fits a phone
+  screen. Five stat tiles (projects, servers up, Claude sessions, active
+  tasks, pillars healthy — the last links to Pillars and turns red when any
+  pillar is not healthy), a workspace-session panel, then one expandable
+  `<details>` card per registered project. Collapsed, a card lists only the
+  facts that exist — server up/down (with version), Claude session (running /
+  idle / untrusted), tasks awaiting finish or running, requirements
+  done/total, latest CI — as a plain-text label beside a status pill
+  (requirements are green when all are done, red when a *published*
+  requirement is not passing, and neutral when the only shortfall is drafts
+  awaiting review, counted as "N draft"), never a row of "—" placeholders; a
+  project with something to act on (an untrusted session, a task awaiting
+  finish, a failing CI) gets an amber edge. Tapping the card expands it to
+  the project's own controls — deploy a branch (Launch/Relaunch) or Stop the
+  server, Start/Stop a Claude Code session (refused with an explanation when
+  the project isn't yet trusted by Claude Code), and its recent tasks with a
+  New task action — the same controls the now-removed Control page offered,
+  and collapses back to the summary when tapped again (`?expand={project}`
+  opens one directly, e.g. after a deploy). Deploys are submitted from a
+  background thread, since a cold `bazel run //:install` outlasts a browser
+  request; progress is on the Jobs page. For an **externally managed**
+  server (see `deployment_servers.md`) the Server section shows its status
+  and unit but no Launch/Stop controls, only a note that it is managed
+  outside Deployment. Each panel is its own live read; a pillar that is down
+  degrades that fact only ("unavailable"), never a 500. Small text is kept
+  legible: dim text is a lighter grey than before (`--ink-faint`), and stat
+  labels are plain 13px text rather than tiny uppercase.
 - **Needs attention** (every page; `/attention`, `/attention.json`, 2026-09-21):
   a banner under the top bar, shown only when something needs a human — an
   enabled policy whose latest check on a project failed, or a Job awaiting
@@ -61,22 +72,25 @@ are the current state of every pillar.
   down contributes nothing. This is the Dashboard half of "informing the user
   immediately" (REQ-000000127); GitHub-issue and Remote Control delivery
   are not built.
-- **Workbench additions (2026-09-21)**:
-  - **Navigation** is grouped. The bottom toolbar has Dashboard, Projects, Tasks and System; a group
-    button reveals its pages (Projects: Control, Report, New project; Tasks: Task list, New task,
+- **Workbench additions (2026-09-21, Control merged into Dashboard 2026-09-22)**:
+  - **Navigation** is grouped. The bottom toolbar has Dashboard, Tasks and System; a group
+    button reveals its pages (Dashboard: Dashboard, Report, New project; Tasks: Task list, New task,
     Queue task, Schedule task, Jobs; System: Pillars, Policies, Attention) with Back returning to
     the main row, and the group of the current page stays open. On a wide screen the top bar holds
-    the four groups and a sub-navigation row lists the active group's pages.
-  - **Arrange cards** (`/?arrange=1`, `/control?arrange=1`, `POST /order/{page}/{project}/{up|down}`):
-    the Dashboard and Control each keep their own order of project cards; a project the user has
-    never placed goes after the placed ones.
-  - **Workspace session** (Control, top panel): starts and stops one Claude Code session in the
-    projects root directory (`~/little-projects`, the parent of the workshop checkout;
-    `LITTLE_WORKSHOP_WORKSPACE_DIR` overrides), under the reserved project id `workspace`, so Claude
-    can work across projects. The root must be trusted by Claude Code like any project.
-  - **Report** (`/report`): for one project, every requirement with its description and verdict
-    (passing, failing, no tests, draft) and every test with its name and latest verdict, grouped by
-    suite, with a search box and a verdict filter.
+    the three groups and a sub-navigation row lists the active group's pages.
+  - **Arrange cards** (`/?arrange=1`, `POST /order/dashboard/{project}/{up|down}`): the Dashboard
+    keeps its own order of project cards; a project the user has never placed goes after the
+    placed ones.
+  - **Workspace session** (Dashboard, top panel, above the project cards): starts and stops one
+    Claude Code session in the projects root directory (`~/little-projects`, the parent of the
+    workshop checkout; `LITTLE_WORKSHOP_WORKSPACE_DIR` overrides), under the reserved project id
+    `workspace`, so Claude can work across projects. The root must be trusted by Claude Code like
+    any project.
+  - **Report** (`/report`): for one project, Requirements and Tests as two tabs. The Requirements
+    tab lists every requirement as a collapsible card — key, title and verdict always visible,
+    description shown only when expanded. The Tests tab groups tests into collapsible suites (the
+    same suite grouping the Requirements tab's own suite links use), one card per test with its
+    name and latest verdict. A search box and a verdict filter apply to both tabs.
   - **New project** (`/projects/new`): the form behind `project.bootstrap` — creates the basic files,
     a git repository on `dev` with version tracking, and registers it under the workspace directory;
     a GitHub repository is created only when the box is ticked.
@@ -86,17 +100,6 @@ are the current state of every pillar.
     agent task once at a chosen local time or on chosen weekdays each week; scheduled agent tasks are
     listed and can be removed.
   - **Pillars** shows each pillar's full name (Policy & Compliance, Registry & Portfolio, …).
-- **Control** (`/control`): per-project accordion, copied in shape from
-  `little-runner`'s own Control page — deploy a branch (Launch/
-  Relaunch) or Stop the server, **Start/Stop a Claude Code session**
-  (`agent.session_start`/`session_stop`; refused with an explanation
-  when the project isn't yet trusted by Claude Code), and see the
-  project's recent tasks. Deploys are submitted from a background
-  thread, since a cold `bazel run //:install` outlasts a browser
-  request; progress is on the Jobs page.
-  For an **externally managed** server (see `deployment_servers.md`) the
-  Server section shows its status and unit but no Launch/Stop controls, only a
-  note that it is managed outside Deployment.
 - **Tasks** (`/tasks`, `/tasks/new`, `/tasks/{project}/{run}`):
   Agentic Development's runs across every project, a New task form
   (`agent.run_task`), and per-run detail with the change report and
@@ -211,7 +214,7 @@ are the current state of every pillar.
 ## Data model
 
 No database. The one thing the Dashboard stores is the user's own display preference — the order of
-the project cards on the Dashboard and on Control — in `<state>/dashboard/prefs.json`
+the project cards on the Dashboard — in `<state>/dashboard/prefs.json`
 (`dashboard/prefs.py`). A missing or damaged file means the default order. Everything else on a
 page is a live read of the pillar that owns it.
 

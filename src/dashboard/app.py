@@ -266,29 +266,30 @@ def build_app(paths: Paths) -> FastAPI:
 
     # ---- Dashboard: manage projects at a glance -------------------------
 
-    def _arrange_page(request: Request, page: str, names: list[str], back: str):
-        return _render(request, "arrange.html", names=names, page=page, back=back, nav_active="dashboard" if page == "dashboard" else "control")
+    def _arrange_page(request: Request, names: list[str]):
+        return _render(request, "arrange.html", names=names, page="dashboard", back="/", nav_active="dashboard")
 
     @app.post("/order/{page}/{name}/{direction}")
     def reorder(page: str, name: str, direction: str):
-        back = "/" if page == "dashboard" else "/control"
         try:
             prefs.move(paths, page, _project_names(), name, direction)
         except client.PillarUnavailable as exc:
-            return _back(back, f"Could not reorder: {exc}")
+            return _back("/", f"Could not reorder: {exc}")
         except ValueError as exc:
-            return _back(back, f"Could not reorder: {exc}")
-        return RedirectResponse(f"{back}?arrange=1", status_code=303)
+            return _back("/", f"Could not reorder: {exc}")
+        return RedirectResponse("/?arrange=1", status_code=303)
 
     @app.get("/", response_class=HTMLResponse)
-    def index(request: Request, arrange: str | None = None):
+    def index(request: Request, arrange: str | None = None, expand: str | None = None):
         error = None
+        from dashboard.client import session_name_for
+
         try:
             names = prefs.ordered(paths, "dashboard", _project_names())
         except client.PillarUnavailable as exc:
             names, error = [], str(exc)
         if arrange:
-            return _arrange_page(request, "dashboard", names, "/")
+            return _arrange_page(request, names)
         pillars = _try(lambda: client.core_status(paths).get("pillars", {}), default={})
         unhealthy = [n for n, e in pillars.items() if e["status"] not in ("healthy", "active", "disabled")]
 
@@ -313,6 +314,8 @@ def build_app(paths: Paths) -> FastAPI:
             rows.append({
                 "name": name, "server": server, "session": session, "awaiting": awaiting, "running": running,
                 "reqs": reqs, "ci": _try(client.agent_latest_ci_check, paths, name),
+                "branches": _try(client.deployment_branches, paths, name, default=[]),
+                "session_name": session_name_for(name), "runs": runs,
             })
         stats = {
             "projects": len(rows),
@@ -323,7 +326,14 @@ def build_app(paths: Paths) -> FastAPI:
             "pillars_total": sum(1 for e in pillars.values() if e["status"] != "disabled"),
             "pillars_ok": sum(1 for e in pillars.values() if e["status"] in ("healthy", "active")),
         }
-        return _render(request, "index.html", rows=rows, stats=stats, unhealthy=unhealthy, error=error, nav_active="dashboard")
+        workspace = {
+            "id": WORKSPACE_ID, "dir": str(workspace_dir()), "session": _try(client.agent_session_status, paths, WORKSPACE_ID),
+            "session_name": session_name_for(WORKSPACE_ID),
+        }
+        return _render(
+            request, "index.html", rows=rows, stats=stats, unhealthy=unhealthy, workspace=workspace,
+            expand=expand, error=error, nav_active="dashboard",
+        )
 
     # ---- Report: requirements and tests with their verdicts ---------------
 
@@ -361,34 +371,7 @@ def build_app(paths: Paths) -> FastAPI:
             test_total=len(data["tests"]), error=error, nav_active="report",
         )
 
-    # ---- Control: per-project servers, sessions, work -------------------
-
-    @app.get("/control", response_class=HTMLResponse)
-    def control(request: Request, project: str | None = None, arrange: str | None = None):
-        error = None
-        try:
-            names = prefs.ordered(paths, "control", _project_names())
-        except client.PillarUnavailable as exc:
-            names, error = [], str(exc)
-        if arrange:
-            return _arrange_page(request, "control", names, "/control")
-        from dashboard.client import session_name_for
-
-        panels = []
-        for name in names:
-            runs = _try(client.agent_runs, paths, name, default=[])
-            awaiting, _ = _run_status_bucket(runs)
-            panels.append({
-                "name": name, "server": _try(client.deployment_status_optional, paths, name),
-                "branches": _try(client.deployment_branches, paths, name, default=[]),
-                "session": _try(client.agent_session_status, paths, name), "session_name": session_name_for(name),
-                "runs": runs, "awaiting": awaiting,
-            })
-        workspace = {
-            "id": WORKSPACE_ID, "dir": str(workspace_dir()), "session": _try(client.agent_session_status, paths, WORKSPACE_ID),
-            "session_name": session_name_for(WORKSPACE_ID),
-        }
-        return _render(request, "control.html", panels=panels, workspace=workspace, focus=project, error=error, nav_active="control")
+    # ---- Project controls: server, session, work (on the Dashboard) -------
 
     @app.post("/projects/{name}/deploy")
     def deploy(name: str, branch: str = Form("dev")):
@@ -396,7 +379,7 @@ def build_app(paths: Paths) -> FastAPI:
             paths, type="deployment.deploy", target_pillar="deployment", project_id=name, params={"branch": branch},
             queue_key=name, depends_on=[], created_by="dashboard",
         )
-        return _back(f"/control?project={name}", f"Deploy of {name} ({branch}) started — progress is on the Jobs page.")
+        return _back(f"/?expand={name}", f"Deploy of {name} ({branch}) started — progress is on the Jobs page.")
 
     @app.post("/projects/{name}/stop")
     def stop(name: str):
@@ -405,7 +388,7 @@ def build_app(paths: Paths) -> FastAPI:
             queue_key=name, depends_on=[], created_by="dashboard",
         ))
         ok = result is not None and result.get("status") == "succeeded"
-        return _back(f"/control?project={name}", f"{name} stopped." if ok else f"Could not stop {name}: {(result or {}).get('error', 'orchestration unreachable')}")
+        return _back(f"/?expand={name}", f"{name} stopped." if ok else f"Could not stop {name}: {(result or {}).get('error', 'orchestration unreachable')}")
 
     @app.post("/projects/{name}/session/start")
     def session_start(name: str):
@@ -414,8 +397,8 @@ def build_app(paths: Paths) -> FastAPI:
             queue_key=None, depends_on=[], created_by="dashboard",
         ))
         if result is not None and result.get("status") == "succeeded":
-            return _back(f"/control?project={name}", f"Session started — open the Claude app and attach to {result['result']['session_name']}.")
-        return _back(f"/control?project={name}", f"Could not start a session: {(result or {}).get('error', 'orchestration unreachable')}")
+            return _back(f"/?expand={name}", f"Session started — open the Claude app and attach to {result['result']['session_name']}.")
+        return _back(f"/?expand={name}", f"Could not start a session: {(result or {}).get('error', 'orchestration unreachable')}")
 
     @app.post("/projects/{name}/session/stop")
     def session_stop(name: str):
@@ -423,7 +406,7 @@ def build_app(paths: Paths) -> FastAPI:
             paths, type="agent.session_stop", target_pillar="agent", project_id=name, params={},
             queue_key=None, depends_on=[], created_by="dashboard",
         ))
-        return _back(f"/control?project={name}", "Session stopped.")
+        return _back(f"/?expand={name}", "Session stopped.")
 
     @app.get("/projects/new", response_class=HTMLResponse)
     def project_new(request: Request):
@@ -450,11 +433,11 @@ def build_app(paths: Paths) -> FastAPI:
             return _back("/projects/new", f"Could not create {name}: {exc}")
         if result.get("status") != "succeeded":
             return _back("/projects/new", f"Could not create {name}: {result.get('error') or result.get('status')}")
-        return _back("/control", f"Project {name} created at {result['result']['path']} and registered.")
+        return _back("/", f"Project {name} created at {result['result']['path']} and registered.")
 
     @app.get("/projects")
     def projects_redirect():
-        return RedirectResponse("/control", status_code=307)
+        return RedirectResponse("/", status_code=307)
 
     # ---- Tasks: Claude on a real branch, under review -------------------
 
