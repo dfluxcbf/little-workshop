@@ -417,3 +417,9 @@ Requested directly, same day as the usability refinement above: the original six
 | --- | --- | --- |
 | REQ-000000218 | **Approving a policy draft needs no separate confirmation.** When the user presses Approve on a policy draft, the Dashboard shall submit the approval without requiring a review checkbox or a typed reason. The earlier "I have reviewed the policy text and the test script" switch is removed; `policy.approve_draft` still receives `reviewed: true`, sent unconditionally the moment Approve is pressed. | done |
 | REQ-000000219 | **Approving a policy draft advances to the next one.** When a policy draft is approved, the Dashboard shall open the next pending draft, or the Policies page when none remain, instead of landing on the newly created policy's own page. | done |
+
+## Policies list gating chip shows "on" instead of "off" (2026-09-22)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000220 | **Policies list shows gating-on count in a neutral chip.** Where a policy's card on the Policies page shows how many applied projects have gating on, the Dashboard shall use a neutral chip and shall omit it when no project has gating on. Replaces the earlier amber "gating off: N" chip, at the user's request after asking what it meant. Per-project detail (which project, its own Gating switch) remains on the policy's own detail page. | done |

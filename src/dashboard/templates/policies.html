@@ -19,9 +19,9 @@
     <span class="polcard-meta">
       {% if p.gate_points %}{% for gp in p.gate_points %}<span class="chip gate">{{ gp }}</span>{% endfor %}
       {% else %}<span class="chip">no gate</span>{% endif %}
-      {% set n = p.projects | length %}{% set off = p.projects | rejectattr("gating_enabled") | list | length %}
+      {% set n = p.projects | length %}{% set on = p.projects | selectattr("gating_enabled") | list | length %}
       <span class="chip">{{ n }} project{{ '' if n == 1 else 's' }}{% if n and n == 1 %}: {{ p.projects[0].project_id }}{% endif %}</span>
-      {% if off %}<span class="chip warn">gating off: {{ off }}</span>{% endif %}
+      {% if on %}<span class="chip">gating on: {{ on }}</span>{% endif %}
       <span class="chip">{{ p.target_pillar }}</span>
       <span class="chip">{{ p.created_by }}</span>
     </span>

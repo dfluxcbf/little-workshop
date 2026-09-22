@@ -179,7 +179,11 @@ are the current state of every pillar.
   "no gate"), the scope, the target pillar, and who created it. The
   whole card opens the policy; a disabled policy is dimmed. The chips
   show how many projects the policy applies to (or the one project's
-  name) and, when any, how many have gating off. The
+  name) and, when any, how many have gating on, in a neutral chip
+  (2026-09-22: shown as "gating on" rather than "gating off", since a
+  reviewer asked what an amber "gating off" chip meant and it turned out
+  gating on was the more useful count to see at a glance — per-project
+  detail is on the policy's own detail page's Projects card). The
   policy's detail page (also redesigned 2026-09-21) is four cards, each
   headed by an icon and a one-word title rather than a boxed sentence:
   a **summary** (topic, status pill, the full `ears_text`, chips for

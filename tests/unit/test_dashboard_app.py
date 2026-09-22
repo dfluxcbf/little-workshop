@@ -463,6 +463,13 @@ def _policy(**overrides):
     return base
 
 
+def test_policies_hides_the_gating_chip_when_nothing_is_gating_on(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths: [
+        _policy(projects=[{"project_id": "proj-a", "gating_enabled": False}, {"project_id": "proj-b", "gating_enabled": False}]),
+    ])
+    assert "gating on" not in test_client.get("/policies").text
+
+
 def test_policies_renders_one_card_per_policy_with_chips(test_client, monkeypatch):
     monkeypatch.setattr(client, "policy_list", lambda paths: [
         _policy(),
@@ -477,7 +484,7 @@ def test_policies_renders_one_card_per_policy_with_chips(test_client, monkeypatc
     assert "project-has-name" in text and "every project shall have a name" in text
     assert '<span class="chip gate">server_launch</span>' in text and '<span class="chip gate">release</span>' in text
     assert ">no gate<" in text
-    assert "2 projects" in text and "gating off: 1" in text
+    assert "2 projects" in text and "gating on: 1" in text and "gating off" not in text
     assert "1 project: little-widget" in text
     assert "polcard is-off" in text and "disabled" in text
     assert "aiver" not in text and "Waivers" not in text
