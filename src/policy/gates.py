@@ -26,8 +26,7 @@ class Gate1Result:
     refined: bool
 
 
-_EARS_REFINED_RE = re.compile(r"^\s*EARS_REFINED:\s*", re.IGNORECASE | re.DOTALL)
-_EARS_OK_RE = re.compile(r"^\s*EARS_OK:\s*", re.IGNORECASE | re.DOTALL)
+_EARS_MARKER_RE = re.compile(r"(EARS_REFINED|EARS_OK):\s*", re.IGNORECASE)
 
 
 def gate1_ears_check(query: QueryFn, draft_text: str) -> Gate1Result:
@@ -44,14 +43,16 @@ def gate1_ears_check(query: QueryFn, draft_text: str) -> Gate1Result:
         "rewrite into valid EARS form, preserving the original intent. Reply with nothing else."
     )
     response = query(prompt).strip()
-    refined_match = _EARS_REFINED_RE.match(response)
-    if refined_match:
-        return Gate1Result(ears_text=response[refined_match.end():].strip(), refined=True)
-    ok_match = _EARS_OK_RE.match(response)
-    if ok_match:
-        return Gate1Result(ears_text=response[ok_match.end():].strip(), refined=False)
-    # Any other shape from the model is treated as a refinement proposal
-    # rather than silently trusting the original draft was already fine.
+    # The instruction says "reply with nothing else," but a model sometimes prefaces its
+    # marker with its own reasoning anyway — search for the marker (the *last* one, if it
+    # second-guesses itself mid-reply) rather than requiring it at the very start, so that
+    # preamble doesn't leak into ears_text as if it were part of the requirement.
+    markers = list(_EARS_MARKER_RE.finditer(response))
+    if markers:
+        marker = markers[-1]
+        return Gate1Result(ears_text=response[marker.end():].strip(), refined=marker.group(1).upper() == "EARS_REFINED")
+    # No marker at all is treated as a refinement proposal rather than silently trusting
+    # the original draft was already fine.
     return Gate1Result(ears_text=response, refined=True)
 
 

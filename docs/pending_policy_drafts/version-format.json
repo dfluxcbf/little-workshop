@@ -7,7 +7,9 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": [],
+  "gate_points": [
+    "branch_finish"
+  ],
   "source": "little-versions",
   "notes": "Reads the root `VERSION` only; single-line semver with optional `-dev.N`/`-rc.N`. Straightforward.",
   "concerns": false

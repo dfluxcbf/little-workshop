@@ -59,3 +59,33 @@ Gate 3; the notes flag the drafts that break it.
 **Added 2026-09-21:** `wheel-filename-has-version` (target pillar `build`, suggested gate point
 `package_publish`) — every `py_wheel` declares a version and every built wheel is named
 `<name>-<version>-<tags>.whl`. Script: `tools/policy_scripts/wheel_filename_has_version.py`.
+
+**Gate points and narrowing, 2026-09-22**: every pending draft now carries a gate point
+(or `[]` for audit-only, deliberately — see below), reviewed against `docs/architecture.md`'s
+ten action categories and this project's own `commit-bumps-version`/`branch-commit-dev-suffix`
+precedent (`branch_finish`). `production-tag-format` and `release-candidate-tag-format` were
+also narrowed to judge only the newest tag (of the current release line, for RCs) rather than
+auditing full tag history, so one old mistake never fails them forever — the same principle
+`commit-bumps-version` already applies to commits.
+
+Left **audit-only** (`gate_points: []`) on purpose, not an oversight:
+- `back-merge-no-ff`, `hotfix-propagates-by-merge`: their own review notes flag the check as a
+  weak static-text-scan proxy standing in for a real git-history check that wasn't built. Gating
+  on a weak proxy risks blocking real work for the wrong reason; decide whether to rewrite or
+  drop the mechanism before ever gating on it.
+- `issue-form-installed`: only meaningful for a project that has opted into issue-driven
+  automation; not every project has, or should.
+- `requirement-marker-id-format`, `requirement-marker-registered`: format-only checks that
+  can't verify the referenced requirement actually exists; useful as a guideline, not yet a
+  gate.
+
+A parsing bug in Gate 1 (`src/policy/gates.py`) leaked a model's own reasoning preamble into
+`production-version-stable`'s stored `ears_text` when the reply didn't start with the marker
+line; fixed (the marker is now found anywhere in the reply, taking the last one), and that
+draft's `ears_text` was cleaned up.
+
+**Projects affected** (`docs/pillars/dashboard.md`'s "Apply to" step) is chosen at approval time
+in the Dashboard and isn't stored on a draft, so it isn't pre-filled here. Recommendation: apply
+each policy to every registered project, gating on for little-home, little-meals,
+little-mindcheck and little-workshop, gating off for little-spectrum (already known to be in a
+bad state — still checked and recorded, never blocks).

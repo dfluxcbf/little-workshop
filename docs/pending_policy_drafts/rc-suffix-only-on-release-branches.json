@@ -7,7 +7,9 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": [],
+  "gate_points": [
+    "release"
+  ],
   "source": "little-versions",
   "notes": "Reads `VERSION` and the checked-out branch only. Straightforward.",
   "concerns": false

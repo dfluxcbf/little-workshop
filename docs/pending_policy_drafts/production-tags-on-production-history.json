@@ -7,7 +7,9 @@
   "scope_level": "all_projects",
   "scope_target": null,
   "created_by": "framework",
-  "gate_points": [],
+  "gate_points": [
+    "release"
+  ],
   "source": "little-versions",
   "notes": "Newest production tag only, reachable from the production branch. Matches the newest-only rule.",
   "concerns": false

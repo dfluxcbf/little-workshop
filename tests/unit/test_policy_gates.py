@@ -148,3 +148,17 @@ def test_generate_test_script_states_the_real_sandbox_mount_paths():
     gates.generate_test_script(query, "x", project_bound=False)
     assert "/framework/src" in captured["prompt"]
     assert "/framework/docs" in captured["prompt"]
+
+
+def test_gate1_extracts_the_marker_even_when_the_model_adds_preamble_first():
+    response = "Wait — this is already valid EARS state-driven form.\n\nEARS_OK: WHILE x, the system shall y."
+    result = gates.gate1_ears_check(lambda p: response, "WHILE x, the system shall y.")
+    assert result.refined is False
+    assert result.ears_text == "WHILE x, the system shall y."
+
+
+def test_gate1_uses_the_last_marker_when_the_model_second_guesses_itself():
+    response = "EARS_REFINED: draft one\n\nActually, EARS_OK: the system shall y."
+    result = gates.gate1_ears_check(lambda p: response, "do y")
+    assert result.refined is False
+    assert result.ears_text == "the system shall y."
