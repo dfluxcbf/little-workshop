@@ -23,6 +23,7 @@
     <span class="chip" title="{{ policy.id }}">{{ policy.id[:8] }}</span>
     {% if policy.amended_at %}<span class="chip" title="Created {{ policy.created_at }}">amended {{ policy.amended_at[:10] }}</span>{% endif %}
   </div>
+  <a class="btn" href="/policies/{{ policy.id }}/edit">Edit</a>
 </section>
 
 <form class="dcard" method="post" action="/policies/{{ policy.id }}/configure">

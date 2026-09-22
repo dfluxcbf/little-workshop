@@ -2,11 +2,55 @@
 {% block title %}New task — little-workshop{% endblock %}
 {% block content %}
 <h1>New task</h1>
-<p class="lede">Hands a task to Claude on the chosen project: a real branch, a change report, and your review before anything is finished. To start it later use <a href="/tasks/schedule">Schedule task</a>; to start it after another task use <a href="/tasks/queue">Queue task</a>.</p>
+<p class="lede">Hands a task to Claude on the chosen project: a real branch, a change report, and your review before anything is finished. Choose whether it starts right away or on a schedule.</p>
 <div class="panel" style="padding:18px 20px">
-<form method="post" action="/tasks/new">
+<form method="post" action="/tasks/new" id="task-form">
   {% include "_task_fields.html" %}
+  <label for="when">When</label>
+  <select name="when" id="when">
+    <option value="immediate">Right away</option>
+    <option value="once">Once, at a date and time</option>
+    <option value="recurring">Every week</option>
+  </select>
+  <div data-when="once" hidden>
+    <label for="at">Date and time</label>
+    <input type="datetime-local" name="at" id="at">
+  </div>
+  <div data-when="recurring" hidden>
+    <label>Weekdays</label>
+    <div class="daypick">
+      {% for d in weekdays %}<label class="chip-check"><input type="checkbox" name="day" value="{{ loop.index0 }}"><span>{{ d }}</span></label>{% endfor %}
+    </div>
+    <label for="time_of_day">Time of day</label>
+    <input type="time" name="time_of_day" id="time_of_day">
+  </div>
   <div class="row" style="margin-top:16px"><button type="submit" class="primary">Start task</button></div>
 </form>
 </div>
+
+{% if scheduled %}
+<h2 class="section-label">Scheduled</h2>
+<div class="report-list">
+  {% for t in scheduled %}
+  <article class="report-item">
+    <span class="report-head"><span class="report-title">{{ t.name }}</span><span class="pill {{ 'ok' if t.state == 'active' else 'idle' }}">{{ t.state }}</span></span>
+    <span class="report-desc">
+      {% if t.schedule.kind == 'once' %}Once at {{ t.schedule.at }}{% else %}Every {% for d in t.schedule.days_of_week %}{{ weekdays[d] }}{{ ', ' if not loop.last }}{% endfor %} at {{ t.schedule.time_of_day }}{% endif %}
+      {% if t.next_run_at %} &middot; next {{ t.next_run_at }}{% endif %}
+    </span>
+    <form method="post" action="/tasks/schedule/{{ t.id }}/remove"><button type="submit" class="danger">Remove</button></form>
+  </article>
+  {% endfor %}
+</div>
+{% endif %}
+<script>
+(function () {
+  var when = document.getElementById("when");
+  function sync() {
+    document.querySelectorAll("[data-when]").forEach(function (el) { el.hidden = el.dataset.when !== when.value; });
+  }
+  when.addEventListener("change", sync);
+  sync();
+})();
+</script>
 {% endblock %}

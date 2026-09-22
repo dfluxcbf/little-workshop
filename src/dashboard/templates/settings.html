@@ -1,6 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Needs attention — little-workshop{% endblock %}
+{% block title %}Settings — little-workshop{% endblock %}
 {% block content %}
+<h1>Settings</h1>
+
+<h2 class="section-label">Needs attention</h2>
 <div class="policy-list">
   {% for i in items %}
   <a class="polcard" href="{{ i.href }}">

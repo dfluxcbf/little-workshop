@@ -50,7 +50,7 @@
 {% if not rows %}
 <p class="muted">No project registered yet. Register one with <code>lws project import</code>, or <a href="/projects/new">create one</a>.</p>
 {% else %}
-<p class="arrange-link"><a href="/?arrange=1">Arrange cards</a></p>
+<p class="arrange-link"><a href="/?arrange=1">Arrange cards</a> &middot; <a href="/projects/new">New project</a></p>
 {% for r in rows %}
 {% set attn = r.awaiting or (r.ci and r.ci.state in ('failure', 'error')) or (r.session and r.session.trusted == false) %}
 <details class="proj-card{{ ' attn' if attn }}" id="{{ r.name }}" {{ 'open' if r.name == expand }}>
@@ -145,7 +145,7 @@
     </div>
 
     <div class="subsection">
-      <h3>Work</h3>
+      <h3>Work <a class="dim" href="/report?project={{ r.name }}" style="font-weight:normal;font-size:12.5px">Report &rarr;</a></h3>
       {% if r.runs %}
       <ul class="plain-list">
         {% for run in r.runs[:5] %}

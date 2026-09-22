@@ -93,6 +93,10 @@ def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0) 
     return _get(paths, "orchestration", "/v1/jobs", params={"status": status} if status else None, timeout=timeout)
 
 
+def get_job(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict | None:
+    return _get_optional(paths, "orchestration", f"/v1/jobs/{job_id}")
+
+
 def job_cleanup_preview(paths: Paths, hours: list[int], *, timeout: float = 10.0) -> dict[str, int]:
     """{"168": how many finished jobs are older than 168 hours, ...} — nothing is deleted."""
     body = _get(paths, "orchestration", "/v1/job-cleanup", params={"hours": ",".join(str(h) for h in hours)}, timeout=timeout)

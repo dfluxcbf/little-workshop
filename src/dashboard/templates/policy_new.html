@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit policy' if policy and policy.id else 'New policy' }} — little-workshop{% endblock %}
+{% block content %}
+<h1>{{ 'Edit policy' if policy and policy.id else 'New policy' }}</h1>
+<p class="lede">
+  {% if policy and policy.id %}Re-authors this policy as a new draft — the existing policy is never changed directly, and the result waits for your approval like any other draft.
+  {% else %}Describe the rule in plain language. Claude checks it, drafts a test script, and files the result as a draft awaiting your approval — nothing is enforced until you approve it.{% endif %}
+</p>
+<div class="panel" style="padding:18px 20px">
+{% if author_error %}<p class="muted" style="color:var(--fail)">{{ author_error }}</p>{% endif %}
+<form method="post" action="{{ '/policies/' + policy.id + '/edit' if policy and policy.id else '/policies/new' }}">
+  <label for="ears_text">The rule</label>
+  <textarea name="ears_text" id="ears_text" rows="4" placeholder="e.g. every release tag shall be annotated" required>{{ policy.ears_text if policy else '' }}</textarea>
+  <label for="topic">Topic</label>
+  <input type="text" name="topic" id="topic" value="{{ policy.topic if policy else '' }}" required>
+  <label for="target_pillar">Target pillar</label>
+  <select name="target_pillar" id="target_pillar">
+    {% for p in ["policy","orchestration","registry","requirements","version","build","deployment","agent","dashboard"] %}
+    <option value="{{ p }}" {{ 'selected' if policy and policy.target_pillar == p }}>{{ p }}</option>
+    {% endfor %}
+  </select>
+  <label for="scope_level">Scope</label>
+  <select name="scope_level" id="scope_level">
+    <option value="all_projects" {{ 'selected' if not policy or policy.scope_level == 'all_projects' }}>Every project</option>
+    <option value="project" {{ 'selected' if policy and policy.scope_level == 'project' }}>One project</option>
+    <option value="project_set" {{ 'selected' if policy and policy.scope_level == 'project_set' }}>A project set</option>
+  </select>
+  <div data-scope="project_scope" hidden>
+    <label for="scope_target">Project or project-set id</label>
+    <input type="text" name="scope_target" id="scope_target" value="{{ policy.scope_target if policy else '' }}">
+  </div>
+  <label>Gate points <span class="dim">none = audit only</span></label>
+  <div class="gp-grid">
+    {% for gp in gate_point_values %}
+    <label class="gp">
+      <input type="checkbox" name="gate_points" value="{{ gp }}" {% if policy and gp in (policy.gate_points or []) %}checked{% endif %}>
+      <span>{{ gp }}</span>
+    </label>
+    {% endfor %}
+  </div>
+  <div class="row" style="margin-top:16px"><button type="submit" class="primary">{{ 'Re-author' if policy and policy.id else 'Author' }}</button></div>
+</form>
+</div>
+<script>
+(function () {
+  var scope = document.getElementById("scope_level");
+  function sync() {
+    document.querySelectorAll('[data-scope="project_scope"]').forEach(function (el) { el.hidden = scope.value === "all_projects"; });
+  }
+  scope.addEventListener("change", sync);
+  sync();
+})();
+</script>
+{% endblock %}

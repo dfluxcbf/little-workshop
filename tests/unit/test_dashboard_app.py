@@ -1245,7 +1245,7 @@ def test_attention_lists_a_failing_check_and_a_job_awaiting_confirmation(test_cl
     body = test_client.get("/attention.json").json()
     assert body["count"] == 2
     assert {i["kind"] for i in body["items"]} == {"policy", "confirmation"}
-    page = test_client.get("/attention").text
+    page = test_client.get("/settings").text
     assert "commit-bumps-version is failing" in page and "VERSION not bumped" in page
     assert "deployment.deploy awaits confirmation" in page
 
@@ -1262,16 +1262,16 @@ def test_attention_uses_only_the_latest_result_and_ignores_disabled_policies(tes
         jobs=[],
     )
     assert test_client.get("/attention.json").json() == {"count": 0, "items": []}
-    assert "Nothing needs you right now" in test_client.get("/attention").text
+    assert "Nothing needs you right now" in test_client.get("/settings").text
 
 
 def test_every_page_carries_the_attention_banner_only_when_something_needs_attention(test_client, monkeypatch):
     _stub_project_panels(monkeypatch)
     _stub_attention(monkeypatch, policies=[], results=[], jobs=[])
-    assert 'id="attention-banner" href="/attention" hidden' in test_client.get("/").text
+    assert 'id="attention-banner" href="/settings" hidden' in test_client.get("/").text
     _stub_attention(monkeypatch, policies=[], results=[], jobs=[{"type": "deployment.deploy", "project_id": "x", "created_at": None}])
     text = test_client.get("/").text
-    assert 'id="attention-banner" href="/attention">' in text and '<strong id="attention-count">1</strong>' in text
+    assert 'id="attention-banner" href="/settings">' in text and '<strong id="attention-count">1</strong>' in text
 
 
 def test_attention_degrades_to_nothing_when_the_pillars_are_down(test_client, monkeypatch):
@@ -1293,7 +1293,7 @@ def test_attention_lists_an_open_incident_as_a_bug(test_client, monkeypatch):
     )
     body = test_client.get("/attention.json").json()
     assert body["count"] == 1 and body["items"][0]["kind"] == "incident"
-    page = test_client.get("/attention").text
+    page = test_client.get("/settings").text
     assert "ValueError in agent" in page and "boom" in page and 'href="/incidents/i1"' in page and ">bug<" in page
 
 
@@ -1327,20 +1327,29 @@ def test_bottom_toolbar_groups_related_pages_under_one_button(test_client, monke
     monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
     text = test_client.get("/policies").text
     bar = text[text.index('<nav class="tabbar"'):]
-    assert bar.count('data-open="tasks"') == 1 and bar.count('data-open="dashboard"') == 1 and bar.count('data-open="system"') == 1
-    tasks_row = re.search(r'data-view="tasks">(.*?)</div>', bar, re.S).group(1)
-    for href, label in (("/tasks", "Task list"), ("/tasks/new", "New task"), ("/tasks/queue", "Queue task"), ("/tasks/schedule", "Schedule task"), ("/jobs", "Jobs")):
-        assert f'href="{href}"' in tasks_row and f"<span>{label}</span>" in tasks_row
-    dashboard_row = re.search(r'data-view="dashboard">(.*?)</div>', bar, re.S).group(1)
-    assert all(h in dashboard_row for h in ('href="/"', 'href="/report"', 'href="/projects/new"'))
+    assert bar.count('data-open="actions"') == 1 and bar.count('data-open="policies"') == 1 and bar.count('data-open="system"') == 1
+    assert bar.count('data-open="dashboard"') == 0
+    actions_row = re.search(r'data-view="actions">(.*?)</div>', bar, re.S).group(1)
+    for href, label in (("/tasks", "Task list"), ("/tasks/new", "New task"), ("/jobs", "Jobs"), ("/jobs/new", "New job"), ("/jobs/schedule", "Schedule job")):
+        assert f'href="{href}"' in actions_row and f"<span>{label}</span>" in actions_row
+    assert "/tasks/queue" not in actions_row and "/tasks/schedule" not in actions_row
+    policies_row = re.search(r'data-view="policies">(.*?)</div>', bar, re.S).group(1)
+    for href, label in (("/policies", "Policies"), ("/policies/new", "New policy")):
+        assert f'href="{href}"' in policies_row and f"<span>{label}</span>" in policies_row
+    system_row = re.search(r'data-view="system">(.*?)</div>', bar, re.S).group(1)
+    for href, label in (("/pillars", "Pillars"), ("/incidents", "Incidents"), ("/settings", "Settings")):
+        assert f'href="{href}"' in system_row and f"<span>{label}</span>" in system_row
+    main_row = re.search(r'data-view="main"(.*?)</div>', bar, re.S).group(1)
+    assert 'href="/"' in main_row
+    assert "/report" not in bar and "/projects/new" not in bar
 
 
 def test_the_group_of_the_current_page_is_open_and_highlighted(test_client, monkeypatch):
     monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [])
     monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
     text = test_client.get("/policies").text
-    assert re.search(r'class="tabbar-row tabbar-row-active" data-view="system"', text)
-    assert re.search(r'class="tab tab-group tab-active" data-open="system"', text)
+    assert re.search(r'class="tabbar-row tabbar-row-active" data-view="policies"', text)
+    assert re.search(r'class="tab tab-group tab-active" data-open="policies"', text)
     assert 'class="subnav-link is-active" href="/policies"' in text.replace('href="/policies" class="subnav-link is-active"', 'class="subnav-link is-active" href="/policies"')
 
 
@@ -1414,9 +1423,16 @@ def _stub_report(monkeypatch):
     ])
 
 
-def test_report_lists_every_requirement_with_description_and_verdict(test_client, monkeypatch):
+def test_report_loads_without_a_project_preselected(test_client, monkeypatch):
     _stub_report(monkeypatch)
     text = test_client.get("/report").text
+    assert "REQ-1" not in text and "t::a" not in text
+    assert 'value="little-widget"' in text and 'value="other"' in text
+
+
+def test_report_lists_every_requirement_with_description_and_verdict(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/report", params={"project": "little-widget"}).text
     for key, desc, verdict in (("REQ-1", "The Widget shall list things.", "passing"), ("REQ-2", "The Widget shall sort things.", "failing"),
                                ("REQ-3", "The Widget shall export things.", "no tests"), ("REQ-4", "The Widget shall print things.", "draft")):
         block = text[text.index(f"<code>{key}</code>"):]
@@ -1425,7 +1441,7 @@ def test_report_lists_every_requirement_with_description_and_verdict(test_client
 
 def test_report_lists_every_test_with_its_latest_verdict(test_client, monkeypatch):
     _stub_report(monkeypatch)
-    text = test_client.get("/report").text
+    text = test_client.get("/report", params={"project": "little-widget"}).text
     assert re.search(r'report-test-name">t::a</span>\s*<span class="pill ok">passed', text)  # the later pass replaces the earlier failure
     assert re.search(r'report-test-name">t::b</span>\s*<span class="pill fail">failed', text)
     assert re.search(r'report-test-name">t::c</span>\s*<span class="pill idle">skipped', text)
@@ -1434,16 +1450,16 @@ def test_report_lists_every_test_with_its_latest_verdict(test_client, monkeypatc
 
 def test_report_filters_by_search_and_verdict(test_client, monkeypatch):
     _stub_report(monkeypatch)
-    text = test_client.get("/report", params={"verdict": "failing"}).text
+    text = test_client.get("/report", params={"project": "little-widget", "verdict": "failing"}).text
     assert "REQ-2" in text and "REQ-1" not in text and "REQ-4" not in text
-    assert "REQ-3" in test_client.get("/report", params={"q": "export"}).text
-    assert "t::b" in test_client.get("/report", params={"verdict": "failed"}).text
-    assert "t::a" not in test_client.get("/report", params={"verdict": "failed"}).text
+    assert "REQ-3" in test_client.get("/report", params={"project": "little-widget", "q": "export"}).text
+    assert "t::b" in test_client.get("/report", params={"project": "little-widget", "verdict": "failed"}).text
+    assert "t::a" not in test_client.get("/report", params={"project": "little-widget", "verdict": "failed"}).text
 
 
 def test_report_splits_requirements_and_tests_into_two_tabs(test_client, monkeypatch):
     _stub_report(monkeypatch)
-    text = test_client.get("/report").text
+    text = test_client.get("/report", params={"project": "little-widget"}).text
     assert len(re.findall(r'class="report-tab( is-active)?"', text)) == 2
     assert re.search(r'class="report-tab is-active"[^>]*data-tab="requirements"', text)
     assert re.search(r'class="report-tab"[^>]*data-tab="tests"', text)
@@ -1462,7 +1478,7 @@ def _requirement_card(text, key):
 
 def test_report_requirement_cards_are_collapsible_and_hide_the_description_until_expanded(test_client, monkeypatch):
     _stub_report(monkeypatch)
-    text = test_client.get("/report").text
+    text = test_client.get("/report", params={"project": "little-widget"}).text
     details = _requirement_card(text, "REQ-1")
     assert "<summary>" in details and "</summary>" in details
     summary = details[details.index("<summary>"):details.index("</summary>")]
@@ -1473,7 +1489,7 @@ def test_report_requirement_cards_are_collapsible_and_hide_the_description_until
 
 def test_report_tests_are_grouped_into_collapsible_suites_with_one_card_per_test(test_client, monkeypatch):
     _stub_report(monkeypatch)
-    text = test_client.get("/report").text
+    text = test_client.get("/report", params={"project": "little-widget"}).text
     tests_panel = text[text.index('data-panel="tests"'):]
     suite = tests_panel[tests_panel.index("<details class=\"report-suite\""):]
     assert "<summary>" in suite and "test_widget" in suite[:suite.index("</summary>")]
@@ -1487,17 +1503,18 @@ def test_report_shows_a_pillar_outage_as_an_error_not_a_500(test_client, monkeyp
         raise client.PillarUnavailable("requirements daemon unreachable")
 
     monkeypatch.setattr(client, "requirements_report", down)
-    response = test_client.get("/report")
+    response = test_client.get("/report", params={"project": "little-widget"})
     assert response.status_code == 200 and "unreachable" in response.text
 
 
 # -- new project (bootstrap) from the toolbar ----------------------------------------
 
 
-def test_new_project_form_is_reachable_from_the_dashboard_group(test_client):
+def test_new_project_form_is_reachable_from_the_dashboard_page(test_client, monkeypatch):
     text = test_client.get("/projects/new").text
     assert 'action="/projects/new"' in text and 'name="create_github_repo"' in text
-    assert 'href="/projects/new"' in text  # the toolbar's Dashboard group offers it
+    _stub_project_panels(monkeypatch, names=())
+    assert 'href="/projects/new"' in test_client.get("/").text  # a contextual link on the Dashboard, not the toolbar
 
 
 def test_new_project_submits_a_bootstrap_job_into_the_workspace(test_client, monkeypatch, tmp_path):
@@ -1533,7 +1550,7 @@ def test_new_project_reports_a_failed_bootstrap(test_client, monkeypatch):
     assert location.startswith("/projects/new?message=") and "already registered" in location
 
 
-# -- queue a task behind a predecessor ------------------------------------------------
+# -- new task: immediate dispatch, and merged-in scheduling ------------------------------
 
 
 def _task_job(job_id, project, title, status="running"):
@@ -1545,52 +1562,32 @@ def _stub_task_pages(monkeypatch, jobs):
     monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: jobs)
 
 
-def test_queue_page_offers_only_unfinished_agent_tasks_as_predecessors(test_client, monkeypatch):
-    _stub_task_pages(monkeypatch, [
-        _task_job("j1", "little-widget", "Add search", "running"), _task_job("j2", "little-widget", "Old thing", "succeeded"),
-        {"id": "j3", "type": "deployment.deploy", "project_id": "little-widget", "status": "running", "params": {}},
-        _task_job("j4", "little-widget", "Waiting one", "queued"),
-    ])
-    text = test_client.get("/tasks/queue").text
-    assert 'value="j1"' in text and 'value="j4"' in text
-    assert 'value="j2"' not in text and 'value="j3"' not in text
-    assert "little-widget — Add search (running)" in text
-
-
-def test_queue_page_explains_when_there_is_nothing_to_wait_for(test_client, monkeypatch):
-    _stub_task_pages(monkeypatch, [_task_job("j2", "little-widget", "Done", "succeeded")])
-    text = test_client.get("/tasks/queue").text
-    assert "nothing to queue behind" in text and 'action="/tasks/queue"' not in text
-
-
-def test_queue_submits_the_task_depending_on_its_predecessor(test_client, monkeypatch):
-    _stub_task_pages(monkeypatch, [_task_job("j1", "little-widget", "Add search")])
+def test_new_task_immediate_dispatches_a_job(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
     created = []
-    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (created.append(kw), {"status": "queued"})[1])
-    response = test_client.post("/tasks/queue", data={"project": "little-widget", "title": "Then sort", "description": "d", "after": "j1"}, follow_redirects=False)
-    assert response.status_code == 303 and "queued" in unquote(response.headers["location"])
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (created.append(kw), {"status": "running"})[1])
+    response = test_client.post("/tasks/new", data={
+        "project": "little-widget", "title": "Add search", "description": "d", "when": "immediate"}, follow_redirects=False)
+    assert response.status_code == 303 and "started" in unquote(response.headers["location"])
     job = created[0]
-    assert job["type"] == "agent.run_task" and job["depends_on"] == ["j1"] and job["queue_key"] == "little-widget"
-    assert job["params"]["title"] == "Then sort"
+    assert job["type"] == "agent.run_task" and job["project_id"] == "little-widget" and job["params"]["title"] == "Add search"
 
 
-@pytest.mark.parametrize("after", ["", "unknown-job", "j2"])
-def test_queue_refuses_a_missing_or_finished_predecessor_and_creates_no_job(test_client, monkeypatch, after):
-    _stub_task_pages(monkeypatch, [_task_job("j1", "little-widget", "Add search"), _task_job("j2", "little-widget", "Done", "succeeded")])
-    created = []
-    monkeypatch.setattr(client, "create_job", lambda paths, **kw: created.append(kw))
-    response = test_client.post("/tasks/queue", data={"project": "little-widget", "title": "t", "after": after}, follow_redirects=False)
-    assert response.status_code == 303 and "Choose the task" in unquote(response.headers["location"]) and created == []
-
-
-# -- schedule a task -------------------------------------------------------------------
+def test_new_task_immediate_reports_a_failure_to_start(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: {"status": "failed", "error": "agent unreachable"})
+    response = test_client.post("/tasks/new", data={
+        "project": "little-widget", "title": "Add search", "when": "immediate"}, follow_redirects=False)
+    assert response.status_code == 303 and "Could not start" in unquote(response.headers["location"])
 
 
 def test_schedule_once_creates_a_scheduled_task_that_starts_an_agent_task(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
     calls = []
     monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: calls.append(kw) or {})
-    response = test_client.post("/tasks/schedule", data={
-        "project": "little-widget", "title": "Nightly tidy", "description": "d", "kind": "once", "at": "2999-01-02T09:30"}, follow_redirects=False)
+    response = test_client.post("/tasks/new", data={
+        "project": "little-widget", "title": "Nightly tidy", "description": "d", "when": "once",
+        "kind": "once", "at": "2999-01-02T09:30"}, follow_redirects=False)
     assert response.status_code == 303 and "scheduled" in unquote(response.headers["location"])
     call = calls[0]
     assert call["name"] == "little-widget: Nightly tidy" and call["schedule"] == {"kind": "once", "at": "2999-01-02T09:30:00"}
@@ -1600,10 +1597,12 @@ def test_schedule_once_creates_a_scheduled_task_that_starts_an_agent_task(test_c
 
 
 def test_schedule_recurring_takes_weekdays_and_a_time(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
     calls = []
     monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: calls.append(kw) or {})
-    test_client.post("/tasks/schedule", data={
-        "project": "little-widget", "title": "Weekly", "kind": "recurring", "day": ["4", "0", "0"], "time_of_day": "07:05"})
+    test_client.post("/tasks/new", data={
+        "project": "little-widget", "title": "Weekly", "when": "recurring", "kind": "recurring",
+        "day": ["4", "0", "0"], "time_of_day": "07:05"})
     assert calls[0]["schedule"] == {"kind": "recurring", "days_of_week": [0, 4], "time_of_day": "07:05"}
 
 
@@ -1613,25 +1612,37 @@ def test_schedule_recurring_takes_weekdays_and_a_time(test_client, monkeypatch):
     {"kind": "recurring", "day": ["9"], "time_of_day": "07:05"}, {"kind": "weekly"},
 ])
 def test_schedule_refuses_an_incomplete_or_past_schedule(test_client, monkeypatch, data):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
     calls = []
     monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: calls.append(kw) or {})
-    response = test_client.post("/tasks/schedule", data={"project": "little-widget", "title": "t", **data}, follow_redirects=False)
+    response = test_client.post("/tasks/new", data={"project": "little-widget", "title": "t", "when": data.get("kind", "once"), **data}, follow_redirects=False)
     assert response.status_code == 303 and calls == []
 
 
-def test_schedule_page_lists_scheduled_agent_tasks_and_removes_one(test_client, monkeypatch):
+def test_new_task_page_lists_scheduled_agent_tasks_and_removes_one(test_client, monkeypatch):
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
     monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [
         {"id": "t1", "name": "little-widget: Weekly", "state": "active", "next_run_at": "2026-09-28T07:05:00",
          "job_template": {"type": "agent.run_task"}, "schedule": {"kind": "recurring", "days_of_week": [0, 4], "time_of_day": "07:05"}},
         {"id": "t2", "name": "policy audit", "state": "active", "job_template": {"type": "policy.check_all"}, "schedule": {"kind": "once", "at": "2026-09-30T00:00:00"}},
     ])
-    text = test_client.get("/tasks/schedule").text
+    text = test_client.get("/tasks/new").text
     assert "little-widget: Weekly" in text and "Mon, Fri at 07:05" in text and "policy audit" not in text
     removed = []
     monkeypatch.setattr(client, "remove_scheduled_task", lambda paths, task_id: removed.append(task_id) or {})
     response = test_client.post("/tasks/schedule/t1/remove", follow_redirects=False)
-    assert removed == ["t1"] and response.status_code == 303
+    assert removed == ["t1"] and response.status_code == 303 and response.headers["location"].startswith("/tasks/new")
+
+
+def test_tasks_list_shows_a_queued_agent_task_as_waiting(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    monkeypatch.setattr(client, "agent_runs", lambda paths, project: [])
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [
+        {"id": "j9", "type": "agent.run_task", "project_id": "little-widget", "created_at": "2026-09-22T10:00:00Z", "params": {"title": "Pending thing"}},
+        {"id": "j10", "type": "deployment.deploy", "project_id": "little-widget", "created_at": "2026-09-22T09:00:00Z", "params": {}},
+    ] if status == "queued" else [])
+    text = test_client.get("/tasks").text
+    assert "Pending thing" in text and "waiting" in text
 
 
 # -- workspace-level session on the Dashboard ------------------------------------------
@@ -1681,7 +1692,7 @@ def test_report_hides_the_self_application_aggregate_suite_from_the_tests_tab(te
         {"suite_id": "agg", "test_name": "tests.unit.test_widget::test_a", "verdict": "passed", "executed_at": "2026-09-22T10:00:00Z"},
         {"suite_id": "s1", "test_name": "test_a", "verdict": "passed", "executed_at": "2026-09-22T10:00:00Z"},
     ])
-    text = test_client.get("/report").text
+    text = test_client.get("/report", params={"project": "little-widget"}).text
     assert ">Unit tests<" not in text
     assert text.count("report-test-name") == 1 and "test_widget" in text
 
@@ -1804,41 +1815,6 @@ def test_pillars_page_survives_registry_being_down_for_secrets(test_client, monk
     assert test_client.get("/pillars").status_code == 200
 
 
-# -- data catalog: pointer vs inline data, live -----------------------------------------
-
-
-def test_data_catalog_shows_pointer_entries(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [])
-    monkeypatch.setattr(client, "list_secrets", lambda paths: [])
-    text = test_client.get("/data").text
-    assert "Requirements and their verdicts" in text and "GET /v1/report?project_id={project}" in text
-    assert "requirements" in text and "Incidents" in text
-
-
-def test_data_catalog_shows_each_projects_inline_version(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
-    monkeypatch.setattr(client, "deployment_status_optional", lambda paths, name: {"version": "1.2.3", "listening": True})
-    monkeypatch.setattr(client, "list_secrets", lambda paths: [])
-    text = test_client.get("/data").text
-    assert "little-widget — server version" in text and "1.2.3" in text and "up" in text
-
-
-def test_data_catalog_shows_secrets_status(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [])
-    monkeypatch.setattr(client, "list_secrets", lambda paths: [{"name": "github", "valid": True, "expires_at": "2026-12-31 00:00:00 UTC"}])
-    text = test_client.get("/data").text
-    assert "github: valid, expires 2026-12-31 00:00:00 UTC" in text
-
-
-def test_data_catalog_survives_pillars_being_down(test_client, monkeypatch):
-    def down(*a, **kw):
-        raise client.PillarUnavailable("down")
-
-    monkeypatch.setattr(client, "list_projects", down)
-    monkeypatch.setattr(client, "list_secrets", down)
-    assert test_client.get("/data").status_code == 200
-
-
 # -- report page: no phantom horizontal scroll, bars stay fixed (2026-09-23) ------------
 
 
@@ -1875,5 +1851,153 @@ def test_report_page_produces_no_horizontally_overflowing_content(test_client, m
     monkeypatch.setattr(client, "requirements_list", lambda paths, project: [
         {"id": "r1", "key": "REQ-1", "title": long_word, "description": "y" * 200, "status": "published"},
     ])
-    text = test_client.get("/report").text
+    text = test_client.get("/report", params={"project": "little-widget"}).text
     assert long_word in text  # rendered, not stripped — wrapping is CSS's job, not the server's
+
+
+# -- new job / schedule job: reuse an existing job, or ask Claude once ------------------
+
+
+def test_job_new_get_renders(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [
+        {"id": "j1", "type": "version.branch_audit", "target_pillar": "version", "project_id": "little-widget",
+         "params": {}, "created_at": "2026-09-22T10:00:00Z"},
+    ])
+    text = test_client.get("/jobs/new").text
+    assert 'action="/jobs/new"' in text and "version.branch_audit" in text
+
+
+def test_job_new_build_reuse_fills_the_template_from_the_chosen_job(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: {
+        "id": job_id, "type": "version.branch_audit", "target_pillar": "version", "project_id": "little-widget", "params": {"x": 1},
+    })
+    text = test_client.post("/jobs/new", data={"action": "build", "mode": "reuse", "reuse_job_id": "j1"}).text
+    assert "version.branch_audit" in text and "little-widget" in text
+
+
+def test_job_new_build_reuse_without_a_choice_is_refused(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    text = test_client.post("/jobs/new", data={"action": "build", "mode": "reuse", "reuse_job_id": ""}).text
+    assert "Choose a job to reuse." in text
+
+
+def test_job_new_build_ask_asks_claude_and_parses_the_reply(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: {
+        "status": "succeeded", "result": {"text": '```json\n{"type": "policy.check_all", "target_pillar": "policy", "params": {}}\n```'},
+    })
+    text = test_client.post("/jobs/new", data={"action": "build", "mode": "ask", "prompt": "run every policy check"}).text
+    assert "policy.check_all" in text
+
+
+def test_job_new_build_ask_with_invalid_json_shows_an_error(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: {"status": "succeeded", "result": {"text": "not json at all"}})
+    text = test_client.post("/jobs/new", data={"action": "build", "mode": "ask", "prompt": "do a thing"}).text
+    assert "wasn&#39;t valid JSON" in text or "wasn't valid JSON" in text
+
+
+def test_job_new_submit_dispatches_and_redirects_to_jobs(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    created = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (created.append(kw), {"status": "queued"})[1])
+    template = '{"type": "policy.check_all", "target_pillar": "policy", "project_id": null, "params": {}}'
+    response = test_client.post("/jobs/new", data={"action": "submit", "template_json": template}, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"].startswith("/jobs?")
+    assert created[0]["type"] == "policy.check_all" and created[0]["target_pillar"] == "policy"
+
+
+def test_job_new_submit_with_bad_json_is_refused(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    text = test_client.post("/jobs/new", data={"action": "submit", "template_json": "{not json"}).text
+    assert "Not valid JSON" in text
+
+
+def test_job_schedule_get_renders_and_lists_scheduled_non_task_jobs(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [
+        {"id": "t1", "name": "audit", "state": "active", "job_template": {"type": "version.branch_audit"}, "schedule": {"kind": "once", "at": "2026-09-30T00:00:00"}},
+        {"id": "t2", "name": "task-thing", "state": "active", "job_template": {"type": "agent.run_task"}, "schedule": {"kind": "once", "at": "2026-09-30T00:00:00"}},
+    ])
+    text = test_client.get("/jobs/schedule").text
+    assert "audit" in text and "task-thing" not in text
+
+
+def test_job_schedule_build_and_submit_creates_a_scheduled_task(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
+    calls = []
+    monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: calls.append(kw) or {})
+    template = '{"type": "version.branch_audit", "target_pillar": "version", "project_id": "little-widget", "params": {}}'
+    response = test_client.post("/jobs/schedule", data={
+        "action": "submit", "template_json": template, "kind": "once", "at": "2999-01-02T09:30"}, follow_redirects=False)
+    assert response.status_code == 303 and "scheduled" in unquote(response.headers["location"])
+    assert calls[0]["job_template"]["type"] == "version.branch_audit"
+    assert calls[0]["schedule"] == {"kind": "once", "at": "2999-01-02T09:30:00"}
+
+
+def test_job_schedule_submit_without_a_time_is_refused(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
+    calls = []
+    monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: calls.append(kw) or {})
+    template = '{"type": "version.branch_audit", "target_pillar": "version", "project_id": null, "params": {}}'
+    text = test_client.post("/jobs/schedule", data={"action": "submit", "template_json": template, "kind": "once", "at": ""}).text
+    assert "Choose when it should run." in text and calls == []
+
+
+def test_job_schedule_remove(test_client, monkeypatch):
+    removed = []
+    monkeypatch.setattr(client, "remove_scheduled_task", lambda paths, task_id: removed.append(task_id) or {})
+    response = test_client.post("/jobs/schedule/t1/remove", follow_redirects=False)
+    assert removed == ["t1"] and response.status_code == 303 and response.headers["location"].startswith("/jobs/schedule")
+
+
+# -- new policy / edit policy: Claude authors it, same as the Policy pillar's own flow --
+
+
+def test_policy_new_get_renders(test_client):
+    text = test_client.get("/policies/new").text
+    assert 'action="/policies/new"' in text and "Author" in text
+
+
+def test_policy_new_post_authors_and_redirects_to_the_new_draft(test_client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (calls.append(kw), {"status": "succeeded", "result": {"draft_id": "d1"}})[1])
+    response = test_client.post("/policies/new", data={
+        "ears_text": "every tag shall be annotated", "topic": "tag-annotated", "target_pillar": "version",
+        "scope_level": "all_projects", "gate_points": ["release"],
+    }, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"].startswith("/policies/drafts/d1")
+    job = calls[0]
+    assert job["type"] == "policy.author" and job["params"]["topic"] == "tag-annotated" and job["params"]["created_by"] == "user"
+    assert job["params"]["save_draft"] is True and "policy_id" not in job["params"]
+
+
+def test_policy_new_post_shows_the_authoring_error_and_preserves_input(test_client, monkeypatch):
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: {"status": "failed", "error": "not enforceable"})
+    text = test_client.post("/policies/new", data={
+        "ears_text": "vague wish", "topic": "vague", "target_pillar": "policy", "scope_level": "all_projects",
+    }).text
+    assert "not enforceable" in text and "vague wish" in text
+
+
+def test_policy_edit_get_prefills_from_the_existing_policy(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_get", lambda paths, policy_id: {
+        "id": "pol1", "ears_text": "a commit shall bump the version", "topic": "commit-bumps-version",
+        "target_pillar": "version", "scope_level": "all_projects", "scope_target": None, "gate_points": ["branch_finish"],
+    })
+    text = test_client.get("/policies/pol1/edit").text
+    assert "a commit shall bump the version" in text and "Re-author" in text
+
+
+def test_policy_edit_post_includes_the_policy_id_in_the_job_params(test_client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (calls.append(kw), {"status": "succeeded", "result": {"draft_id": "d2"}})[1])
+    response = test_client.post("/policies/pol1/edit", data={
+        "ears_text": "a commit shall bump the version twice", "topic": "commit-bumps-version",
+        "target_pillar": "version", "scope_level": "all_projects", "gate_points": ["branch_finish"],
+    }, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"].startswith("/policies/drafts/d2")
+    assert calls[0]["params"]["policy_id"] == "pol1"

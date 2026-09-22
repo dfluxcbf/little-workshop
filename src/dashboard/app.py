@@ -142,22 +142,6 @@ def build_report(paths: Paths, project: str) -> dict:
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
-POINTER_CATALOG_ENTRIES = [
-    {"name": "Requirements and their verdicts", "pillar": "requirements", "endpoint": "GET /v1/report?project_id={project}"},
-    {"name": "Requirements (full records)", "pillar": "requirements", "endpoint": "GET /v1/requirements?project_id={project}"},
-    {"name": "Test results", "pillar": "requirements", "endpoint": "GET /v1/test_results?project_id={project}"},
-    {"name": "Test suites", "pillar": "requirements", "endpoint": "GET /v1/test_suites?project_id={project}"},
-    {"name": "Agent task runs", "pillar": "agent", "endpoint": "GET /v1/runs/{project}"},
-    {"name": "Incidents", "pillar": "agent", "endpoint": "GET /v1/incidents"},
-    {"name": "Jobs", "pillar": "orchestration", "endpoint": "GET /v1/jobs"},
-    {"name": "Policies", "pillar": "policy", "endpoint": "GET /v1/policies"},
-    {"name": "Policy check results", "pillar": "policy", "endpoint": "GET /v1/policy_check_results"},
-    {"name": "Policy drafts", "pillar": "policy", "endpoint": "GET /v1/policy_drafts"},
-    {"name": "Packages (wheels, vsix)", "pillar": "build", "endpoint": "GET /v1/packages"},
-    {"name": "Deploy history", "pillar": "deployment", "endpoint": "GET /v1/deployments?project_id={project}"},
-]
-
-
 PILLAR_NAMES = {
     "orchestration": "Orchestration", "policy": "Policy & Compliance", "registry": "Registry & Portfolio",
     "requirements": "Requirements & Quality", "version": "Version Control & Release", "build": "Build & Packages",
@@ -292,31 +276,10 @@ def build_app(paths: Paths) -> FastAPI:
         items = collect_attention(paths)
         return {"count": len(items), "items": items}
 
-    @app.get("/attention", response_class=HTMLResponse)
-    def attention(request: Request):
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings(request: Request):
         items = collect_attention(paths)
-        return _render(request, "attention.html", items=items, attention_count=len(items), nav_active="attention")
-
-    # -- Data catalog: every kind of data little-workshop holds, and how to find it --
-
-    @app.get("/data", response_class=HTMLResponse)
-    def data_catalog(request: Request):
-        try:
-            names = _project_names()
-        except client.PillarUnavailable:
-            names = []
-        inline_rows = []
-        for name in names:
-            server = _try(client.deployment_status_optional, paths, name)
-            inline_rows.append({
-                "project": name, "version": (server or {}).get("version") if server else None,
-                "listening": (server or {}).get("listening") if server else None,
-            })
-        secrets = _try(client.list_secrets, paths, default=[])
-        return _render(
-            request, "data_catalog.html", pointer_entries=POINTER_CATALOG_ENTRIES,
-            inline_rows=inline_rows, secrets=secrets, nav_active="data",
-        )
+        return _render(request, "settings.html", items=items, attention_count=len(items), nav_active="settings")
 
     # -- Incidents: an unhandled exception, awaiting the user's confirmation -----
 
@@ -434,7 +397,7 @@ def build_app(paths: Paths) -> FastAPI:
             names = prefs.ordered(paths, "dashboard", _project_names())
         except client.PillarUnavailable as exc:
             names, error = [], str(exc)
-        chosen = project if project in names else (names[0] if names else None)
+        chosen = project if project in names else None
         data = {"requirements": [], "tests": []}
         if chosen:
             try:
@@ -531,17 +494,43 @@ def build_app(paths: Paths) -> FastAPI:
 
     # ---- Tasks: Claude on a real branch, under review -------------------
 
+    def _parse_schedule(kind: str, at: str, time_of_day: str, day: list[str], back: str):
+        """Shared by New Task and (indirectly) Schedule Job's own "once/recurring" fields."""
+        if kind == "once":
+            try:
+                when = datetime.fromisoformat(at)
+            except ValueError:
+                return None, _back(back, "Choose the date and time to start it.")
+            if when <= datetime.now():
+                return None, _back(back, "That time has already passed — choose a time in the future.")
+            return {"kind": "once", "at": when.isoformat()}, None
+        if kind == "recurring":
+            days = sorted({int(d) for d in day if d.isdigit() and 0 <= int(d) <= 6})
+            if not days or not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", time_of_day):
+                return None, _back(back, "Choose at least one weekday and a time of day.")
+            return {"kind": "recurring", "days_of_week": days, "time_of_day": time_of_day}, None
+        return None, _back(back, "Choose when it should run.")
+
     @app.get("/tasks", response_class=HTMLResponse)
     def tasks(request: Request):
         error = None
-        runs: list[dict] = []
+        rows: list[dict] = []
         try:
-            for name in _project_names():
-                runs += _try(client.agent_runs, paths, name, default=[])
+            names = _project_names()
         except client.PillarUnavailable as exc:
-            error = str(exc)
-        runs.sort(key=lambda r: r["created_at"], reverse=True)
-        return _render(request, "tasks.html", runs=runs, error=error, nav_active="tasks")
+            names, error = [], str(exc)
+        for name in names:
+            rows += _try(client.agent_runs, paths, name, default=[])
+        queued = _try(lambda: client.list_jobs(paths, status="queued"), default=[])
+        for job in queued:
+            if job.get("type") != "agent.run_task":
+                continue
+            rows.append({
+                "id": job["id"], "project_id": job.get("project_id"), "status": "waiting",
+                "title": (job.get("params") or {}).get("title") or job["id"][:8], "created_at": job.get("created_at"),
+            })
+        rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+        return _render(request, "tasks.html", runs=rows, error=error, nav_active="tasks")
 
     @app.get("/tasks/new", response_class=HTMLResponse)
     def task_new(request: Request, project: str | None = None):
@@ -550,110 +539,47 @@ def build_app(paths: Paths) -> FastAPI:
             names = _project_names()
         except client.PillarUnavailable as exc:
             names, error = [], str(exc)
-        return _render(request, "task_new.html", projects=names, selected=project, error=error, nav_active="new-task")
+        scheduled = [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") == "agent.run_task"]
+        return _render(
+            request, "task_new.html", projects=names, selected=project, scheduled=scheduled, weekdays=WEEKDAYS,
+            error=error, nav_active="new-task",
+        )
 
     @app.post("/tasks/new")
     def task_create(
         project: str = Form(...), title: str = Form(...), description: str = Form(""),
-        intent: str = Form("task"), review_mode: str = Form("manual"),
+        intent: str = Form("task"), review_mode: str = Form("manual"), when: str = Form("immediate"),
+        kind: str = Form("once"), at: str = Form(""), time_of_day: str = Form(""), day: list[str] = Form(default=[]),
     ):
-        result = _try(lambda: client.create_job(
-            paths, type="agent.run_task", target_pillar="agent", project_id=project,
-            params={"title": title, "description": description, "intent": intent, "review_mode": review_mode},
-            queue_key=project, depends_on=[], created_by="dashboard",
-        ))
-        if result is None or result.get("status") not in ("running", "succeeded"):
-            return _back("/tasks/new", f"Could not start the task: {(result or {}).get('error', 'orchestration unreachable')}")
-        return _back("/tasks", f"Task started on {project}.")
-
-    # ---- Queue a task behind another; schedule a task for later ----------------
-
-    def _waiting_on_candidates() -> list[dict]:
-        """Agent tasks that have not finished yet — what a queued task can wait behind."""
-        jobs = _try(lambda: client.list_jobs(paths), default=[])
-        return [
-            {"id": j["id"], "label": f"{j.get('project_id') or '?'} — {(j.get('params') or {}).get('title') or j['id'][:8]} ({j['status'].replace('_', ' ')})"}
-            for j in sorted(jobs, key=lambda j: j.get("created_at") or "", reverse=True)
-            if j.get("type") == "agent.run_task" and j.get("status") in JOB_ACTIVE_STATUSES
-        ]
-
-    @app.get("/tasks/queue", response_class=HTMLResponse)
-    def task_queue(request: Request, project: str | None = None):
-        error = None
-        try:
-            names = _project_names()
-        except client.PillarUnavailable as exc:
-            names, error = [], str(exc)
-        return _render(request, "task_queue.html", projects=names, selected=project, predecessors=_waiting_on_candidates(), error=error, nav_active="queue-task")
-
-    @app.post("/tasks/queue")
-    def task_queue_submit(
-        project: str = Form(...), title: str = Form(...), description: str = Form(""), intent: str = Form("task"),
-        review_mode: str = Form("manual"), after: str = Form(""),
-    ):
-        if not after or after not in {c["id"] for c in _waiting_on_candidates()}:
-            return _back("/tasks/queue", "Choose the task this one should wait for.")
-        result = _try(lambda: client.create_job(
-            paths, type="agent.run_task", target_pillar="agent", project_id=project,
-            params={"title": title, "description": description, "intent": intent, "review_mode": review_mode},
-            queue_key=project, depends_on=[after], created_by="dashboard",
-        ))
-        if result is None or result.get("status") not in ("queued", "running", "succeeded"):
-            return _back("/tasks/queue", f"Could not queue the task: {(result or {}).get('error', 'orchestration unreachable')}")
-        return _back("/tasks", f"Task queued on {project}; it starts once the task it waits for has succeeded.")
-
-    @app.get("/tasks/schedule", response_class=HTMLResponse)
-    def task_schedule(request: Request, project: str | None = None):
-        error = None
-        try:
-            names = _project_names()
-        except client.PillarUnavailable as exc:
-            names, error = [], str(exc)
-        scheduled = [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") == "agent.run_task"]
-        return _render(
-            request, "task_schedule.html", projects=names, selected=project, scheduled=scheduled, weekdays=WEEKDAYS,
-            error=error, nav_active="schedule-task",
-        )
-
-    @app.post("/tasks/schedule")
-    def task_schedule_submit(
-        project: str = Form(...), title: str = Form(...), description: str = Form(""), intent: str = Form("task"),
-        review_mode: str = Form("manual"), kind: str = Form("once"), at: str = Form(""), time_of_day: str = Form(""),
-        day: list[str] = Form(default=[]),
-    ):
-        if kind == "once":
-            try:
-                when = datetime.fromisoformat(at)
-            except ValueError:
-                return _back("/tasks/schedule", "Choose the date and time to start the task.")
-            if when <= datetime.now():
-                return _back("/tasks/schedule", "That time has already passed — choose a time in the future.")
-            schedule = {"kind": "once", "at": when.isoformat()}
-        elif kind == "recurring":
-            days = sorted({int(d) for d in day if d.isdigit() and 0 <= int(d) <= 6})
-            if not days or not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", time_of_day):
-                return _back("/tasks/schedule", "Choose at least one weekday and a time of day.")
-            schedule = {"kind": "recurring", "days_of_week": days, "time_of_day": time_of_day}
-        else:
-            return _back("/tasks/schedule", "Choose whether the task runs once or every week.")
+        params = {"title": title, "description": description, "intent": intent, "review_mode": review_mode}
+        if when == "immediate":
+            result = _try(lambda: client.create_job(
+                paths, type="agent.run_task", target_pillar="agent", project_id=project,
+                params=params, queue_key=project, depends_on=[], created_by="dashboard",
+            ))
+            if result is None or result.get("status") not in ("running", "succeeded"):
+                return _back("/tasks/new", f"Could not start the task: {(result or {}).get('error', 'orchestration unreachable')}")
+            return _back("/tasks", f"Task started on {project}.")
+        schedule, refusal = _parse_schedule(kind, at, time_of_day, day, "/tasks/new")
+        if refusal is not None:
+            return refusal
         template = {
             "type": "agent.run_task", "target_pillar": "agent", "project_id": project,
-            "params": {"title": title, "description": description, "intent": intent, "review_mode": review_mode},
-            "queue_key": project, "depends_on": [],
+            "params": params, "queue_key": project, "depends_on": [],
         }
         try:
             client.create_scheduled_task(paths, name=f"{project}: {title}", job_template=template, schedule=schedule)
         except client.PillarUnavailable as exc:
-            return _back("/tasks/schedule", f"Could not schedule the task: {exc}")
-        return _back("/tasks/schedule", f"Task scheduled on {project}.")
+            return _back("/tasks/new", f"Could not schedule the task: {exc}")
+        return _back("/tasks/new", f"Task scheduled on {project}.")
 
     @app.post("/tasks/schedule/{task_id}/remove")
     def task_schedule_remove(task_id: str):
         try:
             client.remove_scheduled_task(paths, task_id)
         except client.PillarUnavailable as exc:
-            return _back("/tasks/schedule", f"Could not remove it: {exc}")
-        return _back("/tasks/schedule", "Scheduled task removed.")
+            return _back("/tasks/new", f"Could not remove it: {exc}")
+        return _back("/tasks/new", "Scheduled task removed.")
 
     @app.get("/tasks/{project}/{run_id}", response_class=HTMLResponse)
     def task_detail(request: Request, project: str, run_id: str):
@@ -674,6 +600,149 @@ def build_app(paths: Paths) -> FastAPI:
         return _back(f"/tasks/{project}/{run_id}", f"Task {action}ed." if ok else f"Could not {action}: {(result or {}).get('error', 'orchestration unreachable')}")
 
     # ---- Pillars: the system's own components ---------------------------
+
+    # ---- New Job / Schedule Job: reuse an existing job, or ask Claude once ----
+
+    JOB_TEMPLATE_PROMPT = (
+        "You are designing one little-workshop Orchestration Job. The user's request:\n\n{request}\n\n"
+        "Reply with exactly one JSON object and nothing else — no markdown fences, no commentary — with keys: "
+        "\"type\" (a dotted job type such as \"version.branch_audit\"), \"target_pillar\" (one of core, "
+        "orchestration, policy, registry, requirements, version, build, deployment, agent, dashboard), "
+        "\"project_id\" (a project name, or null if the job isn't about one project), and \"params\" "
+        "(a JSON object of that job type's own parameters, {{}} if it takes none)."
+    )
+
+    def _recent_jobs_for_reuse() -> list[dict]:
+        jobs = _try(lambda: client.list_jobs(paths), default=[])
+        jobs.sort(key=lambda j: j.get("created_at") or "", reverse=True)
+        return jobs[:40]
+
+    def _build_job_template(mode: str, reuse_job_id: str, prompt: str) -> tuple[dict | None, str | None]:
+        if mode == "reuse":
+            job = _try(lambda: client.get_job(paths, reuse_job_id))
+            if job is None:
+                return None, "Choose a job to reuse."
+            return {
+                "type": job["type"], "target_pillar": job["target_pillar"], "project_id": job.get("project_id"),
+                "params": job.get("params", {}),
+            }, None
+        if mode == "ask":
+            if not prompt.strip():
+                return None, "Describe what the job should do."
+            result = _try(lambda: client.create_job(
+                paths, timeout=120.0, type="agent.query", target_pillar="agent", project_id=None,
+                params={"prompt": JOB_TEMPLATE_PROMPT.format(request=prompt.strip())},
+                queue_key=None, depends_on=[], created_by="dashboard",
+            ))
+            if result is None or result.get("status") != "succeeded":
+                return None, f"Claude could not be reached: {(result or {}).get('error', 'agent pillar unreachable')}"
+            text = re.sub(r"^```(json)?|```$", "", result["result"]["text"].strip(), flags=re.MULTILINE).strip()
+            try:
+                data = json.loads(text)
+            except ValueError:
+                return None, f"Claude's reply wasn't valid JSON: {text[:300]}"
+            if not isinstance(data, dict) or "type" not in data or "target_pillar" not in data:
+                return None, "Claude's reply was missing 'type' or 'target_pillar'."
+            data.setdefault("project_id", None)
+            data.setdefault("params", {})
+            return data, None
+        return None, "Choose how to build the job."
+
+    def _parse_job_template(raw: str) -> tuple[dict | None, str | None]:
+        try:
+            data = json.loads(raw)
+        except ValueError as exc:
+            return None, f"Not valid JSON: {exc}"
+        if not isinstance(data, dict) or not data.get("type") or not data.get("target_pillar"):
+            return None, "The template needs at least 'type' and 'target_pillar'."
+        data.setdefault("project_id", None)
+        data.setdefault("params", {})
+        if not isinstance(data["params"], dict):
+            return None, "'params' must be a JSON object."
+        return data, None
+
+    @app.get("/jobs/new", response_class=HTMLResponse)
+    def job_new(request: Request):
+        return _render(
+            request, "job_new.html", recent=_recent_jobs_for_reuse(), template_json=None, build_error=None,
+            nav_active="new-job",
+        )
+
+    @app.post("/jobs/new", response_class=HTMLResponse)
+    def job_new_post(
+        request: Request, action: str = Form(...), mode: str = Form("reuse"), reuse_job_id: str = Form(""),
+        prompt: str = Form(""), template_json: str = Form(""),
+    ):
+        if action == "build":
+            template, err = _build_job_template(mode, reuse_job_id, prompt)
+            return _render(
+                request, "job_new.html", recent=_recent_jobs_for_reuse(),
+                template_json=json.dumps(template, indent=2) if template else template_json,
+                build_error=err, nav_active="new-job",
+            )
+        template, err = _parse_job_template(template_json)
+        if err:
+            return _render(
+                request, "job_new.html", recent=_recent_jobs_for_reuse(), template_json=template_json,
+                build_error=err, nav_active="new-job",
+            )
+        result = _try(lambda: client.create_job(
+            paths, type=template["type"], target_pillar=template["target_pillar"], project_id=template["project_id"],
+            params=template["params"], queue_key=None, depends_on=[], created_by="dashboard",
+        ))
+        if result is None or result.get("status") not in ("queued", "running", "succeeded", "accepted"):
+            return _render(
+                request, "job_new.html", recent=_recent_jobs_for_reuse(), template_json=template_json,
+                build_error=f"Could not dispatch: {(result or {}).get('error', 'orchestration unreachable')}",
+                nav_active="new-job",
+            )
+        return _back("/jobs", f"{template['type']} dispatched.")
+
+    @app.get("/jobs/schedule", response_class=HTMLResponse)
+    def job_schedule(request: Request):
+        scheduled = [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") != "agent.run_task"]
+        return _render(
+            request, "job_schedule.html", recent=_recent_jobs_for_reuse(), template_json=None, build_error=None,
+            scheduled=scheduled, weekdays=WEEKDAYS, nav_active="schedule-job",
+        )
+
+    @app.post("/jobs/schedule", response_class=HTMLResponse)
+    def job_schedule_post(
+        request: Request, action: str = Form(...), mode: str = Form("reuse"), reuse_job_id: str = Form(""),
+        prompt: str = Form(""), template_json: str = Form(""), kind: str = Form("once"), at: str = Form(""),
+        time_of_day: str = Form(""), day: list[str] = Form(default=[]),
+    ):
+        scheduled = [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") != "agent.run_task"]
+
+        def render(template_for_display, error):
+            return _render(
+                request, "job_schedule.html", recent=_recent_jobs_for_reuse(),
+                template_json=json.dumps(template_for_display, indent=2) if template_for_display else template_json,
+                build_error=error, scheduled=scheduled, weekdays=WEEKDAYS, nav_active="schedule-job",
+            )
+
+        if action == "build":
+            template, err = _build_job_template(mode, reuse_job_id, prompt)
+            return render(template, err)
+        template, err = _parse_job_template(template_json)
+        if err:
+            return render(None, err)
+        schedule, refusal = _parse_schedule(kind, at, time_of_day, day, "/jobs/schedule")
+        if refusal is not None:
+            return render(template, "Choose when it should run.")
+        try:
+            client.create_scheduled_task(paths, name=f"{template['type']}: {template.get('project_id') or 'no project'}", job_template=template, schedule=schedule)
+        except client.PillarUnavailable as exc:
+            return render(template, f"Could not schedule: {exc}")
+        return _back("/jobs/schedule", f"{template['type']} scheduled.")
+
+    @app.post("/jobs/schedule/{task_id}/remove")
+    def job_schedule_remove(task_id: str):
+        try:
+            client.remove_scheduled_task(paths, task_id)
+        except client.PillarUnavailable as exc:
+            return _back("/jobs/schedule", f"Could not remove it: {exc}")
+        return _back("/jobs/schedule", "Scheduled job removed.")
 
     @app.get("/pillars", response_class=HTMLResponse)
     def pillars(request: Request):
@@ -842,6 +911,74 @@ def build_app(paths: Paths) -> FastAPI:
         ))
         ok = job is not None and job.get("status") == "succeeded"
         return _back("/policies/drafts", "Draft restored." if ok else f"Could not restore: {(job or {}).get('error', 'policy unreachable')}")
+
+    # ---- New/Edit Policy: authored by Claude, filed as a draft -----------
+
+    @app.get("/policies/new", response_class=HTMLResponse)
+    def policy_new(request: Request):
+        return _render(
+            request, "policy_new.html", policy=None, gate_point_values=GATE_POINT_VALUES,
+            author_error=None, nav_active="new-policy",
+        )
+
+    @app.post("/policies/new", response_class=HTMLResponse)
+    def policy_new_post(
+        request: Request, ears_text: str = Form(...), topic: str = Form(...), target_pillar: str = Form(...),
+        scope_level: str = Form("all_projects"), scope_target: str = Form(""), gate_points: list[str] = Form([]),
+    ):
+        return _author_policy(
+            request, None, ears_text, topic, target_pillar, scope_level, scope_target, gate_points, "policy_new.html",
+        )
+
+    @app.get("/policies/{policy_id}/edit", response_class=HTMLResponse)
+    def policy_edit(request: Request, policy_id: str):
+        policy = _try(lambda: client.policy_get(paths, policy_id))
+        if policy is None:
+            return _render(request, "policy_new.html", policy=None, gate_point_values=GATE_POINT_VALUES, author_error="Policy not found.", nav_active="policies")
+        return _render(
+            request, "policy_new.html", policy=policy, gate_point_values=GATE_POINT_VALUES,
+            author_error=None, nav_active="policies",
+        )
+
+    @app.post("/policies/{policy_id}/edit", response_class=HTMLResponse)
+    def policy_edit_post(
+        request: Request, policy_id: str, ears_text: str = Form(...), topic: str = Form(...),
+        target_pillar: str = Form(...), scope_level: str = Form("all_projects"), scope_target: str = Form(""),
+        gate_points: list[str] = Form([]),
+    ):
+        return _author_policy(
+            request, policy_id, ears_text, topic, target_pillar, scope_level, scope_target, gate_points, "policy_new.html",
+        )
+
+    def _author_policy(request, policy_id, ears_text, topic, target_pillar, scope_level, scope_target, gate_points, template_name):
+        params = {
+            "ears_text": ears_text, "topic": topic, "target_pillar": target_pillar, "scope_level": scope_level,
+            "created_by": "user", "gate_points": gate_points, "save_draft": True, "source": "dashboard",
+        }
+        if scope_level != "all_projects":
+            params["scope_target"] = scope_target
+        if policy_id:
+            params["policy_id"] = policy_id
+        try:
+            job = client.create_job(
+                paths, timeout=180.0, type="policy.author", target_pillar="policy", project_id=None,
+                params=params, queue_key=None, depends_on=[], created_by="dashboard",
+            )
+        except client.PillarUnavailable as exc:
+            job = {"status": "failed", "error": str(exc)}
+        if job.get("status") != "succeeded":
+            fallback = {
+                "ears_text": ears_text, "topic": topic, "target_pillar": target_pillar, "scope_level": scope_level,
+                "scope_target": scope_target, "gate_points": gate_points, "id": policy_id,
+            }
+            return _render(
+                request, template_name, policy=fallback, gate_point_values=GATE_POINT_VALUES,
+                author_error=job.get("error") or "The authoring pipeline refused this policy.", nav_active="policies",
+            )
+        draft_id = job["result"].get("draft_id")
+        if draft_id:
+            return _back(f"/policies/drafts/{draft_id}", "Authored — review and approve when ready.")
+        return _back("/policies", "Authored.")
 
     @app.get("/policies/{policy_id}", response_class=HTMLResponse)
     def policy_detail(request: Request, policy_id: str):

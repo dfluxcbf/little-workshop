@@ -72,12 +72,16 @@ are the current state of every pillar.
   down contributes nothing. This is the Dashboard half of "informing the user
   immediately" (REQ-000000127); GitHub-issue and Remote Control delivery
   are not built.
-- **Workbench additions (2026-09-21, Control merged into Dashboard 2026-09-22)**:
-  - **Navigation** is grouped. The bottom toolbar has Dashboard, Tasks and System; a group
-    button reveals its pages (Dashboard: Dashboard, Report, New project; Tasks: Task list, New task,
-    Queue task, Schedule task, Jobs; System: Pillars, Policies, Attention) with Back returning to
+- **Workbench additions (2026-09-21, Control merged into Dashboard 2026-09-22,
+  toolbar/task/job/policy workflow overhauled 2026-09-23)**:
+  - **Navigation** is grouped. The bottom toolbar has Dashboard (standalone), Actions, Policies and
+    System; a group button reveals its pages (Actions: Task list, New task, Jobs, New job, Schedule
+    job; Policies: Policies, New policy; System: Pillars, Incidents, Settings) with Back returning to
     the main row, and the group of the current page stays open. On a wide screen the top bar holds
-    the three groups and a sub-navigation row lists the active group's pages.
+    the four groups and a sub-navigation row lists the active group's pages. Report and New project
+    are reachable only as contextual links (Dashboard's own "New project" link beside "Arrange
+    cards"; each project card's "Report →" link in its Work section) — not toolbar entries, since
+    both are reached from a project's own context rather than picked cold.
   - **Arrange cards** (`/?arrange=1`, `POST /order/dashboard/{project}/{up|down}`): the Dashboard
     keeps its own order of project cards; a project the user has never placed goes after the
     placed ones.
@@ -86,31 +90,61 @@ are the current state of every pillar.
     workshop checkout; `LITTLE_WORKSHOP_WORKSPACE_DIR` overrides), under the reserved project id
     `workspace`, so Claude can work across projects. The root must be trusted by Claude Code like
     any project.
-  - **Report** (`/report`): for one project, Requirements and Tests as two tabs. The Requirements
-    tab lists every requirement as a collapsible card — key, title and verdict always visible,
-    description shown only when expanded. The Tests tab groups tests into collapsible suites, one
-    card per test with its name and latest verdict; for a self-application project (whose own
-    `docs/requirements.md` carries no per-requirement test mapping — REQ-000000149's own honest
-    gap), that grouping is by real test module (`tools/import_requirements.py`'s
-    `import_module_suites` — `test_foo.py` becomes suite `test_foo`), never the one all-tests
-    bucket (`AGGREGATE_SUITE_NAME`, `dashboard/app.py`) that suite is linked to a requirement's
-    own done/passing state and is hidden from this tab so it doesn't duplicate every test under
-    one giant heading (REQ-000000215, correcting REQ-000000212's own "same suite grouping"
-    wording — module suites are never linked to a requirement, so they don't affect done/passing).
-    A search box and a verdict filter apply to both tabs.
+  - **Report** (`/report`, no project pre-selected 2026-09-23): loaded with no project chosen —
+    requirements and tests are only fetched once the user picks one, since a self-application
+    project's own report can be large and shouldn't load by default. Once a project is picked,
+    Requirements and Tests show as two tabs. The Requirements tab lists every requirement as a
+    collapsible card — key, title and verdict always visible, description shown only when expanded.
+    The Tests tab groups tests into collapsible suites, one card per test with its name and latest
+    verdict; for a self-application project (whose own `docs/requirements.md` carries no
+    per-requirement test mapping — REQ-000000149's own honest gap), that grouping is by real test
+    module (`tools/import_requirements.py`'s `import_module_suites` — `test_foo.py` becomes suite
+    `test_foo`), never the one all-tests bucket (`AGGREGATE_SUITE_NAME`, `dashboard/app.py`) that
+    suite is linked to a requirement's own done/passing state and is hidden from this tab so it
+    doesn't duplicate every test under one giant heading (REQ-000000215, correcting
+    REQ-000000212's own "same suite grouping" wording — module suites are never linked to a
+    requirement, so they don't affect done/passing). A search box and a verdict filter apply to
+    both tabs.
   - **New project** (`/projects/new`): the form behind `project.bootstrap` — creates the basic files,
     a git repository on `dev` with version tracking, and registers it under the workspace directory;
     a GitHub repository is created only when the box is ticked.
-  - **Queue task** (`/tasks/queue`): a task that starts only after a chosen unfinished agent task
-    has succeeded (a job with `depends_on`); the form refuses to submit without a predecessor.
-  - **Schedule task** (`/tasks/schedule`): a scheduled task on Orchestration whose job starts an
-    agent task once at a chosen local time or on chosen weekdays each week; scheduled agent tasks are
-    listed and can be removed.
+  - **Task list** (`/tasks`, 2026-09-23): shows every task — finished, running, and still queued
+    (a queued `agent.run_task` job with no run yet appears as a "waiting" row, plain text rather
+    than a link since there is no run to open).
+  - **New task** (`/tasks/new`, absorbed Schedule task 2026-09-23): one form; a "When" choice
+    (right away / once at a date and time / every week on chosen weekdays) decides whether it
+    dispatches an `agent.run_task` Job immediately or files an Orchestration scheduled task — the
+    same underlying scheduling this page's own "Schedule task" used to offer as a separate page.
+    Scheduled agent tasks are listed on the same page and can be removed. **Queue task** (a task
+    behind a predecessor) was dropped as a distinct feature.
+  - **Jobs** (`/jobs`): previous, running and queued jobs of every type (unchanged panel; see below).
+  - **New job** (`/jobs/new`, new 2026-09-23) and **Schedule job** (`/jobs/schedule`, new
+    2026-09-23): dispatch or schedule any Orchestration job type, not just `agent.run_task`. Build
+    the job's template either by reusing an existing job's own type/target pillar/params (picked
+    from the 40 most recent) or by describing it in plain language and asking Claude once — a
+    single `agent.query` Job whose reply is parsed as a JSON template (`type`, `target_pillar`,
+    `project_id`, `params`); the template is shown for review/edit before New job dispatches it
+    (`POST /v1/jobs`) or Schedule job attaches a schedule to it (`POST /v1/scheduled_tasks`), the
+    same "once at a date and time / every week" schedule shape New task uses. Scheduled jobs
+    (excluding `agent.run_task` ones, which live on New task instead) are listed and removable here.
   - **Pillars** shows each pillar's full name (Policy & Compliance, Registry & Portfolio, …).
+  - **New policy** (`/policies/new`, new 2026-09-23) and **Edit policy** (`/policies/{id}/edit`,
+    new 2026-09-23): the same form — the rule in plain language, topic, target pillar, scope and
+    gate points — submitted as a `policy.author` Job (`created_by: "user"`, `save_draft: true`,
+    `source: "dashboard"`). Edit pre-fills the form from the existing policy and passes its id
+    through so authoring produces a new draft linked to it (re-authoring, never a direct edit —
+    the existing policy is untouched until the new draft is approved through the ordinary Gate 4
+    flow). A failed authoring pipeline re-renders the form with the refusal reason and the user's
+    own input preserved, never silently discarded.
+  - **Settings** (`/settings`, new 2026-09-23, absorbed Needs attention): the attention feed that
+    used to be its own page (`/attention`) now lives under Settings; `/attention.json` is
+    unchanged as a JSON endpoint and the banner's link now points to `/settings`.
+  - **Data catalog** was removed (2026-09-23) — it duplicated what each owning pillar's own Report/
+    Pillars/Secrets panels already show live.
 - **Tasks** (`/tasks`, `/tasks/new`, `/tasks/{project}/{run}`):
-  Agentic Development's runs across every project, a New task form
-  (`agent.run_task`), and per-run detail with the change report and
-  Finish/Skip for a run awaiting review.
+  Agentic Development's runs across every project (including tasks still queued, shown as
+  "waiting"), a New task form (`agent.run_task`, immediate or scheduled), and per-run detail with
+  the change report and Finish/Skip for a run awaiting review.
 - **Pillars** (`/pillars`, redesigned 2026-09-21): one tappable card per
   pillar, no page heading — the pillar's name is the card's header, with
   its health pill beside it and one compact line below (deployed commit
@@ -144,13 +178,6 @@ are the current state of every pillar.
   open incident also appears on **Needs Attention** as a "bug" chip. See
   `docs/pillars/agentic_development.md`'s own "Incidents" section for the
   reporting side.
-- **Data catalog** (`/data`; 2026-09-22) — every kind of data
-  little-workshop holds. **Inline** entries (at most 1KB — a project's own
-  server version, the secrets panel) show the value itself, read live on
-  every visit, so there is nothing separate for CI to keep fresh.
-  **Pointer** entries (larger — a project's whole set of requirements and
-  test results, its job history, its policy checks) name the owning
-  pillar and the live endpoint that holds them, never a copy.
 - **Policy drafts** (`/policies/drafts`, `/policies/drafts/{id}`; 2026-09-21)
   — where Gate 4 happens. `/policies` shows a banner ("N policies
   awaiting your approval") linking to the list: one card per pending draft
@@ -211,7 +238,10 @@ are the current state of every pillar.
   policy's detail page (also redesigned 2026-09-21) is four cards, each
   headed by an icon and a one-word title rather than a boxed sentence:
   a **summary** (topic, status pill, the full `ears_text`, chips for
-  target pillar, author, short id and amend date); **Gate points** — an
+  target pillar, author, short id and amend date, and an **Edit** button
+  to `/policies/{id}/edit` — 2026-09-23 — the same authoring form as New
+  policy, pre-filled, that re-authors the policy as a new draft rather than
+  changing it directly); **Gate points** — an
   `enabled` switch and the ten gate points as tappable chips (multi-select
   or none) with one Save; **Test script** — a link card to the exact file
   on GitHub, at the commit whose blob equals the script the policy
