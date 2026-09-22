@@ -712,9 +712,10 @@ def build_app(paths: Paths) -> FastAPI:
         except client.PillarUnavailable as exc:
             draft, error = None, str(exc)
         registered = _try(lambda: _project_names(), default=[]) if draft else []
+        draft_gating = {p["project_id"]: p["gating_enabled"] for p in (draft or {}).get("projects", [])}
         return _render(
-            request, "draft_detail.html", draft=draft, projects=sorted(registered), error=error,
-            gate_point_values=GATE_POINT_VALUES, nav_active="policies",
+            request, "draft_detail.html", draft=draft, projects=sorted(registered), draft_gating=draft_gating,
+            error=error, gate_point_values=GATE_POINT_VALUES, nav_active="policies",
         )
 
     @app.post("/policies/drafts/{draft_id}/approve")

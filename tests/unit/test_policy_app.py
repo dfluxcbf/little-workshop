@@ -805,3 +805,26 @@ def test_author_can_save_its_result_as_a_draft_for_review(client, conn):
 def test_author_without_save_draft_still_never_saves_anything(client, conn):
     assert "draft_id" not in _author(client).json()["result"]
     assert _pending(client) == []
+
+
+def test_import_stores_a_drafts_own_recommended_project_selection(client, conn):
+    _import(client, _draft(projects=[{"project_id": "little-home", "gating_enabled": True}, {"project_id": "little-spectrum", "gating_enabled": False}]))
+    draft = _pending(client)[0]
+    assert {(p["project_id"], p["gating_enabled"]) for p in draft["projects"]} == {("little-home", True), ("little-spectrum", False)}
+
+
+def test_a_draft_with_no_projects_key_has_an_empty_selection(client, conn):
+    _import(client, _draft())
+    assert _pending(client)[0]["projects"] == []
+
+
+def test_reimporting_replaces_the_project_selection(client, conn):
+    _import(client, _draft(projects=[{"project_id": "little-home"}]))
+    _import(client, _draft(projects=[{"project_id": "little-meals", "gating_enabled": False}]))
+    draft = _pending(client)[0]
+    assert [(p["project_id"], p["gating_enabled"]) for p in draft["projects"]] == [("little-meals", False)]
+
+
+def test_import_rejects_an_invalid_project_entry(client):
+    assert "invalid project entry" in _import(client, _draft(projects=["", {"no_project_id": 1}])).json()["error"]
+    assert "invalid project entry" in _import(client, _draft(projects=[{"no_project_id": 1}])).json()["error"]

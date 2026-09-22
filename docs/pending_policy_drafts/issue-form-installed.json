@@ -10,5 +10,27 @@
   "gate_points": [],
   "source": "little-runner",
   "notes": "Checks the file exists. Only meaningful for projects that use issue-driven automation; the script decides that itself \u2014 review how.",
-  "concerns": false
+  "concerns": false,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
 }

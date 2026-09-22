@@ -12,5 +12,27 @@
   ],
   "source": "little-versions",
   "notes": "Reads files only. Straightforward. (2026-09-22: cleaned a leaked Gate 1 preamble out of ears_text \u2014 a real parsing bug, fixed in src/policy/gates.py so it doesn't recur.)",
-  "concerns": false
+  "concerns": false,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
 }

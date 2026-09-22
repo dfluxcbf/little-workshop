@@ -89,6 +89,12 @@ def connect(path: Path) -> sqlite3.Connection:
     legacy = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='policy_waivers'").fetchone()
     if legacy and conn.execute("SELECT COUNT(*) FROM policy_waivers").fetchone()[0] == 0:
         conn.execute("DROP TABLE policy_waivers")
+    # A draft's own recommended project selection, added after policy_drafts already
+    # shipped — an existing database needs the column added, not just the CREATE TABLE
+    # IF NOT EXISTS above, which only helps a brand-new file.
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(policy_drafts)")}
+    if "projects" not in columns:
+        conn.execute("ALTER TABLE policy_drafts ADD COLUMN projects TEXT NOT NULL DEFAULT '[]'")
     conn.commit()
     return conn
 
@@ -335,6 +341,7 @@ def _row_to_draft(row: sqlite3.Row) -> PolicyDraft:
         ears_refined=bool(row["ears_refined"]), test_script=row["test_script"],
         scope_level=ScopeLevel(row["scope_level"]), scope_target=row["scope_target"],
         created_by=CreatedBy(row["created_by"]), gate_points=[GatePoint(g) for g in json.loads(row["gate_points"])],
+        projects=[PolicyProject(**p) for p in json.loads(row["projects"])],
         source=row["source"], notes=row["notes"], concerns=bool(row["concerns"]), status=DraftStatus(row["status"]),
         policy_id=row["policy_id"], reject_reason=row["reject_reason"], created_at=_parse_iso(row["created_at"]),
         decided_at=_parse_iso(row["decided_at"]) if row["decided_at"] else None,
@@ -345,12 +352,13 @@ def insert_draft(conn: sqlite3.Connection, draft: PolicyDraft) -> None:
     conn.execute(
         """INSERT INTO policy_drafts
            (id, topic, target_pillar, ears_text, ears_refined, test_script, scope_level, scope_target, created_by,
-            gate_points, source, notes, concerns, status, policy_id, reject_reason, created_at, decided_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            gate_points, projects, source, notes, concerns, status, policy_id, reject_reason, created_at, decided_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             draft.id, draft.topic, draft.target_pillar, draft.ears_text, int(draft.ears_refined), draft.test_script,
             draft.scope_level.value, draft.scope_target, draft.created_by.value,
-            json.dumps([g.value for g in draft.gate_points]), draft.source, draft.notes, int(draft.concerns),
+            json.dumps([g.value for g in draft.gate_points]), json.dumps([p.model_dump(mode="json") for p in draft.projects]),
+            draft.source, draft.notes, int(draft.concerns),
             draft.status.value, draft.policy_id, draft.reject_reason, _iso(draft.created_at),
             _iso(draft.decided_at) if draft.decided_at else None,
         ),
@@ -386,10 +394,11 @@ def replace_draft_content(conn: sqlite3.Connection, draft: PolicyDraft) -> None:
     """Refresh a pending draft's content (a re-import) without touching its status or id."""
     conn.execute(
         """UPDATE policy_drafts SET target_pillar = ?, ears_text = ?, ears_refined = ?, test_script = ?, scope_level = ?,
-           scope_target = ?, created_by = ?, gate_points = ?, source = ?, notes = ?, concerns = ? WHERE id = ?""",
+           scope_target = ?, created_by = ?, gate_points = ?, projects = ?, source = ?, notes = ?, concerns = ? WHERE id = ?""",
         (
             draft.target_pillar, draft.ears_text, int(draft.ears_refined), draft.test_script, draft.scope_level.value,
             draft.scope_target, draft.created_by.value, json.dumps([g.value for g in draft.gate_points]),
+            json.dumps([p.model_dump(mode="json") for p in draft.projects]),
             draft.source, draft.notes, int(draft.concerns), draft.id,
         ),
     )

@@ -340,11 +340,14 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         gate_points, gate_points_error = _parse_gate_points(raw.get("gate_points"))
         if gate_points_error:
             return None, gate_points_error
+        projects, projects_error = _parse_project_entries(raw.get("projects", []))
+        if projects_error:
+            return None, projects_error
         return PolicyDraft(
             id=db.new_id(), topic=raw["topic"], target_pillar=raw["target_pillar"], ears_text=raw["ears_text"],
             ears_refined=bool(raw.get("ears_refined", False)), test_script=raw["test_script"],
             scope_level=scope_level, scope_target=raw.get("scope_target"), created_by=created_by,
-            gate_points=gate_points, source=str(raw.get("source", "")), notes=str(raw.get("notes", "")),
+            gate_points=gate_points, projects=projects, source=str(raw.get("source", "")), notes=str(raw.get("notes", "")),
             concerns=bool(raw.get("concerns", False)),
         ), None
 

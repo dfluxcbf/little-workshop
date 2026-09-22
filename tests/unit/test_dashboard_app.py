@@ -845,6 +845,29 @@ def test_draft_review_page_preselects_the_drafts_own_gate_points(test_client, mo
     assert 'name="gate_points" value="release" checked' in text and 'name="gate_points" value="build_install" checked' not in text
 
 
+def _checked(text, name, value):
+    match = re.search(rf'name="{name}" value="{value}"( checked)?', text)
+    assert match, f"{name}={value} not found"
+    return bool(match.group(1))
+
+
+def test_draft_review_page_preselects_the_drafts_own_project_selection(test_client, monkeypatch):
+    _stub_drafts(monkeypatch, [_draft_row(projects=[{"project_id": "proj-a", "gating_enabled": False}])])
+    text = test_client.get("/policies/drafts/d1").text
+    assert _checked(text, "project", "proj-a") is True
+    assert _checked(text, "project", "proj-b") is False  # not pre-checked: absent from the draft's own selection
+    assert _checked(text, "gating", "proj-a") is False
+    assert _checked(text, "gating", "proj-b") is True  # no recommendation for proj-b: defaults to gating on
+    assert "pre-filled from the draft's own recommendation" in text
+
+
+def test_draft_review_page_with_no_recommendation_leaves_projects_unchecked(test_client, monkeypatch):
+    _stub_drafts(monkeypatch, [_draft_row()])
+    text = test_client.get("/policies/drafts/d1").text
+    assert _checked(text, "project", "proj-a") is False and _checked(text, "project", "proj-b") is False
+    assert "pre-filled from the draft's own recommendation" not in text
+
+
 def test_a_decided_draft_offers_no_approve_form(test_client, monkeypatch):
     _stub_drafts(monkeypatch, [
         _draft_row(id="a", status="approved", policy_id="pol9"), _draft_row(id="r", status="rejected", reject_reason="too vague"),

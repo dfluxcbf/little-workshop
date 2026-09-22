@@ -12,5 +12,27 @@
   ],
   "source": "little-workshop REQ-000000166",
   "notes": "Static check that every py_wheel declares a version, plus a check of any wheel already under dist/ or bazel-bin/. Skips when a project has neither. Suggested gate point: package_publish.",
-  "concerns": false
+  "concerns": false,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
 }

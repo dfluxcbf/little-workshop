@@ -10,5 +10,27 @@
   "gate_points": [],
   "source": "little-versions",
   "notes": "Same as `back-merge-no-ff`: scans project source and docs for the word \"cherry-pick\". Weak proxy; review or drop.",
-  "concerns": true
+  "concerns": true,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
 }

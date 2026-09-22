@@ -312,3 +312,19 @@ def test_find_open_draft_by_topic_ignores_decided_drafts_and_replace_keeps_statu
     db.replace_draft_content(conn, _draft(id="new", topic="t", ears_text="reworded", notes="fresh"))
     refreshed = db.get_draft(conn, "new")
     assert refreshed.ears_text == "reworded" and refreshed.notes == "fresh" and refreshed.status == DraftStatus.PENDING
+
+
+def test_draft_projects_round_trip_through_insert_and_replace(conn):
+    selection = [PolicyProject(project_id="little-home", gating_enabled=True), PolicyProject(project_id="little-spectrum", gating_enabled=False)]
+    db.insert_draft(conn, _draft(id="pd1", projects=selection))
+    loaded = db.get_draft(conn, "pd1")
+    assert {(p.project_id, p.gating_enabled) for p in loaded.projects} == {("little-home", True), ("little-spectrum", False)}
+
+    db.replace_draft_content(conn, _draft(id="pd1", projects=[PolicyProject(project_id="little-meals", gating_enabled=True)]))
+    refreshed = db.get_draft(conn, "pd1")
+    assert [(p.project_id, p.gating_enabled) for p in refreshed.projects] == [("little-meals", True)]
+
+
+def test_a_draft_with_no_projects_key_defaults_to_empty(conn):
+    db.insert_draft(conn, _draft(id="pd2"))
+    assert db.get_draft(conn, "pd2").projects == []

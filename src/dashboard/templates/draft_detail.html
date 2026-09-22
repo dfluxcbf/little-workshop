@@ -75,18 +75,19 @@
     <div class="dcard-head">
       <span class="dcard-icon">{{ dicon('projects') }}</span>
       <span class="dcard-title">Apply to</span>
+      {% if draft_gating %}<span class="dcard-note">pre-filled from the draft's own recommendation</span>{% endif %}
     </div>
     <div class="prow-list">
       {% for name in projects %}
       <div class="prow">
         <label class="prow-select">
-          <input type="checkbox" name="project" value="{{ name }}">
+          <input type="checkbox" name="project" value="{{ name }}" {% if name in draft_gating %}checked{% endif %}>
           <span class="prow-name">{{ name }}</span>
           <span class="prow-check" aria-hidden="true">✓</span>
         </label>
         <label class="prow-gate" title="Whether a failure may block this project's actions. Off: still checked and recorded, never blocks.">
           <span>Gating</span>
-          <input type="checkbox" name="gating" value="{{ name }}" checked>
+          <input type="checkbox" name="gating" value="{{ name }}" {% if draft_gating.get(name, True) %}checked{% endif %}>
           <span class="switch" aria-hidden="true"></span>
         </label>
       </div>

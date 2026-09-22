@@ -135,8 +135,13 @@ are the current state of every pillar.
   away and restorable. A draft's page is cards: summary; **Review notes**
   (amber border when flagged); the **Test script** in full, open by
   default since it is what is being approved; **Gate points** (none = audit
-  only); **Apply to** (every registered project, each with a Gating
-  switch); and a decision card with an "I have reviewed the policy text and
+  only, pre-checked from the draft's own recommendation); **Apply to**
+  (every registered project, each with a Gating switch — 2026-09-22: a
+  project the draft itself recommends comes pre-checked, with its Gating
+  switch set from the draft's own value, a "pre-filled from the draft's own
+  recommendation" note shown when it has one; still just a starting point —
+  the reviewer's own choice, submitted with the decision, is what takes
+  effect); and a decision card with an "I have reviewed the policy text and
   the test script" switch, an optional rejection reason, and Approve /
   Reject. Approve without the switch does nothing (the route sends no Job);
   with it, one `policy.approve_draft` Job carries the whole decision. This

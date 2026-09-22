@@ -109,6 +109,11 @@ class PolicyDraft(BaseModel):
     scope_target: str | None = None
     created_by: CreatedBy = CreatedBy.FRAMEWORK
     gate_points: list[GatePoint] = Field(default_factory=list)
+    # The Gate 1-3 pipeline's (or a human's, via `lws policy draft import`) own recommended
+    # project selection and gating — pre-filled on the Dashboard's approval page rather than
+    # forcing the reviewer to reconstruct it from scratch; the reviewer's own choice at
+    # approval time, submitted with the decision, is still what actually takes effect.
+    projects: list[PolicyProject] = Field(default_factory=list)
     source: str = ""
     notes: str = ""
     concerns: bool = False

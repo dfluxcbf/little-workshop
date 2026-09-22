@@ -10,5 +10,27 @@
   "gate_points": [],
   "source": "little-versions",
   "notes": "Gate 3 turned this into a static scan of the project's source/docs text, not a history check \u2014 a weak proxy for the stated rule. Review whether it should be dropped or rewritten against merge commits.",
-  "concerns": true
+  "concerns": true,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
 }

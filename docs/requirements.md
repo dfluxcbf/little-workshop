@@ -404,3 +404,9 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000216 | **Gate 1 finds its own marker anywhere in the reply.** When Gate 1 parses a model's reply, the Policy pillar shall locate the `EARS_OK`/`EARS_REFINED` marker anywhere in the reply, using the last one if several appear, instead of requiring it at the very start. Found while reviewing pending policy drafts: `production-version-stable`'s stored `ears_text` had leaked the model's own reasoning preamble because the old regex only matched the marker at the start of the reply. | done |
+
+## Policy draft project selection is pre-fillable (2026-09-22)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000217 | **Policy draft project selection is pre-filled on the approval page.** When a policy draft carries its own project selection, the Dashboard's draft approval page shall pre-check each of those projects and set its Gating switch from the draft's own recorded value, instead of starting every project unselected. `PolicyDraft` gains a `projects` field (`policy/models.py`), the same `{project_id, gating_enabled}` shape as a real policy's own selection, settable via `policy.author`/`policy.draft_import` and migrated onto an existing database with a guarded `ALTER TABLE`. The reviewer's own choice at approval time, submitted with the decision, is still what actually takes effect — this only changes what the form starts with. | done |

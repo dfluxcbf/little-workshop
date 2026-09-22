@@ -338,11 +338,19 @@ as a **draft** (`policy_drafts`: EARS text, generated script, source, review
 notes, a `concerns` flag) — via `policy.author` with `save_draft`, or
 `policy.draft_import` for output made elsewhere (e.g. the JSON files in
 `docs/pending_policy_drafts/`, imported with `lws policy draft import`). A
-draft enforces nothing. The Dashboard lists drafts awaiting approval and
-lets the reviewer read the text, the notes and the whole script, choose the
-gate points and the projects to apply it to (with per-project gating), and
-then **Approve** or **Reject**. Approval (`policy.approve_draft`) requires
-the reviewer's explicit `reviewed: true` — the Dashboard only sends it when
+draft also carries its own **recommended `gate_points` and `projects`**
+(the latter added 2026-09-22, same shape as a real policy's own selection —
+`{project_id, gating_enabled}`), set by whoever authored or imported it;
+the Dashboard's approval page pre-checks the gate points and the "Apply to"
+rows from that recommendation rather than starting blank, though it is only
+ever a starting point — the reviewer's own choice at approval time,
+submitted with the decision, is what actually takes effect. A draft
+enforces nothing on its own. The Dashboard lists drafts awaiting approval
+and lets the reviewer read the text, the notes and the whole script, choose
+the gate points and the projects to apply it to (with per-project gating),
+and then **Approve** or **Reject**. Approval (`policy.approve_draft`)
+requires the reviewer's explicit `reviewed: true` — the Dashboard only
+sends it when
 its "I have reviewed the policy text and the test script" switch is on —
 and goes through the very same write as `policy.activate` (Gate 3a's
 duplicate and ownership checks, gate-point validation), so a draft cannot
@@ -880,6 +888,11 @@ Supersedes the placeholder `policy_rules`, `policy_check_results` pair in
   replaces waivers" under "Action-gating checks." A companion
   `policy_seeded` table records which policies have had their selection
   initialised, so deselecting everything is never undone by a restart.
+- `policy_drafts` also carries a `projects` column (added 2026-09-22, same
+  `{project_id, gating_enabled}` shape as `policy_projects`, migrated onto
+  an existing database with a guarded `ALTER TABLE` since the table already
+  shipped) — a draft's own recommended selection, pre-filled on the
+  Dashboard's approval page; see "Gate 4 happens inside the app" above.
 
 `project_sets` is **not** this pillar's table — it lives in Registry &
 Portfolio (`docs/architecture.md`'s Data model), reached through that
