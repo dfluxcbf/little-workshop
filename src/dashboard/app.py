@@ -720,13 +720,11 @@ def build_app(paths: Paths) -> FastAPI:
 
     @app.post("/policies/drafts/{draft_id}/approve")
     def policy_draft_approve(
-        draft_id: str, reviewed: str | None = Form(None), gate_points: list[str] = Form([]),
-        project: list[str] = Form([]), gating: list[str] = Form([]),
+        draft_id: str, gate_points: list[str] = Form([]), project: list[str] = Form([]), gating: list[str] = Form([]),
     ):
-        """Gate 4, in the app: only with the reviewer's explicit confirmation."""
+        """Gate 4, in the app: pressing Approve is itself the reviewer's confirmation —
+        no separate checkbox or typed reason needed."""
         back = f"/policies/drafts/{draft_id}"
-        if reviewed != "on":
-            return _back(back, "Tick the review box to approve: the policy text and test script must be reviewed first.")
         chosen = list(dict.fromkeys(project))
         try:
             job = client.create_job(
@@ -741,7 +739,11 @@ def build_app(paths: Paths) -> FastAPI:
             return _back(back, f"Could not approve: {exc}")
         if job.get("status") != "succeeded":
             return _back(back, f"Not approved: {job.get('error') or 'the policy pillar refused it'}")
-        return _back(f"/policies/{job['result']['id']}", "Approved and activated.")
+        remaining = _try(lambda: client.policy_drafts(paths, status="pending"), default=[])
+        next_draft = next((d for d in remaining if d["id"] != draft_id), None)
+        if next_draft:
+            return _back(f"/policies/drafts/{next_draft['id']}", "Approved and activated. Next draft:")
+        return _back("/policies", "Approved and activated. No more drafts awaiting approval.")
 
     @app.post("/policies/drafts/{draft_id}/reject")
     def policy_draft_reject(draft_id: str, reason: str = Form("")):

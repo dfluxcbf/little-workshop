@@ -410,3 +410,10 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000217 | **Policy draft project selection is pre-filled on the approval page.** When a policy draft carries its own project selection, the Dashboard's draft approval page shall pre-check each of those projects and set its Gating switch from the draft's own recorded value, instead of starting every project unselected. `PolicyDraft` gains a `projects` field (`policy/models.py`), the same `{project_id, gating_enabled}` shape as a real policy's own selection, settable via `policy.author`/`policy.draft_import` and migrated onto an existing database with a guarded `ALTER TABLE`. The reviewer's own choice at approval time, submitted with the decision, is still what actually takes effect — this only changes what the form starts with. | done |
+
+## Policy draft approval streamlined: no confirmation switch, auto-advance (2026-09-22)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000218 | **Approving a policy draft needs no separate confirmation.** When the user presses Approve on a policy draft, the Dashboard shall submit the approval without requiring a review checkbox or a typed reason. The earlier "I have reviewed the policy text and the test script" switch is removed; `policy.approve_draft` still receives `reviewed: true`, sent unconditionally the moment Approve is pressed. | done |
+| REQ-000000219 | **Approving a policy draft advances to the next one.** When a policy draft is approved, the Dashboard shall open the next pending draft, or the Policies page when none remain, instead of landing on the newly created policy's own page. | done |

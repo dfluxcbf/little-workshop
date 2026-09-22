@@ -141,11 +141,13 @@ are the current state of every pillar.
   switch set from the draft's own value, a "pre-filled from the draft's own
   recommendation" note shown when it has one; still just a starting point —
   the reviewer's own choice, submitted with the decision, is what takes
-  effect); and a decision card with an "I have reviewed the policy text and
-  the test script" switch, an optional rejection reason, and Approve /
-  Reject. Approve without the switch does nothing (the route sends no Job);
-  with it, one `policy.approve_draft` Job carries the whole decision. This
-  is the only way to approve a draft — no CLI or MCP path exists.
+  effect); and a decision card with an optional rejection reason and
+  Approve / Reject. Pressing **Approve** is itself the confirmation
+  (2026-09-22: the earlier separate "I have reviewed..." switch was
+  dropped as redundant friction) — one `policy.approve_draft` Job carries
+  the whole decision, and the page then opens the next pending draft, or
+  the Policies page once none remain. This is the only way to approve a
+  draft — no CLI or MCP path exists.
 - **Jobs** (`/jobs`, redesigned 2026-09-21): the Orchestration queue as a
   list of expandable cards, newest first, phone-first (no table, no page
   heading). A search box (type, project, pillar, creator or id) and a strip

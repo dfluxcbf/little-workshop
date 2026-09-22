@@ -834,7 +834,7 @@ def test_draft_review_page_shows_everything_a_reviewer_needs_and_the_confirmatio
         assert f'name="gate_points" value="{gate_point}"' in text
     assert 'name="project" value="proj-a"' in text and 'name="project" value="proj-b"' in text
     assert 'name="gating" value="proj-a" checked' in text
-    assert 'name="reviewed"' in text and 'action="/policies/drafts/d1/approve"' in text
+    assert 'name="reviewed"' not in text and 'action="/policies/drafts/d1/approve"' in text
     assert 'formaction="/policies/drafts/d1/reject"' in text
     assert "<fieldset" not in text and "<h1" not in text
 
@@ -890,15 +890,7 @@ def test_unknown_draft_says_so_and_unreachable_policy_shows_the_banner(test_clie
     assert response.status_code == 200 and "UNREACHABLE" in response.text
 
 
-def test_approve_without_the_review_confirmation_does_nothing(test_client, monkeypatch):
-    jobs = []
-    monkeypatch.setattr(client, "create_job", lambda paths, **fields: jobs.append(fields))
-    response = test_client.post("/policies/drafts/d1/approve", data={"project": ["proj-a"]}, follow_redirects=False)
-    assert response.status_code == 303 and response.headers["location"].startswith("/policies/drafts/d1?message=")
-    assert "review" in unquote(response.headers["location"]) and jobs == []
-
-
-def test_approve_sends_the_whole_decision_and_lands_on_the_new_policy(test_client, monkeypatch):
+def test_approve_needs_only_the_button_and_advances_to_the_next_pending_draft(test_client, monkeypatch):
     captured = {}
 
     def fake_create_job(paths, **fields):
@@ -906,12 +898,13 @@ def test_approve_sends_the_whole_decision_and_lands_on_the_new_policy(test_clien
         return {"status": "succeeded", "result": {"id": "pol-new"}}
 
     monkeypatch.setattr(client, "create_job", fake_create_job)
+    monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [_draft_row(id="d1"), _draft_row(id="d2", topic="next-one")])
     response = test_client.post(
         "/policies/drafts/d1/approve",
-        data={"reviewed": "on", "gate_points": ["branch_finish"], "project": ["proj-a", "proj-b", "proj-a"], "gating": ["proj-a"]},
+        data={"gate_points": ["branch_finish"], "project": ["proj-a", "proj-b", "proj-a"], "gating": ["proj-a"]},
         follow_redirects=False,
     )
-    assert response.status_code == 303 and response.headers["location"].startswith("/policies/pol-new?message=")
+    assert response.status_code == 303 and response.headers["location"].startswith("/policies/drafts/d2?message=")
     assert captured["type"] == "policy.approve_draft"
     assert captured["params"] == {
         "draft_id": "d1", "reviewed": True, "gate_points": ["branch_finish"],
@@ -922,13 +915,22 @@ def test_approve_sends_the_whole_decision_and_lands_on_the_new_policy(test_clien
 def test_approve_with_nothing_chosen_sends_no_gate_points_and_no_projects(test_client, monkeypatch):
     captured = {}
     monkeypatch.setattr(client, "create_job", lambda paths, **fields: (captured.update(fields), {"status": "succeeded", "result": {"id": "p"}})[1])
-    test_client.post("/policies/drafts/d1/approve", data={"reviewed": "on"}, follow_redirects=False)
+    monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
+    test_client.post("/policies/drafts/d1/approve", data={}, follow_redirects=False)
     assert captured["params"]["gate_points"] == [] and captured["params"]["projects"] == []
+
+
+def test_approving_the_last_pending_draft_returns_to_the_policies_page(test_client, monkeypatch):
+    monkeypatch.setattr(client, "create_job", lambda paths, **fields: {"status": "succeeded", "result": {"id": "pol-new"}})
+    monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
+    response = test_client.post("/policies/drafts/d1/approve", data={}, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"].startswith("/policies?message=")
+    assert "No more drafts" in unquote(response.headers["location"])
 
 
 def test_a_refused_approval_returns_to_the_draft_with_the_reason(test_client, monkeypatch):
     monkeypatch.setattr(client, "create_job", lambda paths, **fields: {"status": "failed", "error": "Gate 3a rejected: duplicate"})
-    response = test_client.post("/policies/drafts/d1/approve", data={"reviewed": "on"}, follow_redirects=False)
+    response = test_client.post("/policies/drafts/d1/approve", data={}, follow_redirects=False)
     location = unquote(response.headers["location"])
     assert location.startswith("/policies/drafts/d1?message=") and "Gate 3a rejected: duplicate" in location
 
@@ -938,7 +940,7 @@ def test_approve_reports_the_policy_pillar_being_unreachable(test_client, monkey
         raise client.PillarUnavailable("orchestration daemon unreachable")
 
     monkeypatch.setattr(client, "create_job", down)
-    response = test_client.post("/policies/drafts/d1/approve", data={"reviewed": "on"}, follow_redirects=False)
+    response = test_client.post("/policies/drafts/d1/approve", data={}, follow_redirects=False)
     assert "Could not approve" in unquote(response.headers["location"])
 
 

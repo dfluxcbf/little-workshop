@@ -349,9 +349,11 @@ enforces nothing on its own. The Dashboard lists drafts awaiting approval
 and lets the reviewer read the text, the notes and the whole script, choose
 the gate points and the projects to apply it to (with per-project gating),
 and then **Approve** or **Reject**. Approval (`policy.approve_draft`)
-requires the reviewer's explicit `reviewed: true` — the Dashboard only
-sends it when
-its "I have reviewed the policy text and the test script" switch is on —
+requires the reviewer's explicit `reviewed: true` — the Dashboard sends it
+the moment **Approve** is pressed (2026-09-22: an earlier separate "I have
+reviewed the policy text and the test script" switch was dropped; the
+button press is itself the confirmation, and approving opens the next
+pending draft automatically, or the Policies page once none remain) —
 and goes through the very same write as `policy.activate` (Gate 3a's
 duplicate and ownership checks, gate-point validation), so a draft cannot
 become a policy by any path that `activate` would refuse. There is
