@@ -64,7 +64,7 @@
         if (!d.choices.length) { show(box, '<p class="muted">None in this project.</p>'); return; }
         var html = d.choices.map(function (c) {
           return '<label class="job-choice' + (c.disabled ? " is-disabled" : "") + '"><input type="checkbox" class="pick" name="arg_' + esc(arg) +
-            '" value="' + esc(c.value) + '"' + (c.disabled ? " disabled" : "") + '><span class="job-choice-name">' + esc(c.label) +
+            '" value="' + esc(c.value) + '"' + (c.disabled ? " disabled" : "") + '><span class="job-choice-name">' + esc(c.label).replace(/_/g, "_<wbr>") +
             '</span><span class="dim">' + esc(c.detail || "") + "</span></label>";
         }).join("");
         loaded[key] = html;
