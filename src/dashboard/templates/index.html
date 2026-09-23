@@ -180,8 +180,8 @@
   document.querySelectorAll('form').forEach(function (form) {
     form.addEventListener('submit', function (e) {
       var btn = e.submitter;
-      if (!btn || !btn.dataset.busy) return;
       if (form.dataset.sent) { e.preventDefault(); return; }
+      if (!btn || !btn.dataset.busy) return;
       form.dataset.sent = '1';
       form.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
       btn.classList.add('is-busy');
