@@ -64,6 +64,17 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     # than the 20s default on a cold cache, misreporting "target pillar
     # unreachable" for a deploy that actually succeeds moments later.
     "deployment.deploy": 300.0,
+    # 2026-09-23 finding, the same OQ-14 class of defect again:
+    # `policy.check_project` runs a real Docker-based sandbox check
+    # synchronously inside its own request handler — that sandbox's own
+    # ceiling (policy/sandbox.py's DEFAULT_CHECK_TIMEOUT_SECONDS) is
+    # 1800s. With only the 20s default here, a real (non-skipped) check
+    # was routinely reported "target pillar unreachable" and requeued
+    # while the sandbox was still legitimately running — the Docker
+    # container just kept running, orphaned from the dispatch attempt
+    # that gave up on it. 1860s gives a 60s margin over the sandbox's
+    # own ceiling for image-pull/startup overhead on the first run.
+    "policy.check_project": 1860.0,
 }
 
 

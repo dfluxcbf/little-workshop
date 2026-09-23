@@ -142,6 +142,15 @@ def test_dispatch_timeout_for_returns_the_longer_ceiling_for_a_real_deploy():
     assert dispatch.dispatch_timeout_for("deployment.deploy") > dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS
 
 
+def test_dispatch_timeout_for_gives_policy_check_project_a_ceiling_above_the_sandbox_timeout():
+    """2026-09-23 finding: this Job type runs a real Docker sandbox check
+    synchronously (up to policy/sandbox.py's own 1800s ceiling) inside its
+    own request handler — the 20s default misreported it as unreachable
+    while the sandbox was still legitimately running."""
+    assert dispatch.dispatch_timeout_for("policy.check_project") == 1860.0
+    assert dispatch.dispatch_timeout_for("policy.check_project") > 1800.0
+
+
 def test_dispatch_ready_jobs_gives_policy_author_its_own_longer_timeout(monkeypatch, tmp_path, conn):
     captured = {}
 
