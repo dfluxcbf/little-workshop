@@ -10,15 +10,18 @@ was down through it.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from contextlib import nullcontext
 from datetime import datetime
 
 from orchestration import db
-from orchestration.dispatch import SocketLookup, dispatch_ready_jobs
+from orchestration.dispatch import SocketLookup, dispatch_ready_jobs, expire_stuck_jobs
 from orchestration.models import Job, ScheduledTask, ScheduledTaskState, ScheduleKind
 from orchestration.schedule import next_occurrence_after
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TICK_INTERVAL_SECONDS = 600.0  # 10 minutes
 
@@ -171,8 +174,17 @@ class SchedulerThread:
         self._thread.start()
 
     def _run(self) -> None:
+        self._expire_stuck_jobs()
         while not self._stop_event.wait(self._interval_seconds):
             tick_once(self._conn, self._socket_lookup, lock=self._lock)
+            self._expire_stuck_jobs()
+
+    def _expire_stuck_jobs(self) -> None:
+        """The running-Job timeout (dispatch.RUNNING_JOB_TIMEOUT) — at start, then every tick."""
+        try:
+            expire_stuck_jobs(self._conn, self._socket_lookup, lock=self._lock)
+        except Exception:  # never let the sweep take the tick loop down with it
+            logger.exception("expiring stuck jobs failed")
 
     def stop(self) -> None:
         self._stop_event.set()

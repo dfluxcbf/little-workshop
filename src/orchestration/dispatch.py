@@ -7,14 +7,14 @@ from __future__ import annotations
 import sqlite3
 import threading
 from contextlib import nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
 import httpx
 
 from common.uds_client import client_for_socket
-from orchestration.db import get_job, insert_job_run, update_job
+from orchestration.db import get_job, insert_job_run, list_jobs, update_job
 from orchestration.models import Job, JobStatus
 from orchestration.queue import cascade_dependency_failures, is_ready, ready_jobs
 
@@ -91,6 +91,15 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     # second hand-written list, since it's the same judgment call.
     **{job_type: 180.0 for job_type in DECLARED_UNSTOPPABLE_JOB_TYPES},
 }
+
+
+# A Job still `running` this long after its last change is presumed lost:
+# its pillar's worker died (a restart mid-run) or never called back, and it
+# would otherwise sit `running` forever, holding its queue_key. Far above
+# any real Job's length (the longest dispatch ceiling above is
+# policy.check_project's 1860s; an agent task runs up to an hour). A plain
+# framework rule, not a Policy: `SchedulerThread` enforces it every tick.
+RUNNING_JOB_TIMEOUT = timedelta(hours=6)
 
 
 def dispatch_timeout_for(job_type: str) -> float:
@@ -291,6 +300,41 @@ def stop_job(
     if response.status_code == 200:
         reason = response.json().get("reason", reason)
     return {"stopped": False, "reason": reason}
+
+
+def expire_stuck_jobs(
+    conn: sqlite3.Connection, socket_lookup: SocketLookup, *,
+    now: datetime | None = None, max_age: timedelta = RUNNING_JOB_TIMEOUT, lock: threading.Lock | None = None,
+) -> list[Job]:
+    """Fail every Job `running` for longer than `max_age` (see
+    `RUNNING_JOB_TIMEOUT`), after asking its pillar to stop it where that
+    pillar can; then fail whatever depended on it and pump the queue its
+    queue_key was holding. `lock`, when given, must not be held by the caller."""
+    guard = lock if lock is not None else nullcontext()
+    now = now or datetime.now(timezone.utc)
+    with guard:
+        stale = [
+            job for job in list_jobs(conn, status=JobStatus.RUNNING)
+            if now - (job.updated_at if job.updated_at.tzinfo else job.updated_at.replace(tzinfo=timezone.utc)) >= max_age
+        ]
+    expired: list[Job] = []
+    for job in stale:
+        stop_job(conn, job, socket_lookup, lock=lock)  # best effort: most pillars say "not stoppable"
+        with guard:
+            current = get_job(conn, job.id)
+            if current is None:
+                continue
+            if current.status == JobStatus.RUNNING:
+                current.status = JobStatus.FAILED
+                current.error = f"timed out: still running after {max_age.total_seconds() / 3600:g} hours"
+                update_job(conn, current)
+                insert_job_run(conn, current.id, outcome="failed", detail=current.error, started_at=job.updated_at, finished_at=now)
+            expired.append(current)
+    if expired:
+        with guard:
+            cascade_dependency_failures(conn)
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)
+    return expired
 
 
 def complete_job(conn: sqlite3.Connection, job: Job, *, succeeded: bool, result: dict | None, error: str | None) -> Job:
