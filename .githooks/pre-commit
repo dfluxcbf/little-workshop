@@ -1,0 +1,14 @@
+#!/bin/sh
+# Installed by `lws version init` -- keeps VERSION (and everything
+# version_hooks propagates it into) correct on every working-branch commit,
+# matching this project's own branch-commit-dev-suffix/commit-bumps-version
+# policies' formula exactly. Never blocks the commit itself: those policies
+# are the real enforcement backstop (still checked after the fact, still
+# catch a bypassed/missing hook); this is best-effort proactive correctness,
+# not a gate. See little-workshop's src/version/commands/sync_version_files.py.
+if ! command -v lws >/dev/null 2>&1; then
+    exit 0
+fi
+lws version sync-version-files --project-id 'little-workshop' || \
+    echo "pre-commit: lws version sync-version-files failed; VERSION may be out of date" >&2
+exit 0
