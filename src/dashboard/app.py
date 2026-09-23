@@ -165,7 +165,7 @@ def build_report(paths: Paths, project: str) -> dict:
     for req in sorted(client.requirements_list(paths, project), key=lambda r: r["key"]):
         row = rows.get(req["id"], {})
         requirements.append({
-            "key": req["key"], "title": req.get("title", ""), "description": req.get("description", ""),
+            "id": req["id"], "key": req["key"], "title": req.get("title", ""), "description": req.get("description", ""),
             "verdict": requirement_verdict({**row, "status": row.get("status", req.get("status"))}),
         })
     all_suites = {s["id"]: s["name"] for s in client.requirements_suites(paths, project)}
@@ -525,6 +525,27 @@ def build_app(paths: Paths) -> FastAPI:
             suites=suites, req_counts=req_counts, test_counts=test_counts, req_total=len(data["requirements"]),
             test_total=len(data["tests"]), error=error, nav_active="report",
         )
+
+    @app.post("/report/{project}/approve")
+    def approve_requirements(project: str, requirement_id: list[str] = Form(default=[]), back: str = Form("")):
+        """Publish drafted requirements — one ordinary `requirements.publish_requirement` Job each."""
+        to = back if back.startswith("/report") else f"/report?project={project}"
+        if not requirement_id:
+            return _back(to, "No draft requirement selected.")
+        approved, failed = 0, []
+        for rid in dict.fromkeys(requirement_id):
+            result = _try(lambda: client.create_job(
+                paths, type="requirements.publish_requirement", target_pillar="requirements", project_id=project,
+                params={"requirement_id": rid}, queue_key=None, depends_on=[], created_by="dashboard",
+            ))
+            if result is not None and result.get("status") == "succeeded":
+                approved += 1
+            else:
+                failed.append((result or {}).get("error") or "requirements unreachable")
+        message = f"Approved {approved} requirement{'' if approved == 1 else 's'}."
+        if failed:
+            message += f" {len(failed)} could not be approved: {failed[0]}"
+        return _back(to, message)
 
     # ---- Project controls: server, session, work (on the Dashboard) -------
 

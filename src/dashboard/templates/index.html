@@ -180,20 +180,6 @@
 {% endif %}
 <script>
 (function () {
-  // A tapped Launch / Start / Stop turns into a disabled spinner at once, so it cannot be sent twice.
-  document.querySelectorAll('form').forEach(function (form) {
-    form.addEventListener('submit', function (e) {
-      var btn = e.submitter;
-      if (form.dataset.sent) { e.preventDefault(); return; }
-      if (!btn || !btn.dataset.busy) return;
-      form.dataset.sent = '1';
-      form.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
-      btn.classList.add('is-busy');
-      btn.textContent = btn.dataset.busy;
-    });
-  });
-  // Back/forward cache would bring the disabled buttons back; show the live state instead.
-  window.addEventListener('pageshow', function (e) { if (e.persisted) location.reload(); });
   // While something is launching or starting, reload once it has finished.
   var waiting = Array.prototype.map.call(document.querySelectorAll('[data-starting]'), function (el) {
     return { project: el.dataset.project, kind: el.dataset.starting };

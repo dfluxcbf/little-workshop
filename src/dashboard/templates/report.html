@@ -26,6 +26,17 @@
 <section class="report-panel" data-panel="requirements">
   <h2 class="section-label">Requirements <span class="dim">{{ requirements|length }} of {{ req_total }}</span>
     {% for v, n in req_counts.items() %}<span class="pill {{ 'ok' if v == 'passing' else ('fail' if v == 'failing' else ('warn' if v == 'no tests' else 'idle')) }}">{{ n }} {{ v }}</span>{% endfor %}</h2>
+  {% set drafts = requirements|selectattr('verdict', 'equalto', 'draft')|list %}
+  {% set back = '/report?' ~ {'project': project, 'q': q, 'verdict': verdict}|urlencode %}
+  {% if drafts %}
+  <form class="report-approve-all" method="post" action="/report/{{ project }}/approve">
+    {% for r in drafts %}<input type="hidden" name="requirement_id" value="{{ r.id }}">{% endfor %}
+    <input type="hidden" name="back" value="{{ back }}">
+    <span class="muted">{{ drafts|length }} draft{{ '' if drafts|length == 1 else 's' }} {{ 'shown' if q or verdict else 'awaiting review' }}</span>
+    <button type="submit" class="primary" data-busy="Approving…"
+      data-confirm="Approve {{ drafts|length }} draft requirement{{ '' if drafts|length == 1 else 's' }}?">Approve {{ drafts|length }} shown draft{{ '' if drafts|length == 1 else 's' }}</button>
+  </form>
+  {% endif %}
   <div class="report-list">
     {% for r in requirements %}
     <details class="report-item">
@@ -35,6 +46,13 @@
         <span class="report-title">{{ r.title }}</span>
       </summary>
       {% if r.description %}<p class="report-desc">{{ r.description }}</p>{% endif %}
+      {% if r.verdict == 'draft' %}
+      <form class="report-approve" method="post" action="/report/{{ project }}/approve">
+        <input type="hidden" name="requirement_id" value="{{ r.id }}">
+        <input type="hidden" name="back" value="{{ back }}">
+        <button type="submit" class="primary small" data-busy="Approving…">Approve</button>
+      </form>
+      {% endif %}
     </details>
     {% else %}<p class="muted">No requirement matches.</p>{% endfor %}
   </div>

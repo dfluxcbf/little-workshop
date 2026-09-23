@@ -1520,7 +1520,9 @@ def test_bottom_toolbar_groups_related_pages_under_one_button(test_client, monke
         assert f'href="{href}"' in system_row and f"<span>{label}</span>" in system_row
     main_row = re.search(r'data-view="main"(.*?)</div>', bar, re.S).group(1)
     assert 'href="/"' in main_row
-    assert "/report" not in bar and "/projects/new" not in bar
+    # Report (requirements and test results, where drafts are approved) is its own one-tap tab
+    assert 'href="/report"' in main_row and bar.count('data-open="report"') == 0
+    assert "/projects/new" not in bar
 
 
 def test_the_group_of_the_current_page_is_open_and_highlighted(test_client, monkeypatch):
@@ -2195,3 +2197,46 @@ def test_an_unreachable_deployment_is_not_reported_as_a_missing_manifest(test_cl
     assert "set-manifest" not in text
     assert "Deployment is not answering right now" in text
     assert 'data-starting="launch" data-project="little-widget">Launching…' in text
+
+
+def test_report_is_in_the_navigation_again(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/").text
+    assert 'href="/report"' in text
+
+
+def test_report_offers_approve_only_on_draft_requirements(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/report", params={"project": "little-widget"}).text
+    assert text.count('data-busy="Approving…">Approve</button>') == 1  # REQ-4 is the only draft
+    assert 'name="requirement_id" value="r4"' in text and 'value="r1"' not in text
+    assert "Approve 1 shown draft" in text
+
+
+def test_approving_publishes_each_requirement_through_a_job(test_client, monkeypatch):
+    seen = []
+
+    def fake_create_job(paths, **f):
+        seen.append((f["type"], f["target_pillar"], f["project_id"], f["params"]))
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(client, "create_job", fake_create_job)
+    response = test_client.post(
+        "/report/little-widget/approve",
+        data={"requirement_id": ["r4", "r5", "r4"], "back": "/report?project=little-widget&q=&verdict=draft"},
+        follow_redirects=False,
+    )
+    assert seen == [
+        ("requirements.publish_requirement", "requirements", "little-widget", {"requirement_id": "r4"}),
+        ("requirements.publish_requirement", "requirements", "little-widget", {"requirement_id": "r5"}),
+    ]
+    location = unquote(response.headers["location"])
+    assert location.startswith("/report?project=little-widget&q=&verdict=draft&") and "Approved 2 requirements." in location
+
+
+def test_approving_reports_failures_and_never_redirects_off_the_report(test_client, monkeypatch):
+    monkeypatch.setattr(client, "create_job", lambda paths, **f: {"status": "failed", "error": "requirement 'x' not found"})
+    response = test_client.post("/report/little-widget/approve", data={"requirement_id": "x", "back": "https://evil.example"}, follow_redirects=False)
+    location = unquote(response.headers["location"])
+    assert location.startswith("/report?project=little-widget")
+    assert "Approved 0 requirements. 1 could not be approved: requirement 'x' not found" in location

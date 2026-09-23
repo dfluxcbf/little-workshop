@@ -23,6 +23,7 @@
 {# Each group is (key, label, landing href, icon, [(page key, href, label, icon)]). A one-page group is a plain link. #}
 {% set groups = [
   ('dashboard', 'Dashboard', '/', 'dashboard', [('dashboard', '/', 'Dashboard', 'dashboard')]),
+  ('report', 'Report', '/report', 'report', [('report', '/report', 'Report', 'report')]),
   ('actions', 'Actions', '/tasks', 'tasks', [('tasks', '/tasks', 'Task list', 'tasks'), ('new-task', '/tasks/new', 'New task', 'plus'), ('jobs', '/jobs', 'Jobs', 'jobs'), ('new-job', '/jobs/new', 'New job', 'plus'), ('schedule-job', '/jobs/schedule', 'Schedule job', 'schedule')]),
   ('policies', 'Policies', '/policies', 'policies', [('policies', '/policies', 'Policies', 'policies'), ('new-policy', '/policies/new', 'New policy', 'plus')]),
   ('system', 'System', '/pillars', 'system', [('pillars', '/pillars', 'Pillars', 'pillars'), ('incidents', '/incidents', 'Incidents', 'bug'), ('settings', '/settings', 'Settings', 'gear')]),
@@ -89,6 +90,21 @@
 </nav>
 <script>
 (function () {
+  // A tapped button with data-busy turns into a disabled spinner at once, so its form cannot be sent twice.
+  document.querySelectorAll('form').forEach(function (form) {
+    form.addEventListener('submit', function (e) {
+      var btn = e.submitter;
+      if (form.dataset.sent) { e.preventDefault(); return; }
+      if (!btn || !btn.dataset.busy) return;
+      if (btn.dataset.confirm && !window.confirm(btn.dataset.confirm)) { e.preventDefault(); return; }
+      form.dataset.sent = '1';
+      form.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+      btn.classList.add('is-busy');
+      btn.textContent = btn.dataset.busy;
+    });
+  });
+  // Back/forward cache would bring the disabled buttons back; show the live state instead.
+  window.addEventListener('pageshow', function (e) { if (e.persisted) location.reload(); });
   var bar = document.querySelector('nav.tabbar');
   if (bar) {
     var rows = bar.querySelectorAll('.tabbar-row');
