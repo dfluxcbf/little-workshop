@@ -331,3 +331,44 @@ def test_secrets_reports_the_github_token_status(client, monkeypatch):
 
     monkeypatch.setattr(github, "github_token_status", lambda: {"present": True, "valid": True, "expires_at": None, "detail": "no expiration set"})
     assert app_client.get("/v1/secrets").json() == [{"name": "github", "present": True, "valid": True, "expires_at": None, "detail": "no expiration set"}]
+
+
+def test_secrets_are_cached_for_a_few_minutes_not_rechecked_every_call(client, monkeypatch):
+    # 2026-09-23 finding: github_token_status() shells out to `gh` twice
+    # per call, including a real network round trip — caching it is what
+    # fixed the Dashboard's Pillars page.
+    app_client, _ = client
+    from registry import github
+
+    calls = []
+    monkeypatch.setattr(
+        github, "github_token_status",
+        lambda: calls.append(1) or {"present": True, "valid": True, "expires_at": None, "detail": ""},
+    )
+
+    first = app_client.get("/v1/secrets").json()
+    second = app_client.get("/v1/secrets").json()
+
+    assert len(calls) == 1  # the second request reused the cached value
+    assert first == second
+
+
+def test_secrets_cache_expires_after_its_ttl(client, monkeypatch):
+    import time as time_module
+
+    from registry import app as app_module, github
+
+    app_client, _ = client
+    calls = []
+    monkeypatch.setattr(
+        github, "github_token_status",
+        lambda: calls.append(1) or {"present": True, "valid": True, "expires_at": None, "detail": ""},
+    )
+    fake_now = [1000.0]
+    monkeypatch.setattr(time_module, "monotonic", lambda: fake_now[0])
+
+    app_client.get("/v1/secrets")
+    fake_now[0] += app_module.SECRETS_CACHE_TTL_SECONDS + 1
+    app_client.get("/v1/secrets")
+
+    assert len(calls) == 2  # a real refresh happened once the TTL elapsed

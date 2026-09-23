@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,17 @@ class CreateProjectSetRequest(BaseModel):
 class CreateTicketRequest(BaseModel):
     project_name: str
     title: str
+
+
+# github_token_status() shells out to `gh` twice, including one real
+# network round trip to GitHub's own API — a credential's validity/
+# expiration essentially never changes between one dashboard page view
+# and the next, so /v1/secrets caches it for this long rather than
+# re-checking on every call (2026-09-23 finding: this was the dominant
+# cost of the Dashboard's own Pillars page, ~1.3s of it). A short TTL,
+# not an eternal launch-time cache: a revoked/rotated token should still
+# surface here within a few minutes, not only after the next restart.
+SECRETS_CACHE_TTL_SECONDS = 300.0
 
 
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
@@ -176,10 +188,18 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         with lock:
             return [t.model_dump(mode="json") for t in db.list_tickets(conn, project_name=project_name)]
 
+    secrets_cache: dict[str, Any] = {"value": None, "at": 0.0}
+
     @app.get("/v1/secrets")
     def list_secrets() -> list[dict]:
-        """System health's own secrets/tokens panel — never the token itself,
-        only whether it authenticates and, when it carries one, its expiration."""
-        return [{"name": "github", **github.github_token_status()}]
+        """System health's own secrets/tokens panel — never the token
+        itself, only whether it authenticates and, when it carries one,
+        its expiration. See SECRETS_CACHE_TTL_SECONDS for why this is
+        cached rather than re-checked on every call."""
+        now = time.monotonic()
+        if secrets_cache["value"] is None or now - secrets_cache["at"] > SECRETS_CACHE_TTL_SECONDS:
+            secrets_cache["value"] = [{"name": "github", **github.github_token_status()}]
+            secrets_cache["at"] = now
+        return secrets_cache["value"]
 
     return app

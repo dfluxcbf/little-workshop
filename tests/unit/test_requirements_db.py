@@ -173,6 +173,57 @@ def test_latest_result_for_suite_is_worst_verdict_among_the_latest_batch(conn):
     assert latest.test_name == "new2"
 
 
+def test_latest_results_for_suites_matches_the_single_suite_lookup(conn):
+    from datetime import datetime, timezone
+
+    db.insert_test_suite(conn, TestSuite(id="s1", project_id="p1", name="a"))
+    db.insert_test_suite(conn, TestSuite(id="s2", project_id="p1", name="b"))
+    old = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    new = datetime(2020, 1, 2, tzinfo=timezone.utc)
+
+    db.insert_test_result(conn, TestResult(
+        id="tr1", project_id="p1", suite_id="s1", test_name="old", verdict=TestVerdict.FAILED, executed_at=old,
+    ))
+    db.insert_test_result(conn, TestResult(
+        id="tr2", project_id="p1", suite_id="s1", test_name="new1", verdict=TestVerdict.PASSED, executed_at=new,
+    ))
+    db.insert_test_result(conn, TestResult(
+        id="tr3", project_id="p1", suite_id="s1", test_name="new2", verdict=TestVerdict.FAILED, executed_at=new,
+    ))
+    db.insert_test_result(conn, TestResult(
+        id="tr4", project_id="p1", suite_id="s2", test_name="only", verdict=TestVerdict.PASSED, executed_at=new,
+    ))
+
+    batched = db.latest_results_for_suites(conn, ["s1", "s2", "s3"])  # s3 has no results at all
+
+    assert batched["s1"].verdict == TestVerdict.FAILED and batched["s1"].test_name == "new2"
+    assert batched["s2"].verdict == TestVerdict.PASSED
+    assert "s3" not in batched  # matches latest_result_for_suite returning None for it
+    assert batched["s1"] == db.latest_result_for_suite(conn, "s1")
+    assert batched["s2"] == db.latest_result_for_suite(conn, "s2")
+
+
+def test_latest_results_for_suites_handles_no_ids(conn):
+    assert db.latest_results_for_suites(conn, []) == {}
+
+
+def test_suites_for_requirements_matches_the_single_requirement_lookup(conn):
+    db.link_requirement_to_suite(conn, "r1", "s1")
+    db.link_requirement_to_suite(conn, "r1", "s2")
+    db.link_requirement_to_suite(conn, "r2", "s3")
+
+    batched = db.suites_for_requirements(conn, ["r1", "r2", "r3"])  # r3 has no mappings at all
+
+    assert batched["r1"] == ["s1", "s2"]
+    assert batched["r2"] == ["s3"]
+    assert batched["r3"] == []  # present with an empty list, not missing — the report always indexes by every requirement
+    assert batched["r1"] == db.list_suites_for_requirement(conn, "r1")
+
+
+def test_suites_for_requirements_handles_no_ids(conn):
+    assert db.suites_for_requirements(conn, []) == {}
+
+
 def test_new_id_is_unique(conn):
     assert db.new_id() != db.new_id()
 

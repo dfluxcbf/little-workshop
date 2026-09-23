@@ -317,6 +317,26 @@ def list_suites_for_requirement(conn: sqlite3.Connection, requirement_id: str) -
     return [row["suite_id"] for row in rows]
 
 
+def suites_for_requirements(conn: sqlite3.Connection, requirement_ids: list[str]) -> dict[str, list[str]]:
+    """`{requirement_id: [suite_id, ...]}` for every id given, one query
+    instead of one per requirement — the Definition-of-Done report
+    (`/v1/report`) builds this for every requirement in a project at
+    once; looping `list_suites_for_requirement` per requirement was part
+    of the same N+1 pattern `latest_results_for_suites` below fixes."""
+    result: dict[str, list[str]] = {rid: [] for rid in requirement_ids}
+    if not requirement_ids:
+        return result
+    placeholders = ",".join("?" * len(requirement_ids))
+    rows = conn.execute(
+        f"SELECT requirement_id, suite_id FROM requirement_test_mappings "
+        f"WHERE requirement_id IN ({placeholders}) ORDER BY suite_id",
+        requirement_ids,
+    ).fetchall()
+    for row in rows:
+        result[row["requirement_id"]].append(row["suite_id"])
+    return result
+
+
 # -- test results ------------------------------------------------------------
 
 
@@ -379,3 +399,39 @@ def latest_result_for_suite(conn: sqlite3.Connection, suite_id: str) -> TestResu
     priority = {TestVerdict.ERROR: 0, TestVerdict.FAILED: 1, TestVerdict.SKIPPED: 2, TestVerdict.PASSED: 3}
     worst = min(batch, key=lambda r: priority[TestVerdict(r["verdict"])])
     return _row_to_result(worst)
+
+
+def latest_results_for_suites(conn: sqlite3.Connection, suite_ids: list[str]) -> dict[str, TestResult]:
+    """`{suite_id: TestResult}` for every id given (a suite with no
+    results yet is simply absent, same as `latest_result_for_suite`
+    returning None) — one join instead of calling
+    `latest_result_for_suite` once per suite. The Definition-of-Done
+    report (`/v1/report`) can involve hundreds of suites at once; even
+    with the index above, hundreds of separate round trips each carry
+    their own fixed per-query overhead (2026-09-23 finding: little-
+    workshop's own report, ~420 requirement/suite mappings, still took
+    ~0.5s from this alone after the index fix — this dropped it to a
+    handful of milliseconds)."""
+    if not suite_ids:
+        return {}
+    unique_ids = list(dict.fromkeys(suite_ids))
+    placeholders = ",".join("?" * len(unique_ids))
+    rows = conn.execute(
+        f"""
+        SELECT tr.* FROM test_results tr
+        JOIN (
+            SELECT suite_id, MAX(executed_at) AS ts FROM test_results
+            WHERE suite_id IN ({placeholders}) GROUP BY suite_id
+        ) latest ON tr.suite_id = latest.suite_id AND tr.executed_at = latest.ts
+        WHERE tr.suite_id IN ({placeholders})
+        """,
+        [*unique_ids, *unique_ids],
+    ).fetchall()
+    by_suite: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        by_suite.setdefault(row["suite_id"], []).append(row)
+    priority = {TestVerdict.ERROR: 0, TestVerdict.FAILED: 1, TestVerdict.SKIPPED: 2, TestVerdict.PASSED: 3}
+    return {
+        suite_id: _row_to_result(min(batch, key=lambda r: priority[TestVerdict(r["verdict"])]))
+        for suite_id, batch in by_suite.items()
+    }

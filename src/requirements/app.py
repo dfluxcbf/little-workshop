@@ -343,13 +343,19 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         every one of those suites' most recent run passed."""
         with lock:
             requirements = db.list_requirements(conn, project_id=project_id)
+            # Two batched queries for every requirement at once, not one
+            # pair of queries per requirement (2026-09-23 finding: the
+            # per-requirement loop was still ~0.5s for little-workshop's
+            # own ~230 requirements even after latest_result_for_suite
+            # itself got an index — hundreds of separate round trips each
+            # carry their own fixed overhead).
+            mappings = db.suites_for_requirements(conn, [r.id for r in requirements])
+            all_suite_ids = [sid for suite_ids in mappings.values() for sid in suite_ids]
+            latest_by_suite = db.latest_results_for_suites(conn, all_suite_ids)
             rows = []
             for requirement in requirements:
-                suite_ids = db.list_suites_for_requirement(conn, requirement.id)
-                suite_verdicts = {
-                    suite_id: (db.latest_result_for_suite(conn, suite_id))
-                    for suite_id in suite_ids
-                }
+                suite_ids = mappings[requirement.id]
+                suite_verdicts = {suite_id: latest_by_suite.get(suite_id) for suite_id in suite_ids}
                 tested = bool(suite_ids) and all(v is not None for v in suite_verdicts.values())
                 passing = tested and all(v.verdict == TestVerdict.PASSED for v in suite_verdicts.values())
                 done = requirement.status == RequirementStatus.PUBLISHED and passing
