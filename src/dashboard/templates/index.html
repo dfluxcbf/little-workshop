@@ -59,9 +59,10 @@
   <summary>
     <span class="proj-name">{{ r.name }}</span>
     <div class="facts">
-      {% if r.server is not none %}
+      {% if r.server is not none or r.server_unreachable %}
       <span class="fact"><span class="fact-k">Server</span>
         {% if r.launching %}<span class="pill warn">launching</span>
+        {% elif r.server_unreachable %}<span class="fact-v">unavailable</span>
         {% elif r.server.listening %}<span class="pill ok">up</span>{% if r.server.version and r.server.version != '?' %}<span class="fact-v">v{{ r.server.version }}</span>{% endif %}
         {% else %}<span class="pill idle">down</span>{% endif %}
       </span>
@@ -97,7 +98,10 @@
 
     <div class="subsection">
       <h3>Server</h3>
-      {% if not r.server %}
+      {% if r.server_unreachable %}
+      <p class="muted">Deployment is not answering right now, so this server's state is unknown.</p>
+      {% if r.launching %}<button type="button" class="primary is-busy" disabled data-starting="launch" data-project="{{ r.name }}">Launching…</button>{% endif %}
+      {% elif not r.server %}
       <p class="muted">No server manifest yet. Upload one with <code>lws deployment set-manifest --project-id {{ r.name }} --file manifest.toml</code>.</p>
       {% else %}
       <dl class="kv">

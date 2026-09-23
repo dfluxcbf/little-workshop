@@ -2180,3 +2180,18 @@ def test_policy_edit_post_includes_the_policy_id_in_the_job_params(test_client, 
     }, follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"].startswith("/policies/drafts/d2")
     assert calls[0]["params"]["policy_id"] == "pol1"
+
+
+def test_an_unreachable_deployment_is_not_reported_as_a_missing_manifest(test_client, monkeypatch):
+    """A status read that times out (Deployment busy or restarting) used to render as "No server manifest yet"."""
+    _stub_project_panels(monkeypatch, session={"running": False, "trusted": True})
+
+    def unreachable(paths, name):
+        raise client.PillarUnavailable("deployment daemon unreachable")
+
+    monkeypatch.setattr(client, "deployment_status_optional", unreachable)
+    _stub_in_flight_jobs(monkeypatch, [{"type": "deployment.deploy", "project_id": "little-widget", "status": "running"}])
+    text = test_client.get("/").text
+    assert "set-manifest" not in text
+    assert "Deployment is not answering right now" in text
+    assert 'data-starting="launch" data-project="little-widget">Launching…' in text

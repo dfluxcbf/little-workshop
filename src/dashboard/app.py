@@ -430,7 +430,12 @@ def build_app(paths: Paths) -> FastAPI:
         under_way = starting_up(paths, starting)
 
         def _project_row(name: str) -> dict:
-            server = _try(client.deployment_status_optional, paths, name)
+            # None means "no manifest" (a 404); an unreachable Deployment is a different answer.
+            server_unreachable = False
+            try:
+                server = client.deployment_status_optional(paths, name)
+            except client.PillarUnavailable:
+                server, server_unreachable = None, True
             session = _try(client.agent_session_status, paths, name)
             runs = _try(client.agent_runs, paths, name, default=[])
             report = _try(client.requirements_report, paths, name)
@@ -447,7 +452,7 @@ def build_app(paths: Paths) -> FastAPI:
                     "failing": sum(1 for r in published if not r.get("done")),
                 }
             return {
-                "name": name, "server": server, "session": session, "awaiting": awaiting, "running": running,
+                "name": name, "server": server, "server_unreachable": server_unreachable, "session": session, "awaiting": awaiting, "running": running,
                 "reqs": reqs, "ci": _try(client.agent_latest_ci_check, paths, name),
                 "branches": _try(client.deployment_branches, paths, name, default=[]),
                 "session_name": session_name_for(name), "runs": runs,
