@@ -1,0 +1,38 @@
+{
+  "ears_text": "WHERE a project uses issue-driven automation, the project shall contain the .github/ISSUE_TEMPLATE/claude-task.yml issue form.",
+  "ears_refined": false,
+  "test_script": "import pytest\nfrom pathlib import Path\nimport re\n\nPROJECT = Path(\"/project\")\nWORKFLOWS = PROJECT / \".github\" / \"workflows\"\nTEMPLATE = PROJECT / \".github\" / \"ISSUE_TEMPLATE\" / \"claude-task.yml\"\n\n# Signals that a project uses issue-driven automation: a workflow triggered by\n# issue events, or one that runs the Claude Code action.\nISSUE_TRIGGER = re.compile(\n    r\"^\\s*(issues|issue_comment)\\s*:|\\bon\\s*:\\s*\\[?[^\\n]*\\bissues\\b|\"\n    r\"anthropics/claude-code-action|@claude\",\n    re.MULTILINE,\n)\n\n\ndef _workflow_files():\n    if not WORKFLOWS.is_dir():\n        return []\n    return sorted(\n        p for p in WORKFLOWS.iterdir()\n        if p.is_file() and p.suffix in (\".yml\", \".yaml\")\n    )\n\n\ndef _uses_issue_driven_automation():\n    for wf in _workflow_files():\n        try:\n            text = wf.read_text(encoding=\"utf-8\", errors=\"replace\")\n        except OSError:\n            continue\n        if ISSUE_TRIGGER.search(text):\n            return True\n    return False\n\n\ndef test_claude_task_issue_form_present():\n    if not PROJECT.is_dir():\n        pytest.fail(\"/project is not mounted\")\n    if not _uses_issue_driven_automation() and not TEMPLATE.exists():\n        pytest.skip(\"project does not use issue-driven automation\")\n    assert TEMPLATE.is_file(), (\n        \"project uses issue-driven automation but \"\n        \".github/ISSUE_TEMPLATE/claude-task.yml is missing\"\n    )\n    assert TEMPLATE.stat().st_size > 0, \"claude-task.yml is empty\"",
+  "topic": "issue-form-installed",
+  "target_pillar": "agent",
+  "scope_level": "all_projects",
+  "scope_target": null,
+  "created_by": "framework",
+  "gate_points": [
+    "branch_finish"
+  ],
+  "source": "little-runner",
+  "notes": "Checks the file exists. Only meaningful for projects that use issue-driven automation; the script decides that itself \u2014 review how. Gate point set 2026-09-22: project_registration, since that's the natural moment to check a project's issue-automation setup; the script itself already skips (not_applicable) for a project that hasn't opted into issue-driven automation, so gating never blocks one that doesn't use it. Corrected 2026-09-22: project_registration is invalid here \u2014 that gate point only works on a framework-bound policy (target_pillar == 'policy'); a project-bound check like this one has no project to inspect yet at registration time. Moved to branch_finish, alongside this project's other repo-content checks.",
+  "concerns": false,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
+}

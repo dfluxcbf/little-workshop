@@ -113,3 +113,34 @@ tool that first implemented them:
   `little-requirements`/`little-versions` as mandatory dependencies, per
   this document and the corresponding root-level exemption in
   `docs/README.md`.
+- **2026-09-16** — The self-application principle became literally true,
+  not just stated (`docs/milestones.md` M15): little-workshop registered
+  itself as a project (name `little-workshop`) in its own Registry &
+  Portfolio, running for the first time as a real, self-hosted instance
+  (Core, Orchestration, Registry, Requirements & Quality, Policy &
+  Compliance, Version Control & Release, Deployment & Servers, Agentic
+  Development, and Dashboard, all real `systemd --user` units against a
+  real `~/.config/little-workshop`, not a test harness) rather than only
+  ever having been exercised against throwaway or other projects'
+  checkouts. All 146 of this file's own sibling `docs/requirements.md`
+  entries were migrated into the real Requirements & Quality pillar as
+  real `Requirement` rows, making it that pillar's first real user. A
+  first real candidate framework policy formalizing the independence
+  principle's "no `.lvx/config.json`" rule was drafted through the real
+  four-gate authoring pipeline against the real Claude CLI (Gates 1-3;
+  Gate 4 activation intentionally left for a maintainer's own review,
+  never auto-approved on their behalf — see `docs/requirements.md`'s M15
+  section) — the first framework policy this project has ever drafted
+  against itself, not a hypothetical example.
+- **2026-09-17** — The 2026-09-16 draft above was reviewed and rejected,
+  not activated: "no `.lvx/config.json`" was never meant as an ongoing
+  invariant to check, only a fact about the state of the
+  `little-versions` migration at the time this document was written.
+  The independence principle's own next sentence already says why a
+  policy enforcing it would have been a category error —
+  "'Independent' means *not required to depend on*, not *forbidden from
+  using*" — and once the migration this document describes is complete,
+  whether a stray `.lvx` directory exists or not is simply irrelevant,
+  since nothing in little-workshop reads it either way. See
+  `docs/requirements.md`'s M15 follow-up section and
+  `docs/pending_policy_drafts/README.md`'s "Rejected drafts."

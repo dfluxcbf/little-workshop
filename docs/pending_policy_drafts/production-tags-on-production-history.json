@@ -1,0 +1,38 @@
+{
+  "ears_text": "The system shall ensure that the newest production tag (v<major>.<minor>.<patch>, with no -rc suffix) points at a commit reachable from the production branch.",
+  "ears_refined": true,
+  "test_script": "import os\nimport re\nimport subprocess\n\nimport pytest\n\nPROJECT = \"/project\"\nTAG_RE = re.compile(r\"^v(\\d+)\\.(\\d+)\\.(\\d+)$\")\nBRANCH_CANDIDATES = [\"production\", \"main\", \"master\"]\n\n\ndef git(*args, check=False):\n    return subprocess.run(\n        [\"git\", \"-c\", \"safe.directory=*\", \"-C\", PROJECT, *args],\n        capture_output=True,\n        text=True,\n        check=check,\n    )\n\n\ndef ref_exists(ref):\n    return git(\"rev-parse\", \"--verify\", \"--quiet\", ref + \"^{commit}\").returncode == 0\n\n\ndef find_production_branch():\n    for name in BRANCH_CANDIDATES:\n        for ref in (f\"refs/heads/{name}\", f\"refs/remotes/origin/{name}\"):\n            if ref_exists(ref):\n                return ref\n    return None\n\n\ndef test_newest_production_tag_reachable_from_production_branch():\n    if not os.path.isdir(PROJECT) or git(\"rev-parse\", \"--git-dir\").returncode != 0:\n        pytest.fail(\"/project is not a git repository checkout\")\n\n    tags = git(\"tag\", \"--list\").stdout.split()\n    prod = []\n    for t in tags:\n        m = TAG_RE.match(t)\n        if m:\n            prod.append((tuple(int(x) for x in m.groups()), t))\n    if not prod:\n        pytest.skip(\"no production tags (v<major>.<minor>.<patch>) exist yet\")\n\n    prod.sort()\n    newest = prod[-1][1]\n\n    branch = find_production_branch()\n    assert branch is not None, (\n        f\"no production branch found (tried {BRANCH_CANDIDATES}, local or origin)\"\n    )\n\n    tag_commit = git(\"rev-parse\", f\"refs/tags/{newest}^{{commit}}\")\n    assert tag_commit.returncode == 0, f\"cannot resolve tag {newest} to a commit\"\n    sha = tag_commit.stdout.strip()\n\n    r = git(\"merge-base\", \"--is-ancestor\", sha, branch)\n    assert r.returncode == 0, (\n        f\"newest production tag {newest} ({sha}) is not reachable from {branch}\"\n    )",
+  "topic": "production-tags-on-production-history",
+  "target_pillar": "version",
+  "scope_level": "all_projects",
+  "scope_target": null,
+  "created_by": "framework",
+  "gate_points": [
+    "release"
+  ],
+  "source": "little-versions",
+  "notes": "Newest production tag only, reachable from the production branch. Matches the newest-only rule.",
+  "concerns": false,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
+}

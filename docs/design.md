@@ -171,6 +171,11 @@ supersede the first round's "Module" concept.
   bootstrap manifest (the pillar list, enabled flags, crash-backoff
   settings) lives directly at `~/.config/little-workshop/manifest.toml`,
   beside the ten pillar directories rather than inside one.
+  The manifest's `[core] workshop_repo_dir` names this project's own git
+  checkout; Core hands it to every pillar it launches as
+  `LITTLE_WORKSHOP_REPO_DIR` (and Deployment carries it on to pillars it
+  redeploys), because a pipx-installed pillar cannot find the checkout by
+  itself and pillar redeploys build from it.
 - **Project files** — the one place pillars actually share a directory:
   `~/.config/little-workshop/projects/<project>/`, one such directory per
   project this system manages. Unlike pillar configuration, this directory
@@ -209,22 +214,69 @@ supersede the first round's "Module" concept.
   reports completion back through its own callback, the same "queue pumps
   itself" shape `little-runner`'s repository-slot logic already uses,
   now crossing a process boundary instead of staying in-process.
+- **ScheduledTask** (`docs/milestones.md` M9) — a durable definition,
+  owned by Orchestration, distinct from a Job: `{id, name, job_template,
+  schedule, state, next_run_at, missed_run_at}`. `job_template` is a
+  Job's own creation payload (`type`, `target_pillar`, `project_id`,
+  `params`, `queue_key`, `depends_on`); `schedule` is `once` (a specific
+  date/time) or `recurring` (a set of weekdays plus one time-of-day, in
+  the host's own local time — not stored per-task, since this system
+  runs on one household's machine) — deliberately not full cron. A
+  single in-process background thread inside Orchestration wakes every
+  10 minutes and dispatches anything due, creating a real Job from
+  `job_template` with `created_by: "scheduler"` — no per-task `systemd`
+  timer. Eight operations: `add`/`edit`/`remove`/`trigger`/`cancel`/
+  `stop`/`postpone`/`queue` — see `docs/pillars/orchestration.md` for
+  what each means precisely. `stop` is declared per Job type by the
+  owning pillar (the fast path — most Job types, a fast synchronous git
+  sequence say, have no safe mid-flight interruption point and are
+  correctly declared unstoppable), falling back to actually attempting
+  the call and trusting the target pillar's own answer for anything
+  left undeclared. `queue` generalizes `queue_key` from a strict mutex
+  into a configurable-capacity pool (default 1, so every existing
+  caller's behavior is unchanged) rather than adding a second
+  concurrency mechanism alongside it.
+
+  **Missed firings**: since little-workshop is locally hosted and can
+  legitimately be down, a `next_run_at` still in the past is only
+  possible at Orchestration's own *startup* (a live tick always catches
+  a due task within 10 minutes) — checked once there, never on the
+  routine tick. A `recurring` task that missed several occurrences during
+  a longer outage collapses to just the most recent one: `next_run_at`
+  advances to the correct next future occurrence, and that single most
+  recent miss is recorded as `missed_run_at`, a pending decision rather
+  than an automatic action either way. `trigger` resolves it by firing
+  the catch-up Job and clearing the field; `cancel` dismisses it without
+  firing; the task's own next *regular* occurrence firing for real also
+  clears it, unasked — a stale question is moot once this cycle's run
+  has already happened. A `once` task has no next occurrence to
+  supersede it this way, so its `missed_run_at`, if ever set, stays
+  pending until a human actually answers it.
 - **Pipeline / PipelineRun** — a named, versioned DAG of Job templates,
   expanded into concrete Jobs at trigger time. A node's target pillar and
   `project_id` can differ from other nodes in the same pipeline, which is
   what makes a pipeline spanning several submodules — or several pillars —
   possible.
-- **PolicyRule** — a predicate plus a message, owned by the Policy &
-  Compliance pillar, evaluated by asking the relevant pillars' own
-  interfaces for the facts a rule needs (never by reading another pillar's
+- **Policy** (design placeholder `PolicyRule`, built as `Policy` —
+  `docs/pillars/policy_compliance.md` is authoritative) — an EARS-form
+  requirement plus a real, sandboxed pytest script, owned by the Policy &
+  Compliance pillar, checked by asking the relevant pillars' own
+  interfaces for the facts it needs (never by reading another pillar's
   storage directly). Seeded from this ecosystem's eight existing root
   policy documents, which remain the human-readable rationale, not the
-  enforcement mechanism. A small number of existing rules — automation never
-  merges/deletes/finishes on its own initiative; the agent never touches
-  branches when a Job specifies them — are hard-coded invariants inside the
-  Orchestration and Agentic Development pillars themselves, not user-editable
-  `PolicyRule`s, because they're safety properties this ecosystem depends
-  on, not conventions someone might reasonably want to loosen.
+  enforcement mechanism. Carries `enabled` (a toggle, no re-authoring)
+  and `gate_points` (which of six action categories it gates on
+  failure, user-chosen) — refined 2026-09-16, and again 2026-09-21: the
+  user **selects which projects a policy applies to** and switches
+  gating on or off per project (a check with gating off still runs and
+  is recorded for analysis, it just cannot block) — which replaced the
+  per-project waiver. A small number of existing rules —
+  automation never merges/deletes/finishes on its own initiative; the
+  agent never touches branches when a Job specifies them — are
+  hard-coded invariants inside the Orchestration and Agentic Development
+  pillars themselves, not user-editable `Policy` rows at all, because
+  they're safety properties this ecosystem depends on, not conventions
+  someone might reasonably want to loosen or waive.
 - **Managed Process** — the abstraction the Deployment & Servers pillar uses
   for anything long-running it's responsible for: a unit name, a start
   command, a health probe, a log reference. A project's server, a Claude CLI
@@ -247,17 +299,20 @@ caller (CLI / MCP tool / Dashboard / scheduler / pipeline expansion)
    │
    ▼
 Job created in Orchestration  {type, target_pillar, project_id, params,
-                                queue_key, depends_on}
+                                queue_key, depends_on, created_by}
    │
    ▼
 Orchestration: ready? (depends_on satisfied, queue_key free)
    │  no  → stays queued
    ▼  yes
-Policy & Compliance: does this Job's type declare a gating topic? (most
-   don't, and skip straight to dispatch — Policy asks the target pillar's
-   PI for whatever facts a relevant policy's check needs; it never opens
-   that pillar's database)
-   │  no gating topic, or the winning policy passes/is not applicable
+Policy & Compliance: does this Job's type declare a gate-point category
+   (build-install, server-launch, deploy/redeploy, release, branch-finish,
+   project-removal)? Most don't, and skip straight to dispatch. If it
+   does, every currently-winning, *enabled*, *non-waived* policy gating
+   that category — a Job can now be gated by more than one at once —
+   gets checked (Policy asks the target pillar's PI for whatever facts
+   each check needs; it never opens that pillar's database)
+   │  no matching category, or every governing policy passes/is not applicable
    ▼  → dispatch proceeds
    │  fails  →  Job = pending_confirmation; user warned immediately;
    │            confirmed within the window → dispatch proceeds anyway;
@@ -282,6 +337,13 @@ pillar executes (synchronously for a quick op, or accepts the Job and
 Job = succeeded | failed, recorded in Orchestration; releasing this
    queue_key may make another queued Job ready (the queue pumps itself)
 ```
+
+`scheduler` above is no longer just a placeholder caller name:
+`docs/milestones.md`'s M9 gives Orchestration a `ScheduledTask` concept
+(`add`/`edit`/`remove`/`trigger`/`cancel`/`stop`/`postpone`/`queue`, over
+a `once` or weekday-`recurring` schedule) that creates exactly this
+shape of Job, on its own timing, with `created_by: "scheduler"` — see
+`docs/pillars/orchestration.md`.
 
 ### Crash recovery (Core's job — fast, dumb, no rebuild)
 

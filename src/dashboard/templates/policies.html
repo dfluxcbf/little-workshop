@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Policies — little-workshop{% endblock %}
+{% block content %}
+{% if pending_drafts %}
+<a class="pending-banner" href="/policies/drafts">
+  <span class="pending-count">{{ pending_drafts }}</span>
+  <span class="pending-text">{{ 'policy' if pending_drafts == 1 else 'policies' }} awaiting your approval</span>
+  <span class="pending-chev" aria-hidden="true">›</span>
+</a>
+{% endif %}
+<div class="policy-list">
+  {% for p in policies %}
+  <a class="polcard{{ ' is-off' if not p.enabled }}" href="/policies/{{ p.id }}">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ p.topic }}</span>
+      {% if p.failing_count %}<span class="pill fail">{{ p.failing_count }} failing</span>
+      {% elif p.enabled %}<span class="pill ok">enabled</span>{% else %}<span class="pill warn">disabled</span>{% endif %}
+    </span>
+    <span class="polcard-ears">{{ p.ears_text }}</span>
+    <span class="polcard-meta">
+      {% if p.gate_points %}{% for gp in p.gate_points %}<span class="chip gate">{{ gp }}</span>{% endfor %}
+      {% else %}<span class="chip">no gate</span>{% endif %}
+      {% set n = p.projects | length %}{% set on = p.projects | selectattr("gating_enabled") | list | length %}
+      <span class="chip">{{ n }} project{{ '' if n == 1 else 's' }}{% if n and n == 1 %}: {{ p.projects[0].project_id }}{% endif %}</span>
+      {% if on %}<span class="chip">gating on: {{ on }}</span>{% endif %}
+      <span class="chip">{{ p.target_pillar }}</span>
+      <span class="chip">{{ p.created_by }}</span>
+    </span>
+  </a>
+  {% else %}
+  <p class="muted">No policies authored yet.</p>
+  {% endfor %}
+</div>
+
+{% endblock %}

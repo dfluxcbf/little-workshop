@@ -1,0 +1,38 @@
+{
+  "ears_text": "The project's VERSION file shall contain a semantic version in the form <major>.<minor>.<patch>, optionally followed by -dev.<N> or -rc.<N>.",
+  "ears_refined": true,
+  "test_script": "import re\nfrom pathlib import Path\n\nimport pytest\n\nVERSION_FILE = Path(\"/project/VERSION\")\n\nSEMVER_RE = re.compile(r\"^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-(dev|rc)\\.(0|[1-9]\\d*))?$\")\n\n\ndef test_version_file_is_semantic_version():\n    assert VERSION_FILE.is_file(), f\"VERSION file not found at {VERSION_FILE}\"\n\n    raw = VERSION_FILE.read_text(encoding=\"utf-8\")\n    content = raw.strip()\n\n    assert content, \"VERSION file is empty\"\n    assert \"\\n\" not in content, (\n        f\"VERSION file must contain a single line, got: {raw!r}\"\n    )\n    assert SEMVER_RE.match(content), (\n        f\"VERSION {content!r} does not match \"\n        \"<major>.<minor>.<patch>[-dev.<N>|-rc.<N>]\"\n    )",
+  "topic": "version-format",
+  "target_pillar": "version",
+  "scope_level": "all_projects",
+  "scope_target": null,
+  "created_by": "framework",
+  "gate_points": [
+    "branch_finish"
+  ],
+  "source": "little-versions",
+  "notes": "Reads the root `VERSION` only; single-line semver with optional `-dev.N`/`-rc.N`. Straightforward.",
+  "concerns": false,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
+}

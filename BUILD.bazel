@@ -1,12 +1,179 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 package(default_visibility = ["//visibility:public"])
 
-# No build artifacts defined yet. Add wheel/vsix/exe/install/test targets here
-# as the project grows — see little-projects/docs/policies/build_policy.md for
-# the standard target names every project should expose, and its "Portability"
-# / "Dependency isolation" / "Missing system dependencies" sections: no
-# hardcoded paths/usernames, install CLI tools via `pipx` (not `pip install
-# --user`), and any `sh_binary`/genrule that needs a system tool that can't be
-# isolated must run tools/check_system_deps.sh as a preflight step first (see
-# that script — install targets should wire it in as a `data` dependency and
-# invoke it before doing real work, the way bootstrap-little-project's own
-# BUILD.bazel does for its `//:install` target).
+# ---------------------------------------------------------------------------
+#   bazel build //:all                  → every artifact (the wheel)
+#   bazel build //:wheel                → the Python wheel (common+core+
+#                                          orchestration+cli — see below)
+#   bazel run   //:install              → preflight (tools/check_system_deps.sh),
+#                                          then pipx-install the wheel (`lws`)
+#   bazel test  //:test                 → the real pytest suite: unit tests
+#                                          plus tests/integration's real
+#                                          `systemd --user` end-to-end proof
+#   bazel test  //:coverage             → the same suite, gated at 90%
+#                                          line coverage (--cov-fail-under=90)
+#   bazel run   //:core_server          → run Core directly from source
+#   bazel run   //:orchestration_server → run Orchestration directly from source
+#   bazel run   //:registry_server      → run Registry & Portfolio directly from source
+#   bazel run   //:requirements_server  → run Requirements & Quality directly from source
+#   bazel run   //:build_server         → run Build & Packages directly from source
+#   bazel run   //:version_server       → run Version Control & Release directly from source
+#   bazel run   //:deployment_server    → run Deployment & Servers directly from source
+#   bazel run   //:agent_server         → run Agentic Development directly from source
+#   bazel run   //:policy_server        → run Policy & Compliance directly from source
+#   bazel run   //:dashboard_server     → run Dashboard directly from source
+#
+# docs/architecture.md's Build section calls for one Bazel package per
+# pillar with its own :build/:install/:test/:server targets. Every
+# pillar built so far ships from one wheel for now — there's no
+# independent-redeploy story yet to make splitting them worthwhile (that
+# lands with Deployment & Servers' worktree-per-pillar mechanism, M4/M5).
+# `:core_server`/`:orchestration_server`/`:registry_server` below are each
+# pillar's stand-in for its own future `:server` target.
+# ---------------------------------------------------------------------------
+
+exports_files(["VERSION", "pyproject.toml"])
+
+genrule(
+    name = "wheel",
+    srcs = glob([
+        "src/**",
+    ]) + [
+        "README.md",
+        "pyproject.toml",
+        "VERSION",
+    ],
+    outs = ["little_workshop-0.1.0-py3-none-any.whl"],
+    cmd = """
+set -euo pipefail
+PROJECT_ROOT="$$(dirname $(location pyproject.toml))"
+TMP_OUT="$$(mktemp -d)"
+trap 'rm -rf "$$TMP_OUT"' EXIT
+cd "$$PROJECT_ROOT"
+python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir "$$TMP_OUT" . >/dev/null
+cp "$$TMP_OUT"/*.whl "$@"
+""",
+    local = True,
+    tags = ["local", "no-sandbox"],
+)
+
+filegroup(
+    name = "all",
+    srcs = [":wheel"],
+)
+
+sh_binary(
+    name = "install",
+    srcs = ["scripts/bazel/install_wheel.sh"],
+    data = [
+        ":wheel",
+        "tools/check_system_deps.sh",
+    ],
+    args = [
+        "$(location :wheel)",
+        "$(location tools/check_system_deps.sh)",
+    ],
+)
+
+sh_test(
+    name = "test",
+    srcs = ["scripts/bazel/run_pytest.sh"],
+    args = ["$(location pyproject.toml)"],
+    data = glob([
+        "src/**",
+        "tests/**",
+    ]) + ["pyproject.toml"],
+    tags = ["local", "no-sandbox"],
+)
+
+# bazel test //:coverage — same suite as //:test, plus a 90% line-coverage
+# gate (--cov-fail-under=90) over every src/ module, including each
+# pillar's own __main__.py. KNOWN LIMITATION: under `bazel test` itself
+# the coverage percentage this target reports is not trustworthy (see
+# scripts/bazel/run_pytest_coverage.sh's comment) — every test still has
+# to pass, but for the real number, run that script directly:
+#   bash scripts/bazel/run_pytest_coverage.sh pyproject.toml
+# (99% measured that way as of the testing-fortification pass this target
+# was added in.)
+sh_test(
+    name = "coverage",
+    srcs = ["scripts/bazel/run_pytest_coverage.sh"],
+    args = ["$(location pyproject.toml)"],
+    data = glob([
+        "src/**",
+        "tests/**",
+    ]) + ["pyproject.toml"],
+    tags = ["local", "no-sandbox"],
+)
+
+sh_binary(
+    name = "core_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["core", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "orchestration_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["orchestration", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "registry_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["registry", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "requirements_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["requirements", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "build_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["build", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "version_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["version", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "deployment_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["deployment", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "agent_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["agent", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "policy_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["policy", "$(location pyproject.toml)"],
+)
+
+sh_binary(
+    name = "dashboard_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["dashboard", "$(location pyproject.toml)"],
+)

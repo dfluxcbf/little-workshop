@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ run.title }} — little-workshop{% endblock %}
+{% block content %}
+<h1>{{ run.title }}</h1>
+<p class="lede"><a href="/tasks">&larr; Tasks</a> &middot; {{ run.project_id }}</p>
+<dl class="kv">
+  <dt>Status</dt><dd><span class="pill {{ 'warn' if run.status == 'awaiting_finish' else ('ok' if run.status in ('running', 'finished') else ('fail' if run.status == 'failed' else 'idle')) }}">{{ run.status.replace('_', ' ') }}</span></dd>
+  <dt>Branch</dt><dd>{% if run.branch %}<code>{{ run.branch }}</code>{% else %}&mdash;{% endif %}</dd>
+  <dt>Result</dt><dd>{{ run.completion_status or '—' }}</dd>
+  {% if run.pr_url %}<dt>Pull request</dt><dd><a href="{{ run.pr_url }}" target="_blank" rel="noopener">{{ run.pr_url }}</a></dd>{% endif %}
+</dl>
+{% if run.status == 'awaiting_finish' %}
+<div class="row">
+  <form class="inline" method="post" action="/tasks/{{ run.project_id }}/{{ run.id }}/finish"><button type="submit" class="primary">Finish</button></form>
+  <form class="inline" method="post" action="/tasks/{{ run.project_id }}/{{ run.id }}/skip"><button type="submit">Skip</button></form>
+</div>
+{% endif %}
+{% if run.summary %}<section><h2>Summary</h2><pre class="log-pre">{{ run.summary }}</pre></section>{% endif %}
+{% if run.report %}<section><h2>Change report</h2><pre class="log-pre">{{ run.report }}</pre></section>{% endif %}
+{% endblock %}

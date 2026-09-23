@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}New project — little-workshop{% endblock %}
+{% block content %}
+<h1>New project</h1>
+<p class="lede">Creates the project's basic files, a git repository on <code>dev</code>, version tracking, and registers it &mdash; in <code>{{ dest }}</code>.</p>
+<div class="panel" style="padding:18px 20px">
+<form method="post" action="/projects/new">
+  <label for="name">Name</label>
+  <input type="text" name="name" id="name" required pattern="[a-z0-9][a-z0-9\-]*" placeholder="little-example" autocapitalize="none" autocomplete="off">
+  <label for="description">Description</label>
+  <input type="text" name="description" id="description" placeholder="What this project is for">
+  <label class="check"><input type="checkbox" name="create_github_repo" value="1"> Also create a GitHub repository and push</label>
+  <label class="check"><input type="checkbox" name="public" value="1"> Make the GitHub repository public</label>
+  <div class="row" style="margin-top:16px"><button type="submit" class="primary">Create project</button></div>
+</form>
+</div>
+{% endblock %}

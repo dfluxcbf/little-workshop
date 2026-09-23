@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "little-workshop"
+version = "0.1.1-dev.30"
+description = "Unified, self-hosted software project-management daemon absorbing little-requirements/little-versions/little-runner/little-pypi/bootstrap-little-project as pillars"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.0",
+    "httpx>=0.25",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5"]
+
+[project.scripts]
+lws = "cli.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["common*", "core*", "orchestration*", "registry*", "requirements*", "version*", "build*", "policy*", "deployment*", "agent*", "cli*", "mcp_server*", "dashboard*"]
+
+[tool.setuptools.package-data]
+agent = ["templates/prompts/*.md"]
+dashboard = ["templates/*.html", "static/*.css", "static/*.js", "static/*.webmanifest", "static/icons/*.png"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "docker: exercises a real Docker sandbox (policy/sandbox.py) — skips cleanly if the daemon isn't available",
+]
+
+[tool.coverage.run]
+source = ["src"]
+# Bazel's sandboxed test action resolves "src" under a runfiles tree whose
+# absolute path differs from a plain checkout's — relative_files makes
+# coverage.py record and match paths relative to this file's own
+# directory instead of by absolute path, the standard fix for a sandboxed/
+# CI root that shifts between the measurement and reporting phases of one
+# run (both phases still happen in the same process here, but Bazel's
+# runfiles tree uses symlinks that otherwise still defeat absolute-path
+# matching).
+relative_files = true
+
+[tool.coverage.report]
+skip_covered = false
+show_missing = true

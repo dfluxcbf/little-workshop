@@ -1,0 +1,66 @@
+{
+  "production_branch": "master",
+  "integration_branch": "dev",
+  "prefixes": {
+    "feature": "feature",
+    "release": "release",
+    "hotfix": "hotfix",
+    "support": "support",
+    "improvement": "improvement"
+  },
+  "branch_types": {
+    "feature": {
+      "prefix": "feature",
+      "base": "integration",
+      "targets": [
+        "integration"
+      ],
+      "protected": false,
+      "issue_automation": true
+    },
+    "improvement": {
+      "prefix": "improvement",
+      "base": "integration",
+      "targets": [
+        "integration"
+      ],
+      "protected": false,
+      "issue_automation": true
+    },
+    "hotfix": {
+      "prefix": "hotfix",
+      "base": "production",
+      "targets": [
+        "production",
+        "integration"
+      ],
+      "protected": false,
+      "issue_automation": true
+    },
+    "release": {
+      "prefix": "release",
+      "base": "production",
+      "targets": [
+        "production",
+        "integration"
+      ],
+      "protected": false,
+      "issue_automation": false
+    },
+    "support": {
+      "prefix": "support",
+      "base": "production",
+      "targets": [
+        "production"
+      ],
+      "protected": true,
+      "issue_automation": false
+    }
+  },
+  "delete_branch_on_finish": true,
+  "version_hooks": [
+    "tools/on_version_bump.py"
+  ],
+  "stale_branch_days": 30,
+  "project_id": "little-workshop"
+}

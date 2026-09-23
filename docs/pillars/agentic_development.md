@@ -11,13 +11,69 @@ for its pillar. See `docs/design.md`/`docs/architecture.md` for this
 pillar's place in the whole system; this document is everything specific
 to it.
 
-## Purpose
+## Description
+
+Agentic Development is the pillar that runs a real Claude CLI session
+against a real branch of a real project, under a set of safety
+guarantees (branch isolation, a mandatory completion marker, a fixed
+change-report shape, one session per project at a time) proven by
+`little-runner` before this pillar existed. Implemented in M6, and one
+of only two pillars (alongside Policy & Compliance) with a full design
+specification of its own, separate from `docs/architecture.md`'s
+Components-table summary.
+
+## Purpose & goal
 
 "Claude does real implementation work on a real branch, safely, and the
 human stays in control of when it's finished" — unchanged from
 `docs/architecture.md`. What this document adds is *how*, inherited
 almost verbatim from `little-runner`'s own proven mechanism, generalized
 from GitHub-issue-only triggers to any Job source.
+
+## Responsibilities
+
+- **`agent.run_task`** — resolves a `BranchingSpec` (`new`/`existing`/
+  `auto`) against Version Control & Release's live branch-type policy,
+  prepares the branch, runs the agent session (a real `claude -p`
+  invocation), parses its completion marker and structured result file,
+  publishes (push + PR, when the project has a real `origin`), and
+  renders the seven-section change report. Runs in a background thread —
+  a real session can take up to an hour — reporting `accepted` to
+  Orchestration immediately and completing later via
+  `POST /v1/jobs/{id}/complete`.
+- **`agent.finish_task` / `agent.skip_task`** — the explicit actions that
+  settle a manual-review run awaiting a human decision.
+- **`agent_runs`** — this pillar's own table of every run and its state
+  (`running`/`awaiting_finish`/`finished`/`failed`/`skipped`), reachable
+  via `GET /v1/runs/{project_id}` and `GET /v1/runs/{project_id}/{run_id}`.
+- **The GitHub adapter and poller** — optional, per-project: actor lookup
+  via the issue timeline and cursor-based edge detection from polling
+  (detailed below), for projects that want issue-triggered runs.
+- Full detail on the `BranchingSpec`, the completion marker, review
+  modes, the change report, concurrency, and the GitHub adapter is in the
+  sections below — this pillar's actual design content, not summarized
+  twice.
+
+## Interfacing
+
+- **Calls**: Version Control & Release — `new`-mode branch creation
+  calls that pillar's own `version.<type>_start` Job directly over its
+  Pillar Interface (a synchronous subroutine call, not routed through
+  Orchestration a second time), and every branching mode validates
+  against that pillar's live `GET /v1/config`. Registry & Portfolio —
+  resolves a `project_id`'s repository path and `repo_url` via
+  `common.registry_client`. Orchestration — reports its own async
+  completion back via `POST /v1/jobs/{id}/complete`, the same pattern
+  M5's self-redeploy worker established first.
+- **Called by**: `lws`, the MCP Server, and Orchestration for
+  `agent.run_task`/`agent.finish_task`/`agent.skip_task`. Policy &
+  Compliance (M12) is planned to call into this pillar for every
+  EARS-refinement, conflict-check, and test-script-generation step of
+  its own four-gate policy-authoring pipeline — this pillar's `agent.run_task`
+  is the one mechanism that pipeline is built on top of, not a new one.
+- **Discovered through**: Core, like every pillar — including for
+  resolving Orchestration's own socket from inside this pillar's
+  background completion thread.
 
 ## Not every Job goes through this pillar
 
@@ -137,6 +193,73 @@ than rediscovering:
   ports, no stored token" — outbound-only polling can still behave like
   event delivery.
 
+## `agent.ci_check`: M16 `little-runner` parity (2026-09-17)
+
+`little-runner`'s M16 survey (`docs/requirements.md`'s M16 follow-up
+section) flagged this tool as "not close" to the absorbed tools'
+functional parity — true for its two genuinely load-bearing, no-
+equivalent-anywhere concepts (branch stabilization, cross-project branch
+auditing; both still open), but the survey undercounted: by the time
+this pass ran, this pillar's own `poller.py`/`github_adapter.py`/`db.py`
+session tracking already gave `lrun issue run/finish` and `lrun session
+start/stop/list`'s *actor-lookup-and-dispatch* half full parity, just
+never checked off explicitly. What this pass actually closed was the one
+real remaining gap: `lrun ci run/status` (REQ-000000035's original test-
+run-plus-commit-status idea), as a new `agent.ci_check` Job. Given a
+`pr_number` and `suite_id`, it resolves the pull request's real head
+(`GitHubAdapter.pull_request`, a `gh pr view` wrapper), posts a `pending`
+commit status, calls Requirements & Quality's own `requirements.run_tests`
+directly (a synchronous cross-pillar Pillar Interface call, the same
+pattern `agent/version_client.py` already established, applied to a
+second pillar via `agent/requirements_client.py`) against that head sha,
+and posts the final `success`/`failure`/`error` status back —
+`GitHubAdapter.post_status`'s own docstring states the principle
+directly: a status is reporting, never the job itself, so only a genuine
+infra failure (no GitHub remote, an unreadable PR, Requirements &
+Quality unreachable) fails the Job; a real test failure is a `failure`
+status on an otherwise-`succeeded` Job, mirroring how `run_tests` itself
+already treats a failing test as data, not an error. Recorded in this
+pillar's own new `ci_checks` table (`GET /v1/ci_checks/{project_id}`,
+`GET /v1/ci_checks/{project_id}/latest`), queued on the same
+`queue_key=project_id` mutex `agent.run_task` already uses, since both
+share the same worktree-provisioning path.
+
+`lws job queue show/release`, matching `lrun queue show/release`
+(REQ-000000040's status/queue visibility), needed no new pillar code at
+all — it is a pure `lws`-side convenience over Orchestration's own
+existing `GET /v1/jobs?status=`/`POST /v1/jobs/{id}/stop` (`show` lists
+and groups by `queue_key`; `release` stops the running holder so the
+next queued Job dispatches).
+
+`lrun session start/stop/list`'s other half — an ad-hoc, human-driven,
+`dtach`-backed interactive terminal session, independent of any Job —
+is also closed (2026-09-17), as `agent.session_start`/`session_stop`
+(`agent/session_flow.py`), reversing the earlier deferral once the
+underlying mechanics turned out to already have a home in this daemon's
+own model, not a foreign one: Deployment & Servers already launches and
+tracks long-running background processes started once and stopped
+later (`deployment.deploy`/`server.launch`), and M5's self-redeploy
+worker already established the `systemd-run --user --collect` detached-
+dispatch pattern this reuses. What genuinely is new here is the PTY
+itself — `agent.run_task`'s own Remote Control usage is headless
+(`claude -p`, `flow.py`'s `_invoke_claude`); an *interactive*
+`claude --remote-control` session needs a real terminal to attach to,
+which `dtach` provides, kept alive independent of whatever launched it.
+A transient `systemd --user` *scope* (not a *service*) tracks cgroup
+population rather than one main PID, so the session survives this
+pillar's own unit restarting — ported directly from `little-runner`'s
+own hard-earned finding that a plain `dtach -n` fork still inherits its
+launcher's cgroup despite reparenting in the process tree. Exactly one
+session per project (a deterministic socket path,
+`Paths.session_socket_path`); refused outright if one is already
+running, or if the project's checkout isn't yet trusted by Claude Code
+(`~/.claude.json`'s own trust-dialog state — a session launched fully
+detached would otherwise hang at that prompt forever with no one there
+to answer it). `GET /v1/sessions/{project_id}` reports whether one is
+running; `lws agent session-list` loops that over Registry & Portfolio's
+own project list for the old tool's "every project" view, the same
+pattern `version.branch_audit`/`version.stabilize` already established.
+
 ## Left open
 
 - Whether Agentic Development's own review-mode parameter (manual vs.
@@ -147,3 +270,43 @@ than rediscovering:
   questions (is the agent's *own* work good enough to finish
   automatically, vs. does a *policy* allow this action to happen at all)
   and nothing yet says how a Job subject to both actually resolves.
+
+## Workspace session (2026-09-21)
+
+`agent.session_start`/`agent.session_stop` and `GET /v1/sessions/{project_id}` also accept the reserved
+id `workspace` (`common/workspace.py`), which is never looked up in Registry & Portfolio and resolves to
+the projects root directory — the parent of the workshop checkout, or `LITTLE_WORKSHOP_WORKSPACE_DIR`.
+It gives the user one Claude Code session above every project for cross-project work, with the same
+one-session limit, trust check and detached lifetime as a project session.
+
+## Incidents: an unhandled exception, awaiting the user's confirmation (2026-09-22)
+
+`POST /v1/incidents` (called directly, never through Orchestration — a crash reporter
+must survive Orchestration itself being unreachable) records an open incident: project,
+raising component ("pillar" — one of little-workshop's own 10, or a child project's own
+app), context (`METHOD /path`), exception type/message, and a truncated traceback.
+`GET /v1/incidents` (optional `status` filter) and `GET /v1/incidents/{id}` are plain
+reads. Two Jobs settle an open incident:
+
+- `agent.confirm_incident` — starts a real `agent.run_task` (the exact same dispatch path
+  `agent.run_task` itself uses) on the incident's own project, `intent="bug"`, title and
+  description built from the exception, `review_mode` taken from the caller (default
+  `auto_approve`) — then links the incident to the new run.
+- `agent.dismiss_incident` — marks it dismissed; no task is ever created.
+
+An incident is never auto-dispatched — the same "propose, a human decides" discipline
+policy drafts and redeploy confirmations already follow.
+
+**Reporting side**: `common/incident.py` is installed into all 10 of little-workshop's
+own FastAPI apps (`install_incident_reporting`, one line each) as ASGI middleware — an
+unhandled exception is reported once, then re-raised unchanged, so the pillar's own error
+response is exactly what it would have been otherwise. `no_auto_incident()` (a context
+manager) marks a block whose exceptions are part of normal, expected control flow, never
+worth a bug task. `tools/incident_reporter.py` is a dependency-light, vendorable copy of
+the same idea for a *child* project's own app (little-meals, little-home, ...) — copied
+into that project's own tree, matching this project's "no shared Python import across
+repos" convention, posting over little-workshop's own Agentic Development Unix socket
+(`LITTLE_WORKSHOP_AGENT_SOCKET` override; defaults to the well-known
+`~/.local/state/little-workshop/sockets/agent.sock`). Delivered as a tested, ready-to-adopt
+module in this pass; wiring it into each child project's own repository is that project's
+own follow-up commit, not part of little-workshop's own codebase.

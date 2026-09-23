@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Jobs — little-workshop{% endblock %}
+{% macro fchip(label, href, count, on) -%}
+<a class="fchip{{ ' on' if on }}" href="{{ href }}">{{ label }}<span class="fchip-n">{{ count }}</span></a>
+{%- endmacro %}
+{% block content %}
+<form class="jobs-search" method="get" action="/jobs" role="search">
+  {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+  <input type="search" name="q" value="{{ q }}" placeholder="Search type, project, id…" aria-label="Search jobs" autocomplete="off">
+  {% if active %}<span class="live" title="Refreshing every few seconds while jobs are active"><span class="live-dot"></span>live</span>{% endif %}
+</form>
+
+{% if all_count %}
+<details class="cleanup">
+  <summary>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4h6v3"></path></svg>
+    <span>Delete old jobs</span>
+    <span class="cleanup-chev" aria-hidden="true">▸</span>
+  </summary>
+  <form class="cleanup-form" id="cleanup-form" method="post" action="/jobs/cleanup">
+    <p class="muted cleanup-help">Removes finished jobs (succeeded, failed, cancelled, stopped) older than:</p>
+    <div class="gp-grid age-grid">
+      {% for o in cleanup_options %}
+      <label class="gp{{ ' is-disabled' if not o.count }}">
+        <input type="radio" name="hours" value="{{ o.hours }}" data-count="{{ o.count }}" data-label="{{ o.label }}"{% if not o.count %} disabled{% endif %}>
+        <span>{{ o.label }}</span><span class="age-n">{{ o.count }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <p class="muted cleanup-help">Running, queued and awaiting-confirmation jobs are never deleted.</p>
+    <button type="submit" class="danger block" id="cleanup-go">Delete</button>
+  </form>
+</details>
+<script>
+(function () {
+  var form = document.getElementById("cleanup-form");
+  if (!form) return;
+  var go = document.getElementById("cleanup-go");
+  function chosen() { return form.querySelector('input[name="hours"]:checked'); }
+  form.addEventListener("change", function () {
+    var r = chosen();
+    if (r) go.textContent = "Delete " + r.dataset.count + " job" + (r.dataset.count === "1" ? "" : "s");
+  });
+  form.addEventListener("submit", function (e) {
+    var r = chosen();
+    if (!r) { e.preventDefault(); return; }
+    if (!confirm("Delete " + r.dataset.count + " finished job" + (r.dataset.count === "1" ? "" : "s") +
+                 " older than " + r.dataset.label + "? This cannot be undone.")) e.preventDefault();
+  });
+})();
+</script>
+{% endif %}
+
+<div id="jobs-live">
+  <nav class="jobs-filters" aria-label="Filter by status">
+    {{ fchip("All", "/jobs" ~ ("?q=" ~ q|urlencode if q else ""), all_count, not status) }}
+    {% for name, label, n in counts %}
+    {{ fchip(label, "/jobs?status=" ~ name ~ ("&q=" ~ q|urlencode if q else ""), n, status == name) }}
+    {% endfor %}
+  </nav>
+
+  <div class="job-list">
+    {% for j in jobs %}
+    {% set parts = j.type.split(".", 1) %}
+    {% set finished = j.status in ("succeeded", "failed", "cancelled") %}
+    <details class="jobcard s-{{ j.status }}">
+      <summary>
+        <span class="job-line">
+          <span class="job-type">{% if parts | length > 1 %}<span class="job-ns">{{ parts[0] }}.</span>{{ parts[1] }}{% else %}{{ j.type }}{% endif %}</span>
+          {% if j.status == "succeeded" %}<span class="pill ok">succeeded</span>
+          {% elif j.status == "failed" %}<span class="pill fail">failed</span>
+          {% elif j.status == "running" %}<span class="pill run">running</span>
+          {% elif j.status == "pending_confirmation" %}<span class="pill warn">needs confirmation</span>
+          {% else %}<span class="pill idle">{{ j.status }}</span>{% endif %}
+        </span>
+        <span class="job-line">
+          <span class="job-tags">
+            {% if j.project_id %}<span class="chip">{{ j.project_id }}</span>{% endif %}
+            <span class="job-meta">{{ [j.created_at | reltime, job_duration(j.created_at, j.updated_at) if finished else "", j.created_by] | select | join(" · ") }}</span>
+          </span>
+        </span>
+        {% if j.error %}<span class="job-error">{{ j.error }}</span>{% endif %}
+      </summary>
+      <div class="job-body">
+        <dl class="kv">
+          <dt>ID</dt><dd><code>{{ j.id }}</code></dd>
+          <dt>Target</dt><dd>{{ j.target_pillar }}</dd>
+          {% if j.queue_key %}<dt>Queue</dt><dd>{{ j.queue_key }}</dd>{% endif %}
+          <dt>Created</dt><dd>{{ j.created_at }}</dd>
+          <dt>Updated</dt><dd>{{ j.updated_at }}</dd>
+          {% if j.depends_on %}<dt>Waits on</dt><dd>{% for d in j.depends_on %}<code>{{ d[:8] }}</code> {% endfor %}</dd>{% endif %}
+        </dl>
+        {% if j.params %}<h4 class="job-h">Params</h4><pre class="code">{{ j.params | pretty }}</pre>{% endif %}
+        {% if j.result %}<h4 class="job-h">Result</h4><pre class="code">{{ j.result | pretty }}</pre>{% endif %}
+        {% if j.error %}<h4 class="job-h">Error</h4><pre class="code err">{{ j.error }}</pre>{% endif %}
+      </div>
+    </details>
+    {% else %}
+    <p class="muted empty">{% if status or q %}No jobs match.{% else %}No jobs yet.{% endif %}</p>
+    {% endfor %}
+  </div>
+
+  {% if total > jobs | length %}
+  <div class="job-more">
+    <span class="muted">Showing {{ jobs | length }} of {{ total }}</span>
+    <a class="btn" href="/jobs?limit={{ next_limit }}{{ '&status=' ~ status if status }}{{ '&q=' ~ q|urlencode if q }}">Show more</a>
+  </div>
+  {% elif jobs %}
+  <p class="muted job-count">{{ total }} job{{ '' if total == 1 else 's' }}</p>
+  {% endif %}
+</div>
+
+{% if active %}
+<script>
+(function () {
+  var timer = setInterval(function () {
+    var region = document.getElementById("jobs-live");
+    var searching = document.activeElement && document.activeElement.name === "q";
+    if (!region || searching || region.querySelector("details[open]")) return;
+    fetch(location.href, { credentials: "same-origin", headers: { "X-Requested-With": "fetch" } })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (html) {
+        if (!html) return;
+        var fresh = new DOMParser().parseFromString(html, "text/html").getElementById("jobs-live");
+        if (fresh && !region.querySelector("details[open]")) region.innerHTML = fresh.innerHTML;
+      })
+      .catch(function () {});
+  }, 5000);
+  window.addEventListener("pagehide", function () { clearInterval(timer); });
+})();
+</script>
+{% endif %}
+{% endblock %}

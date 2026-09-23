@@ -1,0 +1,38 @@
+{
+  "ears_text": "The project's own Python test suite shall cover at least 90 percent of its statements.",
+  "ears_refined": false,
+  "test_script": "import os\nimport re\nimport subprocess\nimport tempfile\n\nimport pytest\n\nPROJECT = os.environ.get(\"POLICY_PROJECT_DIR\", \"/project\")\nTHRESHOLD = 90\n\nTOTAL_RE = re.compile(r\"^TOTAL\\s+\\d+\\s+\\d+\\s+(\\d+)%\\s*$\", re.MULTILINE)\n\n\ndef test_python_statement_coverage_is_at_least_90_percent():\n    \"\"\"Runs the project's own real pytest suite with coverage measurement \u2014 only\n    the *newest* run matters, same as every other check in this project; a\n    project that isn't a Python project in this ecosystem's own convention\n    (no pyproject.toml, no src/, no tests/) is skipped, never failed \u2014 a\n    TypeScript/Node project (little-home) can have its own src/ and tests/\n    directories too, so pyproject.toml is the real signal.\"\"\"\n    if not os.path.isfile(os.path.join(PROJECT, \"pyproject.toml\")):\n        pytest.skip(\"no pyproject.toml - not a Python project\")\n    tests_dir = os.path.join(PROJECT, \"tests\")\n    src_dir = os.path.join(PROJECT, \"src\")\n    if not os.path.isdir(tests_dir):\n        pytest.skip(\"no tests/ directory - nothing to measure coverage of\")\n    if not os.path.isdir(src_dir):\n        pytest.skip(\"no src/ directory - not this ecosystem's Python project layout\")\n\n    # This sandbox runs with --network none, so anything under tests/integration\n    # (real HTTP/socket calls between pillars) can only ever time out here --\n    # never pass, never usefully fail, just burn the check's time budget.\n    # A project that splits out a network-free tests/unit dir gets checked\n    # against that instead; a project that doesn't falls back to tests/ as\n    # before.\n    unit_dir = os.path.join(tests_dir, \"unit\")\n    target = \"tests/unit\" if os.path.isdir(unit_dir) else \"tests\"\n\n    # coverage.py's own data file defaults to <cwd>/.coverage -- cwd is\n    # PROJECT, which the sandbox mounts read-only, so every single check\n    # crashed here before a single test ran (2026-09-23's finding: this\n    # policy had never actually measured any project's real coverage).\n    # COVERAGE_FILE is coverage.py's own documented override, honored by\n    # pytest-cov underneath it -- redirecting it to a real temp dir needs\n    # no pytest-cov-version-specific flag.\n    with tempfile.TemporaryDirectory(prefix=\"policy-coverage-\") as scratch:\n        env = dict(os.environ, PYTHONPATH=src_dir, COVERAGE_FILE=os.path.join(scratch, \".coverage\"))\n        result = subprocess.run(\n            [\"python3\", \"-m\", \"pytest\", target, \"--cov=src\", \"--cov-report=term-missing\", \"-q\"],\n            cwd=PROJECT, capture_output=True, text=True, env=env, timeout=1500,\n        )\n    match = TOTAL_RE.search(result.stdout)\n    assert match, (\n        f\"could not measure coverage (pytest exited {result.returncode}, \"\n        f\"possibly a dependency this check's own sandbox doesn't carry):\\n{result.stdout[-4000:]}\\n{result.stderr[-2000:]}\"\n    )\n    percent = int(match.group(1))\n    assert percent >= THRESHOLD, f\"statement coverage is {percent}%, below the required {THRESHOLD}%\"\n",
+  "topic": "python-test-coverage",
+  "target_pillar": "requirements",
+  "scope_level": "all_projects",
+  "scope_target": null,
+  "created_by": "user",
+  "gate_points": [
+    "branch_finish"
+  ],
+  "source": "user request 2026-09-22",
+  "notes": "Runs the project's own real pytest suite with --cov=src inside the policy sandbox and reads the TOTAL line pytest-cov reports; judges the current run only, never audits history. Skips cleanly for a non-Python project (no pyproject.toml) or one with no tests/ or src/. Limitation: the sandbox (--network none) can only run a project whose test-time imports are covered by this ecosystem's own common stack, baked into the image (fastapi, uvicorn, pydantic, httpx, jinja2, python-multipart, pyyaml, apscheduler, pytest, pytest-cov) \u2014 a project needing something outside that list fails the check with a clear message rather than silently passing.",
+  "concerns": true,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
+}

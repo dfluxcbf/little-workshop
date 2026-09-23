@@ -12,13 +12,21 @@ one instead").
 
 - Every open item gets a stable ID (`OQ-NNN`), assigned in raised order,
   never reused even if the item is later dropped rather than resolved.
-- Each open item has four parts: **where it comes from** (the design
-  round or gap that surfaced it), **what's actually being asked** (in
-  plain terms, not just the original one-line summary), **why it
-  matters** (what actually changes depending on the answer — nothing here
-  is asked just to have an answer on file), and **possible
-  interpretations** (a starting menu, not an exhaustive one — picking
-  none of them and saying something else is completely fine).
+- Each open item has seven parts: **where it comes from** (the design
+  round or gap that surfaced it); **first designed** (when the
+  mechanism the question is actually about was first designed —
+  traced to the presentations deck or implementation commit that
+  introduced it, not the date the question itself was raised, when the
+  two differ); **design goal** (what that original mechanism was for,
+  in the terms it was actually designed in); **pillars affected** (which
+  pillar(s) own the mechanism in question and which others call into or
+  depend on it, so the blast radius of any answer is visible up front);
+  **what's actually being asked** (in plain terms, not just the original
+  one-line summary); **why it matters** (what actually changes depending
+  on the answer — nothing here is asked just to have an answer on file);
+  and **possible interpretations** (a starting menu, not an exhaustive
+  one — picking none of them and saying something else is completely
+  fine).
 - Then a **Your answer** field — write directly under it, in this file.
   Partial answers, a decision plus a "but," or a question back are all
   fine; this is a worksheet, not a form with a single right shape.
@@ -37,48 +45,7 @@ one instead").
 
 ## Open
 
-### OQ-12 — Do review-mode and action-gating compose on the same Job?
-
-**Where this comes from.** Surfaced while writing
-`docs/pillars/agentic_development.md` during a final import pass over the
-whole ecosystem — not a pre-existing gap, a new one caught in the act of
-writing, per this document's own "Claude CLI documents what it surfaces"
-convention.
-
-**What's actually being asked.** Agentic Development's review mode
-(manual vs. auto-approve) answers "is the agent's *own* work good enough
-to finish automatically." Policy & Compliance's action-gating
-(`pending_confirmation`) answers a different question: "does a *policy*
-allow this action to happen at all." Nothing says what happens when a
-single Job is subject to both — e.g. an auto-approved agentic task whose
-resulting action is also gated by a failing policy.
-
-**Why it matters.** These two mechanisms were designed independently, in
-different rounds, for different reasons, and were never checked against
-each other on a single Job. Without an answer, an implementer has to
-guess whether policy-gating happens before or after auto-approval
-resolves, or whether auto-approve should be allowed to skip gating
-entirely (it shouldn't, by every principle already established — a
-policy is never optional — but that needs to actually be stated, not
-assumed).
-
-**Possible interpretations.**
-- (a) Gating always resolves first, regardless of review mode —
-  auto-approve only ever governs the agent's own report/test-result
-  check, never a policy check. A gated Job stays gated no matter what
-  review mode it was submitted under.
-- (b) The two compose sequentially in a fixed order (e.g. policy gate,
-  then review-mode check) with each step's own confirmation window,
-  potentially stacking two human interactions for one Job.
-- (c) Auto-approve implicitly pre-answers a gate's confirmation (since
-  the human already said "proceed without me looking" at submission
-  time) — rejected on its face by (a)'s reasoning above, but worth ruling
-  out explicitly rather than leaving unstated.
-
-**Your answer:**
-
-
----
+_(none currently — see Resolved below)_
 
 ## Resolved
 
@@ -109,6 +76,10 @@ here.
 | OQ-10 | Per-pillar runtime dependencies confirmed deferred to implementation. | 2026-09-15 | `presentations/17-answering-the-first-round.md` |
 | OQ-11 | Per-pillar build targets: `//:build`, `//:install`, `//:test`, `//:server` (the last one new to this ecosystem, specific to a pillar's long-running-service artifact type). | 2026-09-15 | `presentations/17-answering-the-first-round.md` |
 | OQ-2 | Catalog reviewed directly by the user (not summarized) — confirmed good, no changes needed. | 2026-09-15 | `presentations/18-catalog-confirmed.md` |
+| OQ-12 | Interpretation (a): gating always resolves first, regardless of review mode. Confirmed by the actual M12 implementation's own shape — `orchestration/policy_gate.py`'s gate check lives entirely inside Orchestration's Job-creation/dispatch path, with zero awareness of Agentic Development's `review_mode` at all; a `deployment.deploy` Job created as the *result* of an auto-approved agentic task goes through the identical gate-check-then-`pending_confirmation` flow as one created by hand. Auto-approve governs only the agent's own report/test-result check inside Agentic Development's own flow (M6) and never reaches into, or is consulted by, Orchestration's policy gate — a policy is never optional, for either review mode. | 2026-09-16 | `docs/pillars/policy_compliance.md`'s "Action-gating checks," implemented as `docs/milestones.md` M12 |
+| OQ-13 | Interpretation (a): left exactly as built — a reason and a timestamp are the whole audit trail, any caller with PI access can grant/revoke freely, same trust model as everything else in this single-user household system. No code change. | 2026-09-17 | `docs/pillars/policy_compliance.md`'s "Action-gating checks" |
+| OQ-14 | Interpretation (a): a per-Job-type timeout table (`orchestration/dispatch.py`'s `JOB_TYPE_TIMEOUTS`/`dispatch_timeout_for`), consulted by `dispatch_ready_jobs` before calling `dispatch_job` — `policy.author` (120s) and `policy.activate` (60s) get a longer ceiling; the 20s default (`DEFAULT_DISPATCH_TIMEOUT_SECONDS`) is untouched for every other Job type. | 2026-09-17 | `docs/requirements.md`'s M12 follow-up #3 section |
+| OQ-15 | Interpretation (a): `project_registration` is framework-bound only, enforced at Gate-time (`policy.author`/`policy.activate`/`policy.configure` all reject a project-bound `target_pillar` combined with `project_registration` in `gate_points`, rather than failing confusingly at check time) — plus a resolution beyond the original three options: it's *verified after* the real registration succeeds (`orchestration/policy_gate.py`'s `verify_after_completion`), never gated before it, since a project-bound check has nothing to mount until the project exists. | 2026-09-17 | `docs/pillars/policy_compliance.md`'s "Action-gating checks"; `docs/requirements.md`'s M12 follow-up #3 section |
 
 ## As a policy
 

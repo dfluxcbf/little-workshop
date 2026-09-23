@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Settings — little-workshop{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<h2 class="section-label">Needs attention</h2>
+<div class="policy-list">
+  {% for i in items %}
+  <a class="polcard" href="{{ i.href }}">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ i.title }}</span>
+      {% if i.kind == 'policy' %}<span class="pill fail">failing</span>
+      {% elif i.kind == 'incident' %}<span class="pill fail">bug</span>
+      {% else %}<span class="pill warn">confirm</span>{% endif %}
+    </span>
+    {% if i.detail %}<span class="polcard-ears">{{ i.detail }}</span>{% endif %}
+    <span class="polcard-meta">
+      {% if i.project %}<span class="chip">{{ i.project }}</span>{% endif %}
+      {% if i.since %}<span class="chip">{{ i.since | reltime }}</span>{% endif %}
+    </span>
+  </a>
+  {% else %}
+  <p class="muted">Nothing needs you right now: every enabled policy check passes, no job is waiting for confirmation, and no incident is open.</p>
+  {% endfor %}
+</div>
+<p class="muted"><button type="button" class="btn" id="enable-alerts" hidden>Alert me on this device when something new fails</button></p>
+{% endblock %}

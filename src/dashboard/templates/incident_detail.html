@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ incident.exception_type if incident else "Incident" }} — little-workshop{% endblock %}
+{% block content %}
+{% if incident %}
+<section class="dcard summary">
+  <div class="dcard-top">
+    <span class="dcard-name">{{ incident.exception_type }} in {{ incident.pillar }}</span>
+    <span class="pill {{ 'fail' if incident.status == 'open' else ('ok' if incident.status == 'confirmed' else 'idle') }}">{{ incident.status }}</span>
+  </div>
+  <p class="dcard-ears">{{ incident.message }}</p>
+  <div class="polcard-meta">
+    <span class="chip">{{ incident.project_id }}</span>
+    <span class="chip">{{ incident.context }}</span>
+    <span class="chip">{{ incident.created_at | reltime }}</span>
+  </div>
+  {% if incident.status == "confirmed" and incident.run_id %}
+  <a class="btn" href="/tasks/{{ incident.project_id }}/{{ incident.run_id }}">Open the fix task</a>
+  {% endif %}
+</section>
+
+<details class="dcard collapsible" open>
+  <summary class="dcard-head">
+    <span class="dcard-title">Traceback</span>
+    <span class="dcard-note">{{ incident.traceback.splitlines() | length }} lines</span>
+  </summary>
+  <pre class="code">{{ incident.traceback }}</pre>
+</details>
+
+{% if incident.status == "open" %}
+<section class="dcard">
+  <form method="post" action="/incidents/{{ incident.id }}/confirm">
+    <label for="review_mode">Once confirmed</label>
+    <select name="review_mode" id="review_mode">
+      <option value="auto_approve">Auto-approve the fix</option>
+      <option value="manual">Manual review — I finish it</option>
+    </select>
+    <div class="decision-actions">
+      <button type="submit" class="primary">Confirm — start the fix</button>
+      <button type="submit" class="danger" formaction="/incidents/{{ incident.id }}/dismiss">Dismiss</button>
+    </div>
+  </form>
+</section>
+{% endif %}
+{% else %}
+<p class="muted">Incident not found.</p>
+{% endif %}
+{% endblock %}

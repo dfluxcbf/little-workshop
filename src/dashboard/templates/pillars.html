@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Pillars — little-workshop{% endblock %}
+{% block content %}
+{% if secrets %}
+<h2 class="section-label">Secrets</h2>
+<div class="report-list" style="margin-bottom:20px">
+  {% for s in secrets %}
+  <article class="report-item">
+    <span class="report-head"><span class="report-title">{{ s.name }}</span>
+      <span class="pill {{ 'ok' if s.valid else 'fail' }}">{{ 'valid' if s.valid else 'invalid' }}</span></span>
+    <span class="report-desc">
+      {% if not s.present %}not configured
+      {% elif s.expires_at %}expires {{ s.expires_at }}
+      {% else %}{{ s.detail or 'no expiration set' }}{% endif %}
+    </span>
+  </article>
+  {% endfor %}
+</div>
+{% endif %}
+<form method="post" action="/pillars/redeploy" id="redeploy-form">
+<div class="pillar-grid">
+  {% for name, entry in pillars.items() %}
+  {% set dep = deployed.get(name) %}
+  {% set disabled = entry.status == "disabled" %}
+  <label class="pcard{{ ' is-disabled' if disabled }}">
+    {% if not disabled %}<input type="checkbox" class="pick" name="pillar" value="{{ name }}">{% endif %}
+    <span class="pcard-head">
+      <span class="pcard-name" title="{{ name }}">{{ pillar_name(name) }}</span>
+      {% if entry.status in ("healthy", "active", "reconnected") %}<span class="pill ok">{{ entry.status }}</span>
+      {% elif disabled %}<span class="pill idle">disabled</span>
+      {% else %}<span class="pill fail">{{ entry.status }}</span>{% endif %}
+    </span>
+    <span class="pcard-meta">
+      {% if dep %}
+        <span title="{{ dep.commit_sha }} — deployed {{ dep.updated_at }}"><code>{{ dep.commit_sha[:7] }}</code>{% if versions.get(dep.commit_sha) %} <span class="ver">v{{ versions[dep.commit_sha] }}</span>{% endif %}</span>
+        {% if repo_head and dep.commit_sha != repo_head %}<span class="pill warn" title="This checkout's HEAD is {{ repo_head[:7] }}">behind</span>{% endif %}
+      {% elif deployment_known %}<span class="dim" title="Never redeployed through Deployment; still on its initial install">initial install</span>
+      {% else %}<span class="dim" title="Deployment &amp; Servers is unreachable">no commit info</span>{% endif %}
+      <span class="dim">{{ entry.crash_count }} crash{{ '' if entry.crash_count == 1 else 'es' }}</span>
+      <span class="dim">{{ entry.interface_version or '—' }}</span>
+    </span>
+  </label>
+  {% endfor %}
+</div>
+
+{% if pillars %}
+<div class="redeploy-bar">
+  <select name="commit" aria-label="Commit to redeploy from">
+    {% for c in commits %}
+    <option value="{{ c.sha }}">{{ c.sha[:7] }}{% if c.version %} · v{{ c.version }}{% endif %} · {{ c.subject[:56] }}{{ '…' if c.subject|length > 56 }}{{ ' (HEAD)' if loop.first }}</option>
+    {% else %}
+    <option value="HEAD">HEAD</option>
+    {% endfor %}
+  </select>
+  <div class="redeploy-actions">
+    <button type="button" id="toggle-all">Select all</button>
+    <button type="submit" class="primary" id="redeploy-btn">Redeploy</button>
+  </div>
+</div>
+{% endif %}
+</form>
+<script>
+(function () {
+  var picks = Array.prototype.slice.call(document.querySelectorAll(".pick"));
+  var toggle = document.getElementById("toggle-all");
+  var go = document.getElementById("redeploy-btn");
+  if (!toggle || !go) return;
+  function sync() {
+    var n = picks.filter(function (b) { return b.checked; }).length;
+    go.textContent = n ? "Redeploy " + n : "Redeploy";
+    toggle.textContent = n === picks.length ? "Clear" : "Select all";
+  }
+  toggle.addEventListener("click", function () {
+    var all = picks.some(function (b) { return !b.checked; });
+    picks.forEach(function (b) { b.checked = all; });
+    sync();
+  });
+  picks.forEach(function (b) { b.addEventListener("change", sync); });
+  sync();
+})();
+</script>
+{% endblock %}

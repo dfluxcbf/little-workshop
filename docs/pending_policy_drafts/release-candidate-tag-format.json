@@ -1,0 +1,38 @@
+{
+  "ears_text": "WHEN a release candidate is cut, the system shall create an annotated tag v<major>.<minor>.<patch>-rc.<N> on the release branch, where N is 1 for the first candidate of a base version and one more than the previous candidate's N after that.",
+  "ears_refined": false,
+  "test_script": "import re\nimport subprocess\n\nimport pytest\n\nPROJECT = \"/project\"\n\nSTRICT_RC = re.compile(r\"^v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)-rc\\.([1-9]\\d*)$\")\nLOOSE_RC = re.compile(r\"rc\", re.IGNORECASE)\n\n\ndef git(*args, check=True):\n    proc = subprocess.run(\n        [\"git\", \"-c\", \"safe.directory=*\", \"-C\", PROJECT, *args], capture_output=True, text=True,\n    )\n    if check and proc.returncode != 0:\n        pytest.fail(f\"git {' '.join(args)} failed: {proc.stderr.strip()}\")\n    return proc\n\n\ndef _tags():\n    out = git(\"for-each-ref\", \"--format=%(refname:strip=2)|%(objecttype)|%(*objecttype)|%(*objectname)|%(objectname)\", \"refs/tags\").stdout\n    tags = []\n    for line in out.splitlines():\n        if not line.strip():\n            continue\n        name, otype, target_type, deref, obj = line.split(\"|\")\n        tags.append({\"name\": name, \"type\": otype, \"target_type\": target_type, \"commit\": deref or obj})\n    return tags\n\n\ndef _branches_containing(commit):\n    out = git(\"branch\", \"-a\", \"--contains\", commit, \"--format=%(refname:short)\", check=False).stdout\n    return [b.strip() for b in out.splitlines() if b.strip()]\n\n\ndef _release_branches_exist():\n    out = git(\"for-each-ref\", \"--format=%(refname:short)\", \"refs/heads\", \"refs/remotes\").stdout\n    return [b for b in out.splitlines() if re.search(r\"(^|/)release\", b)]\n\n\ndef test_newest_release_candidate_tag():\n    \"\"\"Only the newest RC tag of the current (highest base version) release line is judged\n    \u2014 ranked by the version numbers its own name encodes, never by tag creation time, which\n    is too coarse to order tags cut within the same second \u2014 so one old mistake elsewhere in\n    a project's tag history never fails this forever (the same \"judge the newest transition\n    only\" rule this project's own commit-bumps-version policy already established).\"\"\"\n    check = git(\"rev-parse\", \"--git-dir\", check=False)\n    if check.returncode != 0:\n        pytest.fail(f\"{PROJECT} is not a readable git repository\")\n\n    rc_like = [t for t in _tags() if LOOSE_RC.search(t[\"name\"]) and \"-rc\" in t[\"name\"].lower()]\n    if not rc_like:\n        pytest.skip(\"no release candidate has been cut yet (no -rc tags)\")\n\n    parsed = []\n    for t in rc_like:\n        match = STRICT_RC.match(t[\"name\"])\n        if match:\n            base = tuple(int(x) for x in match.groups()[:3])\n            parsed.append((base, int(match.group(4)), t))\n    if not parsed:\n        pytest.fail(f\"no RC-like tag matches v<major>.<minor>.<patch>-rc.<N>: {[t['name'] for t in rc_like]}\")\n\n    current_base = max(base for base, _, _ in parsed)\n    group = [(n, t) for base, n, t in parsed if base == current_base]\n    n, newest = max(group, key=lambda nt: nt[0])\n\n    assert newest[\"type\"] == \"tag\" and newest[\"target_type\"] == \"commit\", (\n        f\"{newest['name']!r}: is not an annotated tag (object type {newest['type']!r})\"\n    )\n\n    release_branches = _release_branches_exist()\n    containing = _branches_containing(newest[\"commit\"])\n    if release_branches:\n        on_release = [b for b in containing if re.search(r\"(^|/)release\", b)]\n        assert on_release, f\"{newest['name']!r}: commit not on any release branch (contained in: {containing or 'no branch'})\"\n    else:\n        assert containing, f\"{newest['name']!r}: commit not reachable from any branch\"\n\n    predecessors = [m for m, _ in group if m != n]\n    if predecessors:\n        predecessor_n = max(predecessors)\n        assert n == predecessor_n + 1, (\n            f\"v{'.'.join(map(str, current_base))}-rc.{n} should follow rc.{predecessor_n} as rc.{predecessor_n + 1}\"\n        )\n    else:\n        assert n == 1, f\"v{'.'.join(map(str, current_base))}-rc.{n} is the first candidate for its base version and should be rc.1\"\n",
+  "topic": "release-candidate-tag-format",
+  "target_pillar": "version",
+  "scope_level": "all_projects",
+  "scope_target": null,
+  "created_by": "framework",
+  "gate_points": [
+    "release"
+  ],
+  "source": "little-versions",
+  "notes": "Narrowed 2026-09-22 to judge only the current release line's newest candidate (ranked by the version numbers its own name encodes, never tag creation time \u2014 too coarse when tags are cut within the same second), matching this project's own 'a past mistake never fails forever' rule.",
+  "concerns": false,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
+}

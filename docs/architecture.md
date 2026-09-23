@@ -52,12 +52,12 @@ Interface (a small FastAPI app bound to a Unix domain socket):
 
 | Pillar | Goal | Absorbs | Enabled by default |
 |---|---|---|---|
-| **Orchestration** | Every unit of work happens once, in the right order, and its outcome is recorded — regardless of which pillar performs it. | little-runner's per-repo queue/slot logic, generalized to every job type and every pillar | Yes — required |
-| **Policy & Compliance** | Nothing drifts from the rules this ecosystem has already agreed to, without someone finding out. | The 8 root policy docs' checkable rules; `doctor.py`; `branch_audit.py`; the checklist skill's manual verification table | Yes — required. Fully specified: `docs/pillars/policy_compliance.md`. A candidate policy set, mined from every project in this ecosystem: `docs/pillars/policy_catalog.md` — framework tier decided, individual entries still pending the authoring pipeline. |
+| **Orchestration** | Every unit of work happens once, in the right order, and its outcome is recorded — regardless of which pillar performs it. | little-runner's per-repo queue/slot logic, generalized to every job type and every pillar | Yes — required. Also owns scheduled tasks (`docs/milestones.md` M9): a `ScheduledTask` produces an ordinary Job on a timer (`created_by: "scheduler"`, the placeholder role already named in this document's own dispatch diagram) — `add`/`edit`/`remove`/`trigger`/`cancel`/`stop`/`postpone`/`queue`, over a `once` or weekday-`recurring` schedule. No pillar needs its own scheduling mechanism for a periodic version of what it already does (periodic tests, periodic builds, periodic policy audits, periodic releases) — it's just a `ScheduledTask` naming that pillar's existing Job type. A firing missed while the (locally hosted) daemon was down is a pending decision surfaced to the user, not silently skipped or replayed in full — see `docs/pillars/orchestration.md`'s "Missed firings." |
+| **Policy & Compliance** | Nothing drifts from the rules this ecosystem has already agreed to, without someone finding out. | The 8 root policy docs' checkable rules; `doctor.py`; `branch_audit.py`; the checklist skill's manual verification table | Yes — required. Fully specified: `docs/pillars/policy_compliance.md`. A candidate policy set, mined from every project in this ecosystem: `docs/pillars/policy_catalog.md` — framework tier decided, individual entries still pending the authoring pipeline. **Usability, refined 2026-09-16**: every policy can be enabled/disabled without re-authoring, gates a user-chosen subset of six action categories instead of one fixed topic, and the user selects which projects it applies to with gating switched on or off per project (a check with gating off still runs, for analysis) — replacing the earlier per-project waiver. |
 | **Registry & Portfolio** | There is always one true answer to "what projects exist, and what's the state of the work tracked against them." | bootstrap-little-project wholesale; little-projects' informal registry role; `configure_submodules.sh`; little-tickets' undefined purpose; the ecosystem-milestone table | Yes. The main responsible pillar for a project's lifecycle and identity (creation, import, removal) — not owner of everything about a project, which stays deliberately distributed across pillars, but owner of the registration itself. Two creation paths: `project.bootstrap` (deterministic, for a new project) and import (an existing project, driven by a Claude CLI session — human-interactive or Agentic Development's own internal dispatch, the same mechanism either way — through this pillar's MCP-exposed entry point, since bringing an arbitrary existing project into conformance needs judgment a fixed pipeline can't provide). Also owns `project_sets`, moved here from Policy & Compliance — grouping projects is a registry concern even though Policy & Compliance remains its only consumer today. **Removal, resolved 2026-09-15**: hard delete, immediate, cascading — removing a project's registry row triggers every other pillar to purge that project's data through its own Pillar Interface (each pillar deletes its own rows for that `project_id`; Registry & Portfolio doesn't reach into another pillar's database directly). No soft-delete, no undo. |
 | **Requirements & Quality** | Every behavior that matters has an auditable answer to "is this actually tested," and every delivery checkpoint has an auditable answer to "is it done." | little-requirements wholesale, plus its own never-built M8 (Use Cases & Milestones) | Yes |
 | **Version Control & Release** | Branches and versions are always in a known-safe, consistent state — never by hand, never inconsistently. | little-versions wholesale | Yes |
-| **Build & Packages** | A build artifact exists, is reproducible, and is reachable by anything that needs to install it. | little-runner's disclaimed CI non-goal (now real, including its own never-built E6: on-demand testing, JUnit-XML beyond pytest) + little-pypi wholesale | Optional — a project with no build/publish step never starts it |
+| **Build & Packages** | A build artifact exists, is reproducible, and is reachable by anything that needs to install it. | little-runner's disclaimed CI non-goal (now real: general build/test Job execution, not just the fork-testing guard it kept), fork-safety-gated PR testing, and little-pypi wholesale | Optional — a project with no build/publish step never starts it |
 | **Deployment & Servers** | A running process — a project's server, a Claude CLI instance, or a pillar of this system itself — stays running, and can be safely replaced with a newer version without anything else noticing. | little-runner's server-lifecycle mechanics (worktree deploys, confirm-gated rollback, cgroup-aware self-restart), generalized to every Managed Process | Yes. Also the sole owner of isolated-worktree provisioning — Requirements & Quality's test execution and Policy & Compliance's policy checks both call its interface for one rather than each provisioning their own. |
 | **Agentic Development** | Claude does real implementation work on a real branch, safely, and the human stays in control of when it's finished. | little-runner's `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`/`sessions.py`, generalized from GitHub-issue-only triggers | Optional — a project not using agentic dev never starts it. Fully specified: `docs/pillars/agentic_development.md`. |
 | **Dashboard** | A human can see and act on everything above, without a terminal. | little-runner's `web/`, extended with panels for every other pillar | Optional — a headless/automation-only setup can disable it. Visual identity decided: see `presentations/06-visual-identity.md`. |
@@ -87,13 +87,19 @@ Server: it's the only interface that can exist before any pillar with a
 web or agent-facing surface does, and is what actually exercises Core
 and Orchestration during their own construction.
 
-**Compatibility shims**: once `lws` exists, the five absorbed tools'
-original CLIs (`lreq`, `lvx`, `lrun`, `little-pypi`, `bootstrap-little-project`)
-are expected to become thin forwarders to the equivalent `lws` subcommand
-— muscle memory and any existing script that still calls them keeps
-working during the transition, rather than every caller needing to
-switch atomically the moment a pillar ships. This is deliberately
-separate from building `lws` itself; see `docs/milestones.md`.
+**No compatibility shims, by direct decision (corrected 2026-09-17;
+this section previously described the opposite)**: the five absorbed
+tools' original CLIs (`lreq`, `lvx`, `lrun`, `little-pypi`,
+`bootstrap-little-project`) are never made to forward into `lws`, and
+`lws` never calls into them — each stays exactly what it already is,
+running its own original, unmodified code, for the entire transition.
+A project's cutover means switching what it actually invokes (the old
+command, then `lws` instead), never a transparent swap underneath an
+unchanged command name. The old tools are uninstalled only once every
+milestone is done, a first release exists, and their owner has
+personally validated `lws` through real use — a deliberate, manual,
+confidence-gated decision, never an automated step this project's own
+tooling performs on its own. See `docs/milestones.md`.
 
 ## Pillar Interface (PI)
 
@@ -249,8 +255,11 @@ creates the registry row, never the other way around.
 
 - **Orchestration** — `jobs`, `job_runs`, `pipelines`, `pipeline_runs`.
 - **Policy & Compliance** — `policies`, `policy_check_results`
-  (three-outcome: pass/fail/not-applicable). Fully specified, including the
-  scope/precedence model and the EARS-based authoring pipeline:
+  (three-outcome: pass/fail/not-applicable), `policy_projects` (the
+  projects each policy applies to, with per-project gating on/off; added
+  2026-09-21, replacing the 2026-09-16 `policy_waivers`). Fully
+  specified, including the scope/precedence model and the EARS-based
+  authoring pipeline:
   `docs/pillars/policy_compliance.md` — the schema there supersedes the
   placeholder shape this list originally gave this pillar. Reads
   `project_sets` via Registry & Portfolio's Pillar Interface when

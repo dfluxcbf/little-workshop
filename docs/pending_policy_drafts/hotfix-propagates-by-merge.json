@@ -1,0 +1,38 @@
+{
+  "ears_text": "The system shall propagate a hotfix to the integration branch by merge and shall not propagate a hotfix to the integration branch by cherry-pick.",
+  "ears_refined": true,
+  "test_script": "import os\nimport re\n\nimport pytest\n\nPROJECT = \"/project\"\n\nSKIP_DIRS = {\n    \".git\", \"node_modules\", \".venv\", \"venv\", \"__pycache__\", \"dist\", \"build\",\n    \".tox\", \".mypy_cache\", \".pytest_cache\", \"target\", \"vendor\", \"tests\", \"test\",\n}\nCODE_EXT = {\".py\", \".sh\", \".bash\", \".js\", \".ts\", \".mjs\", \".cjs\", \".go\", \".rs\",\n            \".rb\", \".yml\", \".yaml\", \".toml\", \".ps1\", \".mk\", \".cfg\"}\nDOC_EXT = {\".md\", \".rst\", \".txt\"}\nMAX_SIZE = 1_000_000\n\nCHERRY = re.compile(r\"cherry[-_ ]?pick\", re.I)\nMERGE = re.compile(r\"\\bmerge\\b|\\bmerge_|--no-ff|git\\s+merge\", re.I)\nNEGATION = re.compile(\n    r\"\\b(no|not|never|don't|dont|doesn't|without|instead of|rather than|forbid\\w*|\"\n    r\"prohibit\\w*|must not|shall not|avoid\\w*)\\b\",\n    re.I,\n)\nCOMMENT = re.compile(r\"^\\s*(#|//|\\*|/\\*|<!--|--)\")\n\n\ndef _files(exts):\n    for root, dirs, names in os.walk(PROJECT):\n        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]\n        for n in names:\n            if n.startswith(\"test_\") or n.endswith(\"_test.py\"):\n                continue\n            if os.path.splitext(n)[1].lower() in exts:\n                p = os.path.join(root, n)\n                try:\n                    if os.path.getsize(p) > MAX_SIZE:\n                        continue\n                    with open(p, encoding=\"utf-8\", errors=\"ignore\") as f:\n                        yield p, f.read()\n                except OSError:\n                    continue\n\n\ndef _hotfix_files(exts):\n    return [(p, t) for p, t in _files(exts) if re.search(r\"hotfix\", t, re.I)]\n\n\ndef test_hotfix_propagates_by_merge_not_cherry_pick():\n    if not os.path.isdir(PROJECT):\n        pytest.skip(\"project checkout not present\")\n\n    code = _hotfix_files(CODE_EXT)\n    docs = _hotfix_files(DOC_EXT)\n    if not code and not docs:\n        pytest.skip(\"no hotfix workflow present in project\")\n\n    # Forbidden: cherry-pick used in hotfix-related code (non-comment, non-negated lines).\n    offenders = []\n    for p, t in code:\n        for i, line in enumerate(t.splitlines(), 1):\n            if CHERRY.search(line) and not COMMENT.match(line) and not NEGATION.search(line):\n                offenders.append(f\"{p}:{i}: {line.strip()}\")\n    assert not offenders, (\n        \"hotfix propagation must not use cherry-pick:\\n\" + \"\\n\".join(offenders[:20])\n    )\n\n    # Docs must not instruct cherry-picking hotfixes (unless negated).\n    doc_offenders = []\n    for p, t in docs:\n        for i, line in enumerate(t.splitlines(), 1):\n            if CHERRY.search(line) and not NEGATION.search(line):\n                doc_offenders.append(f\"{p}:{i}: {line.strip()}\")\n    assert not doc_offenders, (\n        \"documentation prescribes cherry-pick for hotfixes:\\n\"\n        + \"\\n\".join(doc_offenders[:20])\n    )\n\n    # Required: merge evidence in hotfix-related material (prefer code).\n    def has_merge(entries):\n        for _, t in entries:\n            for line in t.splitlines():\n                if MERGE.search(line) and not (COMMENT.match(line) and not re.search(r\"hotfix\", line, re.I)):\n                    return True\n        return False\n\n    assert has_merge(code) or (not code and has_merge(docs)), (\n        \"no evidence that hotfixes are propagated to the integration branch by merge\"\n    )\n</content>",
+  "topic": "hotfix-propagates-by-merge",
+  "target_pillar": "version",
+  "scope_level": "all_projects",
+  "scope_target": null,
+  "created_by": "framework",
+  "gate_points": [
+    "branch_finish"
+  ],
+  "source": "little-versions",
+  "notes": "Same as `back-merge-no-ff`: scans project source and docs for the word \"cherry-pick\". Weak proxy; review or drop. Gate point set 2026-09-22 at the user's request; same weak-proxy caveat as back-merge-no-ff.",
+  "concerns": true,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
+}

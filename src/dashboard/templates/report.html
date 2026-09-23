@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Report — little-workshop{% endblock %}
+{% block content %}
+<form class="report-filter" method="get" action="/report">
+  <select name="project" aria-label="Project" onchange="this.form.submit()">
+    {% for p in projects %}<option value="{{ p }}" {{ 'selected' if p == project }}>{{ p }}</option>{% endfor %}
+  </select>
+  <input type="search" name="q" value="{{ q }}" placeholder="Search requirements and tests" aria-label="Search">
+  <select name="verdict" aria-label="Verdict" onchange="this.form.submit()">
+    <option value="">Any verdict</option>
+    {% for v in ['passing', 'failing', 'no tests', 'draft', 'passed', 'failed', 'skipped', 'error'] %}<option value="{{ v }}" {{ 'selected' if v == verdict }}>{{ v }}</option>{% endfor %}
+  </select>
+  <button type="submit">Filter</button>
+</form>
+
+{% if not project %}
+<p class="muted">No project registered yet.</p>
+{% else %}
+<div class="report-tabs" role="tablist">
+  <button type="button" class="report-tab is-active" data-tab="requirements" role="tab" aria-selected="true">Requirements
+    <span class="dim">{{ requirements|length }}</span></button>
+  <button type="button" class="report-tab" data-tab="tests" role="tab" aria-selected="false">Tests
+    <span class="dim">{{ suites.values()|map('length')|sum }}</span></button>
+</div>
+
+<section class="report-panel" data-panel="requirements">
+  <h2 class="section-label">Requirements <span class="dim">{{ requirements|length }} of {{ req_total }}</span>
+    {% for v, n in req_counts.items() %}<span class="pill {{ 'ok' if v == 'passing' else ('fail' if v == 'failing' else ('warn' if v == 'no tests' else 'idle')) }}">{{ n }} {{ v }}</span>{% endfor %}</h2>
+  <div class="report-list">
+    {% for r in requirements %}
+    <details class="report-item">
+      <summary>
+        <span class="report-head"><code>{{ r.key }}</code>
+          <span class="pill {{ 'ok' if r.verdict == 'passing' else ('fail' if r.verdict == 'failing' else ('warn' if r.verdict == 'no tests' else 'idle')) }}">{{ r.verdict }}</span></span>
+        <span class="report-title">{{ r.title }}</span>
+      </summary>
+      {% if r.description %}<p class="report-desc">{{ r.description }}</p>{% endif %}
+    </details>
+    {% else %}<p class="muted">No requirement matches.</p>{% endfor %}
+  </div>
+</section>
+
+<section class="report-panel" data-panel="tests" hidden>
+  <h2 class="section-label">Tests <span class="dim">{{ suites.values()|map('length')|sum }} of {{ test_total }}</span>
+    {% for v, n in test_counts.items() %}<span class="pill {{ 'ok' if v == 'passed' else ('fail' if v in ('failed', 'error') else 'idle') }}">{{ n }} {{ v }}</span>{% endfor %}</h2>
+  {% for suite, tests in suites.items() %}
+  <details class="report-suite"{% if verdict or q %} open{% endif %}>
+    <summary><span>{{ suite }}</span><span class="dim">{{ tests|length }} tests</span></summary>
+    <div class="report-list report-suite-tests">
+      {% for t in tests %}
+      <article class="report-item report-test-card">
+        <span class="report-head"><span class="report-test-name">{{ t.name }}</span>
+          <span class="pill {{ 'ok' if t.verdict == 'passed' else ('fail' if t.verdict in ('failed', 'error') else 'idle') }}">{{ t.verdict }}</span></span>
+        {% if t.detail %}<span class="report-desc">{{ t.detail }}</span>{% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </details>
+  {% else %}<p class="muted">No test matches.</p>{% endfor %}
+</section>
+{% endif %}
+<script>
+(function () {
+  var tabs = document.querySelectorAll(".report-tab");
+  var panels = document.querySelectorAll(".report-panel");
+  tabs.forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      tabs.forEach(function (t) { t.classList.toggle("is-active", t === tab); t.setAttribute("aria-selected", t === tab ? "true" : "false"); });
+      panels.forEach(function (p) { p.hidden = p.dataset.panel !== tab.dataset.tab; });
+    });
+  });
+})();
+</script>
+{% endblock %}

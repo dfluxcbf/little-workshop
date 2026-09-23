@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}{{ draft.topic if draft else "Draft" }} — little-workshop{% endblock %}
+{% macro dicon(name) -%}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+{%- if name == 'gate' %}<path d="M4 6h16M4 12h10M4 18h13"></path><circle cx="19" cy="6" r="1.6"></circle><circle cx="16" cy="12" r="1.6"></circle><circle cx="19" cy="18" r="1.6"></circle>
+{%- elif name == 'code' %}<path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"></path>
+{%- elif name == 'projects' %}<path d="M3 7l9-4 9 4-9 4-9-4Z"></path><path d="M3 12l9 4 9-4M3 17l9 4 9-4"></path>
+{%- elif name == 'note' %}<path d="M5 4h14v12l-4 4H5V4Z"></path><path d="M15 20v-4h4M8 9h8M8 13h5"></path>
+{%- elif name == 'chev' %}<path d="M9 6l6 6-6 6"></path>
+{%- endif %}</svg>
+{%- endmacro %}
+{% block content %}
+{% if draft %}
+<section class="dcard summary">
+  <div class="dcard-top">
+    <span class="dcard-name">{{ draft.topic }}</span>
+    {% if draft.status == "approved" %}<span class="pill ok">approved</span>
+    {% elif draft.status == "rejected" %}<span class="pill warn">rejected</span>
+    {% else %}<span class="pill idle">to review</span>{% endif %}
+  </div>
+  <p class="dcard-ears">{{ draft.ears_text }}</p>
+  <div class="polcard-meta">
+    {% if draft.source %}<span class="chip">{{ draft.source }}</span>{% endif %}
+    <span class="chip">{{ draft.target_pillar }}</span>
+    <span class="chip">{{ draft.created_by }}</span>
+    {% if draft.ears_refined %}<span class="chip" title="Gate 1 rewrote the wording; compare with the catalog's original">refined</span>{% endif %}
+  </div>
+  {% if draft.status == "approved" and draft.policy_id %}<a class="btn" href="/policies/{{ draft.policy_id }}">Open the policy</a>{% endif %}
+  {% if draft.status == "rejected" %}
+  <p class="muted empty">{{ draft.reject_reason or "Rejected without a reason." }}</p>
+  <form method="post" action="/policies/drafts/{{ draft.id }}/restore"><button type="submit">Restore</button></form>
+  {% endif %}
+</section>
+
+{% if draft.notes %}
+<section class="dcard{{ ' attention' if draft.concerns }}">
+  <div class="dcard-head">
+    <span class="dcard-icon">{{ dicon('note') }}</span>
+    <span class="dcard-title">Review notes</span>
+    {% if draft.concerns %}<span class="dcard-note warn">needs attention</span>{% endif %}
+  </div>
+  <p class="dcard-ears">{{ draft.notes }}</p>
+</section>
+{% endif %}
+
+<details class="dcard collapsible" open>
+  <summary class="dcard-head">
+    <span class="dcard-icon">{{ dicon('code') }}</span>
+    <span class="dcard-title">Test script</span>
+    <span class="dcard-note">{{ draft.test_script.splitlines() | length }} lines</span>
+    <span class="dcard-chev">{{ dicon('chev') }}</span>
+  </summary>
+  <pre class="code">{{ draft.test_script }}</pre>
+</details>
+
+{% if draft.status == "pending" %}
+<form method="post" action="/policies/drafts/{{ draft.id }}/approve">
+  <section class="dcard">
+    <div class="dcard-head">
+      <span class="dcard-icon">{{ dicon('gate') }}</span>
+      <span class="dcard-title">Gate points</span>
+      <span class="dcard-note">none = audit only</span>
+    </div>
+    <div class="gp-grid">
+      {% for gp in gate_point_values %}
+      <label class="gp">
+        <input type="checkbox" name="gate_points" value="{{ gp }}" {% if gp in draft.gate_points %}checked{% endif %}>
+        <span>{{ gp }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="dcard">
+    <div class="dcard-head">
+      <span class="dcard-icon">{{ dicon('projects') }}</span>
+      <span class="dcard-title">Apply to</span>
+      {% if draft_gating %}<span class="dcard-note">pre-filled from the draft's own recommendation</span>{% endif %}
+    </div>
+    <div class="prow-list">
+      {% for name in projects %}
+      <div class="prow">
+        <label class="prow-select">
+          <input type="checkbox" name="project" value="{{ name }}" {% if name in draft_gating %}checked{% endif %}>
+          <span class="prow-name">{{ name }}</span>
+          <span class="prow-check" aria-hidden="true">✓</span>
+        </label>
+        <label class="prow-gate" title="Whether a failure may block this project's actions. Off: still checked and recorded, never blocks.">
+          <span>Gating</span>
+          <input type="checkbox" name="gating" value="{{ name }}" {% if draft_gating.get(name, True) %}checked{% endif %}>
+          <span class="switch" aria-hidden="true"></span>
+        </label>
+      </div>
+      {% else %}
+      <p class="muted empty">No projects registered.</p>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="dcard">
+    <input type="text" name="reason" placeholder="Reason, if rejecting (optional)" aria-label="Reason for rejecting">
+    <div class="decision-actions">
+      <button type="submit" class="primary">Approve</button>
+      <button type="submit" class="danger" formaction="/policies/drafts/{{ draft.id }}/reject">Reject</button>
+    </div>
+  </section>
+</form>
+{% endif %}
+{% else %}
+<p class="muted">Draft not found.</p>
+{% endif %}
+{% endblock %}

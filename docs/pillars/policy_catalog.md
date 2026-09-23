@@ -3,13 +3,22 @@
 **Status.** Tier is decided: every entry below is a **framework** policy
 candidate, not a strong default users could override — confirmed 2026-09-15.
 The catalog as a whole was reviewed directly by the user (not summarized)
-and confirmed good, no changes needed — 2026-09-15. None is an *active*
-policy yet — each still has to individually clear all four gates in
-`policy_compliance.md`'s authoring pipeline (EARS-compliant, mechanically
-enforceable, non-conflicting, and full human approval of both the EARS
-text and the generated script) before it becomes a real `policies` row.
-This document is the input to that pipeline, not a record of having run
-it. This catalog's own open items are tracked centrally in
+and confirmed good, no changes needed — 2026-09-15. `docs/milestones.md`
+M13 built the real, reusable tool for running an entry through the
+pipeline (`lws policy catalog list`/`run`, `workshop_policy_catalog_*`)
+and carried exactly one entry (`version-file-single-source`, below) all
+the way to a real, activated `policies` row as a working proof — Gate 4's
+"full human approval, every time, no exception" is fundamentally
+incompatible with unattended bulk population, so the other 73 entries
+below are still real future work, one topic at a time, through this
+same tool — never a bulk import. That live run also surfaced a real,
+now-fixed defect: the script-generation prompt didn't originally state
+the sandbox's actual mount paths, so the real Claude CLI guessed at a
+resolution convention that doesn't exist — see `docs/requirements.md`'s
+M13 section (REQ-000000132) for the full story. This document is the
+input to that pipeline, not a
+record of having run it for everything below. This catalog's own open
+items are tracked centrally in
 [`../open_questions.md`](../open_questions.md), not inline.
 
 **Enforceability was applied retroactively to this whole catalog**, not
@@ -79,6 +88,25 @@ than narrowing them the way a few others were:
   as `doc-no-verbatim-duplication` below — the honesty requirement itself
   stays a review-time convention, not a policy.
 
+## Considered and not carried over (2026-09-21 survey of the base projects)
+
+A second pass over `little-versions`, `little-requirements`, `little-runner`,
+`little-pypi` and `bootstrap-little-project` looked for rules the first pass
+missed. The 13 that a checkout can actually show are in sections C, D, G and I
+below, listed after the pre-existing entries of each section — **candidates
+only, not authored, not activated** (2026-09-21). These were read and
+deliberately *not* turned into entries:
+
+| Source rule | Why not |
+|---|---|
+| Version counters `dev.X`/`rc.X` are monotonic per base version (`little-versions`) | Subsumed by `commit-bumps-version`, which already requires each commit's version to outrank its parent's. |
+| `release start` derives the version itself and commits `.lvx/` state with it; `feature finish --continue`/`--abort`; hook failure never rolls back a bump (`little-versions`) | Command behavior of the tool — Version Control & Release pillar code, tier 1 in `policy_compliance.md`'s three-tier model. |
+| Milestone requirement sets are derived through use cases, never stored (`little-requirements`) | Data-model invariant of Requirements & Quality, not a property of a project checkout. |
+| Agent result file outside the repository; `LRUN_STATUS` marker, a missing one counts as `partial`; repository slot is a record, not a lock; queue pumps in a detached process; `deploy_id` guards stale timers; a failed rollback stays `pending` (`little-runner`) | Hard-coded invariants of Agentic Development / Orchestration / Deployment — tier 1, never expressed as policy. |
+| Temporary package server exits on a hard wall-clock timeout (`little-pypi`) | A runtime behavior of one running process; nothing in a checkout shows it. |
+| CLI, Python API and MCP server share one repository class (`little-pypi`) | An architectural convention inside one tool, not verifiable across projects. |
+| Scaffolding refuses an existing directory; local scaffold succeeds independently of GitHub; token used once, never persisted (`bootstrap-little-project`) | Registry & Portfolio's own code (tier 1); the token half is already covered by `secret-scan-best-effort`. |
+
 ## A. Project structure &amp; inter-project independence
 
 | Topic | EARS requirement | Source |
@@ -115,6 +143,17 @@ than narrowing them the way a few others were:
 | `abandoned-branch` | IF an unmerged short-lived branch has had no commits for longer than its project's staleness window, THEN it shall be reported as an abandoned-branch violation. | `branching_policy.md` |
 | `no-detached-head` | IF a repository has a detached `HEAD` outside a brief, tool-managed operation, THEN it shall be reported as a violation. | `branching_policy.md` |
 | `single-worktree` | IF a repository has more than one active `git worktree` outside a short-lived, tool-managed one, THEN it shall be reported as a violation. | `branching_policy.md` |
+| `commit-bumps-version` | WHEN a commit is made, the commit's `VERSION` shall have a higher version precedence than its parent commit's `VERSION`. | little-workshop `version_policy.md` — new (2026-09-21); `little-versions` bumps only at stage boundaries. Judges only the newest commit against its immediate parent, so a past mistake never fails it forever. |
+| `branch-commit-dev-suffix` | WHEN a commit is made on a working branch (not `master`/`dev`, `release/*`, `hotfix/*` or `support/*`), the commit's `VERSION` shall be the next patch version of the commit the branch was cut from with the suffix `-dev.N`, where N is 1 for the branch's first commit and one more than its parent's N for every later commit. | little-workshop `version_policy.md` — new (2026-09-21); the per-commit version on a working branch is what `little-versions` never defined. Same newest-commit-only rule. |
+| `version-format` | The project's `VERSION` file shall contain a semantic version `<major>.<minor>.<patch>`, optionally followed by `-dev.<N>` or `-rc.<N>`. | `little-versions` target_design.md / release-policy.md, "Version format" |
+| `production-version-stable` | WHILE the checked-out branch is the production branch, the project's `VERSION` file shall contain a stable version with no pre-release suffix. | `little-versions` release-policy.md — release finish "normalizes to stable version" |
+| `rc-suffix-only-on-release-branches` | IF the project's `VERSION` file carries an `-rc.<N>` suffix, THEN the checked-out branch shall be a `release/*` branch. | `little-versions` release-policy.md — "`-rc.X` on release branch only" |
+| `production-tag-format` | WHEN a production tag is created, the tag shall be an annotated tag named `v<major>.<minor>.<patch>`. | `little-versions` release-policy.md, "Tagging Policy". Judge only the newest production tag, so a past mistake never fails it forever. |
+| `production-tags-on-production-history` | The newest production tag (`v<major>.<minor>.<patch>`, no `-rc` suffix) shall point at a commit reachable from the production branch. | `little-versions` target_design.md — "only on production branch history". Newest tag only. |
+| `release-candidate-tag-format` | WHEN a release candidate is cut, the system shall create an annotated tag `v<major>.<minor>.<patch>-rc.<N>` on the release branch, where N is 1 for the first candidate of a base version and one more than the previous candidate's N after that. | `little-versions` release-policy.md, "Tagging Policy" and "Counter Rules". Newest candidate tag only. |
+| `back-merge-no-ff` | WHEN a release or hotfix branch is finished, the system shall merge it back into the integration branch with a non-fast-forward merge. | `little-versions` release-policy.md, "Back-Merge Policy". A history check — expect Gate 2 to narrow it to the newest release/hotfix merge. |
+| `hotfix-propagates-by-merge` | The system shall propagate a hotfix to the integration branch by merge, never by cherry-pick. | `little-versions` release-policy.md, "Back-Merge Policy". Same Gate 2 caveat as `back-merge-no-ff`. |
+| `merge-commit-message-format` | IF the newest commit on the integration or production branch is a merge commit, THEN its first line shall have the form `feat (<issue number or -1>): <title>`, `impr (<issue number or -1>): <title>` or `fix (<issue number or -1>): <title>`. | `little-versions` target_design.md, "Commit Message Policy" — **narrowed 2026-09-21 after Gate 2 rejected the original** ("when a feature/improvement/hotfix branch is merged … respectively", which needs the merged branch's type and an issue lookup after the fact). Newest merge commit only. |
 
 ## D. Requirements &amp; quality
 
@@ -125,6 +164,8 @@ than narrowing them the way a few others were:
 | `automatic-test-reporting` | WHEN a project's test suite runs, the system shall automatically record pass/fail results against the requirements that suite is tracked against. | `requirements_policy.md`; `little-requirements` design.md |
 | `draft-published-lifecycle` | A requirement shall have a status of draft or published; draft shall be mutable and the default, published shall be immutable. | `little-requirements` design.md |
 | `local-only-no-auth` | WHERE a tool runs a local HTTP server, the server shall bind to localhost with no built-in authentication and shall never be exposed except via Tailscale. | `little-requirements` architecture.md; generalizes the same choice in `little-pypi`, `little-runner` |
+| `requirement-marker-registered` | The project's pytest configuration shall register a `requirement` marker. | `requirements_policy.md` ("registered in `pyproject.toml`") |
+| `requirement-marker-id-format` | Every `requirement` marker in the project's tests shall reference an identifier of the form `REQ-` followed by nine digits. | `requirements_policy.md` — "not invented text". Complements `requirement-id-format`, which is about how identifiers are generated. |
 
 ## E. Build &amp; packaging
 
@@ -158,6 +199,7 @@ than narrowing them the way a few others were:
 | `claude-cli-budget-and-timeout` | WHEN Claude CLI runs unattended, the system shall enforce a maximum budget and a maximum timeout. | `little-runner` architecture.md |
 | `secret-entry-point-tagged` | IF a file references a secret value, THEN that reference shall be tagged at its entry point and the actual secret shall live outside the repository. | `automation_policy.md` rule 11 — resolved 2026-09-15 as the primary mechanism, replacing pattern-matching: structural (does a tagged entry point actually resolve outside the repo?) rather than guessing at what a secret looks like, and more precisely enforceable than a regex scan. |
 | `secret-scan-best-effort` | IF a file staged for commit is flagged by a Claude CLI review as likely containing a credential, THEN the commit shall be held for confirmation. | Supplementary to `secret-entry-point-tagged` — broader coverage (catches a secret that was never tagged at all), explicitly best-effort in the same sense as Gate 3b's semantic conflict check: nothing proves a string is or isn't a secret with certainty, so this holds for confirmation rather than refusing outright, and is never the only line of defense. |
+| `issue-form-installed` | WHERE a project uses issue-driven automation, the project shall contain the `.github/ISSUE_TEMPLATE/claude-task.yml` issue form. | `little-runner` architecture.md — "the issue body is the interface" |
 
 ## H. Server &amp; deployment
 
@@ -175,6 +217,7 @@ than narrowing them the way a few others were:
 |---|---|---|
 | `tailscale-only-exposure` | The system's dashboards and servers shall be reachable only via a private-mesh "serve" mechanism, never a public-internet "funnel" or equivalent. | Independently established in `little-runner`, `little-meals`, and `little-home` architecture.md — three-for-three is a strong signal this belongs at framework tier. |
 | `no-third-party-cdn` | WHERE a project serves a web frontend, the project shall vendor its JS/CSS/font dependencies rather than loading them from a third-party CDN at runtime. | `little-meals` architecture.md (htmx, fonts) |
+| `ssh-remotes-no-embedded-credentials` | The project's git remotes shall use SSH and shall not embed credentials in the remote URL. | `bootstrap-little-project` architecture.md — "SSH push, not HTTPS+token" |
 
 ~~`no-redundant-app-auth`~~ **withdrawn 2026-09-15** — not a policy at
 all. Little-workshop doesn't build its own login/auth mechanism for

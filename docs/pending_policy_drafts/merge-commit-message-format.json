@@ -1,0 +1,38 @@
+{
+  "ears_text": "IF the newest commit on the integration or production branch is a merge commit, THEN the version control system shall require the first line of that commit to have the form \"feat (<issue number or -1>): <title>\", \"impr (<issue number or -1>): <title>\" or \"fix (<issue number or -1>): <title>\".",
+  "ears_refined": true,
+  "test_script": "import re\nimport subprocess\n\nimport pytest\n\nPROJECT = \"/project\"\nINTEGRATION = [\"develop\", \"dev\", \"development\", \"integration\"]\nPRODUCTION = [\"main\", \"master\", \"production\", \"prod\"]\nPATTERN = re.compile(r\"^(feat|impr|fix) \\((\\d+|-1)\\): \\S.*$\")\n\n\ndef git(*args):\n    r = subprocess.run(\n        [\"git\", \"-c\", \"safe.directory=*\", \"-C\", PROJECT, *args],\n        capture_output=True,\n        text=True,\n    )\n    return r.returncode, r.stdout.strip()\n\n\ndef branch_exists(name):\n    for ref in (f\"refs/heads/{name}\", f\"refs/remotes/origin/{name}\"):\n        rc, _ = git(\"rev-parse\", \"--verify\", \"--quiet\", ref)\n        if rc == 0:\n            return ref\n    return None\n\n\ndef test_merge_commit_first_line_format():\n    rc, out = git(\"rev-parse\", \"--is-inside-work-tree\")\n    if rc != 0:\n        pytest.skip(\"/project is not a git repository\")\n\n    refs = {}\n    for name in INTEGRATION + PRODUCTION:\n        ref = branch_exists(name)\n        if ref:\n            refs[name] = ref\n    if not refs:\n        pytest.skip(\"no integration or production branch found\")\n\n    failures = []\n    merges_seen = 0\n    for name, ref in refs.items():\n        rc, out = git(\"log\", \"-1\", \"--format=%H%n%P%n%s\", ref)\n        if rc != 0 or not out:\n            continue\n        lines = out.split(\"\\n\")\n        sha = lines[0]\n        parents = lines[1].split() if len(lines) > 1 else []\n        subject = lines[2] if len(lines) > 2 else \"\"\n        if len(parents) < 2:\n            continue\n        merges_seen += 1\n        if not PATTERN.match(subject):\n            failures.append(f\"{name} ({sha[:10]}): {subject!r}\")\n\n    assert not failures, (\n        \"Newest merge commit first line must match \"\n        \"'feat|impr|fix (<issue number or -1>): <title>'; violations: \"\n        + \"; \".join(failures)\n    )",
+  "topic": "merge-commit-message-format",
+  "target_pillar": "version",
+  "scope_level": "all_projects",
+  "scope_target": null,
+  "created_by": "framework",
+  "gate_points": [
+    "branch_finish"
+  ],
+  "source": "little-versions",
+  "notes": "Narrowed from the catalog's original wording after Gate 2 rejected it as unenforceable (needed the branch type and an issue lookup). Now judges the newest merge commit's subject shape only.",
+  "concerns": false,
+  "projects": [
+    {
+      "project_id": "little-home",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-meals",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-mindcheck",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-workshop",
+      "gating_enabled": true
+    },
+    {
+      "project_id": "little-spectrum",
+      "gating_enabled": false
+    }
+  ]
+}

@@ -7,6 +7,99 @@ before this pillar can check anything, it needs its own rules for what a
 rule *is*). See `docs/design.md`/`docs/architecture.md` for this pillar's
 place in the whole system; this document is everything specific to it.
 
+## Description
+
+Policy & Compliance is the pillar that guards every checkable rule this
+ecosystem has agreed to — the 8 root policy docs' checkable content,
+`doctor.py`, `branch_audit.py`, and the checklist skill's manual
+verification table, all absorbed into one mechanical enforcement path.
+**Built** (`docs/milestones.md` M12, `src/policy`) — this document
+remains the authoritative design spec; `docs/requirements.md`'s own M12
+section records exactly what was implemented, including two deliberate,
+documented simplifications against the design below: the test-script
+sandbox's network isolation is `--network none` rather than the
+finer-grained "Pillar-Interface-only, safe-endpoints-only" proxy
+described in "Test-script execution sandbox," and which Job types
+declare which gate-point categories is a small, concrete, real start
+(`orchestration/policy_gate.py`'s `JOB_TYPE_CATEGORIES`) rather than the
+full mapping `docs/open_questions.md`'s `OQ-3` always left to each
+pillar's own future work. A companion document, `docs/pillars/policy_catalog.md`,
+holds a candidate set of roughly 50 policies mined from this ecosystem's
+existing tools — tier already decided, individual entries still pending
+the authoring pipeline described below (M13, run one entry at a time
+through the real pipeline).
+
+## Purpose & goal
+
+"Nothing drifts from the rules this ecosystem has already agreed to,
+without someone finding out" (`docs/architecture.md`).
+
+## Responsibilities
+
+- **Three tiers of rules** — hard-coded invariants (never expressed as
+  policy at all; enforced by the pillar whose code they live in), framework
+  policies (authored by little-workshop's own maintainers, always
+  all-project scope, never overridable), and user policies (scoped to a
+  project, a project set, or all projects) — detailed below.
+- **Scope precedence and topic ownership** — a policy's `target_pillar`
+  names the one pillar whose behavior it governs; topics don't collide
+  across pillars, and framework beats project-specific beats project-set
+  beats all-projects, per topic.
+- **The four-gate authoring pipeline** — EARS-compliant, mechanically
+  enforceable, non-conflicting, fully human-approved — turning a
+  plain-language rule into a real policy row plus a real, sandboxed test
+  script.
+- **The test-script execution sandbox** — Docker-based, Pillar-Interface-
+  only network, allowlisted read-only filesystem — how a policy's own
+  check actually runs without trusting it.
+- **Action-gating** — extends Orchestration's Job model with a
+  `pending_confirmation` state: a Job whose type declares one or more
+  gate-point categories doesn't dispatch until every currently-winning,
+  enabled, non-waived policy gating any of those categories, for that
+  project, passes — refined 2026-09-16 from a single fixed topic per
+  Job type into a per-*policy*, user-chosen set of categories, so a Job
+  can now be held by more than one policy at once. Fail-closed, with a
+  10-minute human-override flow.
+- **Usability controls** — a policy can be enabled/disabled without
+  re-authoring, and the user **selects which projects it applies to**,
+  switching gating on or off per project (a check with gating off still
+  runs and is recorded, for analysis — it just can't block). This
+  replaced the per-project waiver on 2026-09-21; see "Project selection
+  replaces waivers" below.
+- **Definition-of-done and policy-conflict resolution** — the multi-pillar
+  half of "is this actually done," paired with Requirements & Quality's
+  own M10 implementation of the same concept from its side.
+- **Remote Control as the notification channel** — reusing Agentic
+  Development's own proven capability for a second purpose (a
+  time-sensitive policy notification), not a new mechanism.
+
+## Interfacing
+
+- **Calls**: Registry & Portfolio — reads project-set membership through
+  its Pillar Interface when resolving which projects a project-set-scoped
+  policy covers, never storing that membership itself. Deployment &
+  Servers — the worktree interface, for the test-script execution
+  sandbox. Agentic Development — every EARS-refinement, conflict-check,
+  and test-script-generation step of the authoring pipeline calls its
+  Pillar Interface, never reimplemented locally. As actually implemented
+  this is `agent.query` — a new, narrowly-scoped, text-in/text-out Job
+  type, not a reuse of `agent.run_task` itself: `run_task`'s existing
+  flow always resolves a branching spec and prepares a real branch,
+  which can't satisfy this same document's own "no file writes, no
+  branch, no side effect of any kind" requirement for these calls (see
+  `docs/requirements.md`'s M12 section). Whichever pillar a policy's
+  `target_pillar` names — to check its state as part of an audit or an
+  action-gate decision.
+- **Called by**: Orchestration — every Job dispatch consults this pillar
+  first for any Job type that declares a gate-point category, before the
+  Job ever reaches its real target pillar; this includes a `policy.check_all`
+  Job dispatched by a recurring `ScheduledTask`, once Orchestration's
+  scheduled tasks (M9) exist — the periodic-audit case is just that Job
+  type on a timer, not a mechanism of this pillar's own. `lws`, the MCP
+  Server (once its catalog covers this pillar), and Requirements &
+  Quality (M10), for the policy-conflict half of definition-of-done.
+- **Discovered through**: Core, like every pillar.
+
 ## Three tiers of rules, not one
 
 Getting this pillar right meant separating three things this project had
@@ -240,6 +333,36 @@ activates without this. Editing a policy re-runs the entire flow, Gate 4
 included: an edit is "replace this policy's EARS text and script," never
 a shortcut around review.
 
+**Gate 4 happens inside the app (2026-09-21).** Gates 1-3's output is kept
+as a **draft** (`policy_drafts`: EARS text, generated script, source, review
+notes, a `concerns` flag) — via `policy.author` with `save_draft`, or
+`policy.draft_import` for output made elsewhere (e.g. the JSON files in
+`docs/pending_policy_drafts/`, imported with `lws policy draft import`). A
+draft also carries its own **recommended `gate_points` and `projects`**
+(the latter added 2026-09-22, same shape as a real policy's own selection —
+`{project_id, gating_enabled}`), set by whoever authored or imported it;
+the Dashboard's approval page pre-checks the gate points and the "Apply to"
+rows from that recommendation rather than starting blank, though it is only
+ever a starting point — the reviewer's own choice at approval time,
+submitted with the decision, is what actually takes effect. A draft
+enforces nothing on its own. The Dashboard lists drafts awaiting approval
+and lets the reviewer read the text, the notes and the whole script, choose
+the gate points and the projects to apply it to (with per-project gating),
+and then **Approve** or **Reject**. Approval (`policy.approve_draft`)
+requires the reviewer's explicit `reviewed: true` — the Dashboard sends it
+the moment **Approve** is pressed (2026-09-22: an earlier separate "I have
+reviewed the policy text and the test script" switch was dropped; the
+button press is itself the confirmation, and approving opens the next
+pending draft automatically, or the Policies page once none remain) —
+and goes through the very same write as `policy.activate` (Gate 3a's
+duplicate and ownership checks, gate-point validation), so a draft cannot
+become a policy by any path that `activate` would refuse. There is
+deliberately **no CLI command and no MCP tool that approves a draft**:
+`lws policy draft` can only import and list, so approval stays a human act
+made in the app. Rejecting keeps the draft (with an optional reason) and it
+can be restored; re-importing a topic refreshes its pending draft instead
+of duplicating it, and skips a topic that already has a policy.
+
 Two separate Claude CLI calls across Gates 1-3, two different scopes of
 trust, and both stay strictly proposals until Gate 4: the EARS-refinement
 call (Gate 1) is text-in, text-out; the conflict check (Gate 3b) is
@@ -392,7 +515,31 @@ window in "Action-gating checks" below — a timeout never does, because
 there's no determined violation there for a human to knowingly bypass;
 see that section for the full distinction.
 
+**`policy.check_project` is itself dispatched `accepted`, not answered
+synchronously (2026-09-23).** The paragraph above describes the Job-
+dependency layer; underneath it, Policy & Compliance's own `/v1/jobs/
+policy.check_project` handler used to run the sandbox inline and hold
+the HTTP request open for however long that took — up to the same
+30-minute ceiling. A real (non-skipped) check now returns `accepted`
+immediately and runs the sandbox on a background thread, reporting the
+eventual verdict back to Orchestration's `/v1/jobs/{id}/complete`
+callback — the same async-completion pattern `agent.run_task` and the
+self-redeploy worker already use. This keeps the pillar's own request-
+handling capacity, and with it `/v1/health`'s responsiveness to Core's
+probe, decoupled from how long any individual check takes; a check
+resolved by the unchanged-fingerprint skip (above) stays fully
+synchronous, since nothing there can block.
+
 ## Informing the user immediately
+
+**Not yet implemented as of M12** — a real gap, not an oversight: the
+Dashboard doesn't exist yet (M14), and wiring Remote Control notification
+through Agentic Development's own capability is real work this pass
+didn't reach. Every failing/pending check is still fully queryable for
+real today (`GET /v1/policy_check_results`, `lws policy results`,
+`workshop_policy_results`, and a `pending_confirmation` Job's own status)
+— what's missing is *push*, not the underlying data. Left for a later
+pass, tracked here rather than silently dropped.
 
 A failing check is recorded the moment its Job completes, not batched.
 Three channels, reusing patterns already proven in this ecosystem rather
@@ -463,12 +610,89 @@ they apply to everything else it manages, not as a special case.
 
 Distinct from the on-demand/scheduled audit above (`policy.check_all`,
 checking everywhere a policy applies, at leisure): some Jobs must not run
-at all until the policy governing their action passes. A Job *type*
-declares which topic(s), if any, gate it — most declare none, and dispatch
-with no policy involvement whatsoever, sparse and opt-in rather than a
-blanket check on everything. `server.launch` and `server.deploy`, for
-example, are gated by whichever policy currently wins (the usual
-precedence resolution) on a server-related topic, for the target project.
+at all until the policy governing their action passes.
+
+**Refined 2026-09-16** (`docs/requirements.md`'s own follow-up section
+has the concrete implementation): gating moved from a fixed, code-level
+Job-type→topic table to a per-*policy*, user-chosen set of **gate
+points** — `build_install`, `server_launch`, `deploy_redeploy`,
+`self_redeploy`, `server_stop`, `release`, `package_publish`,
+`branch_finish`, `project_removal`, `project_registration` — chosen at
+authoring or reconfiguration time, independent of the policy's own
+EARS text and script. `self_redeploy` and `package_publish` were split
+out from `deploy_redeploy`/`release` on the very same day, once real
+usage showed those two conflated meaningfully different blast radii:
+little-workshop redeploying its *own* pillars is a different risk than
+an ordinary user-project redeploy, and cutting a git release tag is a
+different action than pushing an artifact to the real, world-visible
+PEP 503 index. A Job *type* still declares which of these categories it
+belongs to (most declare none, dispatching with no policy involvement
+whatsoever — sparse and opt-in, never a blanket check on everything),
+but a policy now opts into gating zero, one, or several of those
+categories on its own, and any currently-winning policy whose own gate
+points intersect a Job's categories gets checked — a Job can be gated by
+more than one policy at once. `deployment.deploy`, for example, belongs
+to both `server_launch` and `deploy_redeploy`; any enabled, non-waived
+policy gating either category, and currently winning precedence for the
+target project, becomes one of its governing checks.
+
+This also resolved the usability gap the original all-or-nothing
+"framework policies are never overridden" design left open: **a policy
+can now be disabled** (`enabled: bool`, toggled without re-running any
+gate — neither field is about the requirement's own meaning). A
+disabled policy is skipped by precedence resolution and falls through to
+whatever the next-lower-precedence policy on that topic is.
+
+**Project selection replaces waivers (2026-09-21).** The 2026-09-16
+per-project *waiver* (an exception granted against a policy, with a
+reason) is gone. Instead the user **selects the projects a policy applies
+to** — `policy_projects`, one row per selected project — and, per
+selected project, switches **gating** on or off:
+
+- *Applicability is the selection.* A policy is a candidate for a project
+  only if that project is selected for it. Deselecting a project is what
+  a waiver used to do. Scope level (`project` / `project_set` /
+  `all_projects`) survives only as authoring intent: it seeds the initial
+  selection once (at activation, or at the first start after upgrading),
+  and it orders precedence among several selected policies on one topic
+  (framework > project > project set > all projects). A project registered
+  later is not selected automatically.
+- *Gating is per project; where it gates is not.* `gate_points` stays a
+  property of the policy — never chosen per project. Per project there is
+  only on/off.
+- *Gating off still checks.* Orchestration still creates the
+  `policy.check_project` Job for a project whose gating is off, so the
+  result is recorded in `policy_check_results` and visible for analysis;
+  the Job is tagged `gating: false` and its verdict is ignored when
+  deciding whether to hold the action in `pending_confirmation`.
+- Changed with one Job, `policy.set_projects`, which replaces the whole
+  selection (`{project_id, gating_enabled}` per project). Deselecting every
+  project is a real choice and survives restarts. There is no reason
+  field and no separate audit record; the trust model is unchanged from
+  `OQ-13` (any caller with Pillar Interface access, single-user household
+  system).
+- Existing rows: a legacy `policy_waivers` table is dropped only if empty;
+  one holding rows is left untouched and unused.
+
+**`project_registration` is a structurally different gate point, resolved
+2026-09-17** (`OQ-15`): every other category gates a Job *before*
+dispatch, holding it at `pending_confirmation` against an
+already-registered project's own checkout. A project being registered
+by the very Job `project_registration` would gate doesn't exist yet at
+check time, so a project-bound check has nothing to mount — a genuine
+chicken-and-egg problem, not a bug. Resolved by splitting the category
+into two real rules: (1) a policy gating `project_registration` must be
+framework-bound (`target_pillar == "policy"`, checking little-workshop's
+own state, not the incoming project's) — enforced at Gate-time in
+`policy.author`/`policy.activate`/`policy.configure`, rejected outright
+rather than failing confusingly at check time; (2) it is *verified*, not
+gated — `orchestration/policy_gate.py`'s `verify_after_completion` fires
+a real `policy.check_project` Job only once `project.bootstrap`/`project.
+import` has already genuinely succeeded, fire-and-forget, never wired
+back as that Job's own dependency. A `fail` verdict here is recorded in
+`policy_check_results` like any other check, never enforced — blocking
+an action that already happened is meaningless. Every other gate point's
+pre-dispatch, hold-until-confirmed behavior is unchanged.
 
 ### Deciding whether a Job type is gated
 
@@ -640,7 +864,7 @@ points in a Job's life, so they stay two named things with two owners:
 | Owner | Deployment & Servers | Orchestration |
 | Arms | *After* the new version is already running | *Before* the action has started at all |
 | Timeout default | Roll back to the last confirmed commit | Never start — there's nothing to roll back |
-| Scope | Server/pillar redeploys only | Any Job type that declares a gating topic |
+| Scope | Server/pillar redeploys only | Any Job type that declares a gate-point category |
 
 A gated `server.deploy` Job can pass through both in sequence: first
 policy confirmation (proceed despite the failure, or never start), then —
@@ -651,9 +875,10 @@ each is a separate question about a separate moment in the same Job.
 ### Left open
 
 Tracked as `OQ-3` in [`../open_questions.md`](../open_questions.md): which
-Job types declare which gating topics isn't enumerated here — that
-mapping is each pillar's own implementation work as its Job types get
-defined. (The two items this section used to list alongside it — check
+Job types declare which gate-point categories isn't enumerated here —
+that mapping is each pillar's own implementation work as its Job types
+get defined (`orchestration/policy_gate.py`'s `JOB_TYPE_CATEGORIES` has
+this pass's own real, partial coverage). (The two items this section used to list alongside it — check
 execution as an async Job with a 30-minute ceiling, and Gate 4 making a
 separate allowlist-declaration step unnecessary — are resolved; see
 "Test-script execution sandbox" and "Authoring a policy" above.)
@@ -667,10 +892,24 @@ Supersedes the placeholder `policy_rules`, `policy_check_results` pair in
   subject governs — see "Policy ownership" above), ears_text,
   test_script_ref (1:1), scope_level (`project` | `project_set` |
   `all_projects`), scope_target (a project id, a project-set id, or null
-  for all-projects), created_by (`user` | `framework`), status,
-  created_at, amended_at.
+  for all-projects), created_by (`user` | `framework`), **enabled**
+  (bool, default true — refined 2026-09-16, see "Action-gating checks"),
+  **gate_points** (a set of the six gate-point categories this policy
+  gates on failure, default empty — refined 2026-09-16), created_at,
+  amended_at.
 - `policy_check_results` — policy id, project id, outcome (`pass` | `fail`
   | `not_applicable`), checked_at, job id.
+- `policy_projects` (added 2026-09-21, replacing `policy_waivers`) —
+  policy id, project id, `gating_enabled`. The projects a policy applies
+  to, and whether its failure may block each one; see "Project selection
+  replaces waivers" under "Action-gating checks." A companion
+  `policy_seeded` table records which policies have had their selection
+  initialised, so deselecting everything is never undone by a restart.
+- `policy_drafts` also carries a `projects` column (added 2026-09-22, same
+  `{project_id, gating_enabled}` shape as `policy_projects`, migrated onto
+  an existing database with a guarded `ALTER TABLE` since the table already
+  shipped) — a draft's own recommended selection, pre-filled on the
+  Dashboard's approval page; see "Gate 4 happens inside the app" above.
 
 `project_sets` is **not** this pillar's table — it lives in Registry &
 Portfolio (`docs/architecture.md`'s Data model), reached through that
@@ -681,3 +920,22 @@ need resolving.
 document as the authoritative detail for this pillar specifically, per
 this ecosystem's own documentation policy ("don't duplicate content across
 files; link to the authoritative one instead").
+
+## Python test coverage policy, and the sandbox's own dependency limit (2026-09-22)
+
+`python-test-coverage` (`tools/policy_scripts/python_test_coverage.py`, `target_pillar`
+`requirements`, gate point `branch_finish`): runs a Python project's own real `pytest`
+suite with `--cov=src` inside the sandbox and reads pytest-cov's own `TOTAL` line,
+failing below 90%. Judges only the current run, the same "a past mistake never fails
+forever" rule `commit-bumps-version` already established. Skips cleanly (never fails) for
+a project that isn't Python in this ecosystem's own convention (no `pyproject.toml`,
+sidestepping a false match on a project like little-home that happens to have its own
+`src/`/`tests/` directories for TypeScript) or has no `tests/`/`src/`.
+
+**The sandbox's `--network none` is a real limit here**: running a project's actual test
+suite means its test-time imports must already be present in the image, since nothing can
+be `pip install`ed at check time. Image `:3` bakes in this ecosystem's own shared runtime
+stack (fastapi, uvicorn, pydantic, httpx, jinja2, python-multipart, pyyaml, apscheduler)
+alongside `pytest`/`pytest-cov`/`coverage`. A project needing a dependency outside that
+list fails the check with the pytest output attached, rather than silently reporting a
+pass it never actually measured.
