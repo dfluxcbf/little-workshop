@@ -47,19 +47,58 @@ def list_branches(project_dir: Path) -> list[str]:
 
 def recent_commits(repo_dir: Path, limit: int = 10) -> list[dict]:
     """The newest `limit` commits of the checked-out branch, each with the
-    contents of its `VERSION` file (None where the commit has none)."""
+    contents of its `VERSION` file (None where the commit has none).
+    One `git log` plus one `git cat-file --batch` for all `limit` VERSION
+    blobs together, not `limit` separate `git show` spawns — the Dashboard's
+    own `/pillars` page hits this on every load, and each spawned process
+    is real, measurable overhead (2026-09-23 finding: 11 spawns for the
+    default limit=10 made that page take over a second)."""
     result = run(["git", "log", f"-n{limit}", "--format=%H%x1f%s"], repo_dir)
-    commits = []
+    shas, subjects = [], {}
     for line in result.stdout.splitlines():
         sha, _, subject = line.partition("\x1f")
         if not sha:
             continue
-        shown = subprocess.run(
-            ["git", "show", f"{sha}:VERSION"], cwd=str(repo_dir), capture_output=True, text=True,
-        )
-        version = shown.stdout.strip() if shown.returncode == 0 and shown.stdout.strip() else None
-        commits.append({"sha": sha, "subject": subject, "version": version})
-    return commits
+        shas.append(sha)
+        subjects[sha] = subject
+    if not shas:
+        return []
+    versions = _batch_read_blobs(repo_dir, [f"{sha}:VERSION" for sha in shas])
+    return [{"sha": sha, "subject": subjects[sha], "version": versions.get(f"{sha}:VERSION")} for sha in shas]
+
+
+def _batch_read_blobs(repo_dir: Path, refs: list[str]) -> dict[str, str | None]:
+    """`git cat-file --batch`: feed it `<sha>:<path>` lines, get back each
+    blob's content (or `missing`) in the same order, in one process —
+    `refs` may repeat or be empty; a missing/non-blob object maps to None,
+    never raises (this is a best-effort read, same as the single-`git show`
+    version it replaces)."""
+    proc = subprocess.run(
+        ["git", "cat-file", "--batch"], cwd=str(repo_dir),
+        input=("\n".join(refs) + "\n").encode("utf-8"), capture_output=True, text=False,
+    )
+    out = proc.stdout
+    results: dict[str, str | None] = {}
+    pos = 0
+    for ref in refs:
+        newline = out.find(b"\n", pos)
+        if newline == -1:
+            break
+        header = out[pos:newline].decode("utf-8", errors="replace")
+        pos = newline + 1
+        # A found object's header is `<oid> <type> <size>` (3 fields —
+        # note it echoes the *resolved blob's own* sha, not the `<ref>`
+        # we fed in); a missing one is `<ref> missing` (2 fields).
+        parts = header.split()
+        if len(parts) == 3 and parts[1] == "blob":
+            size = int(parts[2])
+            content = out[pos:pos + size]
+            pos += size + 1  # the trailing newline cat-file always appends after the blob
+            results[ref] = content.decode("utf-8", errors="replace").strip() or None
+        else:
+            # "<ref> missing" (or any other non-blob line) — nothing to skip past.
+            results[ref] = None
+    return results
 
 
 def github_base_url(repo_dir: Path) -> str | None:
