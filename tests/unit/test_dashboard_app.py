@@ -62,6 +62,46 @@ def test_index_is_a_project_dashboard(test_client, monkeypatch):
     assert "Pillars healthy" in text
 
 
+def test_index_fetches_each_projects_row_concurrently_not_one_at_a_time(test_client, monkeypatch):
+    # 2026-09-23 finding: this loop was the largest remaining cost of the
+    # home page after the report's own N+1 query got fixed — verifying
+    # overlap (not just that the page still renders) is what would catch
+    # a future change that accidentally serializes it again.
+    import time
+
+    names = ["proj-a", "proj-b", "proj-c"]
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": n, "status": "active"} for n in names])
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": {}})
+    monkeypatch.setattr(client, "deployment_branches", lambda paths, name: [])
+    monkeypatch.setattr(client, "agent_session_status", lambda paths, name: None)
+    monkeypatch.setattr(client, "agent_runs", lambda paths, name: [])
+    monkeypatch.setattr(client, "requirements_report", lambda paths, name: None)
+    monkeypatch.setattr(client, "agent_latest_ci_check", lambda paths, name: None)
+
+    intervals = []
+    lock = threading.Lock()
+
+    def slow_deployment_status(paths, name):
+        start = time.monotonic()
+        time.sleep(0.1)
+        with lock:
+            intervals.append((start, time.monotonic()))
+        return None
+
+    monkeypatch.setattr(client, "deployment_status_optional", slow_deployment_status)
+
+    response = test_client.get("/")
+
+    assert response.status_code == 200
+    assert len(intervals) == len(names)
+    # If these ran serially, each one's start would be at or after the
+    # previous one's own end; running concurrently, the latest start is
+    # still before the earliest end.
+    latest_start = max(s for s, _ in intervals)
+    earliest_end = min(e for _, e in intervals)
+    assert latest_start < earliest_end
+
+
 def test_index_shows_unknown_panels_when_a_pillar_is_down(test_client, monkeypatch):
     _stub_project_panels(monkeypatch)
 

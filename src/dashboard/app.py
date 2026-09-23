@@ -35,6 +35,7 @@ import json
 import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Form, Request
@@ -371,8 +372,7 @@ def build_app(paths: Paths) -> FastAPI:
         pillars = _try(lambda: client.core_status(paths).get("pillars", {}), default={})
         unhealthy = [n for n, e in pillars.items() if e["status"] not in ("healthy", "active", "disabled")]
 
-        rows = []
-        for name in names:
+        def _project_row(name: str) -> dict:
             server = _try(client.deployment_status_optional, paths, name)
             session = _try(client.agent_session_status, paths, name)
             runs = _try(client.agent_runs, paths, name, default=[])
@@ -389,12 +389,26 @@ def build_app(paths: Paths) -> FastAPI:
                     "drafts": len(items) - len(published),
                     "failing": sum(1 for r in published if not r.get("done")),
                 }
-            rows.append({
+            return {
                 "name": name, "server": server, "session": session, "awaiting": awaiting, "running": running,
                 "reqs": reqs, "ci": _try(client.agent_latest_ci_check, paths, name),
                 "branches": _try(client.deployment_branches, paths, name, default=[]),
                 "session_name": session_name_for(name), "runs": runs,
-            })
+            }
+
+        # Each project's own row is 6 independent, read-only pillar calls —
+        # none depend on another project's result, so fetching them
+        # concurrently rather than one project fully at a time is a pure
+        # latency win with no staleness risk (still the same live data,
+        # same request). `ThreadPoolExecutor.map` keeps `rows` in the same
+        # order as `names` (2026-09-23 finding: this loop, run serially,
+        # was most of what remained of the home page's load time after
+        # REQ-000000246 fixed its own dominant N+1-query cost).
+        if names:
+            with ThreadPoolExecutor(max_workers=len(names)) as pool:
+                rows = list(pool.map(_project_row, names))
+        else:
+            rows = []
         stats = {
             "projects": len(rows),
             "servers_total": sum(1 for r in rows if r["server"] is not None),
