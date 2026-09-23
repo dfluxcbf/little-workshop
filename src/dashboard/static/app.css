@@ -1104,4 +1104,4 @@ article.report-item { display: flex; flex-direction: column; gap: 3px; padding: 
 
 /* --- report: approving drafted requirements -------------------------------- */
 .report-approve-all { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 12px; }
-.report-approve { margin: 8px 0 2px; }
+details.report-item > .report-approve { margin: 0; padding: 0 12px 12px; }
