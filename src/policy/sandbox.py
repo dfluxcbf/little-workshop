@@ -26,6 +26,17 @@ from policy.models import CheckOutcome
 
 IMAGE_TAG = "little-workshop-policy-sandbox:4"
 DEFAULT_CHECK_TIMEOUT_SECONDS = 1800.0
+# The sandbox's whole point is to check a project WITHOUT being able to
+# affect anything else — including, concretely, little-workshop's own live
+# pillar processes running on this same host. `--network none`/`--read-only`
+# already cover isolation; these cap what an unbounded or runaway check
+# (e.g. a coverage run spinning up its own workers) can take from the host's
+# CPU/RAM/process table, so even several checks overlapping can't starve a
+# pillar's health probe. Deliberately modest, not tuned to make any one
+# check faster.
+DEFAULT_CPUS = "2.0"
+DEFAULT_MEMORY = "1g"
+DEFAULT_PIDS_LIMIT = "256"
 
 # git: version policies compare a commit with its parent, which needs real history.
 # pytest-cov and this ecosystem's own common runtime stack: the python-test-coverage
@@ -146,6 +157,8 @@ def run_policy_check(
         argv = [
             "docker", "run", "--rm", f"--name={container_name}",
             "--network", "none", "--read-only", "--tmpfs", "/tmp",
+            f"--cpus={DEFAULT_CPUS}", f"--memory={DEFAULT_MEMORY}", f"--memory-swap={DEFAULT_MEMORY}",
+            f"--pids-limit={DEFAULT_PIDS_LIMIT}",
             "-e", "PYTHONDONTWRITEBYTECODE=1",
             "-v", f"{script_path}:/policy/test_policy.py:ro",
         ]

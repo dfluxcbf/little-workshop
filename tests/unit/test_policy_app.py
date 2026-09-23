@@ -300,6 +300,101 @@ def test_check_project_requires_project_id(client, conn):
     assert response.json()["outcome"] == "failed"
 
 
+def _init_git_repo(repo_dir):
+    import subprocess
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo_dir, check=True)
+    (repo_dir / "README.md").write_text("hi\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo_dir, check=True)
+
+
+def test_check_project_skips_the_sandbox_when_nothing_changed(client, conn, monkeypatch, tmp_path):
+    repo_dir = tmp_path / "proj"
+    _init_git_repo(repo_dir)
+    policy = _seed_policy(client, conn)
+    monkeypatch.setattr(app_module, "resolve_project", lambda paths, project_id, **kw: {"path": str(repo_dir), "name": project_id})
+    calls = []
+    monkeypatch.setattr(
+        app_module.sandbox, "run_policy_check",
+        lambda *a, **kw: calls.append(1) or SandboxResult(CheckOutcome.PASS, "ok"),
+    )
+
+    body = {"job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]}}
+    first = client.post("/v1/jobs/policy.check_project", json=body)
+    second = client.post("/v1/jobs/policy.check_project", json=body)
+
+    assert len(calls) == 1  # the sandbox only actually ran once
+    assert first.json()["result"]["outcome"] == "pass"
+    assert second.json()["result"]["outcome"] == "pass"
+    assert second.json().get("skipped") == "unchanged"
+    # both runs are still recorded, for history/job-linkage purposes
+    assert len(db.list_check_results(conn, policy_id=policy["id"], project_id="proj-a")) == 2
+
+
+def test_check_project_re_runs_after_a_new_commit(client, conn, monkeypatch, tmp_path):
+    import subprocess
+    repo_dir = tmp_path / "proj"
+    _init_git_repo(repo_dir)
+    policy = _seed_policy(client, conn)
+    monkeypatch.setattr(app_module, "resolve_project", lambda paths, project_id, **kw: {"path": str(repo_dir), "name": project_id})
+    calls = []
+    monkeypatch.setattr(
+        app_module.sandbox, "run_policy_check",
+        lambda *a, **kw: calls.append(1) or SandboxResult(CheckOutcome.PASS, "ok"),
+    )
+
+    body = {"job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]}}
+    client.post("/v1/jobs/policy.check_project", json=body)
+    (repo_dir / "README.md").write_text("changed\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-aq", "-m", "change"], cwd=repo_dir, check=True)
+    client.post("/v1/jobs/policy.check_project", json=body)
+
+    assert len(calls) == 2  # a new HEAD commit is a real change — re-checked
+
+
+def test_check_project_re_runs_after_the_policy_itself_is_edited(client, conn, monkeypatch, tmp_path):
+    repo_dir = tmp_path / "proj"
+    _init_git_repo(repo_dir)
+    policy = _seed_policy(client, conn)
+    monkeypatch.setattr(app_module, "resolve_project", lambda paths, project_id, **kw: {"path": str(repo_dir), "name": project_id})
+    calls = []
+    monkeypatch.setattr(
+        app_module.sandbox, "run_policy_check",
+        lambda *a, **kw: calls.append(1) or SandboxResult(CheckOutcome.PASS, "ok"),
+    )
+
+    body = {"job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]}}
+    client.post("/v1/jobs/policy.check_project", json=body)
+    _activate(client, {**policy, "ears_text": "when z happens, do w"}, policy_id=policy["id"])
+    client.post("/v1/jobs/policy.check_project", json=body)
+
+    assert len(calls) == 2  # editing the policy is a real change too — re-checked
+
+
+def test_check_project_force_bypasses_the_unchanged_skip(client, conn, monkeypatch, tmp_path):
+    repo_dir = tmp_path / "proj"
+    _init_git_repo(repo_dir)
+    policy = _seed_policy(client, conn)
+    monkeypatch.setattr(app_module, "resolve_project", lambda paths, project_id, **kw: {"path": str(repo_dir), "name": project_id})
+    calls = []
+    monkeypatch.setattr(
+        app_module.sandbox, "run_policy_check",
+        lambda *a, **kw: calls.append(1) or SandboxResult(CheckOutcome.PASS, "ok"),
+    )
+
+    client.post("/v1/jobs/policy.check_project", json={
+        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]},
+    })
+    client.post("/v1/jobs/policy.check_project", json={
+        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"], "force": True},
+    })
+
+    assert len(calls) == 2  # force always re-runs, regardless of the fingerprint
+
+
 # -- reads ----------------------------------------------------------------
 
 

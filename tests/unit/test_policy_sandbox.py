@@ -122,6 +122,19 @@ def test_run_policy_check_mounts_every_given_path_read_only(monkeypatch):
     assert "--read-only" in docker_run_call
 
 
+def test_run_policy_check_caps_cpu_memory_and_process_count(monkeypatch):
+    runner = FakeRunner([
+        CommandResult(0, "", ""),
+        CommandResult(0, "1 passed in 0.01s", ""),
+        CommandResult(0, "", ""),
+    ])
+    sandbox.run_policy_check("x", {}, runner=runner, timeout=10.0)
+    docker_run_call = runner.calls[1]
+    assert f"--cpus={sandbox.DEFAULT_CPUS}" in docker_run_call
+    assert f"--memory={sandbox.DEFAULT_MEMORY}" in docker_run_call
+    assert f"--pids-limit={sandbox.DEFAULT_PIDS_LIMIT}" in docker_run_call
+
+
 def test_parse_verdict_no_tests_ran_is_treated_as_fail():
     result = sandbox._parse_verdict("no tests found\n", 5)
     assert result.outcome == CheckOutcome.FAIL

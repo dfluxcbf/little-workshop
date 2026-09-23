@@ -133,3 +133,8 @@ class PolicyCheckResult(BaseModel):
     detail: str = ""
     job_id: str | None = None
     checked_at: datetime = Field(default_factory=_now)
+    # Fingerprint of what was actually checked (project HEAD commit SHA plus
+    # the policy's own amended_at) — lets policy.check_project recognize an
+    # unchanged (project, policy) pair and skip re-running the sandbox
+    # (docs/pillars/policy_compliance.md's "once per change" rule).
+    checked_state: str = ""

@@ -11,6 +11,7 @@ pillar's Pillar Interface already uses.
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any
@@ -502,12 +503,18 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
 
     # -- enforcement ------------------------------------------------------------
 
+    def _project_root_for_policy(policy: Policy, project_id: str) -> Path:
+        if policy.scope_level == ScopeLevel.ALL_PROJECTS and policy.target_pillar == PILLAR_ITSELF:
+            # framework-bound: little-workshop's own checkout
+            return Path(__file__).resolve().parents[2]
+        return Path(resolve_project(paths, project_id)["path"])
+
     def _mounts_for_policy(policy: Policy, project_id: str) -> dict[Path, str | tuple[str, ...]]:
         if policy.scope_level == ScopeLevel.ALL_PROJECTS and policy.target_pillar == PILLAR_ITSELF:
             # framework-bound: little-workshop's own enumerated source/docs
-            repo_root = Path(__file__).resolve().parents[2]
+            repo_root = _project_root_for_policy(policy, project_id)
             return {repo_root / "src": "/framework/src", repo_root / "docs": "/framework/docs"}
-        project_dir = Path(resolve_project(paths, project_id)["path"])
+        project_dir = _project_root_for_policy(policy, project_id)
         project_files_dir = paths.project_dir(project_id)
         mounts = sandbox.git_dir_mount(project_dir)
         mounts[project_dir] = ("/project", *((mounts[project_dir],) if project_dir in mounts else ()))
@@ -515,16 +522,64 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             mounts[project_files_dir] = "/project-files"
         return mounts
 
+    def _current_head_sha(repo_root: Path) -> str:
+        """Cheap, host-side (no Docker) HEAD lookup — the state a
+        committed-history-based policy check actually reads. Never raises:
+        a repo that can't be read yet (mid-clone, detached, not a repo at
+        all) just means "no fingerprint", which forces a real check."""
+        try:
+            proc = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo_root, capture_output=True, text=True, timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return proc.stdout.strip() if proc.returncode == 0 else ""
+
+    def _current_check_state(policy: Policy, project_id: str) -> str:
+        """Fingerprint of what policy.check_project would actually re-verify:
+        the project's committed HEAD plus the policy's own last edit. Either
+        one changing is a real change; neither changing means the previous
+        result is still correct — see "once per change"
+        (docs/pillars/policy_compliance.md)."""
+        try:
+            repo_root = _project_root_for_policy(policy, project_id)
+        except ProjectResolutionError:
+            return ""
+        head_sha = _current_head_sha(repo_root)
+        if not head_sha:
+            return ""
+        return f"{head_sha}:{policy.amended_at.isoformat()}"
+
     @app.post("/v1/jobs/policy.check_project")
     def job_check_project(request: JobRequest) -> dict:
         error = _require(request.params, "policy_id") or (None if request.project_id else "missing project_id")
         if error:
             return {"outcome": "failed", "error": error}
         policy_id = request.params["policy_id"]
+        force = bool(request.params.get("force"))
         with lock:
             policy = db.get_policy(conn, policy_id)
         if policy is None:
             return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
+
+        current_state = _current_check_state(policy, request.project_id)
+        if current_state and not force:
+            with lock:
+                previous = db.latest_check_result(conn, policy_id=policy_id, project_id=request.project_id)
+            if previous is not None and previous.checked_state == current_state:
+                # Nothing has changed since the last verdict (same HEAD
+                # commit, same policy edit) — reuse it instead of paying for
+                # another Docker sandbox run. Recorded as a fresh row (its own
+                # id/checked_at/job_id) so history and job linkage stay
+                # accurate, but the sandbox itself never runs.
+                result = PolicyCheckResult(
+                    id=db.new_id(), policy_id=policy_id, project_id=request.project_id,
+                    outcome=previous.outcome, detail=previous.detail, job_id=request.job_id,
+                    checked_state=current_state,
+                )
+                with lock:
+                    db.insert_check_result(conn, result)
+                return {"outcome": "succeeded", "result": result.model_dump(mode="json"), "skipped": "unchanged"}
 
         try:
             mounts = _mounts_for_policy(policy, request.project_id)
@@ -542,6 +597,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         result = PolicyCheckResult(
             id=db.new_id(), policy_id=policy_id, project_id=request.project_id,
             outcome=sandbox_result.outcome, detail=sandbox_result.detail, job_id=request.job_id,
+            checked_state=current_state,
         )
         with lock:
             db.insert_check_result(conn, result)

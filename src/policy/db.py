@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS policy_check_results (
     outcome TEXT NOT NULL,
     detail TEXT NOT NULL DEFAULT '',
     job_id TEXT,
-    checked_at TEXT NOT NULL
+    checked_at TEXT NOT NULL,
+    checked_state TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS policy_projects (
@@ -95,6 +96,11 @@ def connect(path: Path) -> sqlite3.Connection:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(policy_drafts)")}
     if "projects" not in columns:
         conn.execute("ALTER TABLE policy_drafts ADD COLUMN projects TEXT NOT NULL DEFAULT '[]'")
+    # Change-driven check skipping (see PolicyCheckResult.checked_state) —
+    # added after policy_check_results already shipped.
+    result_columns = {row["name"] for row in conn.execute("PRAGMA table_info(policy_check_results)")}
+    if "checked_state" not in result_columns:
+        conn.execute("ALTER TABLE policy_check_results ADD COLUMN checked_state TEXT NOT NULL DEFAULT ''")
     conn.commit()
     return conn
 
@@ -290,11 +296,11 @@ def unseeded_policies(conn: sqlite3.Connection) -> list[Policy]:
 
 def insert_check_result(conn: sqlite3.Connection, result: PolicyCheckResult) -> None:
     conn.execute(
-        """INSERT INTO policy_check_results (id, policy_id, project_id, outcome, detail, job_id, checked_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO policy_check_results (id, policy_id, project_id, outcome, detail, job_id, checked_at, checked_state)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             result.id, result.policy_id, result.project_id, result.outcome.value, result.detail,
-            result.job_id, _iso(result.checked_at),
+            result.job_id, _iso(result.checked_at), result.checked_state,
         ),
     )
     conn.commit()
@@ -304,7 +310,7 @@ def _row_to_result(row: sqlite3.Row) -> PolicyCheckResult:
     return PolicyCheckResult(
         id=row["id"], policy_id=row["policy_id"], project_id=row["project_id"],
         outcome=CheckOutcome(row["outcome"]), detail=row["detail"], job_id=row["job_id"],
-        checked_at=_parse_iso(row["checked_at"]),
+        checked_at=_parse_iso(row["checked_at"]), checked_state=row["checked_state"] if "checked_state" in row.keys() else "",
     )
 
 
