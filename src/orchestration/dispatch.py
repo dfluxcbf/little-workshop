@@ -75,6 +75,19 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     # that gave up on it. 1860s gives a 60s margin over the sandbox's
     # own ceiling for image-pull/startup overhead on the first run.
     "policy.check_project": 1860.0,
+    # 2026-09-23 finding, reproduced live during an actual release: both
+    # version.release_start and version.release_finish hit the plain 20s
+    # default and were requeued mid-flight ("target pillar unreachable:
+    # timed out"), then re-dispatched a moment later while the FIRST,
+    # still-running-server-side invocation was still mid-way through its
+    # own real git operations (branch create/merge/tag/commit/back-merge)
+    # — the retry then failed on a dirty tree or wrong branch, a
+    # confusing symptom of the SAME underlying timeout mismatch already
+    # fixed once for policy.check_project. `DECLARED_UNSTOPPABLE_JOB_TYPES`
+    # above is exactly the maintainer-curated set of "real, possibly-slow,
+    # never-safely-interruptible" Job types — reused here rather than a
+    # second hand-written list, since it's the same judgment call.
+    **{job_type: 180.0 for job_type in DECLARED_UNSTOPPABLE_JOB_TYPES},
 }
 
 

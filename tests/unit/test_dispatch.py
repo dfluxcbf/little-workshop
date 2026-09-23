@@ -151,6 +151,18 @@ def test_dispatch_timeout_for_gives_policy_check_project_a_ceiling_above_the_san
     assert dispatch.dispatch_timeout_for("policy.check_project") > 1800.0
 
 
+def test_dispatch_timeout_for_gives_every_declared_unstoppable_type_a_ceiling_above_the_default():
+    """2026-09-23 finding, reproduced live during an actual release:
+    version.release_start and version.release_finish both hit the plain
+    20s default and got double-dispatched — the second invocation
+    landing mid-flight on the first's own uncommitted git state. Every
+    Job type the maintainer already flagged as "real, possibly-slow,
+    never safely interruptible" (DECLARED_UNSTOPPABLE_JOB_TYPES) gets the
+    same longer ceiling, not just the two that happened to be caught."""
+    for job_type in dispatch.DECLARED_UNSTOPPABLE_JOB_TYPES:
+        assert dispatch.dispatch_timeout_for(job_type) > dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS, job_type
+
+
 def test_dispatch_ready_jobs_gives_policy_author_its_own_longer_timeout(monkeypatch, tmp_path, conn):
     captured = {}
 
