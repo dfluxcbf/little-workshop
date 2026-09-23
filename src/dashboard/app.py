@@ -46,7 +46,7 @@ from fastapi.templating import Jinja2Templates
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.workspace import WORKSPACE_ID, workspace_dir
-from dashboard import client, prefs
+from dashboard import client, job_catalog, prefs
 
 GATE_POINT_VALUES = [
     "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
@@ -744,140 +744,93 @@ def build_app(paths: Paths) -> FastAPI:
 
     # ---- Pillars: the system's own components ---------------------------
 
-    # ---- New Job / Schedule Job: reuse an existing job, or ask Claude once ----
+    # ---- New Job / Schedule Job: project -> job -> arguments (dashboard/job_catalog.py) ----
 
-    JOB_TEMPLATE_PROMPT = (
-        "You are designing one little-workshop Orchestration Job. The user's request:\n\n{request}\n\n"
-        "Reply with exactly one JSON object and nothing else — no markdown fences, no commentary — with keys: "
-        "\"type\" (a dotted job type such as \"version.branch_audit\"), \"target_pillar\" (one of core, "
-        "orchestration, policy, registry, requirements, version, build, deployment, agent, dashboard), "
-        "\"project_id\" (a project name, or null if the job isn't about one project), and \"params\" "
-        "(a JSON object of that job type's own parameters, {{}} if it takes none)."
-    )
+    def _discover_suites(project: str) -> list[dict]:
+        """The "Test suites" choices: every suite, with how many of the project's
+        current tests it covers (collected, not run)."""
+        result = client.create_job(
+            paths, timeout=340.0, type="requirements.discover_tests", target_pillar="requirements", project_id=project,
+            params={"commitish": job_catalog.COMMITISH}, queue_key=None, depends_on=[], created_by="dashboard",
+        )
+        if result.get("status") != "succeeded":
+            raise ValueError(result.get("error") or "test discovery failed")
+        suites = sorted(result["result"]["suites"], key=lambda s: s["name"].lower())
+        return [
+            {"value": s["id"], "label": s["name"], "disabled": not s["tests"],
+             "detail": f"{len(s['tests'])} test{'' if len(s['tests']) == 1 else 's'}" if s["tests"] else "no tests found"}
+            for s in suites
+        ]
 
-    def _recent_jobs_for_reuse() -> list[dict]:
-        jobs = _try(lambda: client.list_jobs(paths), default=[])
-        jobs.sort(key=lambda j: j.get("created_at") or "", reverse=True)
-        return jobs[:40]
+    CHOICE_LOADERS = {"suites": _discover_suites}
 
-    def _build_job_template(mode: str, reuse_job_id: str, prompt: str) -> tuple[dict | None, str | None]:
-        if mode == "reuse":
-            job = _try(lambda: client.get_job(paths, reuse_job_id))
-            if job is None:
-                return None, "Choose a job to reuse."
-            return {
-                "type": job["type"], "target_pillar": job["target_pillar"], "project_id": job.get("project_id"),
-                "params": job.get("params", {}),
-            }, None
-        if mode == "ask":
-            if not prompt.strip():
-                return None, "Describe what the job should do."
-            result = _try(lambda: client.create_job(
-                paths, timeout=120.0, type="agent.query", target_pillar="agent", project_id=None,
-                params={"prompt": JOB_TEMPLATE_PROMPT.format(request=prompt.strip())},
-                queue_key=None, depends_on=[], created_by="dashboard",
-            ))
-            if result is None or result.get("status") != "succeeded":
-                return None, f"Claude could not be reached: {(result or {}).get('error', 'agent pillar unreachable')}"
-            text = re.sub(r"^```(json)?|```$", "", result["result"]["text"].strip(), flags=re.MULTILINE).strip()
-            try:
-                data = json.loads(text)
-            except ValueError:
-                return None, f"Claude's reply wasn't valid JSON: {text[:300]}"
-            if not isinstance(data, dict) or "type" not in data or "target_pillar" not in data:
-                return None, "Claude's reply was missing 'type' or 'target_pillar'."
-            data.setdefault("project_id", None)
-            data.setdefault("params", {})
-            return data, None
-        return None, "Choose how to build the job."
-
-    def _parse_job_template(raw: str) -> tuple[dict | None, str | None]:
+    @app.get("/jobs/catalog/choices/{arg}")
+    def job_arg_choices(arg: str, project: str = "") -> Response:
+        loader = CHOICE_LOADERS.get(arg)
+        if loader is None or not project:
+            return Response(json.dumps({"error": "unknown argument or no project"}), status_code=404, media_type="application/json")
         try:
-            data = json.loads(raw)
-        except ValueError as exc:
-            return None, f"Not valid JSON: {exc}"
-        if not isinstance(data, dict) or not data.get("type") or not data.get("target_pillar"):
-            return None, "The template needs at least 'type' and 'target_pillar'."
-        data.setdefault("project_id", None)
-        data.setdefault("params", {})
-        if not isinstance(data["params"], dict):
-            return None, "'params' must be a JSON object."
-        return data, None
+            choices = loader(project)
+        except (client.PillarUnavailable, ValueError) as exc:
+            return Response(json.dumps({"error": str(exc)}), status_code=502, media_type="application/json")
+        return Response(json.dumps({"choices": choices}), media_type="application/json")
+
+    def _job_page(request: Request, name: str, **context) -> HTMLResponse:
+        return _render(
+            request, name, projects=_try(_project_names, default=[]), catalog=job_catalog.CATALOG,
+            chosen=context.pop("chosen", {}), **context,
+        )
 
     @app.get("/jobs/new", response_class=HTMLResponse)
     def job_new(request: Request):
-        return _render(
-            request, "job_new.html", recent=_recent_jobs_for_reuse(), template_json=None, build_error=None,
-            nav_active="new-job",
-        )
+        return _job_page(request, "job_new.html", build_error=None, nav_active="new-job")
 
     @app.post("/jobs/new", response_class=HTMLResponse)
-    def job_new_post(
-        request: Request, action: str = Form(...), mode: str = Form("reuse"), reuse_job_id: str = Form(""),
-        prompt: str = Form(""), template_json: str = Form(""),
-    ):
-        if action == "build":
-            template, err = _build_job_template(mode, reuse_job_id, prompt)
-            return _render(
-                request, "job_new.html", recent=_recent_jobs_for_reuse(),
-                template_json=json.dumps(template, indent=2) if template else template_json,
-                build_error=err, nav_active="new-job",
-            )
-        template, err = _parse_job_template(template_json)
+    async def job_new_post(request: Request):
+        form = await request.form()
+        project, job_key = str(form.get("project") or ""), str(form.get("job") or "")
+        template, err = job_catalog.build_job(project, job_key, {k: form.getlist(k) for k in form.keys()})
         if err:
-            return _render(
-                request, "job_new.html", recent=_recent_jobs_for_reuse(), template_json=template_json,
-                build_error=err, nav_active="new-job",
-            )
-        result = _try(lambda: client.create_job(
-            paths, type=template["type"], target_pillar=template["target_pillar"], project_id=template["project_id"],
-            params=template["params"], queue_key=None, depends_on=[], created_by="dashboard",
-        ))
-        if result is None or result.get("status") not in ("queued", "running", "succeeded", "accepted"):
-            return _render(
-                request, "job_new.html", recent=_recent_jobs_for_reuse(), template_json=template_json,
-                build_error=f"Could not dispatch: {(result or {}).get('error', 'orchestration unreachable')}",
-                nav_active="new-job",
-            )
-        return _back("/jobs", f"{template['type']} dispatched.")
+            return _job_page(request, "job_new.html", build_error=err, chosen={"project": project, "job": job_key}, nav_active="new-job")
+        # Builds and test runs outlast a browser request; progress is on the Jobs page.
+        _fire_and_forget(paths, **template, depends_on=[], created_by="dashboard")
+        return _back("/jobs", f"{job_catalog.BY_KEY[job_key].label} started for {project}.")
+
+    def _scheduled_jobs() -> list[dict]:
+        return [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") != "agent.run_task"]
 
     @app.get("/jobs/schedule", response_class=HTMLResponse)
     def job_schedule(request: Request):
-        scheduled = [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") != "agent.run_task"]
-        return _render(
-            request, "job_schedule.html", recent=_recent_jobs_for_reuse(), template_json=None, build_error=None,
-            scheduled=scheduled, weekdays=WEEKDAYS, nav_active="schedule-job",
-        )
+        return _job_page(request, "job_schedule.html", build_error=None, scheduled=_scheduled_jobs(), weekdays=WEEKDAYS, nav_active="schedule-job")
 
     @app.post("/jobs/schedule", response_class=HTMLResponse)
-    def job_schedule_post(
-        request: Request, action: str = Form(...), mode: str = Form("reuse"), reuse_job_id: str = Form(""),
-        prompt: str = Form(""), template_json: str = Form(""), kind: str = Form("once"), at: str = Form(""),
-        time_of_day: str = Form(""), day: list[str] = Form(default=[]),
-    ):
-        scheduled = [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") != "agent.run_task"]
+    async def job_schedule_post(request: Request):
+        form = await request.form()
+        project, job_key = str(form.get("project") or ""), str(form.get("job") or "")
 
-        def render(template_for_display, error):
-            return _render(
-                request, "job_schedule.html", recent=_recent_jobs_for_reuse(),
-                template_json=json.dumps(template_for_display, indent=2) if template_for_display else template_json,
-                build_error=error, scheduled=scheduled, weekdays=WEEKDAYS, nav_active="schedule-job",
+        def render(error: str) -> HTMLResponse:
+            return _job_page(
+                request, "job_schedule.html", build_error=error, chosen={"project": project, "job": job_key},
+                scheduled=_scheduled_jobs(), weekdays=WEEKDAYS, nav_active="schedule-job",
             )
 
-        if action == "build":
-            template, err = _build_job_template(mode, reuse_job_id, prompt)
-            return render(template, err)
-        template, err = _parse_job_template(template_json)
+        template, err = job_catalog.build_job(project, job_key, {k: form.getlist(k) for k in form.keys()})
         if err:
-            return render(None, err)
-        schedule, refusal = _parse_schedule(kind, at, time_of_day, day, "/jobs/schedule")
+            return render(err)
+        schedule, refusal = _parse_schedule(
+            str(form.get("kind") or ""), str(form.get("at") or ""), str(form.get("time_of_day") or ""),
+            [str(d) for d in form.getlist("day")], "/jobs/schedule",
+        )
         if refusal is not None:
-            return render(template, "Choose when it should run.")
+            return render("Choose when it should run.")
+        label = job_catalog.BY_KEY[job_key].label
         try:
-            client.create_scheduled_task(paths, name=f"{template['type']}: {template.get('project_id') or 'no project'}", job_template=template, schedule=schedule)
+            client.create_scheduled_task(
+                paths, name=f"{label}: {project}", job_template=template, schedule=schedule,
+            )
         except client.PillarUnavailable as exc:
-            return render(template, f"Could not schedule: {exc}")
-        return _back("/jobs/schedule", f"{template['type']} scheduled.")
+            return render(f"Could not schedule: {exc}")
+        return _back("/jobs/schedule", f"{label} for {project} scheduled.")
 
     @app.post("/jobs/schedule/{task_id}/remove")
     def job_schedule_remove(task_id: str):

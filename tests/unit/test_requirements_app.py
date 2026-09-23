@@ -414,3 +414,73 @@ def test_report_gives_each_requirement_the_worst_verdict_of_its_linked_suites(cl
             })
     report = client.get("/v1/report", params={"project_id": "p1"}).json()
     assert report["requirements"][0]["verdict"] == expected
+
+
+# -- discover_tests / run_tests by suite -------------------------------------------------
+
+
+def _record(client, suite_id, test_name, verdict="passed"):
+    client.post("/v1/jobs/requirements.record_test_result", json={
+        "job_id": "j", "project_id": "p1", "params": {"suite_id": suite_id, "test_name": test_name, "verdict": verdict},
+    })
+
+
+def test_discover_tests_reports_each_suites_collected_tests(client, monkeypatch):
+    from requirements import app as app_module
+
+    module_suite = _create_suite(client, name="test_agent_app")
+    feature = _create_suite(client, name="Cook Along")
+    _record(client, feature["id"], "tests.test_cook_along::test_start")
+    _create_suite(client, name="Audio Pipeline")
+    seen = {}
+
+    def fake_collect(paths, project_id, commitish, test_command=None):
+        seen.update(project_id=project_id, commitish=commitish)
+        return ["tests/unit/test_agent_app.py::test_a", "tests/test_cook_along.py::test_start",
+                "tests/test_cook_along.py::test_new_one", "tests/test_other.py::test_x"]
+
+    monkeypatch.setattr(app_module, "collect_sandboxed", fake_collect)
+    body = client.post("/v1/jobs/requirements.discover_tests", json={"job_id": "j", "project_id": "p1", "params": {}}).json()
+    assert body["outcome"] == "succeeded" and seen == {"project_id": "p1", "commitish": "HEAD"}
+    tests = {s["name"]: s["tests"] for s in body["result"]["suites"]}
+    assert tests["test_agent_app"] == ["tests/unit/test_agent_app.py::test_a"]
+    assert tests["Cook Along"] == ["tests/test_cook_along.py::test_start", "tests/test_cook_along.py::test_new_one"]  # found, never run
+    assert tests["Audio Pipeline"] == []
+    assert body["result"]["total"] == 4 and body["result"]["unassigned"] == 1
+    assert {s["id"] for s in body["result"]["suites"]} >= {module_suite["id"], feature["id"]}
+
+
+def test_run_tests_by_suite_records_each_result_under_its_suite(client, monkeypatch):
+    from requirements import app as app_module
+    from requirements.junit import ParsedResult
+    from requirements.models import TestVerdict
+
+    a = _create_suite(client, name="test_a")
+    b = _create_suite(client, name="test_b")
+    got = {}
+
+    def fake_run(paths, project_id, commitish, scopes, test_command=None):
+        got.update(scopes=scopes, commitish=commitish)
+        return {
+            a["id"]: [ParsedResult("tests.test_a::t1", TestVerdict.PASSED, ""), ParsedResult("tests.test_a::t2", TestVerdict.ERROR, "x")],
+            b["id"]: [ParsedResult("tests.test_b::t1", TestVerdict.SKIPPED, "")],
+        }
+
+    monkeypatch.setattr(app_module, "run_suites_sandboxed", fake_run)
+    body = client.post("/v1/jobs/requirements.run_tests", json={
+        "job_id": "j", "project_id": "p1", "params": {"suite_ids": [a["id"], b["id"]]}}).json()
+    assert body["outcome"] == "succeeded"
+    assert got["scopes"] == {a["id"]: {"test_a"}, b["id"]: {"test_b"}} and got["commitish"] == "HEAD"
+    assert {s["name"]: s["verdicts"] for s in body["result"]["suites"]} == {"test_a": {"passed": 1, "error": 1}, "test_b": {"skipped": 1}}
+    recorded = client.get("/v1/test_results", params={"project_id": "p1", "suite_id": a["id"]}).json()
+    assert sorted((r["test_name"], r["verdict"]) for r in recorded) == [("tests.test_a::t1", "passed"), ("tests.test_a::t2", "error")]
+
+
+@pytest.mark.parametrize("suite_ids, error", [
+    ([], "non-empty list"),
+    ("abc", "non-empty list"),
+    (["nope"], "test suite 'nope' not found in p1"),
+])
+def test_run_tests_by_suite_refuses_bad_suite_ids(client, suite_ids, error):
+    body = client.post("/v1/jobs/requirements.run_tests", json={"job_id": "j", "project_id": "p1", "params": {"suite_ids": suite_ids}}).json()
+    assert body["outcome"] == "failed" and error in body["error"]

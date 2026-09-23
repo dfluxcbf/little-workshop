@@ -1,0 +1,67 @@
+{# Project -> job -> arguments, from dashboard/job_catalog.py. Shared by New job and Schedule job. #}
+<label for="project">Project</label>
+<select name="project" id="project" required>
+  <option value="" {{ 'selected' if not chosen.project }} disabled>Choose a project…</option>
+  {% for p in projects %}<option value="{{ p }}" {{ 'selected' if p == chosen.project }}>{{ p }}</option>{% endfor %}
+</select>
+<label for="job">Job</label>
+<select name="job" id="job" required>
+  <option value="" {{ 'selected' if not chosen.job }} disabled>Choose a job…</option>
+  {% for spec in catalog %}<option value="{{ spec.key }}" {{ 'selected' if spec.key == chosen.job }}>{{ spec.label }}</option>{% endfor %}
+</select>
+{% for spec in catalog %}
+<div class="job-args" data-job="{{ spec.key }}" hidden>
+  <p class="muted job-desc">{{ spec.description }}</p>
+  {% for arg in spec.args %}
+  {% if arg.kind == 'flag' %}
+  <label class="job-flag"><input type="checkbox" name="arg_{{ arg.name }}" value="on"> {{ arg.label }}</label>
+  {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
+  {% else %}
+  <fieldset class="job-multi" data-choices="{{ arg.name }}">
+    <legend>{{ arg.label }}</legend>
+    {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
+    <div class="job-choices"><p class="muted">Choose a project first.</p></div>
+  </fieldset>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endfor %}
+<script>
+(function () {
+  var project = document.getElementById("project"), job = document.getElementById("job");
+  var loaded = {};
+  function esc(s) { var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+  function loadChoices(box) {
+    var arg = box.dataset.choices, target = box.querySelector(".job-choices");
+    if (!project.value) { target.innerHTML = '<p class="muted">Choose a project first.</p>'; return; }
+    var key = arg + "|" + project.value;
+    if (loaded[key]) { target.innerHTML = loaded[key]; return; }
+    target.innerHTML = '<p class="muted job-loading">Finding tests…</p>';
+    fetch("/jobs/catalog/choices/" + encodeURIComponent(arg) + "?project=" + encodeURIComponent(project.value), { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (key !== arg + "|" + project.value) return;  // the project changed meanwhile
+        if (d.error) { target.innerHTML = '<p class="muted job-error">Could not list them: ' + esc(d.error) + "</p>"; return; }
+        if (!d.choices.length) { target.innerHTML = '<p class="muted">None in this project.</p>'; return; }
+        var html = d.choices.map(function (c) {
+          return '<label class="job-choice' + (c.disabled ? " is-disabled" : "") + '"><input type="checkbox" name="arg_' + esc(arg) +
+            '" value="' + esc(c.value) + '"' + (c.disabled ? " disabled" : "") + "> <span>" + esc(c.label) + '</span> <span class="dim">' + esc(c.detail || "") + "</span></label>";
+        }).join("");
+        loaded[key] = html;
+        target.innerHTML = html;
+      })
+      .catch(function () { target.innerHTML = '<p class="muted job-error">Could not list them right now.</p>'; });
+  }
+  function sync() {
+    document.querySelectorAll(".job-args").forEach(function (el) {
+      var on = el.dataset.job === job.value;
+      el.hidden = !on;
+      el.querySelectorAll("input").forEach(function (i) { i.disabled = !on || i.closest(".is-disabled") !== null; });
+      if (on) el.querySelectorAll("[data-choices]").forEach(loadChoices);
+    });
+  }
+  project.addEventListener("change", sync);
+  job.addEventListener("change", sync);
+  sync();
+})();
+</script>

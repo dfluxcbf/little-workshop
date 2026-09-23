@@ -31,7 +31,8 @@ from requirements.models import (
     TestVerdict,
     UseCase,
 )
-from requirements.testrun import TestRunError, run_sandboxed
+from requirements.discovery import suite_scope, tests_for_scopes
+from requirements.testrun import TestRunError, collect_sandboxed, run_sandboxed, run_suites_sandboxed
 
 
 class JobRequest(BaseModel):
@@ -249,8 +250,43 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 recorded.append(result.model_dump(mode="json"))
         return {"outcome": "succeeded", "result": {"imported": len(recorded), "results": recorded}}
 
+    def _scopes(project_id: str, suite_ids: list[str] | None) -> tuple[dict[str, TestSuite], dict[str, set[str]]]:
+        """The project's suites (all, or just `suite_ids`) and each one's scope — the
+        test modules it covers (see requirements.discovery)."""
+        with lock:
+            suites = {s.id: s for s in db.list_test_suites(conn, project_id=project_id)}
+            if suite_ids is not None:
+                suites = {sid: suites[sid] for sid in suite_ids if sid in suites}
+            scopes = {
+                sid: suite_scope(s.name, (r.test_name for r in db.list_test_results(conn, project_id=project_id, suite_id=sid)))
+                for sid, s in suites.items()
+            }
+        return suites, scopes
+
+    @app.post("/v1/jobs/requirements.discover_tests")
+    def job_discover_tests(request: JobRequest) -> dict:
+        """Which of the project's current tests each suite covers — collected, never run."""
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        suites, scopes = _scopes(request.project_id, None)
+        try:
+            node_ids = collect_sandboxed(
+                paths, request.project_id, request.params.get("commitish", "HEAD"),
+                test_command=request.params.get("test_command"),
+            )
+        except (TestRunError, WorktreeUnavailable) as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        by_suite = tests_for_scopes(node_ids, scopes)
+        covered = {n for tests in by_suite.values() for n in tests}
+        return {"outcome": "succeeded", "result": {
+            "total": len(node_ids), "unassigned": len(set(node_ids) - covered),
+            "suites": [{"id": sid, "name": suites[sid].name, "tests": by_suite[sid]} for sid in suites],
+        }}
+
     @app.post("/v1/jobs/requirements.run_tests")
     def job_run_tests(request: JobRequest) -> dict:
+        if "suite_ids" in request.params:
+            return _run_suites(request)
         error = _require(request.params, "suite_id", "commitish") or (
             None if request.project_id else "missing project_id"
         )
@@ -279,6 +315,41 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 db.insert_test_result(conn, result)
                 recorded.append(result.model_dump(mode="json"))
         return {"outcome": "succeeded", "result": {"ran": len(recorded), "results": recorded}}
+
+    def _run_suites(request: JobRequest) -> dict:
+        """`suite_ids`: run just the tests those suites cover (discovered, not
+        listed anywhere) in one go, and record each result under its suite."""
+        suite_ids = request.params.get("suite_ids")
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        if not isinstance(suite_ids, list) or not suite_ids or not all(isinstance(s, str) for s in suite_ids):
+            return {"outcome": "failed", "error": "'suite_ids' must be a non-empty list of suite ids"}
+        suites, scopes = _scopes(request.project_id, suite_ids)
+        missing = [sid for sid in suite_ids if sid not in suites]
+        if missing:
+            return {"outcome": "failed", "error": f"test suite {missing[0]!r} not found in {request.project_id}"}
+        try:
+            by_suite = run_suites_sandboxed(
+                paths, request.project_id, request.params.get("commitish", "HEAD"), scopes,
+                test_command=request.params.get("test_command"),
+            )
+        except (TestRunError, WorktreeUnavailable) as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        executed_at = datetime.now(timezone.utc)
+        summary = []
+        with lock:
+            for sid, items in by_suite.items():
+                for item in items:
+                    db.insert_test_result(conn, TestResult(
+                        id=db.new_id(), project_id=request.project_id, suite_id=sid,
+                        test_name=item.test_name, verdict=item.verdict, detail=item.detail,
+                        source="pytest", executed_at=executed_at,
+                    ))
+                counts: dict[str, int] = {}
+                for item in items:
+                    counts[item.verdict.value] = counts.get(item.verdict.value, 0) + 1
+                summary.append({"suite_id": sid, "name": suites[sid].name, "ran": len(items), "verdicts": counts})
+        return {"outcome": "succeeded", "result": {"suites": summary}}
 
     # -- reads ----------------------------------------------------------------
 

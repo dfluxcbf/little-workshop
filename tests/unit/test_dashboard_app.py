@@ -2036,96 +2036,139 @@ def test_report_page_produces_no_horizontally_overflowing_content(test_client, m
     assert long_word in text  # rendered, not stripped — wrapping is CSS's job, not the server's
 
 
-# -- new job / schedule job: reuse an existing job, or ask Claude once ------------------
+# -- new job / schedule job: project -> job -> arguments (dashboard/job_catalog.py) ------
 
 
-def test_job_new_get_renders(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [
-        {"id": "j1", "type": "version.branch_audit", "target_pillar": "version", "project_id": "little-widget",
-         "params": {}, "created_at": "2026-09-22T10:00:00Z"},
-    ])
+def _stub_job_pages(monkeypatch, created=None, scheduled=None):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
+    if created is not None:
+        def fake_create_job(paths, timeout=30.0, **kw):
+            created.append(kw)
+            return {"status": "succeeded"}
+        monkeypatch.setattr(client, "create_job", fake_create_job)
+    if scheduled is not None:
+        monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: scheduled.append(kw) or {})
+
+
+def _wait_for(items, n=1):
+    for _ in range(200):
+        if len(items) >= n:
+            return
+        threading.Event().wait(0.01)
+
+
+def test_job_new_offers_project_then_job_then_its_arguments_and_nothing_else(test_client, monkeypatch):
+    _stub_job_pages(monkeypatch)
     text = test_client.get("/jobs/new").text
-    assert 'action="/jobs/new"' in text and "version.branch_audit" in text
+    assert '<option value="little-widget"' in text
+    assert re.findall(r'<option value="(\w+)" >(Build project|Run tests)</option>', text) == [("build", "Build project"), ("run_tests", "Run tests")]
+    assert 'name="arg_install"' in text and "Install project after building" in text
+    assert 'data-choices="suites"' in text and "Test suites" in text
+    for gone in ("Asking Claude", "reuse_job_id", "template_json", "Describe the job"):
+        assert gone not in text
 
 
-def test_job_new_build_reuse_fills_the_template_from_the_chosen_job(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
-    monkeypatch.setattr(client, "get_job", lambda paths, job_id: {
-        "id": job_id, "type": "version.branch_audit", "target_pillar": "version", "project_id": "little-widget", "params": {"x": 1},
-    })
-    text = test_client.post("/jobs/new", data={"action": "build", "mode": "reuse", "reuse_job_id": "j1"}).text
-    assert "version.branch_audit" in text and "little-widget" in text
-
-
-def test_job_new_build_reuse_without_a_choice_is_refused(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
-    text = test_client.post("/jobs/new", data={"action": "build", "mode": "reuse", "reuse_job_id": ""}).text
-    assert "Choose a job to reuse." in text
-
-
-def test_job_new_build_ask_asks_claude_and_parses_the_reply(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
-    monkeypatch.setattr(client, "create_job", lambda paths, **kw: {
-        "status": "succeeded", "result": {"text": '```json\n{"type": "policy.check_all", "target_pillar": "policy", "params": {}}\n```'},
-    })
-    text = test_client.post("/jobs/new", data={"action": "build", "mode": "ask", "prompt": "run every policy check"}).text
-    assert "policy.check_all" in text
-
-
-def test_job_new_build_ask_with_invalid_json_shows_an_error(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
-    monkeypatch.setattr(client, "create_job", lambda paths, **kw: {"status": "succeeded", "result": {"text": "not json at all"}})
-    text = test_client.post("/jobs/new", data={"action": "build", "mode": "ask", "prompt": "do a thing"}).text
-    assert "wasn&#39;t valid JSON" in text or "wasn't valid JSON" in text
-
-
-def test_job_new_submit_dispatches_and_redirects_to_jobs(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+def test_job_new_build_starts_a_build_run_job(test_client, monkeypatch):
     created = []
-    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (created.append(kw), {"status": "queued"})[1])
-    template = '{"type": "policy.check_all", "target_pillar": "policy", "project_id": null, "params": {}}'
-    response = test_client.post("/jobs/new", data={"action": "submit", "template_json": template}, follow_redirects=False)
-    assert response.status_code == 303 and response.headers["location"].startswith("/jobs?")
-    assert created[0]["type"] == "policy.check_all" and created[0]["target_pillar"] == "policy"
+    _stub_job_pages(monkeypatch, created=created)
+    response = test_client.post("/jobs/new", data={"project": "little-widget", "job": "build"}, follow_redirects=False)
+    assert response.status_code == 303 and "Build project started for little-widget" in unquote(response.headers["location"])
+    _wait_for(created)
+    job = created[0]
+    assert (job["type"], job["target_pillar"], job["project_id"], job["queue_key"]) == ("build.run", "build", "little-widget", "little-widget")
+    assert job["params"] == {"commitish": "HEAD", "command": ["bash", "-lc", "bazel build //..."]}
 
 
-def test_job_new_submit_with_bad_json_is_refused(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
-    text = test_client.post("/jobs/new", data={"action": "submit", "template_json": "{not json"}).text
-    assert "Not valid JSON" in text
+def test_job_new_build_with_install_also_installs(test_client, monkeypatch):
+    created = []
+    _stub_job_pages(monkeypatch, created=created)
+    test_client.post("/jobs/new", data={"project": "little-widget", "job": "build", "arg_install": "on"}, follow_redirects=False)
+    _wait_for(created)
+    assert created[0]["params"]["command"] == ["bash", "-lc", "bazel build //... && bazel run //:install"]
 
 
-def test_job_schedule_get_renders_and_lists_scheduled_non_task_jobs(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+def test_job_new_run_tests_runs_the_chosen_suites(test_client, monkeypatch):
+    created = []
+    _stub_job_pages(monkeypatch, created=created)
+    test_client.post("/jobs/new", data={"project": "little-widget", "job": "run_tests", "arg_suites": ["s1", "s2", "s1"]}, follow_redirects=False)
+    _wait_for(created)
+    job = created[0]
+    assert (job["type"], job["target_pillar"], job["queue_key"]) == ("requirements.run_tests", "requirements", None)
+    assert job["params"] == {"commitish": "HEAD", "suite_ids": ["s1", "s2"]}
+
+
+@pytest.mark.parametrize("data, message", [
+    ({"job": "build"}, "Choose a project."),
+    ({"project": "little-widget"}, "Choose a job."),
+    ({"project": "little-widget", "job": "ask_claude"}, "Choose a job."),
+    ({"project": "little-widget", "job": "run_tests"}, "Choose at least one of: test suites."),
+])
+def test_job_new_refuses_an_incomplete_choice_and_keeps_what_was_picked(test_client, monkeypatch, data, message):
+    created = []
+    _stub_job_pages(monkeypatch, created=created)
+    text = test_client.post("/jobs/new", data=data).text
+    assert message in text and created == []
+    if data.get("project"):
+        assert '<option value="little-widget" selected>' in text
+
+
+def test_suite_choices_come_from_test_discovery(test_client, monkeypatch):
+    calls = []
+
+    def fake_create_job(paths, timeout=30.0, **kw):
+        calls.append((kw["type"], kw["project_id"], kw["params"], timeout))
+        return {"status": "succeeded", "result": {"total": 3, "unassigned": 0, "suites": [
+            {"id": "s2", "name": "test_b", "tests": ["tests/test_b.py::t"]},
+            {"id": "s1", "name": "Alpha", "tests": ["tests/test_a.py::t1", "tests/test_a.py::t2"]},
+            {"id": "s3", "name": "Empty", "tests": []},
+        ]}}
+
+    monkeypatch.setattr(client, "create_job", fake_create_job)
+    body = test_client.get("/jobs/catalog/choices/suites", params={"project": "little-widget"}).json()
+    assert calls == [("requirements.discover_tests", "little-widget", {"commitish": "HEAD"}, 340.0)]
+    assert body["choices"] == [
+        {"value": "s1", "label": "Alpha", "disabled": False, "detail": "2 tests"},
+        {"value": "s3", "label": "Empty", "disabled": True, "detail": "no tests found"},
+        {"value": "s2", "label": "test_b", "disabled": False, "detail": "1 test"},
+    ]
+
+
+def test_suite_choices_report_a_failed_discovery(test_client, monkeypatch):
+    monkeypatch.setattr(client, "create_job", lambda paths, timeout=30.0, **kw: {"status": "failed", "error": "could not list this project's tests"})
+    response = test_client.get("/jobs/catalog/choices/suites", params={"project": "little-widget"})
+    assert response.status_code == 502 and "could not list" in response.json()["error"]
+    assert test_client.get("/jobs/catalog/choices/nope", params={"project": "x"}).status_code == 404
+
+
+def test_job_schedule_offers_the_same_picker_and_lists_scheduled_non_task_jobs(test_client, monkeypatch):
+    _stub_job_pages(monkeypatch)
     monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [
         {"id": "t1", "name": "audit", "state": "active", "job_template": {"type": "version.branch_audit"}, "schedule": {"kind": "once", "at": "2026-09-30T00:00:00"}},
         {"id": "t2", "name": "task-thing", "state": "active", "job_template": {"type": "agent.run_task"}, "schedule": {"kind": "once", "at": "2026-09-30T00:00:00"}},
     ])
     text = test_client.get("/jobs/schedule").text
     assert "audit" in text and "task-thing" not in text
+    assert 'name="arg_install"' in text and "Asking Claude" not in text
 
 
-def test_job_schedule_build_and_submit_creates_a_scheduled_task(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
-    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
-    calls = []
-    monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: calls.append(kw) or {})
-    template = '{"type": "version.branch_audit", "target_pillar": "version", "project_id": "little-widget", "params": {}}'
+def test_job_schedule_creates_a_scheduled_task_from_the_catalog(test_client, monkeypatch):
+    scheduled = []
+    _stub_job_pages(monkeypatch, scheduled=scheduled)
     response = test_client.post("/jobs/schedule", data={
-        "action": "submit", "template_json": template, "kind": "once", "at": "2999-01-02T09:30"}, follow_redirects=False)
-    assert response.status_code == 303 and "scheduled" in unquote(response.headers["location"])
-    assert calls[0]["job_template"]["type"] == "version.branch_audit"
-    assert calls[0]["schedule"] == {"kind": "once", "at": "2999-01-02T09:30:00"}
+        "project": "little-widget", "job": "run_tests", "arg_suites": "s1", "kind": "once", "at": "2999-01-02T09:30"}, follow_redirects=False)
+    assert response.status_code == 303 and "Run tests for little-widget scheduled" in unquote(response.headers["location"])
+    task = scheduled[0]
+    assert task["name"] == "Run tests: little-widget"
+    assert task["job_template"]["type"] == "requirements.run_tests" and task["job_template"]["params"]["suite_ids"] == ["s1"]
+    assert task["schedule"] == {"kind": "once", "at": "2999-01-02T09:30:00"}
 
 
-def test_job_schedule_submit_without_a_time_is_refused(test_client, monkeypatch):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
-    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
-    calls = []
-    monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: calls.append(kw) or {})
-    template = '{"type": "version.branch_audit", "target_pillar": "version", "project_id": null, "params": {}}'
-    text = test_client.post("/jobs/schedule", data={"action": "submit", "template_json": template, "kind": "once", "at": ""}).text
-    assert "Choose when it should run." in text and calls == []
+def test_job_schedule_without_a_time_is_refused(test_client, monkeypatch):
+    scheduled = []
+    _stub_job_pages(monkeypatch, scheduled=scheduled)
+    text = test_client.post("/jobs/schedule", data={"project": "little-widget", "job": "build", "kind": "once", "at": ""}).text
+    assert "Choose when it should run." in text and scheduled == []
 
 
 def test_job_schedule_remove(test_client, monkeypatch):

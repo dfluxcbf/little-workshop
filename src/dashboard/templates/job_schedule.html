@@ -2,34 +2,10 @@
 {% block title %}Schedule job — little-workshop{% endblock %}
 {% block content %}
 <h1>Schedule job</h1>
-<p class="lede">Reuse an existing job's own type and parameters, or describe what you want and let Claude draft it once. Review the result, then choose when it runs.</p>
+<p class="lede">Choose a project, the job to run on it and that job's options, then when it runs.</p>
 <div class="panel" style="padding:18px 20px">
 <form method="post" action="/jobs/schedule">
-  <label for="mode">Build the job from</label>
-  <select name="mode" id="mode">
-    <option value="reuse">An existing job</option>
-    <option value="ask">Asking Claude</option>
-  </select>
-  <div data-mode="reuse">
-    <label for="reuse_job_id">Job to reuse</label>
-    <select name="reuse_job_id" id="reuse_job_id">
-      <option value="">Choose a job…</option>
-      {% for j in recent %}<option value="{{ j.id }}">{{ j.type }} &middot; {{ j.project_id or 'no project' }} &middot; {{ j.created_at | reltime }}</option>{% endfor %}
-    </select>
-  </div>
-  <div data-mode="ask" hidden>
-    <label for="prompt">Describe the job</label>
-    <textarea name="prompt" id="prompt" rows="4" placeholder="What should this job do?"></textarea>
-  </div>
-  <div class="row" style="margin-top:12px"><button type="submit" name="action" value="build" class="primary">Build</button></div>
-</form>
-
-{% if build_error %}<p class="muted" style="color:var(--fail)">{{ build_error }}</p>{% endif %}
-
-{% if template_json %}
-<form method="post" action="/jobs/schedule" style="margin-top:16px">
-  <label for="template_json">Job template &mdash; review and edit before scheduling</label>
-  <textarea name="template_json" id="template_json" rows="10" style="font-family:var(--font-mono)">{{ template_json }}</textarea>
+  {% include "_job_picker.html" %}
   <label for="kind">When</label>
   <select name="kind" id="kind">
     <option value="once">Once, at a date and time</option>
@@ -47,9 +23,9 @@
     <label for="time_of_day">Time of day</label>
     <input type="time" name="time_of_day" id="time_of_day">
   </div>
-  <div class="row" style="margin-top:12px"><button type="submit" name="action" value="submit" class="primary">Schedule</button></div>
+  {% if build_error %}<p class="muted" style="color:var(--fail)">{{ build_error }}</p>{% endif %}
+  <div class="row" style="margin-top:12px"><button type="submit" class="primary" data-busy="Scheduling…">Schedule</button></div>
 </form>
-{% endif %}
 </div>
 
 {% if scheduled %}
@@ -69,20 +45,12 @@
 {% endif %}
 <script>
 (function () {
-  var mode = document.getElementById("mode");
-  function syncMode() {
-    document.querySelectorAll("[data-mode]").forEach(function (el) { el.hidden = el.dataset.mode !== mode.value; });
-  }
-  mode.addEventListener("change", syncMode);
-  syncMode();
   var kind = document.getElementById("kind");
-  if (kind) {
-    var syncKind = function () {
-      document.querySelectorAll("[data-when]").forEach(function (el) { el.hidden = el.dataset.when !== kind.value; });
-    };
-    kind.addEventListener("change", syncKind);
-    syncKind();
-  }
+  var syncKind = function () {
+    document.querySelectorAll("[data-when]").forEach(function (el) { el.hidden = el.dataset.when !== kind.value; });
+  };
+  kind.addEventListener("change", syncKind);
+  syncKind();
 })();
 </script>
 {% endblock %}

@@ -90,6 +90,14 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     # never-safely-interruptible" Job types — reused here rather than a
     # second hand-written list, since it's the same judgment call.
     **{job_type: 180.0 for job_type in DECLARED_UNSTOPPABLE_JOB_TYPES},
+    # The same OQ-14 class once more, for the Dashboard's New Job catalog
+    # (build a project, run its tests): each runs synchronously in its own
+    # request handler with a 1800s ceiling of its own (build/runner.py,
+    # requirements/testrun.py's run_suites_sandboxed); discovery only
+    # collects tests (300s ceiling). 60s/30s margins for worktree setup.
+    "build.run": 1860.0,
+    "requirements.run_tests": 1860.0,
+    "requirements.discover_tests": 330.0,
 }
 
 

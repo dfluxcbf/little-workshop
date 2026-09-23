@@ -1105,3 +1105,14 @@ article.report-item { display: flex; flex-direction: column; gap: 3px; padding: 
 /* --- report: approving drafted requirements -------------------------------- */
 .report-approve-all { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 12px; }
 details.report-item > .report-approve { margin: 0; padding: 0 12px 12px; }
+
+/* --- new job / schedule job: project -> job -> arguments -------------------- */
+.job-args { margin-top: 12px; }
+.job-desc, .job-help { font-size: 12.5px; margin: 4px 0 8px; }
+.job-flag, .job-choice { display: flex; align-items: center; gap: 8px; font-weight: 500; margin: 6px 0; cursor: pointer; }
+.job-flag input, .job-choice input { width: auto; margin: 0; }
+.job-choice.is-disabled { opacity: 0.5; cursor: default; }
+.job-multi { border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 8px 12px 10px; margin: 8px 0 0; min-width: 0; }
+.job-multi legend { font-weight: 600; font-size: 13px; padding: 0 4px; }
+.job-choices { max-height: 320px; overflow-y: auto; }
+.job-error { color: var(--fail); }

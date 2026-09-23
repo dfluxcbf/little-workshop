@@ -2,46 +2,12 @@
 {% block title %}New job — little-workshop{% endblock %}
 {% block content %}
 <h1>New job</h1>
-<p class="lede">Reuse an existing job's own type and parameters, or describe what you want and let Claude draft it once. Review the result before dispatching it.</p>
+<p class="lede">Choose a project, the job to run on it, and that job's options.</p>
 <div class="panel" style="padding:18px 20px">
 <form method="post" action="/jobs/new">
-  <label for="mode">Build the job from</label>
-  <select name="mode" id="mode">
-    <option value="reuse">An existing job</option>
-    <option value="ask">Asking Claude</option>
-  </select>
-  <div data-mode="reuse">
-    <label for="reuse_job_id">Job to reuse</label>
-    <select name="reuse_job_id" id="reuse_job_id">
-      <option value="">Choose a job…</option>
-      {% for j in recent %}<option value="{{ j.id }}">{{ j.type }} &middot; {{ j.project_id or 'no project' }} &middot; {{ j.created_at | reltime }}</option>{% endfor %}
-    </select>
-  </div>
-  <div data-mode="ask" hidden>
-    <label for="prompt">Describe the job</label>
-    <textarea name="prompt" id="prompt" rows="4" placeholder="What should this job do?"></textarea>
-  </div>
-  <div class="row" style="margin-top:12px"><button type="submit" name="action" value="build" class="primary">Build</button></div>
+  {% include "_job_picker.html" %}
+  {% if build_error %}<p class="muted" style="color:var(--fail)">{{ build_error }}</p>{% endif %}
+  <div class="row" style="margin-top:12px"><button type="submit" class="primary" data-busy="Starting…">Start job</button></div>
 </form>
-
-{% if build_error %}<p class="muted" style="color:var(--fail)">{{ build_error }}</p>{% endif %}
-
-{% if template_json %}
-<form method="post" action="/jobs/new" style="margin-top:16px">
-  <label for="template_json">Job template &mdash; review and edit before dispatching</label>
-  <textarea name="template_json" id="template_json" rows="10" style="font-family:var(--font-mono)">{{ template_json }}</textarea>
-  <div class="row" style="margin-top:12px"><button type="submit" name="action" value="submit" class="primary">Dispatch</button></div>
-</form>
-{% endif %}
 </div>
-<script>
-(function () {
-  var mode = document.getElementById("mode");
-  function sync() {
-    document.querySelectorAll("[data-mode]").forEach(function (el) { el.hidden = el.dataset.mode !== mode.value; });
-  }
-  mode.addEventListener("change", sync);
-  sync();
-})();
-</script>
 {% endblock %}
