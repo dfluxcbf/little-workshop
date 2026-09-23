@@ -472,3 +472,9 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000244 | **A real policy check never blocks the Policy pillar's own request handling.** Where `policy.check_project` must actually run the sandbox (the unchanged-fingerprint skip does not apply), the Policy pillar shall dispatch that check to a background thread and return `accepted` immediately, reporting the eventual verdict back to Orchestration's `/v1/jobs/{id}/complete` callback — the same async-completion pattern `agent.run_task` and the self-redeploy worker already use. A skipped (unchanged) check stays fully synchronous, since nothing in that path can block. This keeps `/v1/health`'s responsiveness to Core's own probe decoupled from how long any individual check takes, closing the gap that let a single slow check leave the pillar looking crashed. | done |
+
+## Sandbox pids-limit regression fixed (2026-09-23)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000245 | **The sandbox's own process-count cap never manufactures false test failures.** Where the policy sandbox runs a project's own real test suite, the `--pids-limit` given to `docker run` shall be high enough that a legitimate, subprocess- and thread-heavy suite (real git commands, real `TestClient`/uvicorn instances) never has an individual test fail merely because it couldn't fork/spawn under the cap. Root cause of both Needs-Attention failures this fixes: REQ-000000242's original 256 was picked without ever running little-workshop's own ~2150-test suite against it — 889 tests failed and 68 errored purely from hitting that ceiling, dragging measured coverage from a real 95% down to a reported 69%. Raised to 2048, verified clean (2 unrelated, pre-existing sandbox-environment failures only, real 95% reported) — still a real ceiling against an actual fork bomb, just not one a normal test run can trip. | done |

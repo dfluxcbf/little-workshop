@@ -36,7 +36,17 @@ DEFAULT_CHECK_TIMEOUT_SECONDS = 1800.0
 # check faster.
 DEFAULT_CPUS = "2.0"
 DEFAULT_MEMORY = "1g"
-DEFAULT_PIDS_LIMIT = "256"
+# 2026-09-23 finding: 256 was picked as "generous defense against a fork
+# bomb" without ever running this project's own python-test-coverage
+# check against itself under it — little-workshop's real ~2150-test
+# suite (real subprocess- and thread-heavy: git commands, TestClient
+# instances, uvicorn threadpools) blew straight through 256 concurrent
+# PIDs, and every test that couldn't spawn past the limit failed —
+# 889 failed + 68 errors, dragging the measured coverage from a real 95%
+# down to a nonsensical 69%. Verified clean (2 unrelated, pre-existing
+# failures only, real 95% reported) at 2048; still a real ceiling
+# against a genuine fork bomb, just not one that fires on ordinary use.
+DEFAULT_PIDS_LIMIT = "2048"
 
 # git: version policies compare a commit with its parent, which needs real history.
 # pytest-cov and this ecosystem's own common runtime stack: the python-test-coverage
