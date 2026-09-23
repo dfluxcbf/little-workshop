@@ -17,11 +17,14 @@
   <label class="job-flag"><input type="checkbox" name="arg_{{ arg.name }}" value="on"> {{ arg.label }}</label>
   {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
   {% else %}
-  <fieldset class="job-multi" data-choices="{{ arg.name }}">
-    <legend>{{ arg.label }}</legend>
+  <div class="job-multi" role="group" aria-labelledby="arg-{{ spec.key }}-{{ arg.name }}" data-choices="{{ arg.name }}">
+    <div class="job-multi-head">
+      <span class="job-multi-label" id="arg-{{ spec.key }}-{{ arg.name }}">{{ arg.label }}</span>
+      <button type="button" class="small job-select-all" hidden>Select all</button>
+    </div>
     {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
     <div class="job-choices"><p class="muted">Choose a project first.</p></div>
-  </fieldset>
+  </div>
   {% endif %}
   {% endfor %}
 </div>
@@ -31,27 +34,43 @@
   var project = document.getElementById("project"), job = document.getElementById("job");
   var loaded = {};
   function esc(s) { var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+  function choiceInputs(box) { return box.querySelectorAll(".job-choices input:not(:disabled)"); }
+  // "Select all" shows once there is something to select, and turns into "Select none" when all are.
+  function syncSelectAll(box) {
+    var btn = box.querySelector(".job-select-all"), inputs = choiceInputs(box);
+    btn.hidden = !inputs.length;
+    btn.textContent = inputs.length && Array.prototype.every.call(inputs, function (i) { return i.checked; }) ? "Select none" : "Select all";
+  }
+  function show(box, html) { box.querySelector(".job-choices").innerHTML = html; syncSelectAll(box); }
+  document.querySelectorAll("[data-choices]").forEach(function (box) {
+    box.querySelector(".job-select-all").addEventListener("click", function () {
+      var inputs = choiceInputs(box), all = Array.prototype.every.call(inputs, function (i) { return i.checked; });
+      inputs.forEach(function (i) { i.checked = !all; });
+      syncSelectAll(box);
+    });
+    box.querySelector(".job-choices").addEventListener("change", function () { syncSelectAll(box); });
+  });
   function loadChoices(box) {
-    var arg = box.dataset.choices, target = box.querySelector(".job-choices");
-    if (!project.value) { target.innerHTML = '<p class="muted">Choose a project first.</p>'; return; }
+    var arg = box.dataset.choices;
+    if (!project.value) { show(box, '<p class="muted">Choose a project first.</p>'); return; }
     var key = arg + "|" + project.value;
-    if (loaded[key]) { target.innerHTML = loaded[key]; return; }
-    target.innerHTML = '<p class="muted job-loading">Finding tests…</p>';
+    if (loaded[key]) { show(box, loaded[key]); return; }
+    show(box, '<p class="muted job-loading">Finding tests…</p>');
     fetch("/jobs/catalog/choices/" + encodeURIComponent(arg) + "?project=" + encodeURIComponent(project.value), { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (key !== arg + "|" + project.value) return;  // the project changed meanwhile
-        if (d.error) { target.innerHTML = '<p class="muted job-error">Could not list them: ' + esc(d.error) + "</p>"; return; }
-        if (!d.choices.length) { target.innerHTML = '<p class="muted">None in this project.</p>'; return; }
+        if (d.error) { show(box, '<p class="muted job-error">Could not list them: ' + esc(d.error) + "</p>"); return; }
+        if (!d.choices.length) { show(box, '<p class="muted">None in this project.</p>'); return; }
         var html = d.choices.map(function (c) {
           return '<label class="job-choice' + (c.disabled ? " is-disabled" : "") + '"><input type="checkbox" class="pick" name="arg_' + esc(arg) +
             '" value="' + esc(c.value) + '"' + (c.disabled ? " disabled" : "") + '><span class="job-choice-name">' + esc(c.label) +
             '</span><span class="dim">' + esc(c.detail || "") + "</span></label>";
         }).join("");
         loaded[key] = html;
-        target.innerHTML = html;
+        show(box, html);
       })
-      .catch(function () { target.innerHTML = '<p class="muted job-error">Could not list them right now.</p>'; });
+      .catch(function () { show(box, '<p class="muted job-error">Could not list them right now.</p>'); });
   }
   function sync() {
     document.querySelectorAll(".job-args").forEach(function (el) {

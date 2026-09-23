@@ -755,7 +755,7 @@ def build_app(paths: Paths) -> FastAPI:
         )
         if result.get("status") != "succeeded":
             raise ValueError(result.get("error") or "test discovery failed")
-        suites = sorted(result["result"]["suites"], key=lambda s: s["name"].lower())
+        suites = sorted(result["result"]["suites"], key=lambda s: (-len(s["tests"]), s["name"].lower()))
         return [
             {"value": s["id"], "label": s["name"], "disabled": not s["tests"],
              "detail": f"{len(s['tests'])} test{'' if len(s['tests']) == 1 else 's'}" if s["tests"] else "no tests found"}

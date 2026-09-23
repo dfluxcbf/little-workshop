@@ -2129,8 +2129,8 @@ def test_suite_choices_come_from_test_discovery(test_client, monkeypatch):
     assert calls == [("requirements.discover_tests", "little-widget", {"commitish": "HEAD"}, 340.0)]
     assert body["choices"] == [
         {"value": "s1", "label": "Alpha", "disabled": False, "detail": "2 tests"},
-        {"value": "s3", "label": "Empty", "disabled": True, "detail": "no tests found"},
         {"value": "s2", "label": "test_b", "disabled": False, "detail": "1 test"},
+        {"value": "s3", "label": "Empty", "disabled": True, "detail": "no tests found"},
     ]
 
 
