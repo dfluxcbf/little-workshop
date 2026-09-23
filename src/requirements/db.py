@@ -78,6 +78,13 @@ CREATE TABLE IF NOT EXISTS test_results (
     source TEXT NOT NULL DEFAULT 'manual',
     executed_at TEXT NOT NULL
 );
+
+-- `latest_result_for_suite` below is called once per requirement's own
+-- suite mapping to build the Dashboard's /v1/report — without this,
+-- every call is a full scan of the whole table (2026-09-23 finding:
+-- little-workshop's own 41k+ accumulated rows made that report take
+-- ~9.7s, the dominant cost of the Dashboard's home page).
+CREATE INDEX IF NOT EXISTS idx_test_results_suite_executed ON test_results (suite_id, executed_at);
 """
 
 
@@ -87,6 +94,12 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    # An existing database predates the index above — CREATE INDEX IF NOT
+    # EXISTS in the schema script only helps a fresh file's initial
+    # executescript pass in some sqlite3 driver states; make it explicit
+    # and idempotent here too, the same belt-and-suspenders pattern this
+    # project already uses for a column added after a table shipped.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_test_results_suite_executed ON test_results (suite_id, executed_at)")
     conn.commit()
     return conn
 
@@ -348,14 +361,21 @@ def latest_result_for_suite(conn: sqlite3.Connection, suite_id: str) -> TestResu
     the suite's own verdict for the definition-of-done report is
     "passed" only when every test recorded in its most recent run
     passed — so this returns the worst verdict among results sharing
-    the latest `executed_at` batch, not just an arbitrary single row."""
-    rows = conn.execute(
-        "SELECT * FROM test_results WHERE suite_id = ? ORDER BY executed_at DESC", (suite_id,)
-    ).fetchall()
-    if not rows:
+    the latest `executed_at` batch, not just an arbitrary single row.
+    Two indexed lookups (the index above makes both an index-only range
+    scan) rather than pulling every row a suite has ever recorded and
+    sorting in Python — a suite accumulates one row per test per run
+    forever, so that used to mean scanning the whole table's history on
+    every single call."""
+    latest_row = conn.execute(
+        "SELECT MAX(executed_at) AS ts FROM test_results WHERE suite_id = ?", (suite_id,)
+    ).fetchone()
+    latest_ts = latest_row["ts"] if latest_row else None
+    if latest_ts is None:
         return None
-    latest_ts = rows[0]["executed_at"]
-    batch = [r for r in rows if r["executed_at"] == latest_ts]
+    batch = conn.execute(
+        "SELECT * FROM test_results WHERE suite_id = ? AND executed_at = ?", (suite_id, latest_ts)
+    ).fetchall()
     priority = {TestVerdict.ERROR: 0, TestVerdict.FAILED: 1, TestVerdict.SKIPPED: 2, TestVerdict.PASSED: 3}
     worst = min(batch, key=lambda r: priority[TestVerdict(r["verdict"])])
     return _row_to_result(worst)

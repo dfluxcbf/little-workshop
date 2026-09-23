@@ -175,3 +175,13 @@ def test_latest_result_for_suite_is_worst_verdict_among_the_latest_batch(conn):
 
 def test_new_id_is_unique(conn):
     assert db.new_id() != db.new_id()
+
+
+def test_test_results_has_a_suite_executed_at_index(conn):
+    # 2026-09-23 finding: latest_result_for_suite is called once per
+    # requirement's own suite mapping to build the Dashboard's report —
+    # without this index it's a full table scan every time, and with
+    # little-workshop's own accumulated 40k+ rows that made the report
+    # take ~9.7s.
+    names = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='test_results'")}
+    assert "idx_test_results_suite_executed" in names
