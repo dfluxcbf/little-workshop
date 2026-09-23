@@ -5,6 +5,8 @@ docs/design.md's "Cross-pillar job dispatch" data flow.
 from __future__ import annotations
 
 import sqlite3
+import threading
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -12,9 +14,9 @@ from typing import Callable
 import httpx
 
 from common.uds_client import client_for_socket
-from orchestration.db import insert_job_run, update_job
+from orchestration.db import get_job, insert_job_run, update_job
 from orchestration.models import Job, JobStatus
-from orchestration.queue import cascade_dependency_failures, ready_jobs
+from orchestration.queue import cascade_dependency_failures, is_ready, ready_jobs
 
 # Given a pillar name, returns its socket path if that pillar is known
 # and enabled — regardless of whether it's currently *up* — or None if
@@ -95,81 +97,163 @@ def dispatch_timeout_for(job_type: str) -> float:
     return JOB_TYPE_TIMEOUTS.get(job_type, DEFAULT_DISPATCH_TIMEOUT_SECONDS)
 
 
-def dispatch_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = DEFAULT_DISPATCH_TIMEOUT_SECONDS) -> Job:
+# Job id -> set once its dispatch call has returned. A Job claimed by one
+# request's pump can be the very Job another request (the one that
+# created it) is waiting to report on; see `wait_for_dispatch`.
+_dispatching: dict[str, threading.Event] = {}
+_dispatching_lock = threading.Lock()
+
+
+def wait_for_dispatch(job_id: str, timeout: float) -> None:
+    """Block until `job_id`'s in-flight dispatch call (if any) returns."""
+    with _dispatching_lock:
+        done = _dispatching.get(job_id)
+    if done is not None:
+        done.wait(timeout)
+
+
+def dispatch_job(
+    conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *,
+    timeout: float = DEFAULT_DISPATCH_TIMEOUT_SECONDS, lock: threading.Lock | None = None,
+) -> Job:
+    """`lock`, when given, guards only this function's own db work: the call
+    to the target pillar runs without it. A deploy takes minutes, and every
+    other request (a job list, a status read, a session start) would
+    otherwise queue behind it and time out. The caller must not hold it."""
+    guard = lock if lock is not None else nullcontext()
     socket_path = socket_lookup(job.target_pillar)
     if socket_path is None:
-        job.status = JobStatus.FAILED
-        job.error = "pillar disabled"
-        update_job(conn, job)
-        insert_job_run(
-            conn, job.id, outcome="failed", detail=job.error,
-            started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
-        )
+        with guard:
+            job.status = JobStatus.FAILED
+            job.error = "pillar disabled"
+            update_job(conn, job)
+            insert_job_run(
+                conn, job.id, outcome="failed", detail=job.error,
+                started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+            )
         return job
 
-    job.status = JobStatus.RUNNING
-    update_job(conn, job)
-    started_at = datetime.now(timezone.utc)
-
+    done = threading.Event()
+    with _dispatching_lock:
+        _dispatching[job.id] = done
     try:
-        with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.post(
-                f"/v1/jobs/{job.type}",
-                json={"job_id": job.id, "project_id": job.project_id, "params": job.params},
-            )
-        if response.status_code == 200:
-            body = response.json()
-            outcome = body.get("outcome", "succeeded")
-            if outcome == "succeeded":
-                job.status = JobStatus.SUCCEEDED
-                job.result = body.get("result")
+        with guard:
+            job.status = JobStatus.RUNNING
+            update_job(conn, job)
+        started_at = datetime.now(timezone.utc)
+
+        status, result, error = JobStatus.RUNNING, None, None
+        try:
+            with client_for_socket(socket_path, timeout=timeout) as client:
+                response = client.post(
+                    f"/v1/jobs/{job.type}",
+                    json={"job_id": job.id, "project_id": job.project_id, "params": job.params},
+                )
+            if response.status_code == 200:
+                body = response.json()
+                outcome = body.get("outcome", "succeeded")
+                if outcome == "succeeded":
+                    status, result = JobStatus.SUCCEEDED, body.get("result")
+                elif outcome == "accepted":
+                    # Long-running: stays RUNNING, completed later via
+                    # Orchestration's own callback endpoint.
+                    pass
+                else:
+                    status, error = JobStatus.FAILED, body.get("error", "pillar reported failure")
+            else:
+                status, error = JobStatus.FAILED, f"pillar returned status {response.status_code}"
+        except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+            # Pillar enabled but unreachable right now — leave the job queued
+            # so it's retried once Core reports the pillar healthy again,
+            # rather than failing outright.
+            status, error = JobStatus.QUEUED, f"target pillar unreachable: {exc}"
+
+        with guard:
+            if lock is not None:
+                current = get_job(conn, job.id)
+                if current is not None and current.status != JobStatus.RUNNING:
+                    # Settled while the call was in flight (a `stop`, or an
+                    # accepted Job's own completion callback) — that wins.
+                    return current
+            job.status, job.error = status, error
+            if status == JobStatus.SUCCEEDED:
+                job.result = result
                 from orchestration import policy_gate
 
                 policy_gate.verify_after_completion(conn, socket_lookup, job)
-            elif outcome == "accepted":
-                # Long-running: stays RUNNING, completed later via
-                # Orchestration's own callback endpoint.
-                pass
-            else:
-                job.status = JobStatus.FAILED
-                job.error = body.get("error", "pillar reported failure")
-        else:
-            job.status = JobStatus.FAILED
-            job.error = f"pillar returned status {response.status_code}"
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
-        # Pillar enabled but unreachable right now — leave the job queued
-        # so it's retried once Core reports the pillar healthy again,
-        # rather than failing outright.
-        job.status = JobStatus.QUEUED
-        job.error = f"target pillar unreachable: {exc}"
-
-    update_job(conn, job)
-    insert_job_run(
-        conn, job.id, outcome=job.status.value, detail=job.error,
-        started_at=started_at, finished_at=datetime.now(timezone.utc),
-    )
-    return job
+            update_job(conn, job)
+            insert_job_run(
+                conn, job.id, outcome=job.status.value, detail=job.error,
+                started_at=started_at, finished_at=datetime.now(timezone.utc),
+            )
+        return job
+    finally:
+        done.set()
+        with _dispatching_lock:
+            if _dispatching.get(job.id) is done:
+                del _dispatching[job.id]
 
 
-def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup) -> list[Job]:
+def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup, *, lock: threading.Lock | None = None) -> list[Job]:
     """The queue's own pump: fail anything whose dependency died, then
     dispatch everything actually ready — except a gated Job type whose
     governing policy check just came back `fail`, which goes to
     `pending_confirmation` instead of dispatching (docs/milestones.md
-    M12's action-gating)."""
+    M12's action-gating).
+
+    With `lock` (which the caller must not hold), ready Jobs are claimed
+    (set `running`) under it, so two concurrent pumps never dispatch the
+    same Job, and then dispatched without it, side by side."""
     from orchestration import policy_gate
 
-    cascade_dependency_failures(conn)
-    dispatched: list[Job] = []
-    for job in ready_jobs(conn):
-        if policy_gate.maybe_gate(conn, job):
-            dispatched.append(job)
+    if lock is None:
+        cascade_dependency_failures(conn)
+        dispatched: list[Job] = []
+        for job in ready_jobs(conn):
+            if policy_gate.maybe_gate(conn, job):
+                dispatched.append(job)
+                continue
+            dispatched.append(dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type)))
+        return dispatched
+
+    def run(job: Job) -> Job:
+        return dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type), lock=lock)
+
+    handled: list[Job] = []
+    tried: set[str] = set()
+    while True:
+        claimed: list[Job] = []
+        with lock:
+            cascade_dependency_failures(conn)
+            for job in ready_jobs(conn):
+                # Re-checked per Job: claiming an earlier one may have filled its queue_key.
+                if job.id in tried or not is_ready(conn, job):
+                    continue
+                tried.add(job.id)
+                if policy_gate.maybe_gate(conn, job):
+                    handled.append(job)
+                    continue
+                job.status = JobStatus.RUNNING
+                update_job(conn, job)
+                claimed.append(job)
+        if not claimed:
+            return handled
+        if len(claimed) == 1:
+            handled.append(run(claimed[0]))
             continue
-        dispatched.append(dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type)))
-    return dispatched
+        results: dict[str, Job] = {}
+        threads = [threading.Thread(target=lambda j=job: results.__setitem__(j.id, run(j)), daemon=True) for job in claimed]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        handled.extend(results.get(job.id, job) for job in claimed)
+        # Another round: a Job whose queue_key or dependency just freed up is ready now.
 
 
-def stop_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 10.0) -> dict:
+def stop_job(
+    conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 10.0, lock: threading.Lock | None = None,
+) -> dict:
     """`docs/milestones.md` M9's `stop`: interrupt a Job that is
     currently *running* — scheduled-originated or not. Never raises;
     every outcome (already settled, declared unstoppable, target
@@ -193,13 +277,14 @@ def stop_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *,
         return {"stopped": False, "reason": "target pillar unreachable"}
 
     if response.status_code == 200 and response.json().get("stopped"):
-        job.status = JobStatus.STOPPED
-        job.error = "stopped by user"
-        update_job(conn, job)
-        insert_job_run(
-            conn, job.id, outcome="stopped", detail=job.error,
-            started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
-        )
+        with lock if lock is not None else nullcontext():  # `lock`: not held by the caller, db work only
+            job.status = JobStatus.STOPPED
+            job.error = "stopped by user"
+            update_job(conn, job)
+            insert_job_run(
+                conn, job.id, outcome="stopped", detail=job.error,
+                started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+            )
         return {"stopped": True, "reason": None}
 
     reason = "not stoppable"

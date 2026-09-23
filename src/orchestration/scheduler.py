@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import nullcontext
 from datetime import datetime
 
 from orchestration import db
@@ -23,7 +24,7 @@ DEFAULT_TICK_INTERVAL_SECONDS = 600.0  # 10 minutes
 
 
 def _create_job_from_template(
-    conn: sqlite3.Connection, task: ScheduledTask, socket_lookup: SocketLookup
+    conn: sqlite3.Connection, task: ScheduledTask, socket_lookup: SocketLookup, lock: threading.Lock | None = None
 ) -> Job:
     job = Job(
         type=task.job_template.type,
@@ -34,29 +35,36 @@ def _create_job_from_template(
         depends_on=task.job_template.depends_on,
         created_by="scheduler",
     )
-    db.insert_job(conn, job)
-    dispatch_ready_jobs(conn, socket_lookup)
+    guard = lock if lock is not None else nullcontext()
+    with guard:
+        db.insert_job(conn, job)
+    dispatch_ready_jobs(conn, socket_lookup, lock=lock)
     task.last_job_id = job.id
-    return db.get_job(conn, job.id) or job
+    with guard:
+        return db.get_job(conn, job.id) or job
 
 
 def tick_once(
-    conn: sqlite3.Connection, socket_lookup: SocketLookup, *, now: datetime | None = None
+    conn: sqlite3.Connection, socket_lookup: SocketLookup, *, now: datetime | None = None, lock: threading.Lock | None = None
 ) -> list[Job]:
     """Fires every active task whose `next_run_at` is due, advancing it
     to its own next occurrence (or spending it, for a `once` task) and
     clearing any pending `missed_run_at` — a real firing on schedule
     always supersedes a stale missed-run question."""
     now = now or datetime.now()
+    guard = lock if lock is not None else nullcontext()
     fired: list[Job] = []
-    for task in db.list_scheduled_tasks(conn, state=ScheduledTaskState.ACTIVE):
+    with guard:
+        tasks = db.list_scheduled_tasks(conn, state=ScheduledTaskState.ACTIVE)
+    for task in tasks:
         if task.next_run_at is None or task.next_run_at > now:
             continue
-        job = _create_job_from_template(conn, task, socket_lookup)
+        job = _create_job_from_template(conn, task, socket_lookup, lock)
         fired.append(job)
         task.missed_run_at = None
         task.next_run_at = next_occurrence_after(task.schedule, after=task.next_run_at)
-        db.update_scheduled_task(conn, task)
+        with guard:
+            db.update_scheduled_task(conn, task)
     return fired
 
 
@@ -91,15 +99,16 @@ def startup_check(conn: sqlite3.Connection, *, now: datetime | None = None) -> l
 
 
 def trigger_task(
-    conn: sqlite3.Connection, task: ScheduledTask, socket_lookup: SocketLookup
+    conn: sqlite3.Connection, task: ScheduledTask, socket_lookup: SocketLookup, *, lock: threading.Lock | None = None
 ) -> Job:
     """Fires the template right now, out of band — `next_run_at` is
     left exactly as it was; the schedule's normal cadence keeps going
     independently. Resolves a pending missed-run question, if there was
     one, the same way an on-time firing would."""
-    job = _create_job_from_template(conn, task, socket_lookup)
+    job = _create_job_from_template(conn, task, socket_lookup, lock)
     task.missed_run_at = None
-    db.update_scheduled_task(conn, task)
+    with lock if lock is not None else nullcontext():
+        db.update_scheduled_task(conn, task)
     return job
 
 
@@ -147,20 +156,23 @@ class SchedulerThread:
         socket_lookup: SocketLookup,
         *,
         interval_seconds: float = DEFAULT_TICK_INTERVAL_SECONDS,
+        lock: threading.Lock | None = None,
     ) -> None:
         self._conn = conn
+        self._lock = lock
         self._socket_lookup = socket_lookup
         self._interval_seconds = interval_seconds
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self) -> None:
-        startup_check(self._conn)
+        with self._lock if self._lock is not None else nullcontext():
+            startup_check(self._conn)
         self._thread.start()
 
     def _run(self) -> None:
         while not self._stop_event.wait(self._interval_seconds):
-            tick_once(self._conn, self._socket_lookup)
+            tick_once(self._conn, self._socket_lookup, lock=self._lock)
 
     def stop(self) -> None:
         self._stop_event.set()

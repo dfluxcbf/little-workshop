@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from common.incident import install_incident_reporting
 from common.paths import Paths
 from orchestration import db, policy_gate
-from orchestration.dispatch import SocketLookup, complete_job, dispatch_ready_jobs, stop_job
+from orchestration.dispatch import SocketLookup, complete_job, dispatch_ready_jobs, dispatch_timeout_for, stop_job, wait_for_dispatch
 from orchestration.models import (
     Job,
     JobStatus,
@@ -81,14 +81,18 @@ class SetQueueCapacityRequest(BaseModel):
     capacity: int
 
 
-def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Paths | None = None) -> FastAPI:
+def build_app(
+    conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Paths | None = None, lock: threading.Lock | None = None,
+) -> FastAPI:
     app = FastAPI(title="little-workshop Orchestration")
     if paths is not None:
         install_incident_reporting(app, paths, pillar="orchestration")
     # FastAPI runs sync endpoint functions in a threadpool, so concurrent
     # requests could otherwise touch the one sqlite3 connection from more
     # than one thread at once — serialize every request's db work here.
-    lock = threading.Lock()
+    # Never held across a call to another pillar (see dispatch.py), so a
+    # minutes-long Job never stalls reads. Shared with the scheduler thread.
+    lock = lock or threading.Lock()
 
     @app.get("/v1/health")
     def health() -> dict:
@@ -103,7 +107,10 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Path
         with lock:
             db.insert_job(conn, job)
             policy_gate.attach_policy_gate(conn, socket_lookup, job)
-            dispatch_ready_jobs(conn, socket_lookup)
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)
+        # A concurrent request's pump may have claimed this Job; report its outcome, not "running".
+        wait_for_dispatch(job.id, dispatch_timeout_for(job.type) + 5)
+        with lock:
             return db.get_job(conn, job.id).model_dump(mode="json")
 
     @app.get("/v1/jobs")
@@ -153,8 +160,8 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Path
             completed = complete_job(
                 conn, job, succeeded=request.succeeded, result=request.result, error=request.error
             )
-            dispatch_ready_jobs(conn, socket_lookup)
-            return completed.model_dump(mode="json")
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)
+        return completed.model_dump(mode="json")
 
     @app.post("/v1/jobs/{job_id}/stop")
     def stop(job_id: str) -> dict:
@@ -162,7 +169,7 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Path
             job = db.get_job(conn, job_id)
             if job is None:
                 raise HTTPException(status_code=404, detail="job not found")
-            return stop_job(conn, job, socket_lookup)
+        return stop_job(conn, job, socket_lookup, lock=lock)
 
     @app.post("/v1/jobs/{job_id}/policy_confirm")
     def policy_confirm(job_id: str) -> dict:
@@ -170,9 +177,9 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Path
             job = db.get_job(conn, job_id)
             if job is None:
                 raise HTTPException(status_code=404, detail="job not found")
-            result = policy_gate.confirm(conn, job, socket_lookup)
-            dispatch_ready_jobs(conn, socket_lookup)
-            return result
+        result = policy_gate.confirm(conn, job, socket_lookup, lock=lock)
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)
+        return result
 
     @app.post("/v1/jobs/{job_id}/policy_confirm_timeout")
     def policy_confirm_timeout(job_id: str) -> dict:
@@ -184,8 +191,7 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Path
 
     @app.post("/v1/pump")
     def pump() -> list[dict]:
-        with lock:
-            return [job.model_dump(mode="json") for job in dispatch_ready_jobs(conn, socket_lookup)]
+        return [job.model_dump(mode="json") for job in dispatch_ready_jobs(conn, socket_lookup, lock=lock)]
 
     @app.post("/v1/pipelines")
     def save_pipeline(pipeline: Pipeline) -> dict:
@@ -210,8 +216,8 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Path
             run: PipelineRun = trigger_pipeline(
                 conn, pipeline, project_id=request.project_id, created_by=request.created_by
             )
-            dispatch_ready_jobs(conn, socket_lookup)
-            return run.model_dump(mode="json")
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)
+        return run.model_dump(mode="json")
 
     @app.get("/v1/pipeline_runs/{run_id}")
     def get_pipeline_run(run_id: str) -> dict:
@@ -284,8 +290,7 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Path
             task = db.get_scheduled_task(conn, task_id)
             if task is None:
                 raise HTTPException(status_code=404, detail="scheduled task not found")
-            job = trigger_task(conn, task, socket_lookup)
-            return job.model_dump(mode="json")
+        return trigger_task(conn, task, socket_lookup, lock=lock).model_dump(mode="json")
 
     @app.post("/v1/scheduled_tasks/{task_id}/cancel")
     def cancel(task_id: str) -> dict:
@@ -317,7 +322,7 @@ def build_app(conn: sqlite3.Connection, socket_lookup: SocketLookup, paths: Path
             raise HTTPException(status_code=422, detail="capacity must be at least 1")
         with lock:
             db.set_queue_capacity(conn, queue_key, request.capacity)
-            dispatch_ready_jobs(conn, socket_lookup)
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)
         return {"queue_key": queue_key, "capacity": request.capacity}
 
     return app

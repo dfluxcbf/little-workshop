@@ -34,6 +34,8 @@ since blocking an action that already happened is meaningless.
 from __future__ import annotations
 
 import sqlite3
+import threading
+from contextlib import nullcontext
 from typing import Callable
 
 import httpx
@@ -207,12 +209,18 @@ def maybe_gate(
     return True
 
 
-def confirm(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup) -> dict:
-    if job.status != JobStatus.PENDING_CONFIRMATION:
-        return {"confirmed": False, "reason": f"job is {job.status.value}, not pending confirmation"}
+def confirm(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, lock: threading.Lock | None = None) -> dict:
+    """`lock` (not held by the caller) guards the claim; the dispatch itself runs without it."""
     from orchestration.dispatch import dispatch_job, dispatch_timeout_for
 
-    dispatched = dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type))
+    with lock if lock is not None else nullcontext():
+        if lock is not None:
+            job = get_job(conn, job.id) or job
+        if job.status != JobStatus.PENDING_CONFIRMATION:
+            return {"confirmed": False, "reason": f"job is {job.status.value}, not pending confirmation"}
+        job.status = JobStatus.RUNNING  # claimed: a second confirm now finds it settled
+        update_job(conn, job)
+    dispatched = dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type), lock=lock)
     return {"confirmed": True, "job": dispatched.model_dump(mode="json")}
 
 

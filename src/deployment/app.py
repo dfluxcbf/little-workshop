@@ -73,6 +73,27 @@ def build_app(
     lock = threading.Lock()
     flow = flow or DeploymentFlow(paths=paths)
 
+    db_row = conn.execute("PRAGMA database_list").fetchone()
+    db_file = db_row[2] if db_row else ""
+
+    def read(fn, *args, **kwargs):
+        """Reads must never queue behind `lock`: a deploy, stop or pillar
+        redeploy holds it for the whole operation (a cold `bazel run
+        //:install` takes minutes), and the Dashboard's server panel would
+        otherwise time out and show no server at all for exactly as long as
+        one is launching. A short-lived read-only connection (WAL) sidesteps
+        it — agent/app.py's same pattern; an in-memory database (tests) has
+        no file to reopen, so it falls back to the shared one."""
+        if not db_file:
+            with lock:
+                return fn(conn, *args, **kwargs)
+        reader = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
+        reader.row_factory = conn.row_factory
+        try:
+            return fn(reader, *args, **kwargs)
+        finally:
+            reader.close()
+
     @app.get("/v1/health")
     def health() -> dict:
         return {"ok": True}
@@ -222,8 +243,7 @@ def build_app(
             manifest = _load_manifest(paths, project_id)
         except DeploymentError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
-        with lock:
-            result = flow.status(conn, project_id, manifest)
+        result = read(flow.status, project_id, manifest)
         return {
             "name": result.name, "unit": result.unit, "pids": result.pids, "listening": result.listening,
             "tailscale": result.tailscale, "branch": result.branch, "version": result.version,
@@ -235,8 +255,7 @@ def build_app(
         """The commit each little-workshop pillar was last redeployed from,
         plus this checkout's own HEAD for comparison. A pillar with no row
         was never redeployed through this pillar (still on its initial install)."""
-        with lock:
-            rows = db.list_pillar_deployments(conn)
+        rows = read(db.list_pillar_deployments)
         try:
             head = gitutil.run(["git", "rev-parse", "HEAD"], workshop_repo_dir()).stdout.strip() or None
             commits = gitutil.recent_commits(workshop_repo_dir(), 10)
@@ -265,13 +284,11 @@ def build_app(
 
     @app.get("/v1/deployments/{project_id}")
     def deployments(project_id: str) -> list[dict]:
-        with lock:
-            return db.list_deployments(conn, project_id)
+        return read(db.list_deployments, project_id)
 
     @app.get("/v1/confirmations/{project_id}")
     def confirmation(project_id: str) -> dict:
-        with lock:
-            state = db.get_confirmation(conn, project_id)
+        state = read(db.get_confirmation, project_id)
         if state is None:
             raise HTTPException(status_code=404, detail="not confirm-gated (no state recorded)")
         return state

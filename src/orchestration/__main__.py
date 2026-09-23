@@ -7,6 +7,7 @@ place a socket path is looked up" (docs/architecture.md's PI section).
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 import httpx
@@ -49,7 +50,9 @@ def main() -> None:
 
     conn = db.connect(paths.pillar_db_path("orchestration"))
     socket_lookup = make_core_socket_lookup(paths)
-    app = build_app(conn, socket_lookup, paths)
+    # One lock for every db touch, requests and the tick loop alike.
+    lock = threading.Lock()
+    app = build_app(conn, socket_lookup, paths, lock=lock)
 
     # docs/milestones.md M9: one tick loop per process, started here so
     # its one-time startup check (a firing missed while little-workshop
@@ -59,7 +62,7 @@ def main() -> None:
     # for real without waiting the production 10-minute interval;
     # production never sets it.
     tick_interval = float(os.environ.get("LWS_SCHEDULER_TICK_SECONDS", DEFAULT_TICK_INTERVAL_SECONDS))
-    scheduler_thread = SchedulerThread(conn, socket_lookup, interval_seconds=tick_interval)
+    scheduler_thread = SchedulerThread(conn, socket_lookup, interval_seconds=tick_interval, lock=lock)
     scheduler_thread.start()
 
     socket_path = paths.socket_path("orchestration")
