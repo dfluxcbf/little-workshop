@@ -1109,10 +1109,31 @@ details.report-item > .report-approve { margin: 0; padding: 0 12px 12px; }
 /* --- new job / schedule job: project -> job -> arguments -------------------- */
 .job-args { margin-top: 12px; }
 .job-desc, .job-help { font-size: 12.5px; margin: 4px 0 8px; }
-.job-flag, .job-choice { display: flex; align-items: center; gap: 8px; font-weight: 500; margin: 6px 0; cursor: pointer; }
-.job-flag input, .job-choice input { width: auto; margin: 0; }
+.job-flag { display: flex; align-items: center; gap: 8px; font-weight: 500; margin: 6px 0; cursor: pointer; }
+.job-flag input { width: auto; margin: 0; }
+/* A suite is a card: tapping it selects it (the checkbox is hidden, as on .pcard). */
+.job-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; padding: 2px; }
+.job-choices > p { grid-column: 1 / -1; margin: 4px 0; }
+.job-choice {
+  position: relative;
+  display: flex; flex-direction: column; gap: 3px;
+  min-width: 0; margin: 0; padding: 10px 32px 10px 12px;
+  font-size: 13px; font-weight: 400; text-transform: none; letter-spacing: normal;
+  color: var(--ink); background: var(--surface-alt);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+.job-choice:hover { border-color: var(--cyan-deep); }
+.job-choice .pick { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; padding: 0; border: 0; }
+.job-choice-name { font-family: var(--font-mono); font-weight: 600; overflow-wrap: anywhere; }
+.job-choice .dim { color: var(--ink-faint); font-size: 12px; }
+.job-choice:has(.pick:checked) { border-color: var(--cyan); background: var(--cyan-soft); box-shadow: 0 0 0 1px var(--cyan); }
+.job-choice:has(.pick:checked)::after { content: "✓"; position: absolute; top: 9px; right: 11px; color: var(--cyan); font-weight: 700; }
+.job-choice:has(.pick:focus-visible) { box-shadow: 0 0 0 3px var(--cyan-soft); }
 .job-choice.is-disabled { opacity: 0.5; cursor: default; }
+.job-choice.is-disabled:hover { border-color: var(--border); }
 .job-multi { border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 8px 12px 10px; margin: 8px 0 0; min-width: 0; }
 .job-multi legend { font-weight: 600; font-size: 13px; padding: 0 4px; }
-.job-choices { max-height: 320px; overflow-y: auto; }
+.job-choices { max-height: 360px; overflow-y: auto; }
 .job-error { color: var(--fail); }

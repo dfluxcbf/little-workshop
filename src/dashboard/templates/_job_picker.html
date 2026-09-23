@@ -44,8 +44,9 @@
         if (d.error) { target.innerHTML = '<p class="muted job-error">Could not list them: ' + esc(d.error) + "</p>"; return; }
         if (!d.choices.length) { target.innerHTML = '<p class="muted">None in this project.</p>'; return; }
         var html = d.choices.map(function (c) {
-          return '<label class="job-choice' + (c.disabled ? " is-disabled" : "") + '"><input type="checkbox" name="arg_' + esc(arg) +
-            '" value="' + esc(c.value) + '"' + (c.disabled ? " disabled" : "") + "> <span>" + esc(c.label) + '</span> <span class="dim">' + esc(c.detail || "") + "</span></label>";
+          return '<label class="job-choice' + (c.disabled ? " is-disabled" : "") + '"><input type="checkbox" class="pick" name="arg_' + esc(arg) +
+            '" value="' + esc(c.value) + '"' + (c.disabled ? " disabled" : "") + '><span class="job-choice-name">' + esc(c.label) +
+            '</span><span class="dim">' + esc(c.detail || "") + "</span></label>";
         }).join("");
         loaded[key] = html;
         target.innerHTML = html;
