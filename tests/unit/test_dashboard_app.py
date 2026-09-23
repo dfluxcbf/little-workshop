@@ -1614,7 +1614,7 @@ def test_report_loads_without_a_project_preselected(test_client, monkeypatch):
 def test_report_lists_every_requirement_with_description_and_verdict(test_client, monkeypatch):
     _stub_report(monkeypatch)
     text = test_client.get("/report", params={"project": "little-widget"}).text
-    for key, desc, verdict in (("REQ-1", "The Widget shall list things.", "passing"), ("REQ-2", "The Widget shall sort things.", "failing"),
+    for key, desc, verdict in (("REQ-1", "The Widget shall list things.", "passed"), ("REQ-2", "The Widget shall sort things.", "failed"),
                                ("REQ-3", "The Widget shall export things.", "no tests"), ("REQ-4", "The Widget shall print things.", "draft")):
         block = text[text.index(f"<code>{key}</code>"):]
         assert verdict in block[:200] and desc in block[:400]
@@ -1625,13 +1625,13 @@ def test_report_lists_every_test_with_its_latest_verdict(test_client, monkeypatc
     text = test_client.get("/report", params={"project": "little-widget"}).text
     assert re.search(r'report-test-name">t::a</span>\s*<span class="pill ok">passed', text)  # the later pass replaces the earlier failure
     assert re.search(r'report-test-name">t::b</span>\s*<span class="pill fail">failed', text)
-    assert re.search(r'report-test-name">t::c</span>\s*<span class="pill idle">skipped', text)
+    assert re.search(r'report-test-name">t::c</span>\s*<span class="pill warn">skipped', text)
     assert "test_widget" in text and text.count("report-test-name") == 3
 
 
 def test_report_filters_by_search_and_verdict(test_client, monkeypatch):
     _stub_report(monkeypatch)
-    text = test_client.get("/report", params={"project": "little-widget", "verdict": "failing"}).text
+    text = test_client.get("/report", params={"project": "little-widget", "verdict": "failed"}).text
     assert "REQ-2" in text and "REQ-1" not in text and "REQ-4" not in text
     assert "REQ-3" in test_client.get("/report", params={"project": "little-widget", "q": "export"}).text
     assert "t::b" in test_client.get("/report", params={"project": "little-widget", "verdict": "failed"}).text
@@ -1664,7 +1664,7 @@ def test_report_requirement_cards_are_collapsible_and_hide_the_description_until
     assert "<summary>" in details and "</summary>" in details
     summary = details[details.index("<summary>"):details.index("</summary>")]
     body = details[details.index("</summary>") + len("</summary>"):]
-    assert "REQ-1" in summary and "passing" in summary
+    assert "REQ-1" in summary and "passed" in summary
     assert "The Widget shall list things." not in summary and "The Widget shall list things." in body
 
 
@@ -2240,3 +2240,42 @@ def test_approving_reports_failures_and_never_redirects_off_the_report(test_clie
     location = unquote(response.headers["location"])
     assert location.startswith("/report?project=little-widget")
     assert "Approved 0 requirements. 1 could not be approved: requirement 'x' not found" in location
+
+
+def test_report_orders_requirements_by_what_needs_attention_then_by_number(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    rows = [
+        ("r1", "REQ-10", "published", {"done": True, "verdict": "passed"}),
+        ("r2", "REQ-9", "published", {"done": True, "verdict": "passed"}),
+        ("r3", "REQ-3", "published", {"tested": True, "verdict": "skipped"}),
+        ("r4", "REQ-4", "published", {"tested": True, "verdict": "failed"}),
+        ("r5", "REQ-5", "published", {"tested": True, "verdict": "error"}),
+        ("r6", "REQ-6", "draft", {}),
+        ("r7", "REQ-7", "published", {"tested": False, "verdict": "no tests"}),
+    ]
+    monkeypatch.setattr(client, "requirements_report", lambda paths, project: {"requirements": [
+        {"requirement_id": rid, "status": status, **extra} for rid, _, status, extra in rows]})
+    monkeypatch.setattr(client, "requirements_list", lambda paths, project: [
+        {"id": rid, "key": key, "title": key, "description": "", "status": status} for rid, key, status, _ in rows])
+    text = test_client.get("/report", params={"project": "little-widget"}).text
+    order = re.findall(r"<code>(REQ-\d+)</code>", text)
+    assert order == ["REQ-6", "REQ-5", "REQ-4", "REQ-3", "REQ-7", "REQ-9", "REQ-10"]
+    counts = re.search(r"Requirements <span class=\"dim\">.*?</h2>", text, re.S).group(0)
+    assert [m for m in re.findall(r"\d+ (draft|error|failed|skipped|no tests|passed)<", counts)] == [
+        "draft", "error", "failed", "skipped", "no tests", "passed"]
+
+
+def test_report_verdict_filter_offers_one_word_per_state(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/report", params={"project": "little-widget"}).text
+    options = re.findall(r'<option value="([^"]*)"', text[text.index('name="verdict"'):text.index("</select>", text.index('name="verdict"'))])
+    assert options == ["", "draft", "error", "failed", "skipped", "no tests", "passed"]
+
+
+def test_report_without_a_project_shows_a_placeholder_so_any_project_can_be_picked(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    text = test_client.get("/report").text
+    assert '<option value="" selected disabled>Choose a project…</option>' in text
+    assert 'value="little-widget" selected' not in text
+    chosen = test_client.get("/report", params={"project": "little-widget"}).text
+    assert "Choose a project" not in chosen and 'value="little-widget" selected' in chosen

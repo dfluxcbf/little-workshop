@@ -146,13 +146,29 @@ def _back(to: str, message: str) -> RedirectResponse:
     return RedirectResponse(f"{to}{'&' if '?' in to else '?'}message={quote(message)}", status_code=303)
 
 
+# Requirements and tests share one set of verdict words, listed in the order
+# the Report shows them: what needs a human first, then what is fine.
+VERDICT_ORDER = ["draft", "error", "failed", "skipped", "no tests", "passed"]
+
+
 def requirement_verdict(row: dict) -> str:
-    """One word for a requirement's state: passing (done), failing, no tests, or draft."""
-    if row.get("done"):
-        return "passing"
+    """One word for a requirement's state: draft (awaiting approval), or how its
+    linked tests stand — error, failed, skipped, no tests, passed."""
     if row.get("status") != "published":
         return "draft"
-    return "failing" if row.get("tested") else "no tests"
+    if row.get("done"):
+        return "passed"
+    # "verdict" comes from the Requirements pillar's report; an older pillar only gives "tested"
+    return row.get("verdict") or ("failed" if row.get("tested") else "no tests")
+
+
+def _natural_key(text: str) -> tuple:
+    """REQ-9 before REQ-10, whatever the zero-padding."""
+    return tuple(int(part) if part.isdigit() else part for part in re.split(r"(\d+)", text))
+
+
+def _verdict_rank(verdict: str) -> int:
+    return VERDICT_ORDER.index(verdict) if verdict in VERDICT_ORDER else len(VERDICT_ORDER)
 
 
 AGGREGATE_SUITE_NAME = "Unit tests"  # tools/import_requirements.py's REGISTER_SUITE, kept in sync by name
@@ -162,12 +178,13 @@ def build_report(paths: Paths, project: str) -> dict:
     """Every requirement (description, verdict) and every test (name, verdict — the latest run) of one project."""
     rows = {r["requirement_id"]: r for r in client.requirements_report(paths, project).get("requirements", [])}
     requirements = []
-    for req in sorted(client.requirements_list(paths, project), key=lambda r: r["key"]):
+    for req in client.requirements_list(paths, project):
         row = rows.get(req["id"], {})
         requirements.append({
             "id": req["id"], "key": req["key"], "title": req.get("title", ""), "description": req.get("description", ""),
             "verdict": requirement_verdict({**row, "status": row.get("status", req.get("status"))}),
         })
+    requirements.sort(key=lambda r: (_verdict_rank(r["verdict"]), _natural_key(r["key"])))
     all_suites = {s["id"]: s["name"] for s in client.requirements_suites(paths, project)}
     # AGGREGATE_SUITE_NAME ("Unit tests", tools/import_requirements.py's REGISTER_SUITE): a
     # self-application project's own whole-test-run bucket, used only for a requirement's
@@ -186,7 +203,7 @@ def build_report(paths: Paths, project: str) -> dict:
         {"suite": suites[sid], "name": name, "verdict": r["verdict"], "detail": r.get("detail", "")}
         for (sid, name), r in latest.items()
     ]
-    tests.sort(key=lambda t: (t["suite"], t["name"]))
+    tests.sort(key=lambda t: (t["suite"], _verdict_rank(t["verdict"]), t["name"]))
     return {"requirements": requirements, "tests": tests}
 
 
@@ -511,19 +528,15 @@ def build_app(paths: Paths) -> FastAPI:
                 and (not needle or needle in f"{r['key']} {r['title']} {r['description']}".lower())]
         tests = [t for t in data["tests"] if (not verdict or t["verdict"] == verdict)
                  and (not needle or needle in f"{t['suite']} {t['name']}".lower())]
-        req_counts: dict[str, int] = {}
-        for r in data["requirements"]:
-            req_counts[r["verdict"]] = req_counts.get(r["verdict"], 0) + 1
-        test_counts: dict[str, int] = {}
-        for t in data["tests"]:
-            test_counts[t["verdict"]] = test_counts.get(t["verdict"], 0) + 1
+        req_counts = {v: n for v in VERDICT_ORDER if (n := sum(1 for r in data["requirements"] if r["verdict"] == v))}
+        test_counts = {v: n for v in VERDICT_ORDER if (n := sum(1 for t in data["tests"] if t["verdict"] == v))}
         suites: dict[str, list[dict]] = {}
         for t in tests:
             suites.setdefault(t["suite"], []).append(t)
         return _render(
             request, "report.html", projects=names, project=chosen, q=q, verdict=verdict, requirements=reqs,
             suites=suites, req_counts=req_counts, test_counts=test_counts, req_total=len(data["requirements"]),
-            test_total=len(data["tests"]), error=error, nav_active="report",
+            test_total=len(data["tests"]), verdicts=VERDICT_ORDER, error=error, nav_active="report",
         )
 
     @app.post("/report/{project}/approve")

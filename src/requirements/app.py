@@ -363,6 +363,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                     "requirement_id": requirement.id, "key": requirement.key,
                     "status": requirement.status.value, "suite_ids": suite_ids,
                     "tested": tested, "passing": passing, "done": done,
+                    "verdict": _requirement_verdict(tested, [v.verdict for v in suite_verdicts.values() if v is not None]),
                 })
         return {
             "project_id": project_id, "requirements": rows,
@@ -370,3 +371,19 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         }
 
     return app
+
+
+def _requirement_verdict(tested: bool, suite_verdicts: list[TestVerdict]) -> str:
+    """One word for how a requirement's linked tests stand, in the same words
+    a test result uses: the worst latest suite verdict wins, except that a
+    requirement with any suite never run (or none linked) is "no tests"
+    unless something that did run already errored or failed."""
+    if TestVerdict.ERROR in suite_verdicts:
+        return "error"
+    if TestVerdict.FAILED in suite_verdicts:
+        return "failed"
+    if not tested:
+        return "no tests"
+    if TestVerdict.SKIPPED in suite_verdicts:
+        return "skipped"
+    return "passed"

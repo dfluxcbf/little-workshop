@@ -1,14 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Report — little-workshop{% endblock %}
 {% block content %}
+{% macro verdict_pill(v) -%}
+{{ 'ok' if v == 'passed' else ('fail' if v in ('failed', 'error') else ('warn' if v in ('no tests', 'skipped') else 'idle')) }}
+{%- endmacro %}
 <form class="report-filter" method="get" action="/report">
   <select name="project" aria-label="Project" onchange="this.form.submit()">
+    {% if not project %}<option value="" selected disabled>Choose a project…</option>{% endif %}
     {% for p in projects %}<option value="{{ p }}" {{ 'selected' if p == project }}>{{ p }}</option>{% endfor %}
   </select>
   <input type="search" name="q" value="{{ q }}" placeholder="Search requirements and tests" aria-label="Search">
   <select name="verdict" aria-label="Verdict" onchange="this.form.submit()">
     <option value="">Any verdict</option>
-    {% for v in ['passing', 'failing', 'no tests', 'draft', 'passed', 'failed', 'skipped', 'error'] %}<option value="{{ v }}" {{ 'selected' if v == verdict }}>{{ v }}</option>{% endfor %}
+    {% for v in verdicts %}<option value="{{ v }}" {{ 'selected' if v == verdict }}>{{ v }}</option>{% endfor %}
   </select>
   <button type="submit">Filter</button>
 </form>
@@ -25,7 +29,7 @@
 
 <section class="report-panel" data-panel="requirements">
   <h2 class="section-label">Requirements <span class="dim">{{ requirements|length }} of {{ req_total }}</span>
-    {% for v, n in req_counts.items() %}<span class="pill {{ 'ok' if v == 'passing' else ('fail' if v == 'failing' else ('warn' if v == 'no tests' else 'idle')) }}">{{ n }} {{ v }}</span>{% endfor %}</h2>
+    {% for v, n in req_counts.items() %}<span class="pill {{ verdict_pill(v) }}">{{ n }} {{ v }}</span>{% endfor %}</h2>
   {% set drafts = requirements|selectattr('verdict', 'equalto', 'draft')|list %}
   {% set back = '/report?' ~ {'project': project, 'q': q, 'verdict': verdict}|urlencode %}
   {% if drafts %}
@@ -42,7 +46,7 @@
     <details class="report-item">
       <summary>
         <span class="report-head"><code>{{ r.key }}</code>
-          <span class="pill {{ 'ok' if r.verdict == 'passing' else ('fail' if r.verdict == 'failing' else ('warn' if r.verdict == 'no tests' else 'idle')) }}">{{ r.verdict }}</span></span>
+          <span class="pill {{ verdict_pill(r.verdict) }}">{{ r.verdict }}</span></span>
         <span class="report-title">{{ r.title }}</span>
       </summary>
       {% if r.description %}<p class="report-desc">{{ r.description }}</p>{% endif %}
@@ -60,7 +64,7 @@
 
 <section class="report-panel" data-panel="tests" hidden>
   <h2 class="section-label">Tests <span class="dim">{{ suites.values()|map('length')|sum }} of {{ test_total }}</span>
-    {% for v, n in test_counts.items() %}<span class="pill {{ 'ok' if v == 'passed' else ('fail' if v in ('failed', 'error') else 'idle') }}">{{ n }} {{ v }}</span>{% endfor %}</h2>
+    {% for v, n in test_counts.items() %}<span class="pill {{ verdict_pill(v) }}">{{ n }} {{ v }}</span>{% endfor %}</h2>
   {% for suite, tests in suites.items() %}
   <details class="report-suite"{% if verdict or q %} open{% endif %}>
     <summary><span>{{ suite }}</span><span class="dim">{{ tests|length }} tests</span></summary>
@@ -68,7 +72,7 @@
       {% for t in tests %}
       <article class="report-item report-test-card">
         <span class="report-head"><span class="report-test-name">{{ t.name }}</span>
-          <span class="pill {{ 'ok' if t.verdict == 'passed' else ('fail' if t.verdict in ('failed', 'error') else 'idle') }}">{{ t.verdict }}</span></span>
+          <span class="pill {{ verdict_pill(t.verdict) }}">{{ t.verdict }}</span></span>
         {% if t.detail %}<span class="report-desc">{{ t.detail }}</span>{% endif %}
       </article>
       {% endfor %}

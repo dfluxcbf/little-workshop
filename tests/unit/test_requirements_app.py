@@ -389,3 +389,28 @@ def test_report_requirement_with_no_linked_suite_is_never_tested_or_done(client)
     report = client.get("/v1/report", params={"project_id": "p1"}).json()
     assert report["requirements"][0]["tested"] is False
     assert report["requirements"][0]["done"] is False
+
+
+@pytest.mark.parametrize("suite_results, expected", [
+    ([], "no tests"),                                   # no suite linked
+    ([None], "no tests"),                               # linked, never run
+    ([["passed", "passed"]], "passed"),
+    ([["passed", "skipped"]], "skipped"),
+    ([["passed"], None], "no tests"),                   # one of two suites never ran
+    ([["passed", "failed"], None], "failed"),           # a failure outranks an unrun suite
+    ([["failed"], ["error"]], "error"),
+])
+def test_report_gives_each_requirement_the_worst_verdict_of_its_linked_suites(client, suite_results, expected):
+    requirement = _create_requirement(client)
+    for n, results in enumerate(suite_results):
+        suite = _create_suite(client, name=f"s{n}")
+        client.post("/v1/jobs/requirements.link_requirement_to_suite", json={
+            "job_id": "j", "project_id": "p1", "params": {"requirement_id": requirement["id"], "suite_id": suite["id"]},
+        })
+        for t, verdict in enumerate(results or []):
+            client.post("/v1/jobs/requirements.record_test_result", json={
+                "job_id": "j", "project_id": "p1",
+                "params": {"suite_id": suite["id"], "test_name": f"t{t}", "verdict": verdict, "executed_at": "2026-09-23T10:00:00+00:00"},
+            })
+    report = client.get("/v1/report", params={"project_id": "p1"}).json()
+    assert report["requirements"][0]["verdict"] == expected
