@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -244,6 +246,20 @@ def _seed_policy(client, conn, **overrides):
     return _activate(client, draft).json()["result"]
 
 
+def _wait_for_check_result(conn, *, policy_id, project_id, timeout=5.0):
+    """A real (non-skipped) check dispatches to a background thread and
+    returns `accepted` immediately — tests poll the recorded result the
+    same way a real caller (Orchestration, via the completion callback)
+    would observe it land."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = db.latest_check_result(conn, policy_id=policy_id, project_id=project_id)
+        if result is not None:
+            return result
+        time.sleep(0.02)
+    raise AssertionError(f"no check result for policy={policy_id!r} project={project_id!r} within {timeout}s")
+
+
 def test_check_project_records_a_pass(client, conn, monkeypatch):
     policy = _seed_policy(client, conn)
     monkeypatch.setattr(
@@ -254,9 +270,9 @@ def test_check_project_records_a_pass(client, conn, monkeypatch):
     response = client.post("/v1/jobs/policy.check_project", json={
         "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]},
     })
-    assert response.json()["outcome"] == "succeeded"
-    assert response.json()["result"]["outcome"] == "pass"
-    assert db.latest_check_result(conn, policy_id=policy["id"], project_id="proj-a").outcome == CheckOutcome.PASS
+    assert response.json()["outcome"] == "accepted", response.json()  # dispatched to a background thread, not blocking
+    result = _wait_for_check_result(conn, policy_id=policy["id"], project_id="proj-a")
+    assert result.outcome == CheckOutcome.PASS
 
 
 def test_check_project_records_a_fail_but_job_still_succeeds(client, conn, monkeypatch):
@@ -267,11 +283,16 @@ def test_check_project_records_a_fail_but_job_still_succeeds(client, conn, monke
     response = client.post("/v1/jobs/policy.check_project", json={
         "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]},
     })
-    assert response.json()["outcome"] == "succeeded"  # the Job itself succeeded — a fail is still a determined verdict
-    assert response.json()["result"]["outcome"] == "fail"
+    assert response.json()["outcome"] == "accepted"
+    result = _wait_for_check_result(conn, policy_id=policy["id"], project_id="proj-a")
+    assert result.outcome == CheckOutcome.FAIL  # a determined fail is still a completed check, not a Job failure
 
 
-def test_check_project_fails_the_job_when_the_sandbox_never_completes(client, conn, monkeypatch):
+def test_check_project_reports_failed_to_orchestration_when_the_sandbox_never_completes(client, conn, monkeypatch):
+    import json as json_module
+
+    import httpx as httpx_module
+
     policy = _seed_policy(client, conn)
     monkeypatch.setattr(app_module, "resolve_project", lambda paths, project_id, **kw: {"path": "/tmp/x", "name": project_id})
 
@@ -279,12 +300,85 @@ def test_check_project_fails_the_job_when_the_sandbox_never_completes(client, co
         raise SandboxUnavailable("timed out")
 
     monkeypatch.setattr(app_module.sandbox, "run_policy_check", boom)
+
+    completions = []
+
+    def handler(request):
+        completions.append(request)
+        return httpx_module.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(app_module, "resolve_pillar_socket", lambda paths, pillar, **kw: "fake-socket")
+    monkeypatch.setattr(
+        app_module, "client_for_socket",
+        lambda socket_path, *, timeout=5.0: httpx_module.Client(transport=httpx_module.MockTransport(handler), base_url="http://pillar"),
+    )
+
     response = client.post("/v1/jobs/policy.check_project", json={
         "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]},
     })
-    assert response.json()["outcome"] == "failed"
-    assert "did not complete" in response.json()["error"]
+    assert response.json()["outcome"] == "accepted"  # dispatch itself always succeeds; the worker reports its own failure
+
+    deadline = time.time() + 5.0
+    while time.time() < deadline and not completions:
+        time.sleep(0.02)
+    assert len(completions) == 1
+    payload = json_module.loads(completions[0].content)
+    assert payload["succeeded"] is False
+    assert "did not complete" in payload["error"]
     assert db.latest_check_result(conn, policy_id=policy["id"], project_id="proj-a") is None
+
+
+def test_check_project_posts_succeeded_completion_to_orchestration(client, conn, monkeypatch):
+    import json as json_module
+
+    import httpx as httpx_module
+
+    policy = _seed_policy(client, conn)
+    monkeypatch.setattr(app_module, "resolve_project", lambda paths, project_id, **kw: {"path": "/tmp/x", "name": project_id})
+    monkeypatch.setattr(app_module.sandbox, "run_policy_check", lambda *a, **kw: SandboxResult(CheckOutcome.PASS, "ok"))
+
+    completions = []
+
+    def handler(request):
+        completions.append(request)
+        return httpx_module.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(app_module, "resolve_pillar_socket", lambda paths, pillar, **kw: "fake-socket")
+    monkeypatch.setattr(
+        app_module, "client_for_socket",
+        lambda socket_path, *, timeout=5.0: httpx_module.Client(transport=httpx_module.MockTransport(handler), base_url="http://pillar"),
+    )
+
+    response = client.post("/v1/jobs/policy.check_project", json={
+        "job_id": "the-job-id", "project_id": "proj-a", "params": {"policy_id": policy["id"]},
+    })
+    assert response.json()["outcome"] == "accepted"
+
+    deadline = time.time() + 5.0
+    while time.time() < deadline and not completions:
+        time.sleep(0.02)
+    assert len(completions) == 1
+    assert completions[0].url.path == "/v1/jobs/the-job-id/complete"
+    payload = json_module.loads(completions[0].content)
+    assert payload["succeeded"] is True
+    assert payload["result"]["outcome"] == "pass"
+
+
+def test_check_project_completion_is_a_noop_when_orchestration_unavailable(client, conn, monkeypatch):
+    # No Core running at all -- resolve_pillar_socket returns None -- the
+    # worker's best-effort completion callback must not raise, and the
+    # check result itself (written before the callback) must still land.
+    policy = _seed_policy(client, conn)
+    monkeypatch.setattr(app_module, "resolve_project", lambda paths, project_id, **kw: {"path": "/tmp/x", "name": project_id})
+    monkeypatch.setattr(app_module.sandbox, "run_policy_check", lambda *a, **kw: SandboxResult(CheckOutcome.PASS, "ok"))
+    monkeypatch.setattr(app_module, "resolve_pillar_socket", lambda paths, pillar, **kw: None)
+
+    response = client.post("/v1/jobs/policy.check_project", json={
+        "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]},
+    })
+    assert response.json()["outcome"] == "accepted"
+    result = _wait_for_check_result(conn, policy_id=policy["id"], project_id="proj-a")
+    assert result.outcome == CheckOutcome.PASS
 
 
 def test_check_project_fails_cleanly_for_unknown_policy(client):
@@ -311,6 +405,19 @@ def _init_git_repo(repo_dir):
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo_dir, check=True)
 
 
+def _wait_for_calls(calls, n, *, timeout=5.0):
+    """A real (non-skipped) check now dispatches to a background thread —
+    a caller issuing a second request right after the first must wait for
+    that thread's own `run_policy_check` call to actually land before the
+    fingerprint it wrote is there to be skipped against."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if len(calls) >= n:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"expected {n} sandbox call(s), only saw {len(calls)} within {timeout}s")
+
+
 def test_check_project_skips_the_sandbox_when_nothing_changed(client, conn, monkeypatch, tmp_path):
     repo_dir = tmp_path / "proj"
     _init_git_repo(repo_dir)
@@ -324,10 +431,12 @@ def test_check_project_skips_the_sandbox_when_nothing_changed(client, conn, monk
 
     body = {"job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]}}
     first = client.post("/v1/jobs/policy.check_project", json=body)
+    assert first.json()["outcome"] == "accepted"
+    _wait_for_check_result(conn, policy_id=policy["id"], project_id="proj-a")
     second = client.post("/v1/jobs/policy.check_project", json=body)
 
     assert len(calls) == 1  # the sandbox only actually ran once
-    assert first.json()["result"]["outcome"] == "pass"
+    assert second.json()["outcome"] == "succeeded"  # skipped — resolved synchronously, no thread involved
     assert second.json()["result"]["outcome"] == "pass"
     assert second.json().get("skipped") == "unchanged"
     # both runs are still recorded, for history/job-linkage purposes
@@ -348,9 +457,11 @@ def test_check_project_re_runs_after_a_new_commit(client, conn, monkeypatch, tmp
 
     body = {"job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]}}
     client.post("/v1/jobs/policy.check_project", json=body)
+    _wait_for_calls(calls, 1)
     (repo_dir / "README.md").write_text("changed\n", encoding="utf-8")
     subprocess.run(["git", "commit", "-aq", "-m", "change"], cwd=repo_dir, check=True)
     client.post("/v1/jobs/policy.check_project", json=body)
+    _wait_for_calls(calls, 2)
 
     assert len(calls) == 2  # a new HEAD commit is a real change — re-checked
 
@@ -368,8 +479,10 @@ def test_check_project_re_runs_after_the_policy_itself_is_edited(client, conn, m
 
     body = {"job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]}}
     client.post("/v1/jobs/policy.check_project", json=body)
+    _wait_for_calls(calls, 1)
     _activate(client, {**policy, "ears_text": "when z happens, do w"}, policy_id=policy["id"])
     client.post("/v1/jobs/policy.check_project", json=body)
+    _wait_for_calls(calls, 2)
 
     assert len(calls) == 2  # editing the policy is a real change too — re-checked
 
@@ -388,9 +501,11 @@ def test_check_project_force_bypasses_the_unchanged_skip(client, conn, monkeypat
     client.post("/v1/jobs/policy.check_project", json={
         "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]},
     })
+    _wait_for_calls(calls, 1)
     client.post("/v1/jobs/policy.check_project", json={
         "job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"], "force": True},
     })
+    _wait_for_calls(calls, 2)
 
     assert len(calls) == 2  # force always re-runs, regardless of the fingerprint
 
@@ -429,6 +544,7 @@ def test_check_results_list_and_latest(client, conn, monkeypatch):
     monkeypatch.setattr(app_module, "resolve_project", lambda paths, project_id, **kw: {"path": "/tmp/x", "name": project_id})
     monkeypatch.setattr(app_module.sandbox, "run_policy_check", lambda *a, **kw: SandboxResult(CheckOutcome.PASS, "ok"))
     client.post("/v1/jobs/policy.check_project", json={"job_id": "j", "project_id": "proj-a", "params": {"policy_id": policy["id"]}})
+    _wait_for_check_result(conn, policy_id=policy["id"], project_id="proj-a")
 
     results = client.get("/v1/policy_check_results", params={"policy_id": policy["id"]}).json()
     assert len(results) == 1

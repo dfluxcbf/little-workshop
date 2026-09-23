@@ -16,12 +16,15 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from common.paths import Paths
 from common.incident import install_incident_reporting
+from common.pillar_socket import resolve_pillar_socket
 from common.registry_client import ProjectResolutionError, resolve_project
+from common.uds_client import client_for_socket
 from policy import agent_client, db, gates, registry_client, sandbox
 from policy.agent_client import AgentClientError
 from policy.models import (
@@ -550,30 +553,50 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             return ""
         return f"{head_sha}:{policy.amended_at.isoformat()}"
 
+    def _complete_orchestration_job(job_id: str, *, succeeded: bool, result: dict | None, error: str | None) -> None:
+        """Best-effort: a real (non-skipped) sandbox check runs for up to
+        30 minutes, so `job_check_project` dispatches it to a background
+        thread and returns `accepted` immediately instead of blocking the
+        request — the same async-Job completion path `agent.run_task`'s
+        worker and M5's dispatched self-redeploy worker already use for
+        the identical reason (a long-running operation that must not tie
+        up the pillar's own request-handling capacity, and with it,
+        `/v1/health`'s responsiveness to Core's own probe)."""
+        socket_path = resolve_pillar_socket(paths, "orchestration", timeout=5.0)
+        if socket_path is None:
+            return
+        try:
+            with client_for_socket(socket_path, timeout=10.0) as client:
+                client.post(f"/v1/jobs/{job_id}/complete", json={"succeeded": succeeded, "result": result, "error": error})
+        except (httpx.ConnectError, httpx.TimeoutException, OSError):
+            pass
+
     @app.post("/v1/jobs/policy.check_project")
     def job_check_project(request: JobRequest) -> dict:
         error = _require(request.params, "policy_id") or (None if request.project_id else "missing project_id")
         if error:
             return {"outcome": "failed", "error": error}
         policy_id = request.params["policy_id"]
+        project_id = request.project_id
         force = bool(request.params.get("force"))
         with lock:
             policy = db.get_policy(conn, policy_id)
         if policy is None:
             return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
 
-        current_state = _current_check_state(policy, request.project_id)
+        current_state = _current_check_state(policy, project_id)
         if current_state and not force:
             with lock:
-                previous = db.latest_check_result(conn, policy_id=policy_id, project_id=request.project_id)
+                previous = db.latest_check_result(conn, policy_id=policy_id, project_id=project_id)
             if previous is not None and previous.checked_state == current_state:
                 # Nothing has changed since the last verdict (same HEAD
                 # commit, same policy edit) — reuse it instead of paying for
                 # another Docker sandbox run. Recorded as a fresh row (its own
                 # id/checked_at/job_id) so history and job linkage stay
-                # accurate, but the sandbox itself never runs.
+                # accurate, but the sandbox itself never runs. Cheap and
+                # synchronous — no thread needed, nothing here can block.
                 result = PolicyCheckResult(
-                    id=db.new_id(), policy_id=policy_id, project_id=request.project_id,
+                    id=db.new_id(), policy_id=policy_id, project_id=project_id,
                     outcome=previous.outcome, detail=previous.detail, job_id=request.job_id,
                     checked_state=current_state,
                 )
@@ -582,30 +605,38 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 return {"outcome": "succeeded", "result": result.model_dump(mode="json"), "skipped": "unchanged"}
 
         try:
-            mounts = _mounts_for_policy(policy, request.project_id)
+            mounts = _mounts_for_policy(policy, project_id)
         except ProjectResolutionError as exc:
             return {"outcome": "failed", "error": str(exc)}
 
-        try:
-            sandbox_result = sandbox.run_policy_check(policy.test_script, mounts)
-        except SandboxUnavailable as exc:
-            # No verdict at all — a framework-level fault, never
-            # pending_confirmation: nothing was determined to be a
-            # violation, only that the check itself is broken.
-            return {"outcome": "failed", "error": f"policy check did not complete: {exc}"}
+        def worker() -> None:
+            try:
+                sandbox_result = sandbox.run_policy_check(policy.test_script, mounts)
+            except SandboxUnavailable as exc:
+                # No verdict at all — a framework-level fault, never
+                # pending_confirmation: nothing was determined to be a
+                # violation, only that the check itself is broken.
+                _complete_orchestration_job(
+                    request.job_id, succeeded=False, result=None,
+                    error=f"policy check did not complete: {exc}",
+                )
+                return
 
-        result = PolicyCheckResult(
-            id=db.new_id(), policy_id=policy_id, project_id=request.project_id,
-            outcome=sandbox_result.outcome, detail=sandbox_result.detail, job_id=request.job_id,
-            checked_state=current_state,
-        )
-        with lock:
-            db.insert_check_result(conn, result)
-        # Always "succeeded" at the Job level — a determined pass/fail/
-        # not_applicable verdict is success for the check itself; only an
-        # unreachable dependency or the sandbox's own 30-minute ceiling is
-        # a genuine Job failure (see the SandboxUnavailable branch above).
-        return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
+            result = PolicyCheckResult(
+                id=db.new_id(), policy_id=policy_id, project_id=project_id,
+                outcome=sandbox_result.outcome, detail=sandbox_result.detail, job_id=request.job_id,
+                checked_state=current_state,
+            )
+            with lock:
+                db.insert_check_result(conn, result)
+            # Always "succeeded" at the Job level — a determined pass/fail/
+            # not_applicable verdict is success for the check itself; only an
+            # unreachable dependency or the sandbox's own 30-minute ceiling is
+            # a genuine Job failure (see the SandboxUnavailable branch above).
+            _complete_orchestration_job(request.job_id, succeeded=True, result=result.model_dump(mode="json"), error=None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"outcome": "accepted", "result": {"dispatched": True}}
 
     @app.post("/v1/jobs/policy.check_all")
     def job_check_all(request: JobRequest) -> dict:
@@ -618,9 +649,6 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
 
         project_ids = [sel.project_id for sel in policy.projects]
-
-        from common.pillar_socket import resolve_pillar_socket
-        from common.uds_client import client_for_socket
 
         dispatched = []
         socket_path = resolve_pillar_socket(paths, "orchestration", timeout=5.0)

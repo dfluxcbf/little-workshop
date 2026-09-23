@@ -515,6 +515,21 @@ window in "Action-gating checks" below — a timeout never does, because
 there's no determined violation there for a human to knowingly bypass;
 see that section for the full distinction.
 
+**`policy.check_project` is itself dispatched `accepted`, not answered
+synchronously (2026-09-23).** The paragraph above describes the Job-
+dependency layer; underneath it, Policy & Compliance's own `/v1/jobs/
+policy.check_project` handler used to run the sandbox inline and hold
+the HTTP request open for however long that took — up to the same
+30-minute ceiling. A real (non-skipped) check now returns `accepted`
+immediately and runs the sandbox on a background thread, reporting the
+eventual verdict back to Orchestration's `/v1/jobs/{id}/complete`
+callback — the same async-completion pattern `agent.run_task` and the
+self-redeploy worker already use. This keeps the pillar's own request-
+handling capacity, and with it `/v1/health`'s responsiveness to Core's
+probe, decoupled from how long any individual check takes; a check
+resolved by the unchanged-fingerprint skip (above) stays fully
+synchronous, since nothing there can block.
+
 ## Informing the user immediately
 
 **Not yet implemented as of M12** — a real gap, not an oversight: the
