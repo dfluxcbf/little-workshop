@@ -36,11 +36,13 @@
       </dl>
       {% if workspace.session.running %}
       <p class="muted" style="font-size:12.5px">Open the Claude app and pick <code>{{ workspace.session_name }}</code> to attach.</p>
-      <form method="post" action="/projects/{{ workspace.id }}/session/stop"><button type="submit" class="danger">Stop session</button></form>
+      <form method="post" action="/projects/{{ workspace.id }}/session/stop"><button type="submit" class="danger" data-busy="Stopping…">Stop session</button></form>
       {% elif workspace.session.trusted == false %}
       <p class="muted" style="font-size:12.5px">Not trusted by Claude Code yet &mdash; run <code>claude</code> in <code>{{ workspace.dir }}</code> once and accept the trust prompt, then start the session here.</p>
+      {% elif workspace.session_starting %}
+      <button type="button" class="primary is-busy" disabled data-starting="session" data-project="{{ workspace.id }}">Starting session…</button>
       {% else %}
-      <form method="post" action="/projects/{{ workspace.id }}/session/start"><button type="submit" class="primary">Start workspace session</button></form>
+      <form method="post" action="/projects/{{ workspace.id }}/session/start"><button type="submit" class="primary" data-busy="Starting session…">Start workspace session</button></form>
       {% endif %}
       {% endif %}
     </div>
@@ -59,12 +61,14 @@
     <div class="facts">
       {% if r.server is not none %}
       <span class="fact"><span class="fact-k">Server</span>
-        {% if r.server.listening %}<span class="pill ok">up</span>{% if r.server.version and r.server.version != '?' %}<span class="fact-v">v{{ r.server.version }}</span>{% endif %}
+        {% if r.launching %}<span class="pill warn">launching</span>
+        {% elif r.server.listening %}<span class="pill ok">up</span>{% if r.server.version and r.server.version != '?' %}<span class="fact-v">v{{ r.server.version }}</span>{% endif %}
         {% else %}<span class="pill idle">down</span>{% endif %}
       </span>
       {% endif %}
       <span class="fact"><span class="fact-k">Session</span>
         {% if r.session is none %}<span class="fact-v">unavailable</span>
+        {% elif r.session_starting %}<span class="pill warn">starting</span>
         {% elif r.session.running %}<span class="pill ok">running</span>
         {% elif r.session.trusted == false %}<span class="pill warn">untrusted</span>
         {% else %}<span class="pill idle">idle</span>{% endif %}
@@ -108,12 +112,16 @@
       <p class="muted external-note">Managed outside Deployment — this page shows its status only. Launching or stopping it from here could cut off your connection to the app.</p>
       {% else %}
       <form class="row" method="post" action="/projects/{{ r.name }}/deploy">
-        <select name="branch" style="width:220px">
+        <select name="branch" style="width:220px"{{ ' disabled' if r.launching }}>
           {% for b in r.branches or ['dev'] %}<option value="{{ b }}" {{ 'selected' if b == (r.server.branch if r.server.branch in r.branches else 'dev') }}>{{ b }}</option>{% endfor %}
         </select>
-        <button type="submit" class="primary" title="Build from a throwaway worktree of this branch, then stop, install and relaunch">{{ 'Relaunch' if r.server.listening else 'Launch' }}</button>
+        {% if r.launching %}
+        <button type="button" class="primary is-busy" disabled data-starting="launch" data-project="{{ r.name }}">Launching…</button>
+        {% else %}
+        <button type="submit" class="primary" data-busy="Launching…" title="Build from a throwaway worktree of this branch, then stop, install and relaunch">{{ 'Relaunch' if r.server.listening else 'Launch' }}</button>
+        {% endif %}
         {% if r.server.listening or r.server.unit == 'active' %}
-        <button type="submit" formaction="/projects/{{ r.name }}/stop" formnovalidate class="danger">Stop</button>
+        <button type="submit" formaction="/projects/{{ r.name }}/stop" formnovalidate class="danger" data-busy="Stopping…">Stop</button>
         {% endif %}
       </form>
       {% endif %}
@@ -127,7 +135,8 @@
       {% else %}
       <dl class="kv">
         <dt>Status</dt><dd>
-          {% if r.session.running %}<span class="pill ok">running</span>
+          {% if r.session_starting %}<span class="pill warn">starting</span>
+          {% elif r.session.running %}<span class="pill ok">running</span>
           {% elif r.session.trusted == false %}<span class="pill warn">untrusted</span>
           {% else %}<span class="pill idle">idle</span>{% endif %}
         </dd>
@@ -135,11 +144,13 @@
       </dl>
       {% if r.session.running %}
       <p class="muted" style="font-size:12.5px">Open the Claude app and pick <code>{{ r.session_name }}</code> to attach.</p>
-      <form method="post" action="/projects/{{ r.name }}/session/stop"><button type="submit" class="danger">Stop session</button></form>
+      <form method="post" action="/projects/{{ r.name }}/session/stop"><button type="submit" class="danger" data-busy="Stopping…">Stop session</button></form>
       {% elif r.session.trusted == false %}
       <p class="muted" style="font-size:12.5px">Not trusted by Claude Code yet &mdash; run <code>claude</code> in this project's directory once and accept the trust prompt, then start a session here.</p>
+      {% elif r.session_starting %}
+      <button type="button" class="primary is-busy" disabled data-starting="session" data-project="{{ r.name }}">Starting session…</button>
       {% else %}
-      <form method="post" action="/projects/{{ r.name }}/session/start"><button type="submit" class="primary">Start session</button></form>
+      <form method="post" action="/projects/{{ r.name }}/session/start"><button type="submit" class="primary" data-busy="Starting session…">Start session</button></form>
       {% endif %}
       {% endif %}
     </div>
@@ -163,4 +174,35 @@
 </details>
 {% endfor %}
 {% endif %}
+<script>
+(function () {
+  // A tapped Launch / Start / Stop turns into a disabled spinner at once, so it cannot be sent twice.
+  document.querySelectorAll('form').forEach(function (form) {
+    form.addEventListener('submit', function (e) {
+      var btn = e.submitter;
+      if (!btn || !btn.dataset.busy) return;
+      if (form.dataset.sent) { e.preventDefault(); return; }
+      form.dataset.sent = '1';
+      form.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+      btn.classList.add('is-busy');
+      btn.textContent = btn.dataset.busy;
+    });
+  });
+  // Back/forward cache would bring the disabled buttons back; show the live state instead.
+  window.addEventListener('pageshow', function (e) { if (e.persisted) location.reload(); });
+  // While something is launching or starting, reload once it has finished.
+  var waiting = Array.prototype.map.call(document.querySelectorAll('[data-starting]'), function (el) {
+    return { project: el.dataset.project, kind: el.dataset.starting };
+  });
+  if (!waiting.length) return;
+  var check = function () {
+    fetch('/starting.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+      var done = waiting.filter(function (w) { return (d[w.project] || []).indexOf(w.kind) < 0; });
+      if (done.length) { location.replace('/?expand=' + encodeURIComponent(done[0].project) + '#' + encodeURIComponent(done[0].project)); return; }
+      setTimeout(check, 3000);
+    }).catch(function () { setTimeout(check, 6000); });
+  };
+  setTimeout(check, 3000);
+})();
+</script>
 {% endblock %}

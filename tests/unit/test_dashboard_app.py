@@ -210,6 +210,80 @@ def test_deploy_submits_the_job_without_blocking(test_client, monkeypatch):
     assert captured["type"] == "deployment.deploy" and captured["params"] == {"branch": "dev"} and captured["timeout"] == 320.0
 
 
+def _stub_in_flight_jobs(monkeypatch, jobs):
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [j for j in jobs if status is None or j["status"] == status])
+
+
+def test_dashboard_card_shows_a_disabled_launching_button_while_a_deploy_is_under_way(test_client, monkeypatch):
+    _stub_project_panels(
+        monkeypatch, server={"listening": False, "version": "1", "unit": "inactive", "branch": "dev", "tailscale": "off"},
+        session={"running": False, "trusted": True},
+    )
+    _stub_in_flight_jobs(monkeypatch, [{"type": "deployment.deploy", "project_id": "little-widget", "status": "running"}])
+    text = test_client.get("/").text
+    assert 'disabled data-starting="launch" data-project="little-widget">Launching…' in text
+    assert 'data-busy="Launching…"' not in text
+    assert "/projects/little-widget/session/start" in text  # only the launch is under way
+
+
+def test_dashboard_card_shows_a_disabled_starting_button_while_a_session_starts(test_client, monkeypatch):
+    _stub_project_panels(monkeypatch, session={"running": False, "trusted": True})
+    _stub_in_flight_jobs(monkeypatch, [{"type": "agent.session_start", "project_id": "little-widget", "status": "queued"}])
+    text = test_client.get("/").text
+    assert 'disabled data-starting="session" data-project="little-widget">Starting session…' in text
+    assert "/projects/little-widget/session/start" not in text
+
+
+def test_the_page_after_a_launch_tap_already_shows_it_under_way(test_client, monkeypatch):
+    """The deploy is submitted from a thread, so Orchestration may not list it yet when the redirect lands."""
+    _stub_project_panels(monkeypatch, server={"listening": False, "version": "1", "unit": "inactive", "branch": "dev", "tailscale": "off"})
+    _stub_in_flight_jobs(monkeypatch, [])
+    release, finished = threading.Event(), threading.Event()
+
+    def slow_create_job(paths, timeout=30.0, **fields):
+        release.wait(timeout=5)
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(client, "create_job", slow_create_job)
+    test_client.post("/projects/little-widget/deploy", data={"branch": "dev"}, follow_redirects=False)
+    assert "Launching…</button>" in test_client.get("/").text
+    assert test_client.get("/starting.json").json() == {"little-widget": ["launch"]}
+    again = test_client.post("/projects/little-widget/deploy", data={"branch": "dev"}, follow_redirects=False)
+    assert "already%20launching" in again.headers["location"]
+    release.set()
+    for _ in range(100):
+        if test_client.get("/starting.json").json() == {}:
+            finished.set()
+            break
+        threading.Event().wait(0.02)
+    assert finished.is_set()
+
+
+def test_deploy_is_refused_while_one_is_already_under_way(test_client, monkeypatch):
+    _stub_in_flight_jobs(monkeypatch, [{"type": "deployment.deploy", "project_id": "little-widget", "status": "pending_confirmation"}])
+    submitted = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **f: submitted.append(f) or {"status": "succeeded"})
+    response = test_client.post("/projects/little-widget/deploy", data={"branch": "dev"}, follow_redirects=False)
+    assert "already%20launching" in response.headers["location"] and submitted == []
+
+
+def test_session_start_is_refused_while_one_is_already_under_way(test_client, monkeypatch):
+    _stub_in_flight_jobs(monkeypatch, [{"type": "agent.session_start", "project_id": "little-widget", "status": "running"}])
+    submitted = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **f: submitted.append(f) or {"status": "succeeded"})
+    response = test_client.post("/projects/little-widget/session/start", follow_redirects=False)
+    assert "already%20starting" in response.headers["location"] and submitted == []
+
+
+def test_starting_json_ignores_finished_and_unrelated_jobs(test_client, monkeypatch):
+    _stub_in_flight_jobs(monkeypatch, [
+        {"type": "deployment.deploy", "project_id": "a", "status": "succeeded"},
+        {"type": "build.run", "project_id": "b", "status": "running"},
+        {"type": "agent.session_start", "project_id": "c", "status": "running"},
+    ])
+    assert test_client.get("/starting.json").json() == {"c": ["session"]}
+
+
 def test_stop_reports_success_and_failure(test_client, monkeypatch):
     monkeypatch.setattr(client, "create_job", lambda paths, **f: {"status": "succeeded"})
     assert "stopped" in test_client.post("/projects/little-widget/stop", follow_redirects=False).headers["location"]

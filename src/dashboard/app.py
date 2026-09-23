@@ -77,17 +77,67 @@ def _try(fn, *args, default=None):
         return default
 
 
-def _fire_and_forget(paths: Paths, **job) -> None:
+def _fire_and_forget(paths: Paths, on_done=None, **job) -> None:
     """Deploys and CI checks outlast a browser request (a cold `bazel run
     //:install` takes a minute); the job is submitted from a thread and its
-    progress read back from the Jobs page, instead of hanging the tap."""
+    progress read back from the Jobs page, instead of hanging the tap.
+    `on_done` runs once the job has finished (or the submit gave up)."""
     def submit() -> None:
         try:
             client.create_job(paths, timeout=320.0, **job)
         except client.PillarUnavailable:
             pass
+        finally:
+            if on_done is not None:
+                on_done()
 
     threading.Thread(target=submit, daemon=True).start()
+
+
+# A project "starting up": the Job types behind the Dashboard's Launch and
+# Start-session buttons, and the statuses in which one is still under way.
+STARTING_JOB_KINDS = {"deployment.deploy": "launch", "agent.session_start": "session"}
+STARTING_JOB_STATUSES = ("queued", "running", "pending_confirmation")
+
+
+class _Starting:
+    """Launches and session starts this dashboard has submitted and not yet
+    seen finish. Covers the gap before Orchestration has the Job on record
+    (a fire-and-forget deploy is submitted from a thread), so the page a
+    tap redirects to already shows the launch as under way."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._keys: set[tuple[str, str]] = set()
+
+    def claim(self, kind: str, project: str) -> bool:
+        with self._lock:
+            if (kind, project) in self._keys:
+                return False
+            self._keys.add((kind, project))
+            return True
+
+    def release(self, kind: str, project: str) -> None:
+        with self._lock:
+            self._keys.discard((kind, project))
+
+    def snapshot(self) -> set[tuple[str, str]]:
+        with self._lock:
+            return set(self._keys)
+
+
+def starting_up(paths: Paths, starting: _Starting) -> dict[str, set[str]]:
+    """project -> the kinds ("launch", "session") currently under way for it,
+    whether submitted from here or from anywhere else (CLI, MCP, schedule)."""
+    found: dict[str, set[str]] = {}
+    for kind, project in starting.snapshot():
+        found.setdefault(project, set()).add(kind)
+    for status in STARTING_JOB_STATUSES:
+        for job in _try(lambda: client.list_jobs(paths, status=status), default=[]):
+            kind = STARTING_JOB_KINDS.get(job.get("type"))
+            if kind and job.get("project_id"):
+                found.setdefault(job["project_id"], set()).add(kind)
+    return found
 
 
 def _back(to: str, message: str) -> RedirectResponse:
@@ -275,6 +325,7 @@ def build_app(paths: Paths) -> FastAPI:
     templates.env.globals["static_v"] = int(os.path.getmtime(str(static_dir / "app.css")))
     # follow_symlink: Bazel runfiles trees are symlink forests.
     app.mount("/static", StaticFiles(directory=str(static_dir), follow_symlink=True), name="static")
+    starting = _Starting()
 
     @app.get("/v1/health")
     def health() -> dict:
@@ -301,6 +352,10 @@ def build_app(paths: Paths) -> FastAPI:
     def attention_json() -> dict:
         items = collect_attention(paths)
         return {"count": len(items), "items": items}
+
+    @app.get("/starting.json")
+    def starting_json() -> dict:
+        return {project: sorted(kinds) for project, kinds in starting_up(paths, starting).items()}
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings(request: Request):
@@ -372,6 +427,8 @@ def build_app(paths: Paths) -> FastAPI:
         pillars = _try(lambda: client.core_status(paths).get("pillars", {}), default={})
         unhealthy = [n for n, e in pillars.items() if e["status"] not in ("healthy", "active", "disabled")]
 
+        under_way = starting_up(paths, starting)
+
         def _project_row(name: str) -> dict:
             server = _try(client.deployment_status_optional, paths, name)
             session = _try(client.agent_session_status, paths, name)
@@ -394,6 +451,7 @@ def build_app(paths: Paths) -> FastAPI:
                 "reqs": reqs, "ci": _try(client.agent_latest_ci_check, paths, name),
                 "branches": _try(client.deployment_branches, paths, name, default=[]),
                 "session_name": session_name_for(name), "runs": runs,
+                "launching": "launch" in under_way.get(name, ()), "session_starting": "session" in under_way.get(name, ()),
             }
 
         # Each project's own row is 6 independent, read-only pillar calls —
@@ -420,7 +478,7 @@ def build_app(paths: Paths) -> FastAPI:
         }
         workspace = {
             "id": WORKSPACE_ID, "dir": str(workspace_dir()), "session": _try(client.agent_session_status, paths, WORKSPACE_ID),
-            "session_name": session_name_for(WORKSPACE_ID),
+            "session_name": session_name_for(WORKSPACE_ID), "session_starting": "session" in under_way.get(WORKSPACE_ID, ()),
         }
         return _render(
             request, "index.html", rows=rows, stats=stats, unhealthy=unhealthy, workspace=workspace,
@@ -467,8 +525,10 @@ def build_app(paths: Paths) -> FastAPI:
 
     @app.post("/projects/{name}/deploy")
     def deploy(name: str, branch: str = Form("dev")):
+        if "launch" in starting_up(paths, starting).get(name, ()) or not starting.claim("launch", name):
+            return _back(f"/?expand={name}", f"{name} is already launching — progress is on the Jobs page.")
         _fire_and_forget(
-            paths, type="deployment.deploy", target_pillar="deployment", project_id=name, params={"branch": branch},
+            paths, on_done=lambda: starting.release("launch", name), type="deployment.deploy", target_pillar="deployment", project_id=name, params={"branch": branch},
             queue_key=name, depends_on=[], created_by="dashboard",
         )
         return _back(f"/?expand={name}", f"Deploy of {name} ({branch}) started — progress is on the Jobs page.")
@@ -484,10 +544,15 @@ def build_app(paths: Paths) -> FastAPI:
 
     @app.post("/projects/{name}/session/start")
     def session_start(name: str):
-        result = _try(lambda: client.create_job(
-            paths, type="agent.session_start", target_pillar="agent", project_id=name, params={},
-            queue_key=None, depends_on=[], created_by="dashboard",
-        ))
+        if "session" in starting_up(paths, starting).get(name, ()) or not starting.claim("session", name):
+            return _back(f"/?expand={name}", f"A session for {name} is already starting.")
+        try:
+            result = _try(lambda: client.create_job(
+                paths, type="agent.session_start", target_pillar="agent", project_id=name, params={},
+                queue_key=None, depends_on=[], created_by="dashboard",
+            ))
+        finally:
+            starting.release("session", name)
         if result is not None and result.get("status") == "succeeded":
             return _back(f"/?expand={name}", f"Session started — open the Claude app and attach to {result['result']['session_name']}.")
         return _back(f"/?expand={name}", f"Could not start a session: {(result or {}).get('error', 'orchestration unreachable')}")
