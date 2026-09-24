@@ -78,6 +78,19 @@ def test_project_bootstrap_passes_template_defaulting_to_python(paths, fake_crea
     assert schema["properties"]["template"]["enum"] == ["python", "unity"]
 
 
+def test_project_connect_github_builds_registry_job(paths, fake_create_job):
+    """REQ-000000282."""
+    tools_mod.TOOLS_BY_NAME["workshop_project_connect_github"].handler(paths, {"name": "ethereal-lands", "public": True})
+    call = fake_create_job[0]
+    assert call["type"] == "project.connect_github"
+    assert call["target_pillar"] == "registry"
+    assert call["project_id"] == "ethereal-lands"
+    assert call["queue_key"] == "ethereal-lands"
+    assert call["params"]["public"] is True
+    assert call["params"]["owner"] == "dfluxcbf"
+    assert call["params"]["ensure_labels"] is True
+
+
 def test_project_import_builds_registry_job(paths, fake_create_job):
     tools_mod.TOOLS_BY_NAME["workshop_project_import"].handler(
         paths, {"name": "little-widget", "path": "/repos/little-widget"}
