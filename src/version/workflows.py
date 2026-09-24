@@ -23,7 +23,7 @@ from version.gitops import (
     squash_to_single_commit,
     write_file_in_repo,
 )
-from version.stages import GitflowVersion, bump_patch
+from version.stages import GitflowVersion, bump_patch, normalize_to_stable
 
 VERSION_FILE = "VERSION"
 
@@ -89,6 +89,21 @@ class PatchMergePlan:
     pre_merge_commit_message: str | None = None
 
 
+def finished_version(merged: GitflowVersion, target_before: GitflowVersion) -> GitflowVersion:
+    """The version a finished working branch lands on. A branch already
+    working toward the next patch (its commits carry `X.Y.Z-dev.N`, per
+    `branch-commit-dev-suffix`) lands on `X.Y.Z` itself; one that never
+    bumped gets the next patch. Either way, strictly above what the target
+    carried before the merge. Always bumping the patch here (little-versions'
+    rule, from before branches bumped on their own) skipped one patch per
+    finish -- 0.2.6 -> 0.2.8 -- and doubled the Release job's patch count."""
+    candidate = normalize_to_stable(merged) if merged.is_dev() else bump_patch(merged)
+    floor = normalize_to_stable(target_before)
+    if (candidate.major, candidate.minor, candidate.patch) <= (floor.major, floor.minor, floor.patch):
+        candidate = bump_patch(floor)
+    return candidate
+
+
 def squash_merge_and_bump_patch(repo_root: Path, plan: PatchMergePlan) -> CommandResult:
     if plan.pre_merge_cleanup is not None:
         plan.pre_merge_cleanup(repo_root)
@@ -99,10 +114,10 @@ def squash_merge_and_bump_patch(repo_root: Path, plan: PatchMergePlan) -> Comman
     squash_to_single_commit(repo_root, merge_base, plan.merge_message)
 
     checkout(repo_root, plan.target_branch)
+    target_ver = read_version(repo_root)
     merge_no_ff(repo_root, plan.work_branch, plan.merge_message)
 
-    current_ver = read_version(repo_root)
-    new_ver = bump_patch(current_ver)
+    new_ver = finished_version(read_version(repo_root), target_ver)
     write_version(repo_root, new_ver)
     hook_errors = run_version_hooks(repo_root, str(new_ver))
     commit_if_dirty(repo_root, no_requirement(f"chore: bump version to {new_ver}"))
