@@ -640,7 +640,7 @@ def build_app(paths: Paths) -> FastAPI:
     # ---- Tasks: Claude on a real branch, under review -------------------
 
     def _parse_schedule(kind: str, at: str, time_of_day: str, day: list[str], back: str):
-        """Shared by New Task and (indirectly) Schedule Job's own "once/recurring" fields."""
+        """Shared by New Task's and New Job's own "When" fields."""
         if kind == "once":
             try:
                 when = datetime.fromisoformat(at)
@@ -721,7 +721,7 @@ def build_app(paths: Paths) -> FastAPI:
     def _schedule_detail(request: Request, task_id: str, *, is_task: bool):
         base, back, back_label, nav = (
             ("/tasks/schedule", "/tasks/new", "New task", "new-task") if is_task
-            else ("/jobs/schedule", "/jobs/schedule", "Schedule job", "schedule-job")
+            else ("/jobs/schedule", "/jobs/new", "New job", "new-job")
         )
         try:
             task, error = client.get_scheduled_task(paths, task_id), None
@@ -767,7 +767,7 @@ def build_app(paths: Paths) -> FastAPI:
 
     # ---- Pillars: the system's own components ---------------------------
 
-    # ---- New Job / Schedule Job: project -> job -> arguments (dashboard/job_catalog.py) ----
+    # ---- New Job (right away or scheduled): project -> job -> arguments (dashboard/job_catalog.py) ----
 
     def _discover_suites(project: str) -> list[dict]:
         """The "Test suites" choices: every suite, with how many of the project's
@@ -804,56 +804,54 @@ def build_app(paths: Paths) -> FastAPI:
             chosen=context.pop("chosen", {}), **context,
         )
 
-    @app.get("/jobs/new", response_class=HTMLResponse)
-    def job_new(request: Request):
-        return _job_page(request, "job_new.html", build_error=None, nav_active="new-job")
-
-    @app.post("/jobs/new", response_class=HTMLResponse)
-    async def job_new_post(request: Request):
-        form = await request.form()
-        project, job_key = str(form.get("project") or ""), str(form.get("job") or "")
-        template, err = job_catalog.build_job(project, job_key, {k: form.getlist(k) for k in form.keys()})
-        if err:
-            return _job_page(request, "job_new.html", build_error=err, chosen={"project": project, "job": job_key}, nav_active="new-job")
-        # Builds and test runs outlast a browser request; progress is on the Jobs page.
-        _fire_and_forget(paths, **template, depends_on=[], created_by="dashboard")
-        return _back("/jobs", f"{job_catalog.BY_KEY[job_key].label} started for {project}.")
-
     def _scheduled_jobs() -> list[dict]:
         return [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") != "agent.run_task"]
 
-    @app.get("/jobs/schedule", response_class=HTMLResponse)
-    def job_schedule(request: Request):
-        return _job_page(request, "job_schedule.html", build_error=None, scheduled=_scheduled_jobs(), weekdays=WEEKDAYS, nav_active="schedule-job")
+    def _job_new_page(request: Request, build_error: str | None = None, chosen: dict | None = None,
+                      when: str = "immediate") -> HTMLResponse:
+        return _job_page(
+            request, "job_new.html", build_error=build_error, chosen=chosen or {}, when=when,
+            scheduled=_scheduled_jobs(), weekdays=WEEKDAYS, nav_active="new-job",
+        )
 
-    @app.post("/jobs/schedule", response_class=HTMLResponse)
-    async def job_schedule_post(request: Request):
+    @app.get("/jobs/new", response_class=HTMLResponse)
+    def job_new(request: Request):
+        return _job_new_page(request)
+
+    @app.post("/jobs/new", response_class=HTMLResponse)
+    async def job_new_post(request: Request):
+        """One form: "When" decides whether the job starts right away or is scheduled."""
         form = await request.form()
         project, job_key = str(form.get("project") or ""), str(form.get("job") or "")
+        when = str(form.get("when") or "immediate")
 
         def render(error: str) -> HTMLResponse:
-            return _job_page(
-                request, "job_schedule.html", build_error=error, chosen={"project": project, "job": job_key},
-                scheduled=_scheduled_jobs(), weekdays=WEEKDAYS, nav_active="schedule-job",
-            )
+            return _job_new_page(request, error, {"project": project, "job": job_key}, when)
 
         template, err = job_catalog.build_job(project, job_key, {k: form.getlist(k) for k in form.keys()})
         if err:
             return render(err)
+        label = job_catalog.BY_KEY[job_key].label
+        if when == "immediate":
+            # Builds and test runs outlast a browser request; progress is on the Jobs page.
+            _fire_and_forget(paths, **template, depends_on=[], created_by="dashboard")
+            return _back("/jobs", f"{label} started for {project}.")
         schedule, refusal = _parse_schedule(
-            str(form.get("kind") or ""), str(form.get("at") or ""), str(form.get("time_of_day") or ""),
-            [str(d) for d in form.getlist("day")], "/jobs/schedule",
+            when, str(form.get("at") or ""), str(form.get("time_of_day") or ""),
+            [str(d) for d in form.getlist("day")], "/jobs/new",
         )
         if refusal is not None:
             return render("Choose when it should run.")
-        label = job_catalog.BY_KEY[job_key].label
         try:
-            client.create_scheduled_task(
-                paths, name=f"{label}: {project}", job_template=template, schedule=schedule,
-            )
+            client.create_scheduled_task(paths, name=f"{label}: {project}", job_template=template, schedule=schedule)
         except client.PillarUnavailable as exc:
             return render(f"Could not schedule: {exc}")
-        return _back("/jobs/schedule", f"{label} for {project} scheduled.")
+        return _back("/jobs/new", f"{label} for {project} scheduled.")
+
+    @app.get("/jobs/schedule")
+    def job_schedule_redirect():
+        # Schedule job was merged into New job; an old bookmark lands on it.
+        return RedirectResponse("/jobs/new", status_code=307)
 
     @app.get("/jobs/schedule/{task_id}", response_class=HTMLResponse)
     def job_schedule_detail(request: Request, task_id: str):
@@ -864,8 +862,8 @@ def build_app(paths: Paths) -> FastAPI:
         try:
             client.remove_scheduled_task(paths, task_id)
         except client.PillarUnavailable as exc:
-            return _back("/jobs/schedule", f"Could not remove it: {exc}")
-        return _back("/jobs/schedule", "Scheduled job removed.")
+            return _back("/jobs/new", f"Could not remove it: {exc}")
+        return _back("/jobs/new", "Scheduled job removed.")
 
     @app.get("/pillars", response_class=HTMLResponse)
     def pillars(request: Request):

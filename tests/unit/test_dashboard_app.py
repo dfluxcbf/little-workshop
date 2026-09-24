@@ -1546,9 +1546,10 @@ def test_bottom_toolbar_groups_related_pages_under_one_button(test_client, monke
     assert bar.count('data-open="actions"') == 1 and bar.count('data-open="policies"') == 1 and bar.count('data-open="system"') == 1
     assert bar.count('data-open="dashboard"') == 0
     actions_row = re.search(r'data-view="actions">(.*?)</div>', bar, re.S).group(1)
-    for href, label in (("/tasks", "Task list"), ("/tasks/new", "New task"), ("/jobs", "Jobs"), ("/jobs/new", "New job"), ("/jobs/schedule", "Schedule job")):
+    for href, label in (("/tasks", "Task list"), ("/tasks/new", "New task"), ("/jobs", "Jobs"), ("/jobs/new", "New job")):
         assert f'href="{href}"' in actions_row and f"<span>{label}</span>" in actions_row
     assert "/tasks/queue" not in actions_row and "/tasks/schedule" not in actions_row
+    assert "/jobs/schedule" not in actions_row and "Schedule job" not in actions_row  # merged into New job
     policies_row = re.search(r'data-view="policies">(.*?)</div>', bar, re.S).group(1)
     for href, label in (("/policies", "Policies"), ("/policies/new", "New policy")):
         assert f'href="{href}"' in policies_row and f"<span>{label}</span>" in policies_row
@@ -1880,7 +1881,7 @@ def test_scheduled_tasks_are_cards_that_open_their_details(test_client, monkeypa
 def test_scheduled_jobs_are_cards_that_open_their_details(test_client, monkeypatch):
     _stub_job_pages(monkeypatch)
     monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [_SCHEDULED_TASK, _SCHEDULED_JOB])
-    text = test_client.get("/jobs/schedule").text
+    text = test_client.get("/jobs/new").text
     assert 'href="/jobs/schedule/t2"' in text and "/tasks/schedule/t1" not in text
     assert '<span class="pill warn">missed</span>' in text and "requirements.run_tests" in text
 
@@ -1899,7 +1900,7 @@ def test_scheduled_task_detail_shows_everything_and_offers_remove(test_client, m
 def test_scheduled_job_detail_shows_its_job_and_arguments(test_client, monkeypatch):
     monkeypatch.setattr(client, "get_scheduled_task", lambda paths, task_id: _SCHEDULED_JOB)
     text = test_client.get("/jobs/schedule/t2").text
-    assert "<h1>Run tests: little-widget</h1>" in text and 'href="/jobs/schedule"' in text
+    assert "<h1>Run tests: little-widget</h1>" in text and 'href="/jobs/new"' in text
     assert "<code>requirements.run_tests</code>" in text and "suite ids" in text and "<code>[\"s1\"]</code>" in text
     assert "Missed run" in text and "not run yet" in text
     assert 'action="/jobs/schedule/t2/remove"' in text
@@ -2133,7 +2134,7 @@ def test_report_page_produces_no_horizontally_overflowing_content(test_client, m
     assert long_word in text  # rendered, not stripped — wrapping is CSS's job, not the server's
 
 
-# -- new job / schedule job: project -> job -> arguments (dashboard/job_catalog.py) ------
+# -- new job (right away or scheduled): project -> job -> arguments (dashboard/job_catalog.py) ------
 
 
 def _stub_job_pages(monkeypatch, created=None, scheduled=None):
@@ -2237,12 +2238,12 @@ def test_job_new_release_refuses_bad_conditions(test_client, monkeypatch, data, 
     assert message in text and created == []
 
 
-def test_job_schedule_can_schedule_a_release(test_client, monkeypatch):
+def test_job_new_can_schedule_a_release(test_client, monkeypatch):
     scheduled = []
     _stub_job_pages(monkeypatch, scheduled=scheduled)
-    test_client.post("/jobs/schedule", data={
+    test_client.post("/jobs/new", data={
         "project": "little-widget", "job": "release", "arg_combine": "and", "arg_all_requirements": "on",
-        "kind": "recurring", "day": ["4"], "time_of_day": "18:00"}, follow_redirects=False)
+        "when": "recurring", "day": ["4"], "time_of_day": "18:00"}, follow_redirects=False)
     [task] = scheduled
     assert task["job_template"]["type"] == "version.release" and task["job_template"]["params"]["all_requirements"] is True
 
@@ -2290,41 +2291,78 @@ def test_suite_choices_report_a_failed_discovery(test_client, monkeypatch):
     assert test_client.get("/jobs/catalog/choices/nope", params={"project": "x"}).status_code == 404
 
 
-def test_job_schedule_offers_the_same_picker_and_lists_scheduled_non_task_jobs(test_client, monkeypatch):
+def test_job_new_offers_when_and_lists_scheduled_non_task_jobs(test_client, monkeypatch):
     _stub_job_pages(monkeypatch)
     monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [
         {"id": "t1", "name": "audit", "state": "active", "job_template": {"type": "version.branch_audit"}, "schedule": {"kind": "once", "at": "2026-09-30T00:00:00"}},
         {"id": "t2", "name": "task-thing", "state": "active", "job_template": {"type": "agent.run_task"}, "schedule": {"kind": "once", "at": "2026-09-30T00:00:00"}},
     ])
-    text = test_client.get("/jobs/schedule").text
+    text = test_client.get("/jobs/new").text
     assert "audit" in text and "task-thing" not in text
-    assert 'name="arg_install"' in text and "Asking Claude" not in text
+    assert '<select name="when" id="when">' in text
+    assert re.findall(r'<option value="(\w+)" (?:selected)?>', text.split('id="when"', 1)[1].split("</select>", 1)[0]) == ["immediate", "once", "recurring"]
+    assert '<option value="immediate" selected>Right away</option>' in text
+    assert 'name="at"' in text and 'name="day"' in text and 'name="time_of_day"' in text
 
 
-def test_job_schedule_creates_a_scheduled_task_from_the_catalog(test_client, monkeypatch):
-    scheduled = []
-    _stub_job_pages(monkeypatch, scheduled=scheduled)
-    response = test_client.post("/jobs/schedule", data={
-        "project": "little-widget", "job": "run_tests", "arg_suites": "s1", "kind": "once", "at": "2999-01-02T09:30"}, follow_redirects=False)
-    assert response.status_code == 303 and "Run tests for little-widget scheduled" in unquote(response.headers["location"])
+def test_job_new_without_when_starts_right_away(test_client, monkeypatch):
+    created, scheduled = [], []
+    _stub_job_pages(monkeypatch, created=created, scheduled=scheduled)
+    response = test_client.post("/jobs/new", data={"project": "little-widget", "job": "build", "when": "immediate"}, follow_redirects=False)
+    assert response.headers["location"].startswith("/jobs")
+    _wait_for(created)
+    assert created[0]["type"] == "build.run" and scheduled == []
+
+
+def test_job_new_once_creates_a_scheduled_task_and_starts_nothing(test_client, monkeypatch):
+    created, scheduled = [], []
+    _stub_job_pages(monkeypatch, created=created, scheduled=scheduled)
+    response = test_client.post("/jobs/new", data={
+        "project": "little-widget", "job": "run_tests", "arg_suites": "s1", "when": "once", "at": "2999-01-02T09:30"}, follow_redirects=False)
+    location = unquote(response.headers["location"])
+    assert response.status_code == 303 and location.startswith("/jobs/new") and "Run tests for little-widget scheduled" in location
     task = scheduled[0]
     assert task["name"] == "Run tests: little-widget"
     assert task["job_template"]["type"] == "requirements.run_tests" and task["job_template"]["params"]["suite_ids"] == ["s1"]
     assert task["schedule"] == {"kind": "once", "at": "2999-01-02T09:30:00"}
+    threading.Event().wait(0.05)
+    assert created == []
 
 
-def test_job_schedule_without_a_time_is_refused(test_client, monkeypatch):
+def test_job_new_recurring_creates_a_weekly_scheduled_task(test_client, monkeypatch):
     scheduled = []
     _stub_job_pages(monkeypatch, scheduled=scheduled)
-    text = test_client.post("/jobs/schedule", data={"project": "little-widget", "job": "build", "kind": "once", "at": ""}).text
-    assert "Choose when it should run." in text and scheduled == []
+    test_client.post("/jobs/new", data={
+        "project": "little-widget", "job": "build", "when": "recurring", "day": ["0", "2"], "time_of_day": "06:15"}, follow_redirects=False)
+    assert scheduled[0]["schedule"] == {"kind": "recurring", "days_of_week": [0, 2], "time_of_day": "06:15"}
+
+
+@pytest.mark.parametrize("data", [
+    {"when": "once", "at": ""},
+    {"when": "once", "at": "2000-01-01T00:00"},
+    {"when": "recurring", "time_of_day": "06:15"},
+    {"when": "someday"},
+])
+def test_job_new_schedule_without_a_valid_time_is_refused_and_keeps_the_choice(test_client, monkeypatch, data):
+    created, scheduled = [], []
+    _stub_job_pages(monkeypatch, created=created, scheduled=scheduled)
+    text = test_client.post("/jobs/new", data={"project": "little-widget", "job": "build", **data}).text
+    assert "Choose when it should run." in text and scheduled == [] and created == []
+    assert '<option value="build" selected>' in text
+    if data["when"] in ("once", "recurring"):
+        assert f'<option value="{data["when"]}" selected>' in text
+
+
+def test_old_schedule_job_url_redirects_to_new_job(test_client):
+    response = test_client.get("/jobs/schedule", follow_redirects=False)
+    assert response.status_code == 307 and response.headers["location"] == "/jobs/new"
 
 
 def test_job_schedule_remove(test_client, monkeypatch):
     removed = []
     monkeypatch.setattr(client, "remove_scheduled_task", lambda paths, task_id: removed.append(task_id) or {})
     response = test_client.post("/jobs/schedule/t1/remove", follow_redirects=False)
-    assert removed == ["t1"] and response.status_code == 303 and response.headers["location"].startswith("/jobs/schedule")
+    assert removed == ["t1"] and response.status_code == 303 and response.headers["location"].startswith("/jobs/new")
 
 
 # -- new policy / edit policy: Claude authors it, same as the Policy pillar's own flow --

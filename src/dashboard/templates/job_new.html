@@ -2,12 +2,46 @@
 {% block title %}New job — little-workshop{% endblock %}
 {% block content %}
 <h1>New job</h1>
-<p class="lede">Choose a project, the job to run on it, and that job's options.</p>
+<p class="lede">Choose a project, the job to run on it and that job's options, then whether it starts right away or on a schedule.</p>
 <div class="panel" style="padding:18px 20px">
 <form method="post" action="/jobs/new">
   {% include "_job_picker.html" %}
+  <label for="when">When</label>
+  <select name="when" id="when">
+    <option value="immediate" {{ 'selected' if when == 'immediate' }}>Right away</option>
+    <option value="once" {{ 'selected' if when == 'once' }}>Once, at a date and time</option>
+    <option value="recurring" {{ 'selected' if when == 'recurring' }}>Every week</option>
+  </select>
+  <div data-when="once" hidden>
+    <label for="at">Date and time</label>
+    <input type="datetime-local" name="at" id="at">
+  </div>
+  <div data-when="recurring" hidden>
+    <label>Weekdays</label>
+    <div class="daypick">
+      {% for d in weekdays %}<label class="chip-check"><input type="checkbox" name="day" value="{{ loop.index0 }}"><span>{{ d }}</span></label>{% endfor %}
+    </div>
+    <label for="time_of_day">Time of day</label>
+    <input type="time" name="time_of_day" id="time_of_day">
+  </div>
   {% if build_error %}<p class="muted" style="color:var(--fail)">{{ build_error }}</p>{% endif %}
-  <div class="row" style="margin-top:12px"><button type="submit" class="primary" data-busy="Starting…">Start job</button></div>
+  <div class="row" style="margin-top:12px"><button type="submit" class="primary" id="job-submit" data-busy="Starting…">Start job</button></div>
 </form>
 </div>
+
+{% set detail_base = "/jobs/schedule" %}
+{% include "_scheduled_cards.html" %}
+<script>
+(function () {
+  var when = document.getElementById("when"), submit = document.getElementById("job-submit");
+  function sync() {
+    document.querySelectorAll("[data-when]").forEach(function (el) { el.hidden = el.dataset.when !== when.value; });
+    var now = when.value === "immediate";
+    submit.textContent = now ? "Start job" : "Schedule job";
+    submit.dataset.busy = now ? "Starting…" : "Scheduling…";
+  }
+  when.addEventListener("change", sync);
+  sync();
+})();
+</script>
 {% endblock %}

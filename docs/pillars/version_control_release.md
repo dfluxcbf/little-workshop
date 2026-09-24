@@ -136,6 +136,13 @@ repository in a half-finished state.
   `improvement/*` (the prefixes are read at install time) — a sync queued
   behind a Release Job holding the project's queue would otherwise run
   later, on whatever branch is checked out by then.
+- **Pre-commit sync runs in the CLI, not as a Job** (2026-09-24):
+  `lws version sync-version-files` now syncs the checkout it is run in,
+  synchronously, without the daemon (`--project-id` is still accepted).
+  As a Job it queued behind the project's `queue_key` — held by the very
+  `agent.run_task` making the commit — so it ran only after the run ended:
+  the commits carried no bump and the leftover staged VERSION blocked the
+  run's own finish ("Working tree is dirty"). REQ-000000264.
 
 ## Interfacing
 
