@@ -137,6 +137,14 @@ registers a stdio MCP server exposing every pillar's mutations/reads as
 `workshop_*` tools, namespaced by pillar. Point `claude mcp add` at it per
 `docs/policies/mcp_policy.md`.
 
+Every Claude Code session little-workshop itself launches on a project (agent
+tasks, ad-hoc sessions) also gets the **Playwright MCP server**, so the agent
+can open the project's app in a headless browser. It needs `npx` (Node) on
+`PATH` and uses the Chromium from `playwright install chromium` when present.
+A project's UI tests are pytest-playwright tests under `tests/ui/`; test runs
+start the branch's app and pass `--base-url` to them. See
+`docs/pillars/agentic_development.md` and `docs/pillars/requirements_quality.md`.
+
 ## Testing
 
 ```bash
