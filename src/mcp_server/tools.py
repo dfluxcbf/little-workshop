@@ -167,6 +167,22 @@ def _project_import(paths: Paths, args: JSONDict) -> Any:
     )
 
 
+def _project_connect_github(paths: Paths, args: JSONDict) -> Any:
+    params = {
+        "name": args["name"],
+        "owner": args.get("owner", "dfluxcbf"),
+        "description": args.get("description", ""),
+        "public": args.get("public", False),
+        "remote_host": args.get("remote_host", "github.com"),
+        "github_token": args.get("github_token"),
+        "ensure_labels": args.get("ensure_labels", True),
+    }
+    return client.create_job(
+        paths, type="project.connect_github", target_pillar="registry", project_id=args["name"],
+        params=params, queue_key=args["name"], depends_on=[], created_by="mcp",
+    )
+
+
 def _project_remove(paths: Paths, args: JSONDict) -> Any:
     return client.create_job(
         paths, type="project.remove", target_pillar="registry", project_id=args["name"],
@@ -819,6 +835,19 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "name": _prop("string", "The project's name to register it under."),
                  "path": _prop("string", "Absolute path to the existing, already-checked-out git repository."),
              }, ["name", "path"]), _project_import),
+    ToolSpec("workshop_project_connect_github", "Give an already-registered project its GitHub setup without "
+             "re-importing it: with no `origin` remote, create the repo (private by default) and push master and dev; "
+             "with an `origin` already there, adopt it. Either way ensure the bootstrap labels and record repo_url. "
+             "Safe to re-run.",
+             _schema({
+                 "name": _prop("string", "The registered project's name (also the GitHub repo name)."),
+                 "owner": _prop("string", "GitHub owner/org for a new repo. Default: dfluxcbf."),
+                 "description": _prop("string", "Description for a new repo."),
+                 "public": _prop("boolean", "Make a new repo public. Default: false."),
+                 "remote_host": _prop("string", "Git remote host. Default: github.com."),
+                 "github_token": _prop("string", "GitHub token; omit to use the logged-in gh CLI."),
+                 "ensure_labels": _prop("boolean", "Ensure the bootstrap GitHub labels exist. Default: true."),
+             }, ["name"]), _project_connect_github),
     ToolSpec("workshop_project_remove", "Hard-delete a registered project: cascades to every pillar's own data for it.",
              _schema({"name": _prop("string", "The project's name.")}, ["name"]), _project_remove),
     ToolSpec("workshop_project_list", "List every registered project, with its overall status.",

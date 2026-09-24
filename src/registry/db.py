@@ -108,6 +108,14 @@ def list_projects(conn: sqlite3.Connection, *, status: ProjectStatus | None = No
     return [_row_to_project(row) for row in rows]
 
 
+def update_project_repo_url(conn: sqlite3.Connection, name: str, repo_url: str | None) -> None:
+    conn.execute(
+        "UPDATE projects SET repo_url = ?, updated_at = ? WHERE name = ?",
+        (repo_url, _iso(datetime.now(timezone.utc)), name),
+    )
+    conn.commit()
+
+
 def delete_project(conn: sqlite3.Connection, name: str) -> None:
     """Hard delete — no soft-delete, no undo (docs/open_questions.md OQ-7)."""
     conn.execute("DELETE FROM projects WHERE name = ?", (name,))

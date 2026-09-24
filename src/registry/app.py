@@ -9,6 +9,7 @@ doesn't need a Job's audit trail the way a real operation does.
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -21,8 +22,9 @@ from common.paths import Paths
 from common.incident import install_incident_reporting
 from registry import db, github, gitops, version_client
 from registry.bootstrap import BootstrapError, bootstrap_project
+from registry.connect_github import ConnectGitHubError, connect_github
 from registry.import_ import ProjectImportError, import_project
-from registry.models import BootstrapParams, ImportParams, ProjectSet, ProjectStatus, Ticket
+from registry.models import BootstrapParams, ConnectGitHubParams, ImportParams, ProjectSet, ProjectStatus, Ticket
 from registry.removal import ProjectNotFoundError, remove_project
 
 
@@ -110,6 +112,20 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 result = import_project(conn, paths, import_params)
             except ProjectImportError as exc:
                 return {"outcome": "failed", "error": str(exc)}
+        return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
+
+    @app.post("/v1/jobs/project.connect_github")
+    def job_connect_github(request: JobRequest) -> dict:
+        try:
+            connect_params = ConnectGitHubParams(**{"name": request.project_id, **request.params})
+        except ValidationError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        with lock:
+            try:
+                result = connect_github(conn, paths, connect_params)
+            except (ConnectGitHubError, subprocess.CalledProcessError) as exc:
+                detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else str(exc)
+                return {"outcome": "failed", "error": detail}
         return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
 
     @app.post("/v1/jobs/project.remove")

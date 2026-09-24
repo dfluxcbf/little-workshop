@@ -269,6 +269,35 @@ def cmd_project_import(args: argparse.Namespace) -> int:
     return 0 if result.get("status") == "succeeded" else 1
 
 
+def cmd_project_connect_github(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    params = {
+        "name": args.name,
+        "owner": args.owner,
+        "description": args.description,
+        "public": args.public,
+        "remote_host": args.remote_host,
+        "github_token": args.github_token,
+        "ensure_labels": args.ensure_labels,
+    }
+    try:
+        result = client.create_job(
+            paths,
+            type="project.connect_github",
+            target_pillar="registry",
+            project_id=args.name,
+            params=params,
+            queue_key=args.name,
+            depends_on=[],
+            created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
 def cmd_project_list(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     _print(client.list_projects(paths, status=args.status))
@@ -1740,6 +1769,18 @@ def build_parser() -> argparse.ArgumentParser:
     project_bootstrap.add_argument("--github-token", default=None)
     project_bootstrap.add_argument("--no-labels", dest="ensure_labels", action="store_false", default=True)
     project_bootstrap.set_defaults(func=cmd_project_bootstrap)
+
+    project_connect = project_sub.add_parser(
+        "connect-github", help="Create or adopt a registered project's GitHub repo, labels and repo_url"
+    )
+    project_connect.add_argument("name")
+    project_connect.add_argument("--owner", default="dfluxcbf")
+    project_connect.add_argument("--description", default="")
+    project_connect.add_argument("--public", action="store_true")
+    project_connect.add_argument("--remote-host", default="github.com")
+    project_connect.add_argument("--github-token", default=None)
+    project_connect.add_argument("--no-labels", dest="ensure_labels", action="store_false", default=True)
+    project_connect.set_defaults(func=cmd_project_connect_github)
 
     project_import = project_sub.add_parser("import", help="Register an existing, already-conformant repository")
     project_import.add_argument("name")
