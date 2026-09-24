@@ -169,7 +169,9 @@ def build_app(
             job = db.get_job(conn, job_id)
             if job is None:
                 raise HTTPException(status_code=404, detail="job not found")
-        return stop_job(conn, job, socket_lookup, lock=lock)
+        result = stop_job(conn, job, socket_lookup, lock=lock)
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)  # a stopped Job frees its queue_key
+        return result
 
     @app.post("/v1/jobs/{job_id}/policy_confirm")
     def policy_confirm(job_id: str) -> dict:
@@ -187,7 +189,13 @@ def build_app(
             job = db.get_job(conn, job_id)
             if job is None:
                 raise HTTPException(status_code=404, detail="job not found")
-            return policy_gate.confirm_timeout(conn, job)
+            result = policy_gate.confirm_timeout(conn, job)
+        # A pending_confirmation Job holds its queue_key; once it settles,
+        # whatever queued behind it must be dispatched now, not whenever the
+        # next unrelated Job happens to arrive (2026-09-24: a finish sat
+        # queued with every dependency green until a manual pump).
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)
+        return result
 
     @app.post("/v1/pump")
     def pump() -> list[dict]:

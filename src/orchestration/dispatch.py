@@ -280,6 +280,16 @@ def stop_job(
     unreachable, target genuinely stopped it, target says it can't) is a
     plain `{"stopped": bool, "reason": str | None}` the caller can show
     directly."""
+    if job.status == JobStatus.PENDING_CONFIRMATION:
+        # Never dispatched: nothing to interrupt, but it holds its
+        # queue_key until confirmed or timed out -- stopping it declines it.
+        with lock if lock is not None else nullcontext():
+            job.status = JobStatus.CANCELLED
+            job.error = "stopped by user while awaiting policy confirmation"
+            update_job(conn, job)
+            cascade_dependency_failures(conn)
+        return {"stopped": True, "reason": None}
+
     if job.status != JobStatus.RUNNING:
         return {"stopped": False, "reason": f"job is {job.status.value}, not running"}
 
