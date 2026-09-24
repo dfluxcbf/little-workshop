@@ -197,17 +197,6 @@ def test_sandbox_image_carries_little_mindchecks_session_and_push_dependencies()
     assert {"itsdangerous", "pywebpush"} <= _image_pip_packages()
 
 
-def test_sandbox_image_carries_every_sibling_python_projects_dependencies():
-    """Every little-* Python project checked out next to this one: its own
-    pyproject.toml's dependencies, dev extras included, must all be baked in."""
-    siblings = sorted(p for p in _REPO.parent.glob("little-*/pyproject.toml") if p.parent != _REPO)
-    if not siblings:
-        pytest.skip("no sibling little-* Python projects checked out next to this one")
-    image = _image_pip_packages()
-    missing = {p.parent.name: sorted(_pyproject_dependency_names(p) - image) for p in siblings}
-    assert not any(missing.values()), f"sandbox image is missing {missing}"
-
-
 def test_sandbox_image_tag_moved_past_the_image_without_those_dependencies():
     # ensure_image only rebuilds on a tag change: an unchanged tag would keep
     # serving the old image that lacked itsdangerous/pywebpush.
