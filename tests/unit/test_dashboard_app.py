@@ -715,6 +715,42 @@ def test_policy_detail_status_panel_survives_no_check_results_yet(test_client, m
     assert "no data yet" in text
 
 
+def test_policy_detail_status_panel_lists_every_associated_project_and_only_those(test_client, monkeypatch):
+    _stub_detail(monkeypatch)  # associated: proj-a, proj-b; proj-c is registered but not associated
+    monkeypatch.setattr(client, "policy_check_results", lambda paths: [
+        {"policy_id": "0123456789abcdef", "project_id": "proj-a", "outcome": "fail",
+         "detail": "AssertionError: proj-a broke", "checked_at": "2026-09-23T10:00:00Z"},
+        {"policy_id": "0123456789abcdef", "project_id": "proj-c", "outcome": "fail",
+         "detail": "AssertionError: proj-c broke", "checked_at": "2026-09-23T10:00:00Z"},
+    ])
+    text = test_client.get("/policies/pol1").text
+    status_panel = text.split('class="dcard-title">Policy status<', 1)[1].split('class="dcard-title">Gate points<', 1)[0]
+    rows = re.findall(r'<span class="prow-name">([^<]+)</span>', status_panel)
+    assert rows == ["proj-a", "proj-b"]
+    assert "1 failing" in status_panel and "2 failing" not in status_panel
+    assert "AssertionError: proj-a broke" in status_panel
+    assert "proj-c broke" not in text
+    assert "no data yet" in status_panel  # proj-b: associated, never checked
+
+
+def test_policies_pages_judge_only_each_projects_latest_check(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths: [
+        _policy(id="0123456789abcdef", projects=[{"project_id": "proj-a", "gating_enabled": True}]),
+    ])
+    _stub_detail(monkeypatch, policy={"projects": [{"project_id": "proj-a", "gating_enabled": True}]})
+    monkeypatch.setattr(client, "policy_check_results", lambda paths: [  # oldest first
+        {"policy_id": "0123456789abcdef", "project_id": "proj-a", "outcome": "fail",
+         "detail": "AssertionError: old failure", "checked_at": "2026-09-22T10:00:00Z"},
+        {"policy_id": "0123456789abcdef", "project_id": "proj-a", "outcome": "pass",
+         "detail": "", "checked_at": "2026-09-23T10:00:00Z"},
+    ])
+    listing = test_client.get("/policies").text
+    detail = test_client.get("/policies/pol1").text
+    assert "failing" not in listing
+    assert "failing" not in detail and "all passing" in detail
+    assert "old failure" not in detail
+
+
 def test_policy_detail_keeps_a_selected_project_that_is_no_longer_registered(test_client, monkeypatch):
     _stub_detail(monkeypatch, registered=("proj-a",))
     text = test_client.get("/policies/pol1").text

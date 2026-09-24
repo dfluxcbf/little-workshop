@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import tempfile
 
 import pytest
 
@@ -26,11 +27,28 @@ def test_python_statement_coverage_is_at_least_90_percent():
     if not os.path.isdir(src_dir):
         pytest.skip("no src/ directory - not this ecosystem's Python project layout")
 
-    env = dict(os.environ, PYTHONPATH=src_dir)
-    result = subprocess.run(
-        ["python3", "-m", "pytest", "tests", "--cov=src", "--cov-report=term-missing", "-q"],
-        cwd=PROJECT, capture_output=True, text=True, env=env, timeout=1500,
-    )
+    # This sandbox runs with --network none, so anything under tests/integration
+    # (real HTTP/socket calls between pillars) can only ever time out here --
+    # never pass, never usefully fail, just burn the check's time budget.
+    # A project that splits out a network-free tests/unit dir gets checked
+    # against that instead; a project that doesn't falls back to tests/ as
+    # before.
+    unit_dir = os.path.join(tests_dir, "unit")
+    target = "tests/unit" if os.path.isdir(unit_dir) else "tests"
+
+    # coverage.py's own data file defaults to <cwd>/.coverage -- cwd is
+    # PROJECT, which the sandbox mounts read-only, so every single check
+    # crashed here before a single test ran (2026-09-23's finding: this
+    # policy had never actually measured any project's real coverage).
+    # COVERAGE_FILE is coverage.py's own documented override, honored by
+    # pytest-cov underneath it -- redirecting it to a real temp dir needs
+    # no pytest-cov-version-specific flag.
+    with tempfile.TemporaryDirectory(prefix="policy-coverage-") as scratch:
+        env = dict(os.environ, PYTHONPATH=src_dir, COVERAGE_FILE=os.path.join(scratch, ".coverage"))
+        result = subprocess.run(
+            ["python3", "-m", "pytest", target, "--cov=src", "--cov-report=term-missing", "-q"],
+            cwd=PROJECT, capture_output=True, text=True, env=env, timeout=1500,
+        )
     match = TOTAL_RE.search(result.stdout)
     assert match, (
         f"could not measure coverage (pytest exited {result.returncode}, "

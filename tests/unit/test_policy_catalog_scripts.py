@@ -5,9 +5,12 @@ same way tools/policy_scripts/*.py's own tests do, since these scripts aren't
 committed files themselves (framework-catalog drafts stay data until approved)."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 DRAFTS = Path(__file__).resolve().parents[2] / "docs" / "pending_policy_drafts"
 
@@ -193,3 +196,29 @@ def test_python_test_coverage_passes_when_fully_covered(tmp_path):
     project = _python_project(tmp_path)
     result = _run_coverage(script, project)
     assert result.returncode == 0 and "passed" in result.stdout
+
+
+def test_python_test_coverage_script_is_the_catalog_drafts_own_script():
+    # The Dashboard finds a policy's script under tools/policy_scripts/ by blob hash,
+    # and the tests above run this file -- both only mean something while it is
+    # exactly the script the policy itself runs.
+    assert Path("tools/policy_scripts/python_test_coverage.py").read_text() == _script("python-test-coverage")
+
+
+def test_python_test_coverage_measures_a_read_only_project(tmp_path):
+    """The sandbox mounts the project read-only; coverage.py's data file must land
+    somewhere writable, or the run crashes before measuring anything."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    script = _write_coverage_script(tmp_path)
+    project = _python_project(tmp_path)
+    dirs = [project, *(p for p in project.rglob("*") if p.is_dir())]
+    for d in dirs:
+        d.chmod(0o555)
+    try:
+        result = _run_coverage(script, project)
+    finally:
+        for d in dirs:
+            d.chmod(0o755)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (project / ".coverage").exists()

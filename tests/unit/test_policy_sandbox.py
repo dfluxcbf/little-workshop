@@ -166,3 +166,49 @@ def test_run_policy_check_mounts_a_host_path_at_every_container_path(tmp_path):
     sandbox.run_policy_check("def test_x(): pass\n", {tmp_path: ("/project", "/sub")}, runner=runner)
     run_argv = next(c for c in runner.calls if c[:2] == ["docker", "run"])
     assert f"{tmp_path}:/project:ro" in run_argv and f"{tmp_path}:/sub:ro" in run_argv
+
+
+# -- the image carries every Python project's own real dependencies (--network none) --
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def _image_pip_packages() -> set[str]:
+    line = next(l for l in sandbox._DOCKERFILE.splitlines() if "pip install" in l)
+    return {w.lower() for w in line.split("pip install", 1)[1].split() if not w.startswith("-")}
+
+
+def _pyproject_dependency_names(pyproject: Path) -> set[str]:
+    import re
+    import tomllib
+    project = tomllib.loads(pyproject.read_text())["project"]
+    specs = list(project.get("dependencies", []))
+    for extra in project.get("optional-dependencies", {}).values():
+        specs += extra
+    return {re.match(r"[A-Za-z0-9_.-]+", s).group(0).lower().replace("_", "-") for s in specs}
+
+
+def test_sandbox_image_carries_little_workshops_own_dependencies():
+    missing = _pyproject_dependency_names(_REPO / "pyproject.toml") - _image_pip_packages()
+    assert not missing, f"sandbox image is missing {sorted(missing)}"
+
+
+def test_sandbox_image_carries_little_mindchecks_session_and_push_dependencies():
+    assert {"itsdangerous", "pywebpush"} <= _image_pip_packages()
+
+
+def test_sandbox_image_carries_every_sibling_python_projects_dependencies():
+    """Every little-* Python project checked out next to this one: its own
+    pyproject.toml's dependencies, dev extras included, must all be baked in."""
+    siblings = sorted(p for p in _REPO.parent.glob("little-*/pyproject.toml") if p.parent != _REPO)
+    if not siblings:
+        pytest.skip("no sibling little-* Python projects checked out next to this one")
+    image = _image_pip_packages()
+    missing = {p.parent.name: sorted(_pyproject_dependency_names(p) - image) for p in siblings}
+    assert not any(missing.values()), f"sandbox image is missing {missing}"
+
+
+def test_sandbox_image_tag_moved_past_the_image_without_those_dependencies():
+    # ensure_image only rebuilds on a tag change: an unchanged tag would keep
+    # serving the old image that lacked itsdangerous/pywebpush.
+    assert sandbox.IMAGE_TAG not in ("little-workshop-policy-sandbox:3", "little-workshop-policy-sandbox:latest")

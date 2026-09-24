@@ -122,3 +122,103 @@ def test_pre_commit_hook_never_blocks_a_commit_when_lws_is_unavailable(tmp_path)
     result = subprocess.run(["git", "commit", "-m", "feat: c"], cwd=repo, env=env, capture_output=True, text=True)
 
     assert result.returncode == 0, result.stderr
+
+
+def test_an_improvement_branch_is_synced_like_a_feature_branch(tmp_path):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    cmd_topic_start(repo, prefix="improvement", name="faster")
+
+    _write(repo, "src.py", "x = 1\n")
+    result = cmd_sync_version_files(repo)
+
+    assert result.success, result.message
+    assert result.data["version"] == "0.1.1-dev.1"
+    assert "VERSION" in _git(["diff", "--cached", "--name-only"], repo).stdout
+
+
+def test_no_op_on_a_support_branch(tmp_path):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "-b", "support/0.1"], repo)
+
+    result = cmd_sync_version_files(repo)
+
+    assert result.success and result.data == {"skipped": True}
+    assert str(read_version(repo)) == "0.1.0"
+
+
+def _add_version_hook(repo, script):
+    import json
+    (repo / "tools").mkdir()
+    (repo / "tools" / "bump.py").write_text(script, encoding="utf-8")
+    cfg_path = repo / ".lvx" / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg["version_hooks"] = ["tools/bump.py"]
+    cfg_path.write_text(json.dumps(cfg))
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "chore: add version hook"], repo)
+    _git(["checkout", "dev"], repo)
+    _git(["merge", "--ff-only", "master"], repo)
+
+
+def test_a_hook_edit_to_an_already_tracked_file_is_staged(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / "pyproject.toml").write_text('version = "0.1.0"\n', encoding="utf-8")
+    _add_version_hook(
+        repo,
+        "import sys, pathlib\n"
+        "pathlib.Path('pyproject.toml').write_text(f'version = \"{sys.argv[1]}\"\\n')\n",
+    )
+    cmd_topic_start(repo, prefix="feature", name="widgets")
+
+    _write(repo, "src.py", "x = 1\n")
+    result = cmd_sync_version_files(repo)
+
+    assert result.success, result.message
+    assert (repo / "pyproject.toml").read_text() == 'version = "0.1.1-dev.1"\n'
+    staged = _git(["diff", "--cached", "--name-only"], repo).stdout.split()
+    assert {"VERSION", "pyproject.toml", "src.py"} <= set(staged)
+    assert _git(["diff", "--name-only"], repo).stdout == ""  # nothing left unstaged
+
+
+def test_a_real_commit_through_the_installed_pre_commit_hook_carries_the_synced_version(tmp_path):
+    """End to end through git itself: the installed hook calls `lws`, a stand-in
+    here that runs the real sync command in-process, and the commit that lands
+    carries the new VERSION and the hook-propagated file."""
+    import sys
+    from pathlib import Path
+
+    repo = make_repo(tmp_path)
+    _add_version_hook(
+        repo,
+        "import sys, pathlib\n"
+        "pathlib.Path('propagated.txt').write_text(sys.argv[1])\n",
+    )
+    install_pre_commit_hook(repo, "little-widget")
+    _git(["add", "-A"], repo)
+    _git(["commit", "--no-verify", "-m", "chore: install hook"], repo)
+    cmd_topic_start(repo, prefix="feature", name="widgets")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    src_dir = Path(__file__).resolve().parents[2] / "src"
+    lws = bin_dir / "lws"
+    lws.write_text(
+        f"#!{sys.executable}\n"
+        "import sys, pathlib\n"
+        f"sys.path.insert(0, {str(src_dir)!r})\n"
+        "assert sys.argv[1:] == ['version', 'sync-version-files', '--project-id', 'little-widget'], sys.argv\n"
+        "from version.commands.sync_version_files import cmd_sync_version_files\n"
+        "sys.exit(0 if cmd_sync_version_files(pathlib.Path.cwd()).success else 1)\n",
+        encoding="utf-8",
+    )
+    lws.chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin")
+
+    _write(repo, "src.py", "x = 1\n")
+    result = subprocess.run(["git", "commit", "-m", "feat: x"], cwd=repo, env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert _git(["show", "HEAD:VERSION"], repo).stdout.strip() == "0.1.1-dev.1"
+    assert _git(["show", "HEAD:propagated.txt"], repo).stdout == "0.1.1-dev.1"
+    assert _git(["status", "--porcelain"], repo).stdout == ""
