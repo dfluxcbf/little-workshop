@@ -54,7 +54,9 @@ section for the full shape.
   alongside a real `REQ-nnnnnnnnn` id. little-workshop's own bookkeeping commits (version
   bumps, finish/release state, release candidates, changelogs) cite it; merge commits,
   which carry a branch's real changes, never do. `commit-cites-requirement` accepts either
-  and refuses both together.
+  and refuses both together. `REQ-NONE` is recognised in any letter case (`Req-NONE`,
+  `req-none`; amended 2026-09-24); requirement ids stay uppercase, and little-workshop's own
+  commits write `REQ-NONE`.
 - **Requirements follow EARS.** A description reads `<The system> shall <response>`, optionally
   prefixed by `While <state>,`, `When <trigger>,`, `Where <feature>,` or `If <condition>, then`.
   The Requirements pillar enforces this: creating a requirement or editing a draft's description
