@@ -1,5 +1,5 @@
-"""The jobs a person can start from the Dashboard's New Job and Schedule job
-pages: pick a project, pick one of these jobs, fill in its arguments.
+"""The jobs a person can start or schedule from the Dashboard's New Job page:
+pick a project, pick one of these jobs, fill in its arguments.
 
 This list is the whole menu. A new user-triggerable job is added here as one
 more `JobSpec` (its arguments as `JobArg`s, and `make` turning the filled-in

@@ -75,8 +75,8 @@ are the current state of every pillar.
 - **Workbench additions (2026-09-21, Control merged into Dashboard 2026-09-22,
   toolbar/task/job/policy workflow overhauled 2026-09-23)**:
   - **Navigation** is grouped. The bottom toolbar has Dashboard (standalone), Actions, Policies and
-    System; a group button reveals its pages (Actions: Task list, New task, Jobs, New job, Schedule
-    job; Policies: Policies, New policy; System: Pillars, Incidents, Settings) with Back returning to
+    System; a group button reveals its pages (Actions: Task list, New task, Jobs, New job;
+    Policies: Policies, New policy; System: Pillars, Incidents, Settings) with Back returning to
     the main row, and the group of the current page stays open. On a wide screen the top bar holds
     the four groups and a sub-navigation row lists the active group's pages. Report and New project
     are reachable only as contextual links (Dashboard's own "New project" link beside "Arrange
@@ -120,16 +120,16 @@ are the current state of every pillar.
     description, its last Job) with the Remove button. **Queue task** (a task behind a
     predecessor) was dropped as a distinct feature.
   - **Jobs** (`/jobs`): previous, running and queued jobs of every type (unchanged panel; see below).
-  - **New job** (`/jobs/new`, new 2026-09-23) and **Schedule job** (`/jobs/schedule`, new
-    2026-09-23): dispatch or schedule any Orchestration job type, not just `agent.run_task`. Build
-    the job's template either by reusing an existing job's own type/target pillar/params (picked
-    from the 40 most recent) or by describing it in plain language and asking Claude once — a
-    single `agent.query` Job whose reply is parsed as a JSON template (`type`, `target_pillar`,
-    `project_id`, `params`); the template is shown for review/edit before New job dispatches it
-    (`POST /v1/jobs`) or Schedule job attaches a schedule to it (`POST /v1/scheduled_tasks`), the
-    same "once at a date and time / every week" schedule shape New task uses. Scheduled jobs
-    (excluding `agent.run_task` ones, which live on New task instead) are listed here as cards
-    (2026-09-24); tapping one opens its details (`/jobs/schedule/{id}`: when, next and missed
+  - **New job** (`/jobs/new`, new 2026-09-23; absorbed Schedule job 2026-09-24): dispatch or
+    schedule any job in the catalog (`dashboard/job_catalog.py`): choose a project, a job and that
+    job's own arguments, then a "When" choice — right away / once at a date and time / every week
+    on chosen weekdays, the same choice New task offers. Right away dispatches the Job in the
+    background (`POST /v1/jobs`) and lands on Jobs; a schedule files an Orchestration scheduled
+    task (`POST /v1/scheduled_tasks`) and returns to New job. The submit button reads "Start job"
+    or "Schedule job" to match. The old separate Schedule job page is gone from the toolbar;
+    `/jobs/schedule` now redirects to `/jobs/new` so old bookmarks still land. Scheduled jobs
+    (excluding `agent.run_task` ones, which live on New task instead) are listed under the form as
+    cards (2026-09-24); tapping one opens its details (`/jobs/schedule/{id}`: when, next and missed
     run, job type and arguments, its last Job) with the Remove button. The catalog's **Release**
     job (2026-09-24) takes its conditions as arguments — minimum delta and minimum patch bumps
     (numbers), how they combine (and/or, which must be chosen) and three checkboxes (all tests,
