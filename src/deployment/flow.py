@@ -8,6 +8,7 @@ itself) is explicitly not in scope here — docs/milestones.md M5.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
 import time
@@ -119,6 +120,20 @@ def _lws_python() -> Path | None:
 def _pip_version(version: str) -> str:
     """VERSION's gitflow form as pip reports it: 0.2.19-dev.1 -> 0.2.19.dev1."""
     return version.replace("-dev.", ".dev").replace("-rc.", "rc")
+
+
+_PIP_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+)|rc(\d+))?$")
+
+
+def _version_key(pip_version: str) -> tuple[int, ...] | None:
+    """Orders pip-form versions the gitflow way (dev < rc < stable); None
+    for anything else."""
+    match = _PIP_VERSION_RE.match(pip_version.strip())
+    if not match:
+        return None
+    major, minor, patch, dev, rc = match.groups()
+    stage, n = (0, int(dev)) if dev else (1, int(rc)) if rc else (2, 0)
+    return (int(major), int(minor), int(patch), stage, n)
 
 
 @dataclass
@@ -420,7 +435,7 @@ class DeploymentFlow:
         return how
 
     def redeploy_pillar_direct(
-        self, conn: sqlite3.Connection, pillar: str, workshop_repo_dir: Path, commit: str,
+        self, conn: sqlite3.Connection, pillar: str, workshop_repo_dir: Path, commit: str, *, refresh_cli: bool = True,
     ) -> UpResult:
         """Build-before-stop, generalized from an external project's server
         to one of little-workshop's own pillars: check out `commit` into a
@@ -456,7 +471,9 @@ class DeploymentFlow:
             if install_dir.exists():
                 shutil.rmtree(install_dir)
             shutil.copytree(worktree / "src", install_dir / "src")
-            cli_note = self._refresh_cli(worktree, version)
+            # A rollback puts one pillar back on an older commit; `lws` is
+            # shared by all of them and stays where it is.
+            cli_note = self._refresh_cli(worktree, version) if refresh_cli else None
         finally:
             gitutil.remove_worktree(workshop_repo_dir, worktree)
 
@@ -481,8 +498,9 @@ class DeploymentFlow:
         undeployed until someone ran `bazel run //:install` (2026-09-24).
         Upgraded in place with the venv's own pip -- recreating the venv
         (`pipx install --force`) would pull it out from under the processes
-        running from it. Skipped when `lws` already has this version. Never
-        fails the redeploy: returns a note instead."""
+        running from it. Skipped when `lws` already has this version or a
+        newer one, and never run for a rollback. Never fails the redeploy:
+        returns a note instead."""
         python = self.cli_python()
         if python is None:
             return "lws is not installed; nothing to refresh"
@@ -490,7 +508,12 @@ class DeploymentFlow:
             [str(python), "-c", "import importlib.metadata as m; print(m.version('little-workshop'))"], timeout=30,
         )
         target = _pip_version(version)
-        if installed.ok and installed.stdout.strip() == target:
+        installed_key = _version_key(installed.stdout) if installed.ok else None
+        target_key = _version_key(target)
+        if installed_key is not None and target_key is not None and target_key <= installed_key:
+            # Same version, or an older commit (redeploying one pillar back):
+            # `lws` is shared by every pillar and never moves backwards
+            # (2026-09-24: a rollback of `deployment` took it to 0.1.1).
             return None
         for argv in (
             # The package itself, even at an unchanged version number; then any new dependency.
@@ -537,7 +560,7 @@ class DeploymentFlow:
             return reason
         assert state is not None
 
-        result = self.redeploy_pillar_direct(conn, pillar, workshop_repo_dir, state["confirmed_commit"])
+        result = self.redeploy_pillar_direct(conn, pillar, workshop_repo_dir, state["confirmed_commit"], refresh_cli=False)
         db.settle_after_rollback(conn, pillar)
         return f"{pillar}: rolled back to {state['confirmed_commit'][:10]} (version {result.version}, {result.how})"
 

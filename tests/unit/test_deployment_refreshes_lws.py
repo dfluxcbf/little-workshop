@@ -1,6 +1,7 @@
 """A self-redeploy brings the installed `lws` to the deployed commit, in
-place, once per version, and never fails the redeploy over it.
-REQ-000000272."""
+place, once per version, and never fails the redeploy over it
+(REQ-000000272); it never moves `lws` backwards, and a rollback never
+touches it (REQ-000000273)."""
 
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 from common.paths import Paths
 from common.shell import CommandResult
 from deployment import flow as flow_module
-from deployment.flow import DeploymentFlow, _pip_version
+from deployment.flow import DeploymentFlow, _pip_version, _version_key
 
 VENV_PY = Path("/venv/bin/python3")
 
@@ -122,3 +123,42 @@ def test_a_pillar_redeploy_refreshes_lws_and_reports_it(tmp_path):
         conn.close()
     assert result.cli_note == "lws refreshed to 0.2.19"
     assert len(_pip_calls(runner)) == 2
+
+
+def test_version_keys_order_dev_below_rc_below_stable():
+    assert _version_key("0.2.21.dev1") < _version_key("0.2.21rc1") < _version_key("0.2.21") < _version_key("0.2.22.dev1")
+    assert _version_key("0.1.1.dev25") < _version_key("0.2.20")
+    assert _version_key("not-a-version") is None
+
+
+def test_an_older_commit_never_downgrades_lws(tmp_path):
+    runner = Runner(installed="0.2.20")
+    assert _flow(tmp_path, runner)._refresh_cli(tmp_path / "wt", "0.1.1-dev.25") is None
+    assert _pip_calls(runner) == []
+
+
+def test_an_unreadable_installed_version_is_refreshed(tmp_path):
+    runner = Runner(installed="garbage")
+    assert _flow(tmp_path, runner)._refresh_cli(tmp_path / "wt", "0.2.21") == "lws refreshed to 0.2.21"
+
+
+def test_a_rollback_never_touches_lws(tmp_path, monkeypatch):
+    """rollback_pillar_if_unconfirmed puts one pillar back on its confirmed
+    commit without refreshing the shared lws (2026-09-24: a timed-out
+    `deployment` confirm rolled lws back to 0.1.1)."""
+    from deployment import confirm
+
+    captured = {}
+
+    def fake_direct(self, conn, pillar, repo, commit, *, refresh_cli=True):
+        captured["refresh_cli"] = refresh_cli
+        return flow_module.UpResult(branch=commit, version="0.1.1", commit=commit, how="x", exposure=None)
+
+    monkeypatch.setattr(DeploymentFlow, "redeploy_pillar_direct", fake_direct)
+    monkeypatch.setattr(confirm, "rollback_guard", lambda conn, pillar, deploy_id: ({"confirmed_commit": "abc"}, None))
+    monkeypatch.setattr(flow_module.db, "settle_after_rollback", lambda conn, pillar: None)
+    flow = DeploymentFlow(paths=Paths(config_home=tmp_path / "c", state_home=tmp_path / "s"), own_cgroup=lambda: "")
+
+    flow.rollback_pillar_if_unconfirmed(None, "version", tmp_path, "deploy-1")
+
+    assert captured["refresh_cli"] is False
