@@ -144,3 +144,33 @@ def test_release_finish_conflict_supports_abort(tmp_path):
     abort_result = cmd_release_finish(repo, action="abort")
     assert abort_result.success
     assert current_branch(repo) == "release/0.1.0"
+
+
+def test_a_second_release_finishes_without_conflicts_even_with_version_hooks(tmp_path):
+    """The finish commits the minor bump (and what version_hooks write) on
+    production after the release merge; the back-merge must carry those to the
+    integration branch, or the next release conflicts on every one of them."""
+    import json
+
+    repo = make_repo(tmp_path)
+    (repo / "tools").mkdir()
+    (repo / "tools" / "bump.py").write_text(
+        "import sys, pathlib\npathlib.Path('pyproject.toml').write_text(f'version = \"{sys.argv[1]}\"\\n')\n", encoding="utf-8")
+    (repo / "pyproject.toml").write_text('version = "0.1.0"\n', encoding="utf-8")
+    cfg_path = repo / ".lvx" / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg["version_hooks"] = ["tools/bump.py"]
+    cfg_path.write_text(json.dumps(cfg))
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "chore: add version hook"], repo)
+    _git(["checkout", "dev"], repo)
+    _git(["merge", "--ff-only", "master"], repo)
+
+    for expected in ("0.1.0", "0.2.1"):
+        cmd_release_start(repo)
+        result = cmd_release_finish(repo)
+        assert result.success, result.message
+        assert result.data["stable_version"] == expected
+    assert list_tags(repo, "v*") == ["v0.1.0", "v0.2.1"]
+    _git(["checkout", "master"], repo)
+    assert (repo / "pyproject.toml").read_text() == 'version = "0.3.0"\n'

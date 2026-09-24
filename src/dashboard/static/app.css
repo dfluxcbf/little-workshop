@@ -1111,6 +1111,7 @@ details.report-item > .report-approve { margin: 0; padding: 0 12px 12px; }
 .job-desc, .job-help { font-size: 12.5px; margin: 4px 0 8px; }
 .job-flag { display: flex; align-items: center; gap: 8px; font-weight: 500; margin: 6px 0; cursor: pointer; }
 .job-flag input { width: auto; margin: 0; }
+.job-group { font-size: 13px; font-weight: 700; margin: 14px 0 6px; padding-top: 10px; border-top: 1px solid var(--border-soft); color: var(--ink-soft); }
 /* A suite is a card: tapping it selects it (the checkbox is hidden, as on .pcard). */
 /* Three columns across the whole form; the page scrolls, not the list. */
 .job-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

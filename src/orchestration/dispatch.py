@@ -42,6 +42,9 @@ DECLARED_UNSTOPPABLE_JOB_TYPES: frozenset[str] = frozenset({
     "version.release_candidate_promote", "version.release_finish",
     "version.support_start", "version.support_finish",
     "version.config_add_hook", "version.config_remove_hook",
+    # Answers `accepted` at once and runs on (release start/finish mid-way
+    # must never be cut off); the 180s dispatch ceiling below is ample.
+    "version.release",
 })
 
 # Per-Job-type dispatch timeout overrides — `docs/open_questions.md`'s

@@ -130,7 +130,11 @@ are the current state of every pillar.
     same "once at a date and time / every week" schedule shape New task uses. Scheduled jobs
     (excluding `agent.run_task` ones, which live on New task instead) are listed here as cards
     (2026-09-24); tapping one opens its details (`/jobs/schedule/{id}`: when, next and missed
-    run, job type and arguments, its last Job) with the Remove button.
+    run, job type and arguments, its last Job) with the Remove button. The catalog's **Release**
+    job (2026-09-24) takes its conditions as arguments — minimum delta and minimum patch bumps
+    (numbers), how they combine (and/or, which must be chosen) and three checkboxes (all tests,
+    all requirements, all policies pass) — shown under one "Conditions" heading; see
+    `docs/pillars/version_control_release.md`'s Release job.
   - **Pillars** shows each pillar's full name (Policy & Compliance, Registry & Portfolio, …).
   - **New policy** (`/policies/new`, new 2026-09-23) and **Edit policy** (`/policies/{id}/edit`,
     new 2026-09-23): the same form — the rule in plain language, topic, target pillar, scope and

@@ -94,6 +94,48 @@ repository in a half-finished state.
   owns that concern elsewhere (Agentic Development's own `_publish`); a
   narrow, deliberate exception scoped to this one Job, not a general new
   capability.
+- **Release job** (`version.release`, 2026-09-24; `src/version/release_job.py`):
+  the Dashboard's "Release" catalog job — releases the latest committed
+  integration branch in one Job. Conditions are verified before any branch is
+  created, with the checkout on the integration branch (a clean checkout is
+  required; one on another branch is switched back to it afterwards):
+  - the release must merge into production without conflicts (a dry-run
+    `git merge-tree`), always;
+  - **minimum delta** (lines added + removed since the last production tag)
+    and **minimum patch bumps** (patch versions the integration branch moved
+    on since the last release — the line a release starts is `.1`, so the
+    count is its patch minus one, or minus production's own patch before any
+    release), combined with **and** or **or**;
+  - optionally **all tests pass** and **all requirements pass** — one run of
+    every test suite at the integration commit serves both (failed/error
+    tests fail it; skips don't); every *published* requirement must then be
+    done on the Definition-of-Done report, drafts ignored — and **all
+    policies pass**: every enabled policy associated with the project runs
+    (`policy.check_project`), and a fail blocks unless gating is off for the
+    project. Tests and policies only run once the cheap checks hold.
+  Then `release start`, a `CHANGELOG.md` section on the release branch (the
+  integration branch's first-parent subjects since the last tag, `chore`/
+  back-merges left out), `release finish`. Last, the relaunch is queued as
+  Jobs that depend on this one, so they start only once it has succeeded: a
+  running app is relaunched on the branch it runs (`deployment.deploy`); for
+  little-workshop itself (the project at `LITTLE_WORKSHOP_REPO_DIR`) every
+  enabled pillar is redeployed at the integration branch's new tip, one after
+  another, `deployment`/`orchestration` last (their own confirm gates apply).
+  It answers `accepted` and runs on a background thread (tests and policy
+  checks take minutes), reporting back by job id; every check's outcome is
+  in the Job's result, refused or not. Gated like `release_finish`
+  (`release`, `branch_finish`).
+- **Release finish back-merges production** (2026-09-24): the integration
+  branch now merges production (not the release branch) after the release,
+  so it also carries the minor bump, finish-state and version-hook commits
+  made on production after the release merge. Before, those stayed
+  production-only and every next release conflicted on `VERSION`,
+  `.lvx/state.json` and hook-written files.
+- **Pre-commit hook only on working branches** (2026-09-24): the installed
+  hook calls `lws version sync-version-files` only on `feature/*` and
+  `improvement/*` (the prefixes are read at install time) — a sync queued
+  behind a Release Job holding the project's queue would otherwise run
+  later, on whatever branch is checked out by then.
 
 ## Interfacing
 

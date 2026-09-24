@@ -6,6 +6,7 @@ own interface already makes.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -29,6 +30,8 @@ from version.commands.release import (
 )
 from version.commands.support import cmd_support_finish, cmd_support_start
 from version.commands.sync_version_files import cmd_sync_version_files
+from version.release_job import ReleaseFailed, ReleaseRefused, run_release
+from version.release_services import PillarReleaseServices, ServiceUnavailable
 from version.commands.topic_branch import cmd_topic_finish, cmd_topic_start, cmd_topic_status
 from version.branch_audit import audit_as_dicts
 from version.common import CommandResult
@@ -161,13 +164,43 @@ STATUS_HANDLERS: dict[str, Callable[[Path], CommandResult]] = {
 }
 
 
-def build_app(paths: Paths, resolve: Callable[[Paths, str | None], Path] = resolve_project_path) -> FastAPI:
+def build_app(
+    paths: Paths, resolve: Callable[[Paths, str | None], Path] = resolve_project_path, release_services=None,
+) -> FastAPI:
     app = FastAPI(title="little-workshop Version Control & Release")
     install_incident_reporting(app, paths, pillar="version")
+    release_services = release_services or PillarReleaseServices(paths)
 
     @app.get("/v1/health")
     def health() -> dict:
         return {"ok": True}
+
+    @app.post("/v1/jobs/version.release")
+    def job_release(request: JobRequest) -> dict:
+        """The Release job: conditions, release start, changelog, release finish,
+        relaunch. It waits on test runs and policy checks that take many minutes,
+        so it runs on a background thread and reports back by job id, like
+        `agent.run_task`."""
+        try:
+            repo_root = resolve(paths, request.project_id)
+        except ProjectResolutionError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+
+        def worker() -> None:
+            try:
+                result = run_release(repo_root, request.project_id, request.params, release_services, job_id=request.job_id)
+            except ReleaseRefused as exc:
+                release_services.complete(request.job_id, succeeded=False, result={"checks": exc.checks} if exc.checks else None, error=str(exc))
+            except (ReleaseFailed, ServiceUnavailable, GitError, FileNotFoundError, KeyError) as exc:
+                release_services.complete(request.job_id, succeeded=False, result=None, error=str(exc))
+            except Exception as exc:  # never leave the Job running forever
+                release_services.complete(request.job_id, succeeded=False, result=None, error=f"release crashed: {exc!r}")
+                raise
+            else:
+                release_services.complete(request.job_id, succeeded=True, result=result, error=None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"outcome": "accepted", "result": {"dispatched": True}}
 
     @app.post("/v1/jobs/{job_type}")
     def run_job(job_type: str, request: JobRequest) -> dict:

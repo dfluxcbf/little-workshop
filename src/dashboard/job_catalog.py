@@ -27,9 +27,13 @@ class JobArg:
     label: str
     # "flag": a checkbox. "multi": pick any of a per-project list, fetched from
     # /jobs/catalog/choices/<name>?project=… when the job is chosen.
+    # "number": a whole number, 0 or more. "choice": one of `options`.
     kind: str
     help: str = ""
     required: bool = False
+    default: str = ""
+    options: tuple[tuple[str, str], ...] = ()  # "choice": (value, label) pairs
+    group: str = ""  # consecutive args sharing a group are shown under that heading
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,14 @@ def _run_tests(project: str, values: dict) -> dict:
             "params": {"commitish": COMMITISH, "suite_ids": values["suites"]}}
 
 
+def _release(project: str, values: dict) -> dict:
+    # The project's own queue: nothing else may branch, build or launch it mid-release.
+    return {"type": "version.release", "target_pillar": "version", "project_id": project, "queue_key": project,
+            "params": dict(values)}
+
+
+_CONDITIONS = "Conditions — all must hold before the release branch is started"
+
 CATALOG: tuple[JobSpec, ...] = (
     JobSpec(
         key="build", label="Build project",
@@ -70,6 +82,26 @@ CATALOG: tuple[JobSpec, ...] = (
         args=(JobArg("suites", "Test suites", "multi", required=True,
                      help="Each suite's tests are found by listing the project's tests, without running them."),),
     ),
+    JobSpec(
+        key="release", label="Release",
+        description=("Release the latest committed dev: check the conditions, start the release branch, write the "
+                     "changelog, finish the release. A running app is relaunched once everything is done."),
+        make=_release,
+        args=(
+            JobArg("min_delta", "Minimum delta (lines changed)", "number", default="0", group=_CONDITIONS,
+                   help="Lines added plus lines removed on dev since the last release."),
+            JobArg("combine", "How the two minimums combine", "choice", required=True, group=_CONDITIONS,
+                   options=(("and", "Both minimums must hold (and)"), ("or", "Either minimum is enough (or)"))),
+            JobArg("min_patch_bumps", "Minimum patch bumps", "number", default="0", group=_CONDITIONS,
+                   help="Patch versions dev moved on since the last release — one per finished feature or improvement."),
+            JobArg("all_tests", "All tests pass", "flag", group=_CONDITIONS,
+                   help="Runs every test suite once, at dev's latest commit."),
+            JobArg("all_requirements", "All requirements pass", "flag", group=_CONDITIONS,
+                   help="Every approved requirement must pass on that same test run. Drafts are ignored."),
+            JobArg("all_policies", "All policies pass", "flag", group=_CONDITIONS,
+                   help="Runs every enabled policy that applies to the project."),
+        ),
+    ),
 )
 
 BY_KEY: dict[str, JobSpec] = {spec.key: spec for spec in CATALOG}
@@ -79,9 +111,20 @@ def parse(spec: JobSpec, form: Mapping[str, Sequence[str]]) -> tuple[dict | None
     """The spec's argument values from a submitted form (fields named `arg_<name>`)."""
     values: dict = {}
     for arg in spec.args:
-        raw = [v for v in form.get(f"arg_{arg.name}", []) if v]
+        raw = [v.strip() for v in form.get(f"arg_{arg.name}", []) if v and v.strip()]
         if arg.kind == "flag":
             values[arg.name] = "on" in raw
+        elif arg.kind == "number":
+            text = raw[0] if raw else (arg.default or "0")
+            if not text.isdigit():
+                return None, f"{arg.label} must be a whole number, 0 or more."
+            values[arg.name] = int(text)
+        elif arg.kind == "choice":
+            allowed = [value for value, _ in arg.options]
+            chosen = raw[0] if raw else arg.default
+            if chosen not in allowed:
+                return None, f"Choose {arg.label.lower()}."
+            values[arg.name] = chosen
         else:
             values[arg.name] = list(dict.fromkeys(raw))
             if arg.required and not values[arg.name]:

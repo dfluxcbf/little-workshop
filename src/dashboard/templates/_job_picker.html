@@ -13,8 +13,20 @@
 <div class="job-args" data-job="{{ spec.key }}" hidden>
   <p class="muted job-desc">{{ spec.description }}</p>
   {% for arg in spec.args %}
+  {% if arg.group and (loop.first or loop.previtem.group != arg.group) %}<h3 class="job-group">{{ arg.group }}</h3>{% endif %}
   {% if arg.kind == 'flag' %}
   <label class="job-flag"><input type="checkbox" name="arg_{{ arg.name }}" value="on"> {{ arg.label }}</label>
+  {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
+  {% elif arg.kind == 'number' %}
+  <label for="arg-{{ spec.key }}-{{ arg.name }}">{{ arg.label }}</label>
+  <input type="number" id="arg-{{ spec.key }}-{{ arg.name }}" name="arg_{{ arg.name }}" min="0" step="1" inputmode="numeric" value="{{ arg.default or 0 }}">
+  {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
+  {% elif arg.kind == 'choice' %}
+  <label for="arg-{{ spec.key }}-{{ arg.name }}">{{ arg.label }}</label>
+  <select id="arg-{{ spec.key }}-{{ arg.name }}" name="arg_{{ arg.name }}" {{ 'required' if arg.required }}>
+    {% if not arg.default %}<option value="" selected disabled>Choose…</option>{% endif %}
+    {% for value, text in arg.options %}<option value="{{ value }}" {{ 'selected' if value == arg.default }}>{{ text }}</option>{% endfor %}
+  </select>
   {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
   {% else %}
   <div class="job-multi" role="group" aria-labelledby="arg-{{ spec.key }}-{{ arg.name }}" data-choices="{{ arg.name }}">
@@ -76,7 +88,8 @@
     document.querySelectorAll(".job-args").forEach(function (el) {
       var on = el.dataset.job === job.value;
       el.hidden = !on;
-      el.querySelectorAll("input").forEach(function (i) { i.disabled = !on || i.closest(".is-disabled") !== null; });
+      // A hidden job's fields are disabled, so its required ones never block submitting another job.
+      el.querySelectorAll("input, select").forEach(function (i) { i.disabled = !on || i.closest(".is-disabled") !== null; });
       if (on) el.querySelectorAll("[data-choices]").forEach(loadChoices);
     });
   }

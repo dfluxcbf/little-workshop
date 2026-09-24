@@ -39,6 +39,14 @@ _HOOK_TEMPLATE = """#!/bin/sh
 # are the real enforcement backstop (still checked after the fact, still
 # catch a bypassed/missing hook); this is best-effort proactive correctness,
 # not a gate. See little-workshop's src/version/commands/sync_version_files.py.
+# Only a working branch's VERSION is this hook's job: release/hotfix/support,
+# dev and master are written by the finish commands themselves -- and a sync
+# queued behind one of those (a Release Job holds the project's queue) would
+# otherwise land later, on whatever branch is checked out by then.
+case "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" in
+    {working_branches}) ;;
+    *) exit 0 ;;
+esac
 if ! command -v lws >/dev/null 2>&1; then
     exit 0
 fi
@@ -55,7 +63,9 @@ def install_pre_commit_hook(repo_root: Path, project_id: str) -> Path:
     hook_dir = repo_root / _HOOK_DIR
     hook_dir.mkdir(parents=True, exist_ok=True)
     hook_path = hook_dir / _HOOK_NAME
-    hook_path.write_text(_HOOK_TEMPLATE.format(project_id=project_id), encoding="utf-8")
+    prefixes = load_config(repo_root)["prefixes"]
+    working = "|".join(f"{prefixes[k]}/*" for k in ("feature", "improvement"))
+    hook_path.write_text(_HOOK_TEMPLATE.format(project_id=project_id, working_branches=working), encoding="utf-8")
     hook_path.chmod(0o755)
     run(["git", "config", "core.hooksPath", _HOOK_DIR], repo_root)
     return hook_path

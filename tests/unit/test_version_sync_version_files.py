@@ -222,3 +222,27 @@ def test_a_real_commit_through_the_installed_pre_commit_hook_carries_the_synced_
     assert _git(["show", "HEAD:VERSION"], repo).stdout.strip() == "0.1.1-dev.1"
     assert _git(["show", "HEAD:propagated.txt"], repo).stdout == "0.1.1-dev.1"
     assert _git(["status", "--porcelain"], repo).stdout == ""
+
+
+def test_the_hook_calls_lws_only_on_a_working_branch(tmp_path):
+    """A commit on dev, master or release/* never asks for a sync: a sync
+    queued behind a Release Job would otherwise run later, on whatever branch
+    is checked out by then."""
+    repo = make_repo(tmp_path)
+    install_pre_commit_hook(repo, "little-widget")
+    _git(["add", "-A"], repo)
+    _git(["commit", "--no-verify", "-m", "chore: install hook"], repo)
+    calls = tmp_path / "lws-calls"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "lws").write_text(f"#!/bin/sh\necho \"$(git rev-parse --abbrev-ref HEAD)\" >> {calls}\n", encoding="utf-8")
+    (bin_dir / "lws").chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin")
+
+    for branch in ("dev", "release/9.9.9", "improvement/x", "feature/y"):
+        _git(["checkout", "-B", branch, "master"], repo)
+        (repo / f"{branch.replace('/', '-')}.txt").write_text("x\n", encoding="utf-8")
+        _git(["add", "-A"], repo)
+        subprocess.run(["git", "commit", "-m", f"on {branch}"], cwd=repo, env=env, check=True, capture_output=True)
+
+    assert calls.read_text().split() == ["improvement/x", "feature/y"]

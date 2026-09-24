@@ -520,3 +520,11 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000259 | **Scheduled tasks and jobs are cards that open their details.** When the user opens New task or Schedule job, the Dashboard shall list the scheduled tasks or jobs as cards and shall open a tapped card's own details page showing its schedule, next and missed run, what it runs, its last Job and a Remove action. | done |
+
+## Release job (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000260 | **Release job: conditions, then release start, changelog, release finish, relaunch.** When the user starts a Release job (New job or Schedule job), Version Control & Release shall verify the chosen conditions before starting a release branch — the release merges into production without conflicts; minimum delta (lines changed since the last release) and minimum patch bumps, combined with the chosen and/or; and, if checked, all tests pass, all published requirements pass (drafts ignored) and all policies pass, running the tests once for both test conditions — and, only if they all hold, shall start the release branch, write a CHANGELOG.md section, finish the release and then relaunch the running app on its own branch (for little-workshop itself, redeploy every enabled pillar). | done |
+| REQ-000000261 | **Release finish back-merges production.** When a release finishes, Version Control & Release shall back-merge the production branch into the integration branch, so the next release merges into production without conflicts on VERSION, `.lvx/state.json` or version-hook-written files. | done |
+| REQ-000000262 | **Pre-commit version sync only on working branches.** When a commit is made on a branch other than a feature or improvement branch, the installed pre-commit hook shall not request a version sync. | done |

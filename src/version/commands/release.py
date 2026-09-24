@@ -141,7 +141,12 @@ def _release_finish_post_prod_merge(
 
     checkout(repo_root, integ)
     try:
-        merge_no_ff(repo_root, release_branch, f"Back-merge release {stable_ver} into {integ}")
+        # Back-merge production, not the release branch: production now also holds
+        # the minor bump and finish-state commits made after the release merge.
+        # Leaving those off the integration branch made every *next* release
+        # conflict on VERSION, .lvx/state.json and whatever version_hooks write
+        # (2026-09-24, found building the Release job).
+        merge_no_ff(repo_root, prod, f"Back-merge release {stable_ver} into {integ}")
     except MergeConflictError as exc:
         return merge_conflict_result(exc, continue_cmd="version release finish --continue", abort_cmd="version release finish --abort")
 

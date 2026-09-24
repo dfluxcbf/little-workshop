@@ -64,6 +64,7 @@ JOB_TYPE_CATEGORIES: dict[str, set[str]] = {
     "version.release_candidate_cut": {"release"},
     "version.release_candidate_promote": {"release"},
     "version.release_finish": {"release", "branch_finish"},
+    "version.release": {"release", "branch_finish"},  # start + finish in one Job
     "version.feature_finish": {"branch_finish"},
     "version.improvement_finish": {"branch_finish"},
     "version.hotfix_finish": {"branch_finish"},

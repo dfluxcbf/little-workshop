@@ -2159,7 +2159,8 @@ def test_job_new_offers_project_then_job_then_its_arguments_and_nothing_else(tes
     _stub_job_pages(monkeypatch)
     text = test_client.get("/jobs/new").text
     assert '<option value="little-widget"' in text
-    assert re.findall(r'<option value="(\w+)" >(Build project|Run tests)</option>', text) == [("build", "Build project"), ("run_tests", "Run tests")]
+    assert re.findall(r'<option value="(\w+)" >(Build project|Run tests|Release)</option>', text) == [
+        ("build", "Build project"), ("run_tests", "Run tests"), ("release", "Release")]
     assert 'name="arg_install"' in text and "Install project after building" in text
     assert 'data-choices="suites"' in text and "Test suites" in text
     for gone in ("Asking Claude", "reuse_job_id", "template_json", "Describe the job"):
@@ -2193,6 +2194,57 @@ def test_job_new_run_tests_runs_the_chosen_suites(test_client, monkeypatch):
     job = created[0]
     assert (job["type"], job["target_pillar"], job["queue_key"]) == ("requirements.run_tests", "requirements", None)
     assert job["params"] == {"commitish": "HEAD", "suite_ids": ["s1", "s2"]}
+
+
+def test_job_new_release_shows_its_conditions(test_client, monkeypatch):
+    _stub_job_pages(monkeypatch)
+    text = test_client.get("/jobs/new").text
+    release = text.split('data-job="release"', 1)[1].split('<div class="job-args"', 1)[0]
+    assert '<h3 class="job-group">Conditions' in release and release.count('class="job-group"') == 1
+    assert 'type="number" id="arg-release-min_delta" name="arg_min_delta" min="0"' in release
+    assert 'type="number" id="arg-release-min_patch_bumps" name="arg_min_patch_bumps" min="0"' in release
+    assert '<select id="arg-release-combine" name="arg_combine" required>' in release
+    assert '<option value="" selected disabled>Choose…</option>' in release  # the user must pick and/or
+    for flag in ("all_tests", "all_requirements", "all_policies"):
+        assert f'name="arg_{flag}" value="on"' in release
+    assert 'querySelectorAll("input, select")' in text  # a hidden job's required select never blocks another job
+
+
+def test_job_new_release_starts_a_release_job_with_its_conditions(test_client, monkeypatch):
+    created = []
+    _stub_job_pages(monkeypatch, created=created)
+    response = test_client.post("/jobs/new", data={
+        "project": "little-widget", "job": "release", "arg_min_delta": "250", "arg_combine": "or",
+        "arg_min_patch_bumps": "2", "arg_all_tests": "on", "arg_all_policies": "on"}, follow_redirects=False)
+    assert response.status_code == 303
+    _wait_for(created)
+    job = created[0]
+    assert (job["type"], job["target_pillar"], job["project_id"], job["queue_key"]) == ("version.release", "version", "little-widget", "little-widget")
+    assert job["params"] == {"min_delta": 250, "combine": "or", "min_patch_bumps": 2,
+                             "all_tests": True, "all_requirements": False, "all_policies": True}
+
+
+@pytest.mark.parametrize("data, message", [
+    ({"arg_combine": "and", "arg_min_delta": "-3"}, "Minimum delta (lines changed) must be a whole number, 0 or more."),
+    ({"arg_combine": "and", "arg_min_patch_bumps": "two"}, "Minimum patch bumps must be a whole number, 0 or more."),
+    ({"arg_min_delta": "10"}, "Choose how the two minimums combine."),
+    ({"arg_combine": "xor"}, "Choose how the two minimums combine."),
+])
+def test_job_new_release_refuses_bad_conditions(test_client, monkeypatch, data, message):
+    created = []
+    _stub_job_pages(monkeypatch, created=created)
+    text = test_client.post("/jobs/new", data={"project": "little-widget", "job": "release", **data}).text
+    assert message in text and created == []
+
+
+def test_job_schedule_can_schedule_a_release(test_client, monkeypatch):
+    scheduled = []
+    _stub_job_pages(monkeypatch, scheduled=scheduled)
+    test_client.post("/jobs/schedule", data={
+        "project": "little-widget", "job": "release", "arg_combine": "and", "arg_all_requirements": "on",
+        "kind": "recurring", "day": ["4"], "time_of_day": "18:00"}, follow_redirects=False)
+    [task] = scheduled
+    assert task["job_template"]["type"] == "version.release" and task["job_template"]["params"]["all_requirements"] is True
 
 
 @pytest.mark.parametrize("data, message", [

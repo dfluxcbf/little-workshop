@@ -400,3 +400,11 @@ def test_confirm_timeout_cascades_failure_to_dependents(conn):
     policy_gate.confirm_timeout(conn, job)
 
     assert db.get_job(conn, dependent.id).status == JobStatus.FAILED
+
+
+def test_the_release_job_is_gated_like_a_release_finish_and_never_stopped_mid_way():
+    from orchestration.dispatch import DECLARED_UNSTOPPABLE_JOB_TYPES, JOB_TYPE_TIMEOUTS
+    from orchestration.policy_gate import JOB_TYPE_CATEGORIES
+
+    assert JOB_TYPE_CATEGORIES["version.release"] == JOB_TYPE_CATEGORIES["version.release_finish"]
+    assert "version.release" in DECLARED_UNSTOPPABLE_JOB_TYPES and JOB_TYPE_TIMEOUTS["version.release"] >= 60
