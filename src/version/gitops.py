@@ -38,8 +38,20 @@ class TagExistsError(GitError):
     pass
 
 
+# The pillar's own git calls never run the repository's hooks. The installed
+# pre-commit hook (`sync_version_files`) is for commits an agent or a person
+# makes; the pillar writes VERSION itself, and the hook re-bumping on top of
+# it -- a finish's squash commit, replayed with HEAD back on the integration
+# tip, looked like a branch's first commit -- made every finish skip a patch.
+_NO_HOOKS = ("-c", "core.hooksPath=/dev/null")
+
+
+def _git_args(args: list[str]) -> list[str]:
+    return [args[0], *_NO_HOOKS, *args[1:]] if args and args[0] == "git" else list(args)
+
+
 def run(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
-    result = subprocess.run(args, cwd=str(cwd), check=False, capture_output=True, text=True)
+    result = subprocess.run(_git_args(args), cwd=str(cwd), check=False, capture_output=True, text=True)
     if check and result.returncode != 0:
         raise GitError(
             f"git command failed: {' '.join(args)}\n"
@@ -312,7 +324,7 @@ def _continue_past_version_conflicts(repo_root: Path) -> bool:
             step = ["git", "rebase", "--continue"]
         else:
             return False
-        result = subprocess.run(step, cwd=str(repo_root), check=False, capture_output=True, text=True, env=full_env)
+        result = subprocess.run(_git_args(step), cwd=str(repo_root), check=False, capture_output=True, text=True, env=full_env)
         if result.returncode != 0 and not _conflicted_paths(repo_root) and is_rebase_in_progress(repo_root):
             if run(["git", "diff", "--cached", "--quiet"], repo_root, check=False).returncode != 0:
                 return False  # stopped for a reason that is not a conflict
@@ -339,7 +351,7 @@ def rebase_onto(repo_root: Path, base_branch: str) -> None:
 def rebase_continue(repo_root: Path) -> None:
     full_env = {**os.environ, "GIT_EDITOR": "true"}
     result = subprocess.run(
-        ["git", "rebase", "--continue"], cwd=str(repo_root), check=False, capture_output=True, text=True, env=full_env
+        _git_args(["git", "rebase", "--continue"]), cwd=str(repo_root), check=False, capture_output=True, text=True, env=full_env
     )
     if result.returncode != 0 and is_rebase_in_progress(repo_root) and _continue_past_version_conflicts(repo_root):
         return

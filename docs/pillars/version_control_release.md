@@ -170,6 +170,14 @@ repository in a half-finished state.
   `X.Y.Z`; a branch whose VERSION has no -dev suffix still gets the next
   patch, and the result is always above what the integration branch
   carried before the merge (`workflows.finished_version`). REQ-000000269.
+- **The pillar's own git calls skip the repository's hooks** (2026-09-24):
+  once the pre-commit sync ran synchronously (REQ-000000264), it also ran
+  on the finish's own squash commit, which sits on the integration tip
+  after its `reset --soft` and so looked like a branch's first commit:
+  it bumped to the next patch again (0.2.15 instead of 0.2.14). Every git
+  call the pillar makes now runs with `core.hooksPath=/dev/null`
+  (`gitops.run`); the hook stays for commits an agent or a person makes.
+  REQ-000000270.
 
 ## Interfacing
 
