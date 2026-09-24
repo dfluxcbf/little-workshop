@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -56,6 +57,7 @@ class Ticket(BaseModel):
 class BootstrapParams(BaseModel):
     name: str
     dest_dir: str
+    template: Literal["python", "unity"] = "python"
     owner: str = "dfluxcbf"
     description: str = ""
     create_github_repo: bool = False

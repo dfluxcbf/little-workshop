@@ -596,3 +596,13 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000273 | **lws never moves backwards.** When the Deployment pillar rolls a pillar back or redeploys a pillar to a version not newer than the installed lws, the pillar shall leave lws unchanged. | done |
+
+## Unity project template (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000274 | **Bootstrap offers a Unity project template.** When project.bootstrap is called with template "unity", the Registry shall scaffold the Unity layout (docs, README, VERSION, a Unity .gitignore and .gitattributes, CLAUDE.md, tools/run-unity-tests and its converter) instead of the Python/Bazel layout; when template is omitted, the Registry shall scaffold the "python" layout; when template names any other value, the Registry shall reject the request without writing any file. Exposed as the MCP tool's `template` and `lws project bootstrap --template`. | done |
+| REQ-000000275 | **Unity template tracks binary assets with Git LFS and merges Unity YAML.** When the Registry scaffolds a Unity project, the Registry shall write a .gitattributes that routes binary asset types through Git LFS, marks Unity YAML assets and .meta files as text merged by the unityyamlmerge driver, and normalises line endings. | done |
+| REQ-000000276 | **Unity template ignores generated folders.** When the Registry scaffolds a Unity project, the Registry shall write a .gitignore that excludes Library, Temp, Obj, Build(s), Logs, UserSettings, MemoryCaptures, IDE project files and the test runner's results, while keeping Assets, Packages and ProjectSettings tracked. | done |
+| REQ-000000277 | **Unity test runner emits a JUnit report.** When tools/run-unity-tests is invoked with --junit-xml=PATH, the script shall run the project's tests in the Windows Unity Editor in batch mode (EditMode by default, PlayMode on request) and write a JUnit-XML report converted from Unity's NUnit3 result; when Unity writes no result, the script shall exit non-zero without a report. | done |
+| REQ-000000278 | **Unity template ships Claude guidance.** When the Registry scaffolds a Unity project, the Registry shall write a CLAUDE.md telling Claude sessions to drive the Editor through the Unity CLI rather than hand-editing scene YAML, never to touch generated folders, to keep .meta files paired with their assets, and to run tests through tools/run-unity-tests. | done |
