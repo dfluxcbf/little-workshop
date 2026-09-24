@@ -28,6 +28,7 @@ import json
 import os
 from pathlib import Path
 
+from common import playwright
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.systemd import user_path_env
@@ -74,9 +75,10 @@ def _unit_name(project_id: str) -> str:
 
 
 class SessionFlow:
-    def __init__(self, paths: Paths, runner: CommandRunner = DEFAULT_RUNNER):
+    def __init__(self, paths: Paths, runner: CommandRunner = DEFAULT_RUNNER, *, playwright_mcp: bool = True):
         self.paths = paths
         self.runner = runner
+        self.playwright_mcp = playwright_mcp
 
     def is_running(self, project_id: str) -> bool:
         return self.runner.run(["pgrep", "-f", _match(self.paths, project_id)]).ok
@@ -105,6 +107,11 @@ class SessionFlow:
 
         name = session_name(project_id)
         argv = ["dtach", "-n", str(socket), "claude", "--remote-control", name]
+        if self.playwright_mcp:
+            # Last, since `--mcp-config` takes every value after it.
+            argv += playwright.mcp_claude_args(
+                self.runner, self.paths.sessions_dir / "playwright-mcp" / project_id.replace("/", "-"),
+            )
         unit = _unit_name(project_id)
         result = self.runner.run([
             "systemd-run", "--user", "--collect", "--scope", f"--unit={unit}",

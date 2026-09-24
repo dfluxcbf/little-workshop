@@ -150,6 +150,14 @@ def test_agent_run_task_omits_branching_when_no_branch_mode(paths, fake_create_j
     assert call["params"]["review_mode"] == "manual"
 
 
+def test_agent_run_task_playwright_mcp_is_on_unless_turned_off(paths, fake_create_job):
+    handler = tools_mod.TOOLS_BY_NAME["workshop_agent_run_task"].handler
+    handler(paths, {"project_id": "little-meals", "title": "t"})
+    handler(paths, {"project_id": "little-meals", "title": "t", "playwright_mcp": True})
+    handler(paths, {"project_id": "little-meals", "title": "t", "playwright_mcp": False})
+    assert [c["params"].get("playwright_mcp") for c in fake_create_job] == [None, None, False]
+
+
 def test_agent_run_task_includes_branching_when_branch_mode_given(paths, fake_create_job):
     tools_mod.TOOLS_BY_NAME["workshop_agent_run_task"].handler(
         paths,

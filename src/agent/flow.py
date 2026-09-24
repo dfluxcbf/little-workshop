@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from common import playwright
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from agent import db, gitutil, report, requirements_client, templates_util, version_client
@@ -65,6 +66,9 @@ class AgentFlow:
     user_messages: bool = True
     model: str | None = None
     max_budget_usd: float | None = None
+    # Playwright as standard: every run gets the Playwright MCP server
+    # (common/playwright.py) unless a run's own params turn it off.
+    playwright_mcp: bool = True
 
     def __post_init__(self) -> None:
         if self.github is None:
@@ -136,7 +140,7 @@ class AgentFlow:
 
     # -- Claude --------------------------------------------------------------
 
-    def _render_prompt(self, *, project_id: str, project_dir: Path, title: str, description: str, intent: str, branch: str, specified: bool, integ: str, result_file: Path) -> str:
+    def _render_prompt(self, *, project_id: str, project_dir: Path, title: str, description: str, intent: str, branch: str, specified: bool, integ: str, result_file: Path, playwright_mcp: bool = False) -> str:
         instructions = templates_util.render(
             templates_util.read_prompt("branching_specified.md" if specified else "branching_auto.md"),
             branch=branch, integration_branch=integ,
@@ -146,12 +150,21 @@ class AgentFlow:
             project_id=project_id, project_dir=str(project_dir), title=title, description=description or "(no description)",
             intent=intent, branching_instructions=instructions, result_file=str(result_file),
             intent_instructions=templates_util.read_prompt(f"{intent}.md").strip(),
+            ui_instructions=templates_util.render(
+                templates_util.read_prompt("ui_playwright_mcp.md" if playwright_mcp else "ui_playwright.md"),
+                mcp_package=playwright.MCP_PACKAGE,
+            ).strip(),
         )
 
-    def _invoke_claude(self, project_dir: Path, prompt: str, session_name: str | None) -> tuple[str, bool]:
+    def _playwright_args(self, run_id: str, enabled: bool) -> tuple[str, ...]:
+        if not enabled:
+            return ()
+        return playwright.mcp_claude_args(self.runner, self.paths.state_home / "playwright-mcp" / f"run-{run_id}")
+
+    def _invoke_claude(self, project_dir: Path, prompt: str, session_name: str | None, extra_args: tuple[str, ...] = ()) -> tuple[str, bool]:
         argv = claude_argv(
             prompt, session_name=session_name, model=self.model, max_budget_usd=self.max_budget_usd,
-            user_messages=self.user_messages,
+            user_messages=self.user_messages, extra_args=extra_args,
         )
         result = self.runner.run(argv, cwd=project_dir, timeout=self.claude_timeout_seconds)
         text, is_error, _raw = parse_claude_output(result.stdout)
@@ -234,13 +247,15 @@ class AgentFlow:
 
         integ = cfg["integration_branch"]
         result_file = report.result_path(self.paths.state_home, project_id, run_id)
+        playwright_args = self._playwright_args(run_id, bool(params.get("playwright_mcp", self.playwright_mcp)))
         prompt = self._render_prompt(
             project_id=project_id, project_dir=project_dir, title=title, description=description, intent=intent,
             branch=branch, specified=resolved_spec.specified, integ=integ, result_file=result_file,
+            playwright_mcp=bool(playwright_args),
         )
 
         try:
-            summary_text, _is_error = self._invoke_claude(project_dir, prompt, session_name)
+            summary_text, _is_error = self._invoke_claude(project_dir, prompt, session_name, playwright_args)
         except AgentFlowError as exc:
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, branch, "failed", None, None, str(exc))

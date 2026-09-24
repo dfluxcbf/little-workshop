@@ -151,3 +151,28 @@ refuse a description that is not in EARS form and reply with how to fix it (`req
 deterministic pattern check: an optional `While`/`When`/`Where`/`If … then` prefix, then a determiner, a
 system name and `shall`). A bulk import from another tool passes `imported: true` to skip the check; requirements
 recorded before the rule keep their wording until edited.
+
+## UI tests with Playwright (2026-09-24)
+
+A project's UI/UX tests are **pytest-playwright tests under a `ui` directory of its tests tree**
+(`tests/ui/test_menu.py`, `tests/ui/flows/test_checkout.py`), using relative URLs (`page.goto("/")`). They
+are ordinary pytest tests — collected, run and recorded like every other — with one thing added: they need
+the app they test to be running.
+
+When a sandboxed run (`requirements.run_tests`, by `suite_id` or `suite_ids`) includes any such file, the
+project's pytest has pytest-playwright (`pytest -VV`'s plugin listing), and the project's
+`manifest.deployment.toml` has a `[server.screenshot].command`, this pillar (`requirements/testrun.py`,
+`ui_app`):
+
+1. starts that command from the worktree on a free port (`{port}` substituted), its output to
+   `.requirements-ui-app.log` in the worktree;
+2. waits up to the manifest's `ready_timeout_seconds` for the port to listen — if it never does, the run
+   fails with the command and the log's tail, rather than reporting every UI test as a failure;
+3. runs pytest with `--base-url=http://127.0.0.1:<port>` added;
+4. stops the app again, whatever the outcome, before the worktree is released.
+
+The same scratch-port command Agentic Development's screenshots use is reused rather than adding a second
+"how to start this app" setting. A free port instead of the screenshot's fixed `port + 1000` means a test
+run never collides with an agent's screenshot or another test run. Without pytest-playwright or a launch
+command, the UI tests run exactly as they are — against whatever base URL their own configuration gives
+them — so a project that starts its own server in a fixture is unaffected.

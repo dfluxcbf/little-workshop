@@ -866,3 +866,71 @@ def test_run_ci_check_passes_through_test_command_and_timeout(paths, conn, monke
     assert captured["params"]["test_command"] == "python3 -m pytest tests/unit"
     assert captured["params"]["commitish"] == "abc123"
     assert captured["timeout"] == 42.0
+
+
+class NpxClaudeRunner(WritingClaudeRunner):
+    """`npx` present or absent on the host, independent of the machine the tests run on."""
+
+    def __init__(self, *, npx: bool, **kw):
+        super().__init__(**kw)
+        self.npx = npx
+
+    def run(self, argv, timeout=None, cwd=None):
+        if argv == ["which", "npx"]:
+            self.calls.append(argv)
+            return CommandResult(0 if self.npx else 1, "", "")
+        return super().run(argv, timeout=timeout, cwd=cwd)
+
+
+def _claude_call(runner):
+    return next(c for c in runner.calls if c and c[0] == "claude")
+
+
+def test_run_task_attaches_the_playwright_mcp_server(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = NpxClaudeRunner(npx=True)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
+
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "restyle the menu", "branching": {"mode": "new"}})
+
+    argv = _claude_call(runner)
+    assert argv[-2] == "--mcp-config"  # last: it takes every value after it
+    server = json.loads(argv[-1])["mcpServers"]["playwright"]
+    assert server["command"] == "npx"
+    assert "@playwright/mcp@" in server["args"][1] and "--headless" in server["args"]
+    out_dir = Path(server["args"][server["args"].index("--output-dir") + 1])
+    assert out_dir == paths.state_home / "playwright-mcp" / f"run-{result.run_id}"
+    assert repo not in out_dir.parents  # snapshots never land in the checkout the run commits
+    assert "Playwright MCP server attached" in argv[2]
+    assert "tests/ui/" in argv[2]
+
+
+def test_run_task_without_npx_runs_without_playwright_and_says_so(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = NpxClaudeRunner(npx=False)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
+
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    argv = _claude_call(runner)
+    assert result.status == db.AWAITING_FINISH
+    assert "--mcp-config" not in argv
+    assert "not attached to this session" in argv[2]
+    assert "tests/ui/" in argv[2]
+
+
+def test_run_task_params_can_turn_playwright_off(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = NpxClaudeRunner(npx=True)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
+
+    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}, "playwright_mcp": False})
+
+    assert "--mcp-config" not in _claude_call(runner)
+    assert ["which", "npx"] not in runner.calls
