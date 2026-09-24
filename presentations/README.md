@@ -1,6 +1,6 @@
 # little-workshop — presentations
 
-Five short decks, meant to be read in order, walking through every goal and
+Short decks, meant to be read in order, walking through every goal and
 decision made about this project so far. Each slide is a `##` heading;
 `---` marks a slide break. These are the *narrative* — the why and the
 decision — not the spec: every deck links out to `../docs/design.md` and
@@ -110,5 +110,12 @@ restating it.
     depending on `lreq`/`lvx`/`lrun`/`little-pypi`) had no milestone at
     all. Three new milestones (M15–M17) fix the last one; M1 absorbs the
     first two.
+22. [Deterministic Automation](22-deterministic-automation.md) — a
+    proposal, nothing built: twelve areas where scheduled jobs and MCP
+    entry points running plain code (never Claude) could replace work
+    Claude sessions now do by hand, ranked for token savings. The top
+    three are a project context pack, a test run with a failure digest,
+    and an agent pre-flight gate with incident dedupe. Token accounting
+    per run comes first, so each one's effect can be measured.
 
 Start at [1 — Vision & Goals](01-vision-and-goals.md).
