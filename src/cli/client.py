@@ -51,6 +51,12 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
             response = client.post("/v1/jobs", json=fields)
         response.raise_for_status()
         return response.json()
+    except httpx.ReadTimeout as exc:
+        # It took the request: the Job exists and may well be running.
+        raise DaemonUnavailable(
+            f"Orchestration took the job but has not answered within {timeout:g}s; it may still be "
+            "working on it -- check `lws job list` before retrying"
+        ) from exc
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable(
             "Orchestration daemon unreachable — job creation needs the daemon "
