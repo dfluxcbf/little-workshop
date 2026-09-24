@@ -6,7 +6,7 @@ import uvicorn
 
 from common.paths import Paths
 from agent import db
-from agent.app import build_app
+from agent.app import build_app, recover_interrupted_runs
 
 
 def main() -> None:
@@ -15,6 +15,9 @@ def main() -> None:
 
     conn = db.connect(paths.pillar_db_path("agent"))
     app = build_app(paths, conn)
+    # Before serving, so no new run can be mistaken for an interrupted one;
+    # reporting to Orchestration is best-effort, its own timeout the backstop.
+    recover_interrupted_runs(paths, conn)
 
     socket_path = paths.socket_path("agent")
     if socket_path.exists():

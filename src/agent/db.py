@@ -132,6 +132,16 @@ def update_run(conn: sqlite3.Connection, run_id: str, **fields) -> None:
     conn.commit()
 
 
+def fail_interrupted_runs(conn: sqlite3.Connection, reason: str) -> list[dict]:
+    """Fail every run still `running` and return them. Only safe at startup:
+    a run's worker is a thread inside this process, so a run left `running`
+    by a previous process can never finish."""
+    rows = [dict(r) for r in conn.execute("SELECT * FROM agent_runs WHERE status = ?", (RUNNING,)).fetchall()]
+    for run in rows:
+        update_run(conn, run["id"], status=FAILED, summary=reason)
+    return rows
+
+
 def get_run(conn: sqlite3.Connection, run_id: str) -> dict | None:
     row = conn.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
     return dict(row) if row else None

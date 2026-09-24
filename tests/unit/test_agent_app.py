@@ -781,3 +781,35 @@ def test_confirm_unknown_or_already_decided_incident_fails_cleanly(paths, conn, 
     client.post("/v1/jobs/agent.dismiss_incident", json={"job_id": "j", "params": {"incident_id": incident_id}})
     second = client.post("/v1/jobs/agent.confirm_incident", json={"job_id": "j", "params": {"incident_id": incident_id}})
     assert second.json()["outcome"] == "failed" and "already" in second.json()["error"]
+
+
+def test_recover_interrupted_runs_fails_orphaned_runs_and_reports_their_jobs(paths, conn, monkeypatch):
+    import agent.app as app_module
+
+    for run_id, job_id in (("orphan-1", "job-1"), ("orphan-2", None)):
+        db.create_run(conn, run_id, job_id=job_id, project_id="proj", intent="task",
+                      review_mode="auto_approve", title=run_id, source={"type": "manual"})
+    db.create_run(conn, "waiting", job_id="job-3", project_id="proj", intent="task",
+                  review_mode="manual", title="waiting", source={"type": "manual"})
+    db.update_run(conn, "waiting", status=db.AWAITING_FINISH)
+
+    reported = []
+    monkeypatch.setattr(app_module, "_complete_orchestration_job",
+                        lambda paths_, job_id, **kw: reported.append((job_id, kw)))
+
+    recovered = app_module.recover_interrupted_runs(paths, conn)
+
+    assert sorted(r["id"] for r in recovered) == ["orphan-1", "orphan-2"]
+    for run_id in ("orphan-1", "orphan-2"):
+        run = db.get_run(conn, run_id)
+        assert run["status"] == db.FAILED and run["summary"] == app_module.INTERRUPTED_RUN_REASON
+    assert db.get_run(conn, "waiting")["status"] == db.AWAITING_FINISH  # a finished run awaiting review is untouched
+    # Only a run that came from a Job has one to report; a failure, never a success.
+    assert reported == [("job-1", {"succeeded": False, "result": None, "error": app_module.INTERRUPTED_RUN_REASON})]
+
+
+def test_recover_interrupted_runs_is_a_noop_with_nothing_running(paths, conn, monkeypatch):
+    import agent.app as app_module
+
+    monkeypatch.setattr(app_module, "_complete_orchestration_job", lambda *a, **kw: pytest.fail("nothing to report"))
+    assert app_module.recover_interrupted_runs(paths, conn) == []

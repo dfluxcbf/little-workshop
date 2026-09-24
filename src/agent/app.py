@@ -44,6 +44,21 @@ def _complete_orchestration_job(paths: Paths, job_id: str, *, succeeded: bool, r
         pass
 
 
+INTERRUPTED_RUN_REASON = "interrupted: the agent pillar restarted while this run was in progress"
+
+
+def recover_interrupted_runs(paths: Paths, conn: sqlite3.Connection) -> list[dict]:
+    """Startup: a run's worker thread dies with the process that started it,
+    leaving the run `running` forever and its Job holding its queue_key until
+    Orchestration's own timeout. Fail each one and report that back, the same
+    way a worker that failed on its own would."""
+    runs = db.fail_interrupted_runs(conn, INTERRUPTED_RUN_REASON)
+    for run in runs:
+        if run["job_id"]:
+            _complete_orchestration_job(paths, run["job_id"], succeeded=False, result=None, error=INTERRUPTED_RUN_REASON)
+    return runs
+
+
 class JobRequest(BaseModel):
     job_id: str
     project_id: str | None = None

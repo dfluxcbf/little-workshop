@@ -140,6 +140,30 @@ def test_agent_main_builds_app_and_serves_on_its_socket(paths, monkeypatch):
     assert captured["app"] is not None
 
 
+def test_agent_main_fails_runs_a_previous_process_left_running_before_serving(paths, monkeypatch):
+    import agent.__main__ as agent_main
+    from agent import db as agent_db
+
+    conn = agent_db.connect(paths.pillar_db_path("agent"))
+    agent_db.create_run(conn, "orphan", job_id=None, project_id="proj", intent="task",
+                        review_mode="auto_approve", title="t", source={"type": "manual"})
+    conn.close()
+    monkeypatch.setattr(agent_main.Paths, "from_env", staticmethod(lambda: paths))
+
+    status_when_serving = {}
+
+    def fake_run(app, uds, log_level):
+        check = agent_db.connect(paths.pillar_db_path("agent"))
+        status_when_serving["orphan"] = agent_db.get_run(check, "orphan")["status"]
+        check.close()
+
+    monkeypatch.setattr(agent_main.uvicorn, "run", fake_run)
+
+    agent_main.main()
+
+    assert status_when_serving["orphan"] == agent_db.FAILED
+
+
 def test_dashboard_main_builds_app_and_serves_on_its_socket(paths, monkeypatch):
     import dashboard.__main__ as dashboard_main
 
