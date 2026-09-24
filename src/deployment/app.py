@@ -116,6 +116,8 @@ def build_app(
             payload["exposure"] = result.exposure
         if result.confirm_message:
             payload["confirm_message"] = result.confirm_message
+        if result.cli_note:
+            payload["cli_note"] = result.cli_note
         return {"outcome": "succeeded", "result": payload}
 
     @app.post("/v1/jobs/deployment.stop")
@@ -201,6 +203,8 @@ def build_app(
         payload = {"branch": result.branch, "version": result.version, "commit": result.commit, "how": result.how}
         if result.confirm_message:
             payload["confirm_message"] = result.confirm_message
+        if result.cli_note:
+            payload["cli_note"] = result.cli_note
         return {"outcome": "succeeded", "result": payload}
 
     @app.post("/v1/jobs/deployment.confirm")

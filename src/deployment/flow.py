@@ -78,6 +78,7 @@ class UpResult:
     how: str
     exposure: str | None
     confirm_message: str | None = None
+    cli_note: str | None = None
 
 
 @dataclass
@@ -102,6 +103,24 @@ def _unit_key(project_id: str) -> str:
     return f"deploy-{project_id}"
 
 
+def _lws_python() -> Path | None:
+    """The interpreter of the venv `lws` is installed in (pipx), read from
+    the shim's own shebang; None when `lws` is not installed."""
+    shim = shutil.which("lws", path=systemd.user_path_env())
+    if shim is None:
+        return None
+    try:
+        first = Path(shim).read_text(encoding="utf-8", errors="replace").splitlines()[0]
+    except (OSError, IndexError):
+        return None
+    return Path(first[2:].strip()) if first.startswith("#!") else None
+
+
+def _pip_version(version: str) -> str:
+    """VERSION's gitflow form as pip reports it: 0.2.19-dev.1 -> 0.2.19.dev1."""
+    return version.replace("-dev.", ".dev").replace("-rc.", "rc")
+
+
 @dataclass
 class DeploymentFlow:
     paths: Paths
@@ -111,6 +130,7 @@ class DeploymentFlow:
     clock: Callable[[], float] = time.monotonic
     own_cgroup: Callable[[], str] = _read_own_cgroup
     health_probe: Callable[..., HealthResult] = probe_health
+    cli_python: Callable[[], Path | None] = _lws_python
 
     # -- helpers --------------------------------------------------------
 
@@ -436,6 +456,7 @@ class DeploymentFlow:
             if install_dir.exists():
                 shutil.rmtree(install_dir)
             shutil.copytree(worktree / "src", install_dir / "src")
+            cli_note = self._refresh_cli(worktree, version)
         finally:
             gitutil.remove_worktree(workshop_repo_dir, worktree)
 
@@ -451,7 +472,35 @@ class DeploymentFlow:
         if previous is not None and Path(previous["install_dir"]) != install_dir:
             shutil.rmtree(previous["install_dir"], ignore_errors=True)
 
-        return UpResult(branch=commit, version=version, commit=resolved_commit, how=how, exposure=None)
+        return UpResult(branch=commit, version=version, commit=resolved_commit, how=how, exposure=None, cli_note=cli_note)
+
+    def _refresh_cli(self, worktree: Path, version: str) -> str | None:
+        """Bring the installed `lws` to the commit being deployed. The
+        pre-commit hook, the MCP server and the self-redeploy workers all
+        run `lws`, which nothing else ever updated: a fix to any of them sat
+        undeployed until someone ran `bazel run //:install` (2026-09-24).
+        Upgraded in place with the venv's own pip -- recreating the venv
+        (`pipx install --force`) would pull it out from under the processes
+        running from it. Skipped when `lws` already has this version. Never
+        fails the redeploy: returns a note instead."""
+        python = self.cli_python()
+        if python is None:
+            return "lws is not installed; nothing to refresh"
+        installed = self.runner.run(
+            [str(python), "-c", "import importlib.metadata as m; print(m.version('little-workshop'))"], timeout=30,
+        )
+        target = _pip_version(version)
+        if installed.ok and installed.stdout.strip() == target:
+            return None
+        for argv in (
+            # The package itself, even at an unchanged version number; then any new dependency.
+            [str(python), "-m", "pip", "install", "--quiet", "--no-deps", "--force-reinstall", str(worktree)],
+            [str(python), "-m", "pip", "install", "--quiet", str(worktree)],
+        ):
+            result = self.runner.run(argv, timeout=600)
+            if not result.ok:
+                return f"lws was not refreshed to {version}: {(result.stderr or result.stdout).strip()[-1000:]}"
+        return f"lws refreshed to {version}"
 
     def redeploy_pillar(
         self, conn: sqlite3.Connection, pillar: str, workshop_repo_dir: Path, commit: str,
