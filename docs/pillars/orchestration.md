@@ -124,6 +124,14 @@ that pillar's existing Job type.
   `systemd` timer. `recurring` schedules are interpreted in the host's
   own local time; little-workshop runs on one household's machine, not
   across timezones, so there's no per-task timezone field to get wrong.
+- **A settled policy-gated Job frees its queue** (2026-09-24): a Job in
+  `pending_confirmation` holds its `queue_key` like a running one. When the
+  confirmation window times out, the queue is pumped right away (before,
+  a Job queued behind it waited, every dependency green, for the next
+  unrelated Job to arrive). `stop` on a `pending_confirmation` Job now
+  declines it (`cancelled`, dependents failed) instead of answering "not
+  running" and leaving it to hold the queue for the full 10 minutes.
+  REQ-000000268.
 
 ### Missed firings — little-workshop is locally hosted, and can be down
 

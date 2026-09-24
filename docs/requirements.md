@@ -560,3 +560,9 @@ Requested directly, same day as the usability refinement above: the original six
 | --- | --- | --- |
 | REQ-000000266 | **Bookkeeping commits cite REQ-NONE.** When the Version Control & Release pillar makes one of its own bookkeeping commits (a version bump or finish state or release candidate or changelog or issue link), the pillar shall cite REQ-NONE in that commit's message and shall never cite REQ-NONE in a merge commit that carries a branch's changes. | done |
 | REQ-000000267 | **Agent commits cite requirements or REQ-NONE.** When the Agentic Development pillar starts an agent run, the pillar shall instruct the agent to cite the affected requirement ids in each commit message, or REQ-NONE when the commit affects no requirement, and never both. | done |
+
+## A settled policy-gated Job frees its queue (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000268 | **A settled policy-gated Job frees its queue.** When a Job awaiting policy confirmation times out or is stopped, the Orchestration pillar shall settle it (a stopped one as cancelled) and shall dispatch whatever Job is ready behind it on the same queue key right away. | done |
