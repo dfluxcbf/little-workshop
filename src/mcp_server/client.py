@@ -26,6 +26,20 @@ class PillarUnavailable(Exception):
     """Raised whenever a pillar's Pillar Interface can't be reached."""
 
 
+def _failure(pillar: str, exc: Exception, timeout: float) -> str:
+    """Say what actually went wrong. A pillar that took the request and has
+    not answered yet is not "unreachable": a caller told it was would retry
+    something that is in fact running (2026-09-24)."""
+    if isinstance(exc, httpx.ReadTimeout):
+        return (
+            f"{pillar} daemon took the request but has not answered within {timeout:g}s; "
+            "it may still be working on it -- check workshop_job_list before retrying"
+        )
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"{pillar} daemon answered HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+    return f"{pillar} daemon unreachable"
+
+
 def _get(paths: Paths, pillar: str, path: str, *, params: dict | None = None, timeout: float = 5.0) -> dict:
     socket_path = resolve_pillar_socket(paths, pillar, timeout=timeout)
     if socket_path is None:
@@ -36,7 +50,7 @@ def _get(paths: Paths, pillar: str, path: str, *, params: dict | None = None, ti
         response.raise_for_status()
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
-        raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
+        raise PillarUnavailable(_failure(pillar, exc, timeout)) from exc
 
 
 def _mutate(
@@ -51,7 +65,7 @@ def _mutate(
         response.raise_for_status()
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
-        raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
+        raise PillarUnavailable(_failure(pillar, exc, timeout)) from exc
 
 
 def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
@@ -74,7 +88,7 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
         response.raise_for_status()
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
-        raise PillarUnavailable("orchestration daemon unreachable") from exc
+        raise PillarUnavailable(_failure("orchestration", exc, timeout)) from exc
 
 
 def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0):

@@ -291,7 +291,8 @@ def _version_job(args: argparse.Namespace, job_type: str, params: dict) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     _print(result)
-    return 0 if result.get("status") == "succeeded" else 1
+    # queued/running: accepted, still behind its policy checks or queue_key.
+    return 0 if result.get("status") in ("succeeded", "queued", "running") else 1
 
 
 def cmd_version_init(args: argparse.Namespace) -> int:

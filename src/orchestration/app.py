@@ -28,6 +28,7 @@ from orchestration.models import (
     ScheduledTask,
 )
 from orchestration.pipelines import trigger_pipeline
+from orchestration.queue import is_ready
 from orchestration.schedule import first_occurrence
 from orchestration.scheduler import cancel_task, postpone_task, trigger_task
 
@@ -107,6 +108,16 @@ def build_app(
         with lock:
             db.insert_job(conn, job)
             policy_gate.attach_policy_gate(conn, socket_lookup, job)
+            waits = not is_ready(conn, db.get_job(conn, job.id))
+        if waits:
+            # Behind its policy checks (minutes, for a test-suite one) or a
+            # busy queue_key: answer now with the queued Job and its id, and
+            # pump in the background. Waiting here outlasted every caller's
+            # timeout, which each reported as "orchestration daemon
+            # unreachable" while the Job went on to run (2026-09-24).
+            threading.Thread(target=dispatch_ready_jobs, args=(conn, socket_lookup), kwargs={"lock": lock}, daemon=True).start()
+            with lock:
+                return db.get_job(conn, job.id).model_dump(mode="json")
         dispatch_ready_jobs(conn, socket_lookup, lock=lock)
         # A concurrent request's pump may have claimed this Job; report its outcome, not "running".
         wait_for_dispatch(job.id, dispatch_timeout_for(job.type) + 5)

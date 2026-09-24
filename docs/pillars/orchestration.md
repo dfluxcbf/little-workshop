@@ -132,6 +132,18 @@ that pillar's existing Job type.
   declines it (`cancelled`, dependents failed) instead of answering "not
   running" and leaving it to hold the queue for the full 10 minutes.
   REQ-000000268.
+- **A Job that has to wait is answered at once** (2026-09-24): `POST
+  /v1/jobs` used to pump the queue inline and answer only once the new Job
+  had been dispatched, so a gated Job's request lasted as long as its policy
+  checks (minutes, for a test-suite one) and every caller's 30 s timeout
+  fired first, reported as "orchestration daemon unreachable" while the Job
+  went on to run. A Job that is not ready when created (behind a
+  dependency or a busy `queue_key`) is now answered right away, `queued`,
+  with its id, and the queue is pumped in the background. The MCP server and
+  `lws` report a request a pillar took but has not answered in time as
+  still working ("check the job list before retrying"), never as
+  unreachable; `lws version …` exits 0 for a queued or running Job.
+  REQ-000000271.
 
 ### Missed firings — little-workshop is locally hosted, and can be down
 
