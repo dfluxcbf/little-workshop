@@ -566,3 +566,9 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000268 | **A settled policy-gated Job frees its queue.** When a Job awaiting policy confirmation times out or is stopped, the Orchestration pillar shall settle it (a stopped one as cancelled) and shall dispatch whatever Job is ready behind it on the same queue key right away. | done |
+
+## A finish lands on the branch's own patch (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000269 | **A finish lands on the branch's own patch.** When a feature or improvement branch finishes, the Version Control & Release pillar shall set the integration branch's VERSION to the stable form of the branch's -dev version, or to the next patch when the branch's VERSION carries no -dev suffix, and always to a version above the integration branch's version before the merge. | done |

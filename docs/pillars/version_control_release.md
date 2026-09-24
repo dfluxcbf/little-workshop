@@ -162,6 +162,14 @@ repository in a half-finished state.
   `commit-cites-requirement` judges every commit that does. Merge commits
   carry real changes and never cite it. `stabilize`'s "commit pending
   changes" does not either: what it commits is unknown. REQ-000000266.
+- **A finish lands on the branch's own patch** (2026-09-24): a working
+  branch's commits already carry the next patch (`X.Y.Z-dev.N`, per
+  `branch-commit-dev-suffix`), and the finish then bumped the patch again,
+  so every finish skipped one (0.2.6 → 0.2.8) and the Release job's
+  "minimum patch bumps" counted each finish twice. The finish now lands on
+  `X.Y.Z`; a branch whose VERSION has no -dev suffix still gets the next
+  patch, and the result is always above what the integration branch
+  carried before the merge (`workflows.finished_version`). REQ-000000269.
 
 ## Interfacing
 
