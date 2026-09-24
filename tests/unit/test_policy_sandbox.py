@@ -200,4 +200,4 @@ def test_sandbox_image_carries_little_mindchecks_session_and_push_dependencies()
 def test_sandbox_image_tag_moved_past_the_image_without_those_dependencies():
     # ensure_image only rebuilds on a tag change: an unchanged tag would keep
     # serving the old image that lacked itsdangerous/pywebpush.
-    assert sandbox.IMAGE_TAG not in ("little-workshop-policy-sandbox:3", "little-workshop-policy-sandbox:latest")
+    assert sandbox.IMAGE_TAG not in ("little-workshop-policy-sandbox:3", "little-workshop-policy-sandbox:4", "little-workshop-policy-sandbox:latest")
