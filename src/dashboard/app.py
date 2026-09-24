@@ -69,6 +69,41 @@ def _run_status_bucket(runs: list[dict]) -> tuple[int, int]:
     return awaiting, running
 
 
+# The Task list's four sections, in page order: (key, heading).
+TASK_GROUPS = (("queued", "Queued"), ("running", "Running"), ("attention", "Needs attention"), ("done", "Done"))
+_TASK_GROUP_OF_STATUS = {
+    "waiting": "queued", "running": "running",
+    "awaiting_finish": "attention", "failed": "attention", "stopped": "attention",
+    "finished": "done", "skipped": "done", "cancelled": "done",
+}
+
+
+def _task_group(status: str) -> str:
+    return _TASK_GROUP_OF_STATUS.get(status, "attention")
+
+
+def _task_rows_without_a_run(jobs: list[dict], runs: list[dict]) -> list[dict]:
+    """`agent.run_task` Jobs that have no Agentic Development run yet: still queued,
+    dispatched but waiting for the agent's one-task-at-a-time lock, or failed/stopped
+    before the run was ever created. A Job whose run exists is already shown as that run."""
+    with_a_run = {r.get("job_id") for r in runs if r.get("job_id")}
+    rows = []
+    for job in jobs:
+        if job.get("type") != "agent.run_task" or job["id"] in with_a_run:
+            continue
+        status = job.get("status", "queued")
+        if status in ("queued", "running", "pending_confirmation"):
+            status = "waiting"
+        elif status == "succeeded":
+            continue  # finished without a run to show — nothing to act on
+        rows.append({
+            "id": job["id"], "project_id": job.get("project_id"), "status": status, "job_only": True,
+            "title": (job.get("params") or {}).get("title") or job["id"][:8], "created_at": job.get("created_at"),
+            "error": job.get("error"),
+        })
+    return rows
+
+
 def _try(fn, *args, default=None):
     """A panel whose pillar is down renders as "unknown", never a 500."""
     try:
@@ -666,16 +701,10 @@ def build_app(paths: Paths) -> FastAPI:
             names, error = [], str(exc)
         for name in names:
             rows += _try(client.agent_runs, paths, name, default=[])
-        queued = _try(lambda: client.list_jobs(paths, status="queued"), default=[])
-        for job in queued:
-            if job.get("type") != "agent.run_task":
-                continue
-            rows.append({
-                "id": job["id"], "project_id": job.get("project_id"), "status": "waiting",
-                "title": (job.get("params") or {}).get("title") or job["id"][:8], "created_at": job.get("created_at"),
-            })
+        rows += _task_rows_without_a_run(_try(client.list_jobs, paths, default=[]), rows)
         rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
-        return _render(request, "tasks.html", runs=rows, error=error, nav_active="tasks")
+        task_sections = {key: [r for r in rows if _task_group(r["status"]) == key] for key, _ in TASK_GROUPS}
+        return _render(request, "tasks.html", runs=rows, task_sections=task_sections, task_groups=TASK_GROUPS, error=error, nav_active="tasks")
 
     @app.get("/tasks/new", response_class=HTMLResponse)
     def task_new(request: Request, project: str | None = None):

@@ -2,19 +2,25 @@
 {% block title %}Tasks — little-workshop{% endblock %}
 {% block content %}
 <h1>Tasks</h1>
-<p class="lede">Every task Claude has been given on any project &mdash; waiting to start, running, waiting for your review, or done. Start one from <a href="/tasks/new">New task</a>.</p>
+<p class="lede">Every task Claude has been given on any project &mdash; queued, running, needing your attention, or done. Start one from <a href="/tasks/new">New task</a>.</p>
 {% if not runs %}
 <p class="muted">No task has run yet.</p>
+{% else %}
+{% for key, heading in task_groups %}
+<section id="tasks-{{ key }}">
+<h2 class="section-label">{{ heading }} ({{ task_sections[key]|length }})</h2>
+{% if not task_sections[key] %}
+<p class="muted">None.</p>
 {% else %}
 <div class="panel">
 <table>
   <thead><tr><th>Project</th><th>Task</th><th>Status</th><th>Branch</th><th>Started</th></tr></thead>
   <tbody>
-  {% for r in runs %}
+  {% for r in task_sections[key] %}
   <tr>
     <td data-label="Project">{{ r.project_id }}</td>
-    <td data-label="Task">{% if r.status == 'waiting' %}{{ r.title }}{% else %}<a href="/tasks/{{ r.project_id }}/{{ r.id }}">{{ r.title }}</a>{% endif %}</td>
-    <td data-label="Status"><span class="pill {{ 'warn' if r.status in ('awaiting_finish', 'waiting') else ('ok' if r.status in ('running', 'finished') else ('fail' if r.status == 'failed' else 'idle')) }}">{{ r.status.replace('_', ' ') }}</span></td>
+    <td data-label="Task">{% if r.job_only %}{{ r.title }}{% if r.error %}<br><span class="muted">{{ r.error }}</span>{% endif %}{% else %}<a href="/tasks/{{ r.project_id }}/{{ r.id }}">{{ r.title }}</a>{% endif %}</td>
+    <td data-label="Status"><span class="pill {{ 'warn' if r.status in ('awaiting_finish', 'waiting') else ('ok' if r.status in ('running', 'finished') else ('fail' if r.status in ('failed', 'stopped') else 'idle')) }}">{{ r.status.replace('_', ' ') }}</span></td>
     <td data-label="Branch">{% if r.branch %}<code>{{ r.branch }}</code>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
     <td data-label="Started">{{ (r.created_at or '')[:16].replace('T', ' ') }}</td>
   </tr>
@@ -22,5 +28,8 @@
   </tbody>
 </table>
 </div>
+{% endif %}
+</section>
+{% endfor %}
 {% endif %}
 {% endblock %}

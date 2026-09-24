@@ -108,9 +108,15 @@ are the current state of every pillar.
   - **New project** (`/projects/new`): the form behind `project.bootstrap` — creates the basic files,
     a git repository on `dev` with version tracking, and registers it under the workspace directory;
     a GitHub repository is created only when the box is ticked.
-  - **Task list** (`/tasks`, 2026-09-23): shows every task — finished, running, and still queued
-    (a queued `agent.run_task` job with no run yet appears as a "waiting" row, plain text rather
-    than a link since there is no run to open).
+  - **Task list** (`/tasks`, 2026-09-23; sectioned 2026-09-24): shows every task in four sections,
+    each with a count — **Queued**, **Running**, **Needs attention** (awaiting finish/skip, failed,
+    stopped) and **Done** (finished, skipped, cancelled) — REQ-000000256. An `agent.run_task` Job
+    with no run yet is listed from the Job itself (REQ-000000257): queued, awaiting confirmation or
+    dispatched-but-waiting for the agent's single run lock (the agent creates the run only once it
+    holds that lock) show as "waiting" under Queued; one that failed or was stopped before a run
+    existed shows under Needs attention with the Job's error. Such rows are plain text rather than
+    a link, since there is no run to open; a Job that has a run (matched by the run's `job_id`) is
+    shown once, as that run.
   - **New task** (`/tasks/new`, absorbed Schedule task 2026-09-23): one form; a "When" choice
     (right away / once at a date and time / every week on chosen weekdays) decides whether it
     dispatches an `agent.run_task` Job immediately or files an Orchestration scheduled task — the
