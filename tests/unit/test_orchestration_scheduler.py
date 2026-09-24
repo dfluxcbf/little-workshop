@@ -9,7 +9,9 @@ import pytest
 
 from orchestration import db
 from orchestration.models import JobStatus, JobTemplate, Schedule, ScheduledTask, ScheduleKind
-from orchestration.scheduler import cancel_task, postpone_task, startup_check, tick_once, trigger_task
+from orchestration.scheduler import (
+    cancel_task, postpone_task, remove_spent_tasks, startup_check, tick_once, trigger_task,
+)
 
 
 @pytest.fixture
@@ -45,7 +47,7 @@ def _recurring_task(next_run_at: datetime, days=(0, 1, 2, 3, 4, 5, 6)) -> Schedu
 # tick_once
 # ---------------------------------------------------------------------------
 
-def test_tick_fires_a_due_once_task_and_spends_it(conn):
+def test_tick_fires_a_due_once_task_and_deletes_it(conn):
     task = _once_task(datetime(2026, 1, 1, 2, 0))
     db.insert_scheduled_task(conn, task)
 
@@ -54,10 +56,17 @@ def test_tick_fires_a_due_once_task_and_spends_it(conn):
     assert len(fired) == 1
     assert fired[0].type == "noop"
     assert fired[0].created_by == "scheduler"
+    assert db.get_scheduled_task(conn, task.id) is None  # once-kind: spent, nothing left to list
+
+
+def test_tick_keeps_a_recurring_task_after_it_fires(conn):
+    task = _recurring_task(datetime(2026, 1, 5, 2, 0))
+    db.insert_scheduled_task(conn, task)
+
+    fired = tick_once(conn, _disabled_lookup, now=datetime(2026, 1, 5, 2, 5))
 
     reloaded = db.get_scheduled_task(conn, task.id)
-    assert reloaded.next_run_at is None  # once-kind: spent
-    assert reloaded.last_job_id == fired[0].id
+    assert reloaded is not None and reloaded.last_job_id == fired[0].id
 
 
 def test_tick_does_not_fire_a_task_not_yet_due(conn):
@@ -223,3 +232,56 @@ def test_postpone_retargets_next_run_at_and_clears_any_missed_run(conn):
     assert updated.next_run_at == new_at
     assert updated.missed_run_at is None
     assert db.get_scheduled_task(conn, task.id).next_run_at == new_at
+
+
+# ---------------------------------------------------------------------------
+# spent `once` tasks are deleted, never left listed
+# ---------------------------------------------------------------------------
+
+def _missed_once_task() -> ScheduledTask:
+    task = _once_task(datetime(2026, 1, 1, 2, 0))
+    task.next_run_at = None
+    task.missed_run_at = datetime(2026, 1, 1, 2, 0)
+    return task
+
+
+def test_triggering_a_missed_once_task_fires_it_and_deletes_it(conn):
+    task = _missed_once_task()
+    db.insert_scheduled_task(conn, task)
+
+    job = trigger_task(conn, task, _disabled_lookup)
+
+    assert db.get_job(conn, job.id) is not None
+    assert db.get_scheduled_task(conn, task.id) is None
+
+
+def test_triggering_a_once_task_early_keeps_it_for_its_scheduled_firing(conn):
+    task = _once_task(datetime(2026, 2, 1, 2, 0))
+    db.insert_scheduled_task(conn, task)
+
+    trigger_task(conn, task, _disabled_lookup)
+
+    assert db.get_scheduled_task(conn, task.id).next_run_at == datetime(2026, 2, 1, 2, 0)
+
+
+def test_dismissing_a_missed_once_task_deletes_it(conn):
+    task = _missed_once_task()
+    db.insert_scheduled_task(conn, task)
+
+    assert cancel_task(conn, task) == {"cancelled": "missed_run"}
+    assert db.get_scheduled_task(conn, task.id) is None
+
+
+def test_remove_spent_tasks_deletes_only_once_tasks_with_nothing_left(conn):
+    spent = _once_task(datetime(2026, 1, 1, 2, 0))
+    spent.next_run_at = None
+    pending = _once_task(datetime(2026, 2, 1, 2, 0))
+    missed = _missed_once_task()
+    recurring = _recurring_task(datetime(2026, 1, 5, 2, 0))
+    for task in (spent, pending, missed, recurring):
+        db.insert_scheduled_task(conn, task)
+
+    removed = remove_spent_tasks(conn)
+
+    assert [t.id for t in removed] == [spent.id]
+    assert {t.id for t in db.list_scheduled_tasks(conn)} == {pending.id, missed.id, recurring.id}

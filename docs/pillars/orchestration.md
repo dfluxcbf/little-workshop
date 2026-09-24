@@ -85,6 +85,12 @@ that pillar's existing Job type.
 
 - **Schedule kinds**: `once` (a specific date/time) or `recurring` (a
   set of weekdays plus one time-of-day) — deliberately not full cron.
+  A `once` task is deleted as soon as it is spent — fired on time, or
+  its missed firing triggered or dismissed — so the scheduled-task
+  lists only ever show tasks that can still fire or still need an
+  answer; its Job stays in history. Orchestration also deletes, at
+  startup, any spent `once` task an older version left behind
+  (2026-09-24).
 - **Eight operations**: `add`, `edit`, `remove` (hard-delete the
   definition; cancels a pending firing or stops a running one first;
   Jobs it already spawned stay in Orchestration's history, untouched),
@@ -150,7 +156,7 @@ run actually happens, exactly as if the question had been answered "no."
 A `once` task has no next occurrence to supersede it this way, so a
 missed `once` task's `missed_run_at` stays pending indefinitely until a
 human actually answers it — there is no automatic path that ever clears
-it on its own.
+it on its own. Either answer spends it, and it is deleted.
 
 ## Interfacing
 

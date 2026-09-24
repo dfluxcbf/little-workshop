@@ -47,13 +47,37 @@ def _create_job_from_template(
         return db.get_job(conn, job.id) or job
 
 
+def _is_spent(task: ScheduledTask) -> bool:
+    """A `once` task whose single firing has happened (on time, or its missed
+    firing triggered or dismissed): nothing left to schedule or decide."""
+    return task.schedule.kind == ScheduleKind.ONCE and task.next_run_at is None and task.missed_run_at is None
+
+
+def _save_or_remove(conn: sqlite3.Connection, task: ScheduledTask) -> None:
+    """Persist `task`, or delete it once spent — only a task that can still
+    fire, or still needs the user's missed-run decision, stays listed."""
+    if _is_spent(task):
+        db.delete_scheduled_task(conn, task.id)
+    else:
+        db.update_scheduled_task(conn, task)
+
+
+def remove_spent_tasks(conn: sqlite3.Connection) -> list[ScheduledTask]:
+    """Delete every spent `once` task: at startup, for any left by a version
+    that kept them after firing."""
+    spent = [t for t in db.list_scheduled_tasks(conn) if _is_spent(t)]
+    for task in spent:
+        db.delete_scheduled_task(conn, task.id)
+    return spent
+
+
 def tick_once(
     conn: sqlite3.Connection, socket_lookup: SocketLookup, *, now: datetime | None = None, lock: threading.Lock | None = None
 ) -> list[Job]:
     """Fires every active task whose `next_run_at` is due, advancing it
-    to its own next occurrence (or spending it, for a `once` task) and
-    clearing any pending `missed_run_at` — a real firing on schedule
-    always supersedes a stale missed-run question."""
+    to its own next occurrence (or deleting it, for a `once` task, now
+    spent) and clearing any pending `missed_run_at` — a real firing on
+    schedule always supersedes a stale missed-run question."""
     now = now or datetime.now()
     guard = lock if lock is not None else nullcontext()
     fired: list[Job] = []
@@ -67,7 +91,7 @@ def tick_once(
         task.missed_run_at = None
         task.next_run_at = next_occurrence_after(task.schedule, after=task.next_run_at)
         with guard:
-            db.update_scheduled_task(conn, task)
+            _save_or_remove(conn, task)
     return fired
 
 
@@ -107,11 +131,12 @@ def trigger_task(
     """Fires the template right now, out of band — `next_run_at` is
     left exactly as it was; the schedule's normal cadence keeps going
     independently. Resolves a pending missed-run question, if there was
-    one, the same way an on-time firing would."""
+    one, the same way an on-time firing would — and a `once` task left
+    with nothing to fire is deleted."""
     job = _create_job_from_template(conn, task, socket_lookup, lock)
     task.missed_run_at = None
     with lock if lock is not None else nullcontext():
-        db.update_scheduled_task(conn, task)
+        _save_or_remove(conn, task)
     return job
 
 
@@ -120,10 +145,11 @@ def cancel_task(conn: sqlite3.Connection, task: ScheduledTask) -> dict:
     there is one; otherwise skips the one upcoming occurrence — for
     `recurring`, only that one, the next one after it still happens on
     schedule; for `once`, there is no next occurrence to fall back to,
-    so this is the caller's cue to `remove` the task instead."""
+    so this is the caller's cue to `remove` the task instead. Dismissing a
+    `once` task's missed firing leaves nothing to fire, so it is deleted."""
     if task.missed_run_at is not None:
         task.missed_run_at = None
-        db.update_scheduled_task(conn, task)
+        _save_or_remove(conn, task)
         return {"cancelled": "missed_run"}
 
     if task.next_run_at is None:
@@ -170,6 +196,7 @@ class SchedulerThread:
 
     def start(self) -> None:
         with self._lock if self._lock is not None else nullcontext():
+            remove_spent_tasks(self._conn)
             startup_check(self._conn)
         self._thread.start()
 
