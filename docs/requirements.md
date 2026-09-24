@@ -584,3 +584,9 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000271 | **A waiting Job is answered at once; a slow answer is not "unreachable".** When a new Job has to wait behind its policy checks or a busy queue key, the Orchestration pillar shall answer the request at once with the queued Job and its id, and the MCP server and lws shall report a pillar that took a request but has not answered in time as still working, never as unreachable. | done |
+
+## A self-redeploy refreshes lws (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000272 | **A self-redeploy refreshes lws.** When the Deployment pillar redeploys one of little-workshop's own pillars to a commit whose version differs from the installed lws, the pillar shall upgrade lws in place to that commit and shall report the outcome without failing the redeploy. | done |

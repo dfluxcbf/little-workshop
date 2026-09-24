@@ -77,6 +77,15 @@ healthy, currently-running process down.
   to call rather than each provisioning their own: Requirements &
   Quality's sandboxed test execution (M10) and Policy & Compliance's
   test-script sandbox (M12) are both meant to use it.
+- **A self-redeploy refreshes `lws`** (2026-09-24): the pre-commit version
+  hook, the MCP server and the self-redeploy workers all run the
+  pipx-installed `lws`, which nothing updated — a fix to any of them sat
+  undeployed until someone ran `bazel run //:install` (the pre-commit sync
+  fix did). Redeploying a pillar now also upgrades `lws` to the deployed
+  commit, in place with its venv's own pip (recreating the venv would pull
+  it out from under the processes running from it), once per version, and
+  reports it as `cli_note` in the redeploy's result; a failed upgrade never
+  fails the redeploy. REQ-000000272.
 
 ## Interfacing
 

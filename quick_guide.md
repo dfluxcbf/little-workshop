@@ -19,9 +19,10 @@ bazel run //:install
 ```
 
 This builds the wheel, runs `tools/check_system_deps.sh`, and `pipx`-installs
-it, giving you a global `lws` command. Re-run this any time `src/` changes —
-the previous install goes stale silently otherwise (see `docs/open_questions.md`
-history: this bit a real self-hosting attempt once already).
+it, giving you a global `lws` command. Once little-workshop runs itself, every
+self-redeploy of a pillar also upgrades `lws` to the deployed commit; run this by
+hand only for the first install, or after changing `src/` without redeploying
+(the install goes stale silently otherwise).
 
 ## Running it for real (self-hosting)
 

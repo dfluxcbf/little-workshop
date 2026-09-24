@@ -1317,6 +1317,8 @@ def cmd_deployment_redeploy_pillar_worker(args: argparse.Namespace) -> int:
         payload = {"branch": result.branch, "version": result.version, "commit": result.commit, "how": result.how}
         if result.confirm_message:
             payload["confirm_message"] = result.confirm_message
+        if result.cli_note:
+            payload["cli_note"] = result.cli_note
         succeeded, error = True, None
     except (DeploymentError, RuntimeError) as exc:
         # RuntimeError alongside DeploymentError: deployment.gitutil's own
