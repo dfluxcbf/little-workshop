@@ -47,6 +47,14 @@ section for the full shape.
   Judging that the mapping is *right* is a review matter; the mechanical part — commits under
   `src/` cite an id — is the `commit-cites-requirement` policy, filed as a draft for approval in
   the app.
+- **`REQ-NONE`: a commit that affects no requirement says so** (2026-09-24). A commit
+  cites `REQ-NONE` instead of an id when it affects no requirement at all — a refactor, a
+  typo fix, a version bump a version hook wrote into `src/`. It declares "no requirement
+  affected"; it is not a label for any particular kind of change, and it is never cited
+  alongside a real `REQ-nnnnnnnnn` id. little-workshop's own bookkeeping commits (version
+  bumps, finish/release state, release candidates, changelogs) cite it; merge commits,
+  which carry a branch's real changes, never do. `commit-cites-requirement` accepts either
+  and refuses both together.
 - **Requirements follow EARS.** A description reads `<The system> shall <response>`, optionally
   prefixed by `While <state>,`, `When <trigger>,`, `Where <feature>,` or `If <condition>, then`.
   The Requirements pillar enforces this: creating a requirement or editing a draft's description

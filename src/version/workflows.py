@@ -18,6 +18,7 @@ from version.gitops import (
     delete_branch,
     get_merge_base,
     merge_no_ff,
+    no_requirement,
     run,
     squash_to_single_commit,
     write_file_in_repo,
@@ -49,7 +50,7 @@ def create_prefixed_branch(
 
     if issue is not None:
         set_issue_link(repo_root, branch_name, issue)
-        commit_if_dirty(repo_root, f"chore(version): link issue #{issue} to {branch_name}")
+        commit_if_dirty(repo_root, no_requirement(f"chore(version): link issue #{issue} to {branch_name}"))
 
     return CommandResult(
         success=True,
@@ -104,7 +105,7 @@ def squash_merge_and_bump_patch(repo_root: Path, plan: PatchMergePlan) -> Comman
     new_ver = bump_patch(current_ver)
     write_version(repo_root, new_ver)
     hook_errors = run_version_hooks(repo_root, str(new_ver))
-    commit_if_dirty(repo_root, f"chore: bump version to {new_ver}")
+    commit_if_dirty(repo_root, no_requirement(f"chore: bump version to {new_ver}"))
 
     delete_branch_if_configured(repo_root, plan.work_branch)
     return success_with_hook_warnings(

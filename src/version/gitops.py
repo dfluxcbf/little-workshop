@@ -131,6 +131,18 @@ def list_tags(repo_root: Path, pattern: str = "") -> list[str]:
     return [t for t in result.stdout.strip().splitlines() if t]
 
 
+# Cited, instead of requirement ids, by a commit that affects no requirement
+# (`commit-cites-requirement`): never alongside a real REQ-nnnnnnnnn id.
+NO_REQUIREMENT = "REQ-NONE"
+
+
+def no_requirement(message: str) -> str:
+    """`message` with the REQ-NONE trailer: for little-workshop's own
+    bookkeeping commits (version bumps, finish state, changelogs), which a
+    version hook may still make touch src/ (little-home's src/package.json)."""
+    return f"{message}\n\n{NO_REQUIREMENT}"
+
+
 def commit_file(repo_root: Path, file_path: Path, message: str) -> str:
     run(["git", "add", str(file_path.relative_to(repo_root))], repo_root)
     run(["git", "commit", "-m", message], repo_root)

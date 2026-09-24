@@ -29,7 +29,7 @@ from typing import Protocol
 from version.commands.release import cmd_release_finish, cmd_release_start
 from version.common import get_integration_branch, get_production_branch
 from version.configstore import load_release_finish_state
-from version.gitops import checkout, commit_file, current_branch, get_commit_sha, is_ancestor, is_dirty, list_tags, run, write_file_in_repo
+from version.gitops import checkout, commit_file, current_branch, get_commit_sha, is_ancestor, is_dirty, list_tags, run, write_file_in_repo, no_requirement
 from version.stages import GitflowVersion
 
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's own empty tree: "since the beginning"
@@ -361,7 +361,7 @@ def run_release(repo: Path, project_id: str, params: dict, services: ReleaseServ
     version = started.data["version"]
 
     changelog = write_changelog(repo, version, changelog_entries(repo, base_tag, integ))
-    commit_file(repo, changelog, f"docs: changelog for {version}")
+    commit_file(repo, changelog, no_requirement(f"docs: changelog for {version}"))
 
     finished = cmd_release_finish(repo)
     if not finished.success:

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from version.common import CommandResult, get_integration_branch, require_branch_exists, require_clean_tree
 from version.configstore import clear_finish_state, get_issue_link, load_finish_state, save_finish_state
-from version.gitops import RebaseConflictError, commit_if_dirty, current_branch, is_rebase_in_progress, rebase_abort, rebase_continue, rebase_onto
+from version.gitops import RebaseConflictError, commit_if_dirty, current_branch, is_rebase_in_progress, rebase_abort, rebase_continue, rebase_onto, no_requirement
 from version.workflows import PatchMergePlan, squash_merge_and_bump_patch, start_integration_branch
 
 
@@ -31,7 +31,7 @@ def _finish_squash_merge_bump(repo_root: Path, work_branch: str, integ: str, mer
             target_branch=integ,
             merge_message=merge_message,
             pre_merge_cleanup=clear_finish_state,
-            pre_merge_commit_message="chore(version): clear finish state",
+            pre_merge_commit_message=no_requirement("chore(version): clear finish state"),
         ),
     )
 
@@ -58,7 +58,7 @@ def cmd_topic_finish(
         # work branch right after an abort ("Repository restored" wasn't
         # actually true). hotfix's own abort path already commits its
         # equivalent cleanup; this one didn't.
-        commit_if_dirty(repo_root, f"chore(version): abort finish for {work_branch}")
+        commit_if_dirty(repo_root, no_requirement(f"chore(version): abort finish for {work_branch}"))
         return CommandResult(success=True, message=f"Aborted finish for {work_branch!r}. Repository restored.")
 
     if action == "continue":
@@ -101,7 +101,7 @@ def cmd_topic_finish(
     merge_message = f"{commit_label} ({issue_label}): {short_name}"
 
     save_finish_state(repo_root, cur, integ, merge_message)
-    commit_if_dirty(repo_root, "chore(version): save finish state")
+    commit_if_dirty(repo_root, no_requirement("chore(version): save finish state"))
 
     try:
         rebase_onto(repo_root, integ)

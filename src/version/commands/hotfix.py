@@ -7,7 +7,7 @@ from pathlib import Path
 
 from version.common import CommandResult, get_integration_branch, get_production_branch, require_branch_exists, require_clean_tree, run_version_hooks
 from version.configstore import clear_hotfix_finish_state, get_issue_link, load_hotfix_finish_state, save_hotfix_finish_state
-from version.gitops import MergeConflictError, checkout, commit_if_dirty, create_annotated_tag, current_branch, is_merge_in_progress, merge_abort, merge_commit, merge_no_ff
+from version.gitops import MergeConflictError, checkout, commit_if_dirty, create_annotated_tag, current_branch, is_merge_in_progress, merge_abort, merge_commit, merge_no_ff, no_requirement
 from version.stages import GitflowVersion, bump_patch
 from version.workflows import checkout_existing_branch, clear_untracked_state_file, create_prefixed_branch, delete_branch_if_configured, merge_conflict_result, read_version, require_checked_out_branch, success_with_hook_warnings, write_version
 
@@ -26,7 +26,7 @@ def _hotfix_finish_post_prod_merge(
 ) -> CommandResult:
     write_version(repo_root, new_ver)
     hook_errors = run_version_hooks(repo_root, str(new_ver))
-    commit_if_dirty(repo_root, f"chore: bump version to {new_ver}")
+    commit_if_dirty(repo_root, no_requirement(f"chore: bump version to {new_ver}"))
 
     tag = new_ver.production_tag()
     create_annotated_tag(repo_root, tag, f"Hotfix release {new_ver}")
@@ -40,7 +40,7 @@ def _hotfix_finish_post_prod_merge(
         new_version=str(new_ver),
         phase="dev_backmerge",
     )
-    commit_if_dirty(repo_root, "chore(version): advance hotfix finish state to dev_backmerge")
+    commit_if_dirty(repo_root, no_requirement("chore(version): advance hotfix finish state to dev_backmerge"))
 
     checkout(repo_root, integ)
     try:
@@ -50,7 +50,7 @@ def _hotfix_finish_post_prod_merge(
 
     delete_branch_if_configured(repo_root, hotfix_branch)
     clear_hotfix_finish_state(repo_root)
-    commit_if_dirty(repo_root, "chore(version): clear hotfix finish state")
+    commit_if_dirty(repo_root, no_requirement("chore(version): clear hotfix finish state"))
 
     return success_with_hook_warnings(
         message=f"Hotfix {hotfix_branch[len('hotfix/'):]} finished. Tag {tag} created on {prod}.",
@@ -70,7 +70,7 @@ def cmd_hotfix_finish(repo_root: Path, force: bool = False, action: str | None =
         clear_untracked_state_file(repo_root)
         checkout_existing_branch(repo_root, hotfix_branch)
         clear_hotfix_finish_state(repo_root)
-        commit_if_dirty(repo_root, "chore(version): abort hotfix finish")
+        commit_if_dirty(repo_root, no_requirement("chore(version): abort hotfix finish"))
         return CommandResult(success=True, message=f"Aborted hotfix finish for {hotfix_branch!r}. Repository restored.")
 
     if action == "continue":
@@ -104,7 +104,7 @@ def cmd_hotfix_finish(repo_root: Path, force: bool = False, action: str | None =
             tag = new_ver.production_tag()
             delete_branch_if_configured(repo_root, hotfix_branch)
             clear_hotfix_finish_state(repo_root)
-            commit_if_dirty(repo_root, "chore(version): clear hotfix finish state")
+            commit_if_dirty(repo_root, no_requirement("chore(version): clear hotfix finish state"))
             return CommandResult(
                 success=True,
                 message=f"Hotfix {hotfix_name} finished. Tag {tag} created on {prod}.",
@@ -137,7 +137,7 @@ def cmd_hotfix_finish(repo_root: Path, force: bool = False, action: str | None =
         repo_root, hotfix_branch=cur, production_branch=prod, integration_branch=integ,
         merge_message=merge_msg, new_version=str(new_ver), phase="prod_merge",
     )
-    commit_if_dirty(repo_root, "chore(version): begin hotfix finish")
+    commit_if_dirty(repo_root, no_requirement("chore(version): begin hotfix finish"))
 
     checkout(repo_root, prod)
     try:

@@ -553,3 +553,10 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000265 | **Finish resolves version-only rebase conflicts.** When a feature or improvement finish hits a rebase conflict that differs only by the two commits' own VERSION strings (in VERSION or a version_hooks-written file) or is in `.lvx/state.json`, the Version Control & Release pillar shall resolve that conflict and continue the finish, and shall still stop the finish on any other conflict. | done |
+
+## REQ-NONE for commits that affect no requirement (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000266 | **Bookkeeping commits cite REQ-NONE.** When the Version Control & Release pillar makes one of its own bookkeeping commits (a version bump or finish state or release candidate or changelog or issue link), the pillar shall cite REQ-NONE in that commit's message and shall never cite REQ-NONE in a merge commit that carries a branch's changes. | done |
+| REQ-000000267 | **Agent commits cite requirements or REQ-NONE.** When the Agentic Development pillar starts an agent run, the pillar shall instruct the agent to cite the affected requirement ids in each commit message, or REQ-NONE when the commit affects no requirement, and never both. | done |

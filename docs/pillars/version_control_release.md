@@ -155,6 +155,13 @@ repository in a half-finished state.
   the one exception to M3's never-auto-resolve). `docs/requirements.md` is
   `merge=union` in `.gitattributes`, since branches only append to it.
   REQ-000000265.
+- **Bookkeeping commits cite `REQ-NONE`** (2026-09-24): version bumps,
+  finish/release state, release candidates, changelogs and issue links end
+  with a `REQ-NONE` paragraph (`gitops.no_requirement`), since a version hook
+  can make them touch `src/` (little-home's `src/package.json`) and
+  `commit-cites-requirement` judges every commit that does. Merge commits
+  carry real changes and never cite it. `stabilize`'s "commit pending
+  changes" does not either: what it commits is unknown. REQ-000000266.
 
 ## Interfacing
 
