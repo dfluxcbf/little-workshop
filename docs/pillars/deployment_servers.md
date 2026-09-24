@@ -86,6 +86,12 @@ healthy, currently-running process down.
   it out from under the processes running from it), once per version, and
   reports it as `cli_note` in the redeploy's result; a failed upgrade never
   fails the redeploy. REQ-000000272.
+- **`lws` never moves backwards** (2026-09-24): a rollback puts one pillar
+  back on an older commit, and the refresh above followed it — a timed-out
+  `deployment` confirm rolled `lws` back to 0.1.1, which no longer had
+  `sync-version-files`, and the pre-commit hook failed. `lws` is shared by
+  every pillar: a rollback never touches it, and a forward redeploy only
+  ever moves it up. REQ-000000273.
 
 ## Interfacing
 

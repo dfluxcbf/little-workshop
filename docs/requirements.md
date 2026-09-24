@@ -590,3 +590,9 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000272 | **A self-redeploy refreshes lws.** When the Deployment pillar redeploys one of little-workshop's own pillars to a commit whose version differs from the installed lws, the pillar shall upgrade lws in place to that commit and shall report the outcome without failing the redeploy. | done |
+
+## lws never moves backwards (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000273 | **lws never moves backwards.** When the Deployment pillar rolls a pillar back or redeploys a pillar to a version not newer than the installed lws, the pillar shall leave lws unchanged. | done |
