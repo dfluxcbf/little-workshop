@@ -11,7 +11,7 @@ from version.configstore import clear_release_finish_state, get_promoted_rc, loa
 from version.gitops import (
     DirtyWorkingTreeError, MergeConflictError, branch_exists, checkout, commit_file, commit_if_dirty,
     create_and_checkout, create_annotated_tag, current_branch, get_tag_commit, is_ancestor,
-    is_dirty, is_merge_in_progress, list_tags, merge_abort, merge_commit, merge_no_ff, run, tag_exists,
+    is_dirty, is_merge_in_progress, list_tags, merge_abort, merge_commit, merge_no_ff, run, tag_exists, no_requirement,
 )
 from version.stages import GitflowVersion, bump_minor, bump_patch, normalize_to_stable
 from version.workflows import checkout_existing_branch, clear_untracked_state_file, delete_branch_if_configured, merge_conflict_result, read_version, require_checked_out_branch, success_with_hook_warnings, write_version
@@ -26,7 +26,7 @@ def _commit_lvx_and_version(repo_root: Path, ver: GitflowVersion) -> None:
         run(["git", "add", ".lvx/"], repo_root)
     staged = run(["git", "diff", "--cached", "--quiet"], repo_root, check=False)
     if staged.returncode != 0:
-        run(["git", "commit", "-m", f"chore: set version to {ver}"], repo_root)
+        run(["git", "commit", "-m", no_requirement(f"chore: set version to {ver}")], repo_root)
 
 
 def cmd_release_start(repo_root: Path, force: bool = False) -> CommandResult:
@@ -79,7 +79,7 @@ def cmd_release_candidate_cut(repo_root: Path, number: int | None = None, force:
     rc_ver = GitflowVersion(base_ver.major, base_ver.minor, base_ver.patch, "rc", number)
 
     vfile = write_version(repo_root, rc_ver)
-    commit_file(repo_root, vfile, f"chore: release candidate {rc_ver}")
+    commit_file(repo_root, vfile, no_requirement(f"chore: release candidate {rc_ver}"))
 
     tag = rc_ver.rc_tag()
     create_annotated_tag(repo_root, tag, f"Release candidate {tag}")
@@ -116,7 +116,7 @@ def cmd_release_candidate_promote(repo_root: Path, rc_number: int) -> CommandRes
         return CommandResult(success=False, message=f"RC tag {tag!r} does not exist for release line {cur!r}.")
 
     set_promoted_rc(repo_root, cur, rc_number)
-    commit_if_dirty(repo_root, f"chore(version): promote RC {rc_number} for {cur}")
+    commit_if_dirty(repo_root, no_requirement(f"chore(version): promote RC {rc_number} for {cur}"))
 
     return CommandResult(success=True, message=f"Promoted RC {rc_number} ({tag}) as the release target.", data={"rc_number": rc_number, "tag": tag})
 
@@ -131,13 +131,13 @@ def _release_finish_post_prod_merge(
     bumped_ver = bump_minor(stable_ver)
     write_version(repo_root, bumped_ver)
     hook_errors.extend(run_version_hooks(repo_root, str(bumped_ver)))
-    commit_if_dirty(repo_root, f"chore: bump version to {bumped_ver}")
+    commit_if_dirty(repo_root, no_requirement(f"chore: bump version to {bumped_ver}"))
 
     save_release_finish_state(
         repo_root, release_branch=release_branch, stable_version=str(stable_ver), production_branch=prod,
         integration_branch=integ, merge_message=f"Back-merge release {stable_ver} into {integ}", phase="dev_backmerge",
     )
-    commit_if_dirty(repo_root, "chore(version): advance release finish state to dev_backmerge")
+    commit_if_dirty(repo_root, no_requirement("chore(version): advance release finish state to dev_backmerge"))
 
     checkout(repo_root, integ)
     try:
@@ -153,11 +153,11 @@ def _release_finish_post_prod_merge(
     next_ver = bump_patch(bumped_ver)
     write_version(repo_root, next_ver)
     hook_errors.extend(run_version_hooks(repo_root, str(next_ver)))
-    commit_if_dirty(repo_root, f"chore: establish next patch line {next_ver}")
+    commit_if_dirty(repo_root, no_requirement(f"chore: establish next patch line {next_ver}"))
 
     delete_branch_if_configured(repo_root, release_branch)
     clear_release_finish_state(repo_root)
-    commit_if_dirty(repo_root, "chore(version): clear release finish state")
+    commit_if_dirty(repo_root, no_requirement("chore(version): clear release finish state"))
 
     return success_with_hook_warnings(
         message=(
@@ -180,11 +180,11 @@ def _release_finish_post_dev_backmerge(
     next_ver = bump_patch(bumped_ver)
     write_version(repo_root, next_ver)
     hook_errors = run_version_hooks(repo_root, str(next_ver))
-    commit_if_dirty(repo_root, f"chore: establish next patch line {next_ver}")
+    commit_if_dirty(repo_root, no_requirement(f"chore: establish next patch line {next_ver}"))
 
     delete_branch_if_configured(repo_root, release_branch)
     clear_release_finish_state(repo_root)
-    commit_if_dirty(repo_root, "chore(version): clear release finish state")
+    commit_if_dirty(repo_root, no_requirement("chore(version): clear release finish state"))
 
     return success_with_hook_warnings(
         message=(
@@ -210,7 +210,7 @@ def cmd_release_finish(repo_root: Path, force: bool = False, action: str | None 
         clear_untracked_state_file(repo_root)
         checkout_existing_branch(repo_root, release_branch)
         clear_release_finish_state(repo_root)
-        commit_if_dirty(repo_root, "chore(version): abort release finish")
+        commit_if_dirty(repo_root, no_requirement("chore(version): abort release finish"))
         return CommandResult(success=True, message=f"Aborted release finish for {release_branch!r}. Repository restored.")
 
     if action == "continue":
@@ -279,7 +279,7 @@ def cmd_release_finish(repo_root: Path, force: bool = False, action: str | None 
     current_file_ver = read_version(repo_root)
     if not current_file_ver.is_stable():
         vfile = write_version(repo_root, stable_ver)
-        commit_file(repo_root, vfile, f"chore: finalize release version {stable_ver}")
+        commit_file(repo_root, vfile, no_requirement(f"chore: finalize release version {stable_ver}"))
 
     release_branch = cur
     merge_message = f"rel ({stable_ver}): merge {release_branch}"
@@ -288,7 +288,7 @@ def cmd_release_finish(repo_root: Path, force: bool = False, action: str | None 
         repo_root, release_branch=release_branch, stable_version=str(stable_ver), production_branch=prod,
         integration_branch=integ, merge_message=merge_message, phase="prod_merge",
     )
-    commit_if_dirty(repo_root, "chore(version): begin release finish")
+    commit_if_dirty(repo_root, no_requirement("chore(version): begin release finish"))
 
     checkout(repo_root, prod)
     try:
