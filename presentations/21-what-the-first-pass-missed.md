@@ -1,4 +1,4 @@
-← [The Full Milestone Sequence](20-the-full-milestone-sequence.md) · deck 21 of 21 · back to [index](README.md)
+← [The Full Milestone Sequence](20-the-full-milestone-sequence.md) · deck 21 of 22 · next: [Deterministic Automation →](22-deterministic-automation.md)
 
 # What the First Pass Missed
 
