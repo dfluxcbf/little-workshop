@@ -310,3 +310,33 @@ repos" convention, posting over little-workshop's own Agentic Development Unix s
 `~/.local/state/little-workshop/sockets/agent.sock`). Delivered as a tested, ready-to-adopt
 module in this pass; wiring it into each child project's own repository is that project's
 own follow-up commit, not part of little-workshop's own codebase.
+
+## Playwright as standard: the agent drives a real browser (2026-09-24)
+
+Playwright is this ecosystem's standard for anything a user sees or touches, so every Claude Code
+session this pillar launches on a project — each `agent.run_task` run, and each ad-hoc session
+(`agent.session_start`) — gets the **Playwright MCP server** attached through `claude --mcp-config`
+(`common/playwright.py`). The agent can then launch the project's app (the project's
+`[server.screenshot].command` starts this branch on a scratch port) and navigate, click, type, resize to
+a phone viewport and take snapshots with the `browser_*` tools.
+
+- **Pinned, not `@latest`**: `@playwright/mcp@0.0.82`, run through `npx -y`, so a run is reproducible and
+  an upstream release can't change agent behaviour overnight. Bumping it is a one-line change.
+- **Headless, in-memory profile** (`--headless --isolated`): a run is unattended under systemd, and nothing
+  one run does in the browser (logins, cookies) leaks into the next.
+- **Uses the host's own Chromium**: `--executable-path` points at the newest `chromium-*` the host's
+  Playwright install already downloaded (`~/.cache/ms-playwright`, or `PLAYWRIGHT_BROWSERS_PATH`), so no
+  second ~150 MB browser download is needed. Without one, the MCP server uses its own; the prompt tells the
+  agent how to install it (`npx -y @playwright/mcp@0.0.82 install-browser chrome-for-testing`).
+- **Snapshots outside the checkout**: `--output-dir` is under the state directory
+  (`playwright-mcp/run-<run_id>` for a run, `sessions/playwright-mcp/<project>` for a session), never the
+  project checkout, whose leftovers `_publish` would otherwise commit.
+- **Never a failed run for lack of Node**: without `npx` on `PATH`, the session is launched as before,
+  without the server, and the prompt says so. A run's own `playwright_mcp: false` param (also on the
+  `workshop_agent_run_task` MCP tool) turns it off for that run.
+
+The prompt (`templates/prompts/ui_playwright_mcp.md`, or `ui_playwright.md` without the server) asks the
+agent, for any UI/UX change, to check it in the browser (desktop and phone viewports), never touch whatever
+is serving on the project's real port, and cover the behaviour with pytest-playwright tests under
+`tests/ui/` using relative URLs — which Requirements & Quality then runs against the branch's own app
+(`docs/pillars/requirements_quality.md`, "UI tests with Playwright").

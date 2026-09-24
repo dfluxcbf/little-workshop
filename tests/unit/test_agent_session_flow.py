@@ -153,3 +153,37 @@ def test_stop_stops_the_scope_and_pkills_when_running(paths):
     assert ["systemctl", "--user", "reset-failed", "little-workshop-agent-session-little-widget"] in argvs
     assert any(c[:3] == ["pkill", "-TERM", "-f"] for c in argvs)
     assert any(c[0] == "pkill" and "claude --remote-control lws-little-widget-session" in c[-1] for c in argvs)
+
+
+class NpxRunner(FakeRunner):
+    def __init__(self, *, npx: bool, **kw):
+        super().__init__(**kw)
+        self.npx = npx
+
+    def run(self, argv, timeout=None, cwd=None):
+        if argv == ["which", "npx"]:
+            self.calls.append(argv)
+            return CommandResult(0 if self.npx else 1, "", "")
+        return super().run(argv, timeout=timeout, cwd=cwd)
+
+
+def test_start_attaches_the_playwright_mcp_server(paths, tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(session_flow_module, "is_trusted", lambda project_dir: True)
+    runner = NpxRunner(npx=True)
+    SessionFlow(paths, runner=runner).start("dfluxcbf/little-widget", tmp_path)
+    launch = next(c for c in runner.calls if c[0] == "systemd-run")
+    assert launch[-2] == "--mcp-config"
+    server = json.loads(launch[-1])["mcpServers"]["playwright"]
+    out_dir = server["args"][server["args"].index("--output-dir") + 1]
+    assert out_dir == str(paths.sessions_dir / "playwright-mcp" / "dfluxcbf-little-widget")
+
+
+def test_start_without_npx_or_when_disabled_has_no_playwright(paths, tmp_path, monkeypatch):
+    monkeypatch.setattr(session_flow_module, "is_trusted", lambda project_dir: True)
+    for runner, enabled in ((NpxRunner(npx=False), True), (NpxRunner(npx=True), False)):
+        SessionFlow(paths, runner=runner, playwright_mcp=enabled).start("little-widget", tmp_path)
+        launch = next(c for c in runner.calls if c[0] == "systemd-run")
+        assert "--mcp-config" not in launch
+        assert launch[-1] == "lws-little-widget-session"

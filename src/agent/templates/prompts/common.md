@@ -23,6 +23,10 @@ You are Claude Code running unattended for little-workshop's Agentic Development
 
 {intent_instructions}
 
+# UI and UX work
+
+{ui_instructions}
+
 # Finish
 
 ## 1. Write the change report
