@@ -1917,11 +1917,55 @@ def test_tasks_list_shows_a_queued_agent_task_as_waiting(test_client, monkeypatc
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
     monkeypatch.setattr(client, "agent_runs", lambda paths, project: [])
     monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [
-        {"id": "j9", "type": "agent.run_task", "project_id": "little-widget", "created_at": "2026-09-22T10:00:00Z", "params": {"title": "Pending thing"}},
-        {"id": "j10", "type": "deployment.deploy", "project_id": "little-widget", "created_at": "2026-09-22T09:00:00Z", "params": {}},
-    ] if status == "queued" else [])
+        {"id": "j9", "type": "agent.run_task", "status": "queued", "project_id": "little-widget", "created_at": "2026-09-22T10:00:00Z", "params": {"title": "Pending thing"}},
+        {"id": "j10", "type": "deployment.deploy", "status": "queued", "project_id": "little-widget", "created_at": "2026-09-22T09:00:00Z", "params": {}},
+    ])
     text = test_client.get("/tasks").text
     assert "Pending thing" in text and "waiting" in text
+
+
+def _tasks_section(text: str, key: str) -> str:
+    start = text.index(f'id="tasks-{key}"')
+    end = text.find("<section", start + 1)
+    return text[start:end if end != -1 else len(text)]
+
+
+def test_tasks_list_groups_tasks_into_queued_running_attention_and_done(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "w", "status": "active"}])
+    monkeypatch.setattr(client, "agent_runs", lambda paths, project: [
+        {"id": f"r-{status}", "job_id": f"j-{status}", "project_id": "w", "title": f"run {status}", "status": status, "created_at": "2026-09-22T10:00:00"}
+        for status in ("running", "awaiting_finish", "failed", "finished", "skipped")
+    ])
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [
+        # jobs that already have a run are shown once, as that run
+        {"id": "j-running", "type": "agent.run_task", "status": "running", "project_id": "w", "params": {"title": "run running"}},
+        {"id": "j-q", "type": "agent.run_task", "status": "queued", "project_id": "w", "params": {"title": "not started"}},
+        # dispatched, but the agent is still busy with another task: no run yet
+        {"id": "j-lock", "type": "agent.run_task", "status": "running", "project_id": "w", "params": {"title": "behind another task"}},
+        {"id": "j-bad", "type": "agent.run_task", "status": "failed", "project_id": "w", "error": "unknown project", "params": {"title": "never started"}},
+        {"id": "j-cancel", "type": "agent.run_task", "status": "cancelled", "project_id": "w", "params": {"title": "called off"}},
+        {"id": "j-ok", "type": "agent.run_task", "status": "succeeded", "project_id": "w", "params": {"title": "ghost"}},
+    ])
+    text = test_client.get("/tasks").text
+    assert text.index('id="tasks-queued"') < text.index('id="tasks-running"') < text.index('id="tasks-attention"') < text.index('id="tasks-done"')
+    queued, running = _tasks_section(text, "queued"), _tasks_section(text, "running")
+    attention, done = _tasks_section(text, "attention"), _tasks_section(text, "done")
+    assert "not started" in queued and "behind another task" in queued and "Queued (2)" in queued
+    assert "run running" in running and "Running (1)" in running and "behind another task" not in running
+    assert "run awaiting_finish" in attention and "run failed" in attention
+    assert "never started" in attention and "unknown project" in attention and "Needs attention (3)" in attention
+    assert "run finished" in done and "run skipped" in done and "called off" in done and "Done (3)" in done
+    assert text.count("run running") == 1 and "ghost" not in text
+
+
+def test_tasks_list_shows_an_empty_section_as_none(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "w", "status": "active"}])
+    monkeypatch.setattr(client, "agent_runs", lambda paths, project: [
+        {"id": "r1", "project_id": "w", "title": "done thing", "status": "finished", "created_at": "2026-09-22T10:00:00"},
+    ])
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    text = test_client.get("/tasks").text
+    assert "None." in _tasks_section(text, "queued") and "done thing" in _tasks_section(text, "done")
 
 
 # -- workspace-level session on the Dashboard ------------------------------------------

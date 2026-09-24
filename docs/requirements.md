@@ -509,6 +509,13 @@ Requested directly, same day as the usability refinement above: the original six
 | REQ-000000254 | **The agent is told to verify UI/UX in a browser and cover it with Playwright tests.** When Agentic Development renders an agent run's prompt, the prompt shall instruct the agent, for any UI/UX change, to check it in a real browser through the Playwright MCP tools (desktop and phone viewports) and to cover it with pytest-playwright tests under `tests/ui/` using relative URLs; when the server is not attached, the prompt shall still ask for the tests and ask the agent to report that the UI was not checked in a browser. | done |
 | REQ-000000255 | **UI tests run against the branch's own app.** When a Requirements & Quality sandboxed test run includes test files under a `ui` directory of the tests tree, and the project's pytest has pytest-playwright, and the project's `manifest.deployment.toml` has a `[server.screenshot].command`, the pillar shall start that command in the worktree on a free port, pass `--base-url` for it to pytest, and stop it after the run whatever the outcome; if the app never starts listening, the run shall fail with the command and the tail of the app's output. See `docs/pillars/requirements_quality.md`, "UI tests with Playwright". | done |
 
+## Comprehensive Task list (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000256 | **Task list is grouped into Queued, Running, Needs attention and Done.** When the user opens the Task list, the Dashboard shall show every agent task in one of four sections, in this order and each with its own count: Queued (submitted, not started), Running, Needs attention (awaiting the user's finish/skip review, failed, or stopped) and Done (finished, skipped, or cancelled before it started); an empty section shall say so rather than disappear. Supersedes REQ-000000234's single flat list. | done |
+| REQ-000000257 | **Task list shows tasks that have a Job but no run yet.** Where an `agent.run_task` Job has no Agentic Development run, the Task list shall still show it — as Queued while the Job is queued, awaiting confirmation, or dispatched but waiting for the agent's one-task-at-a-time lock, and under Needs attention with the Job's own error when it failed or was stopped before a run was created; a Job that already has a run shall be shown once, as that run. | done |
+
 ## One-time scheduled tasks are deleted once spent (2026-09-24)
 
 | ID | Description | Status |
