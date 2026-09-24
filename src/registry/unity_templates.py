@@ -144,7 +144,7 @@ and is managed from WSL by little-workshop.
 
 - Drive the open Unity Editor through the Unity CLI instead of
   hand-editing scene/prefab/asset YAML: `unity status`, `unity command`,
-  `unity command eval --caller plugin --skill unity-cli '<C#>'`. It needs
+  `unity command eval '<C#>'`. It needs
   the `com.unity.pipeline` package in the project (`unity pipeline install`).
 - If `unity status` shows no ready Editor, the project may have compile
   errors (Safe Mode) — fix them first; do not fall back to blind YAML edits.
