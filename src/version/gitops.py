@@ -1,11 +1,16 @@
 """Git subprocess wrapper for Gitflow-critical operations — ported
 near-verbatim from `little-versions`' `git/ops.py`. Refuses on conflict,
-never auto-resolves (docs/milestones.md M3)."""
+never auto-resolves (docs/milestones.md M3) -- with one narrow exception: a
+rebase conflict hunk whose two sides differ only by each commit's own
+VERSION string (`resolve_version_only_conflicts`). Every working branch's
+first commit bumps VERSION, so any two branches cut from the same dev tip
+always conflicted there at finish, and finish rewrites VERSION anyway."""
 
 from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -183,9 +188,131 @@ def get_merge_base(repo_root: Path, ref1: str, ref2: str) -> str:
     return result.stdout.strip()
 
 
+_FINISH_STATE_PATH = ".lvx/state.json"  # version.schema's CONFIG_DIR/STATE_FILE
+_CONFLICT_CODES = ("UU", "AA", "DD", "AU", "UA", "DU", "UD")
+
+
+def _conflicted_paths(repo_root: Path) -> list[str]:
+    status = run(["git", "status", "--porcelain"], repo_root, check=False)
+    return [line[3:] for line in status.stdout.splitlines() if line[:2] in _CONFLICT_CODES]
+
+
+def _version_at(repo_root: Path, rev: str) -> str | None:
+    shown = run(["git", "show", f"{rev}:VERSION"], repo_root, check=False)
+    return (shown.stdout.strip() or None) if shown.returncode == 0 else None
+
+
+def _stage(repo_root: Path, n: int, path: str) -> str | None:
+    shown = run(["git", "show", f":{n}:{path}"], repo_root, check=False)
+    return shown.stdout if shown.returncode == 0 else None
+
+
+def _resolve_hunks(merged: str, base_v: str, ours_v: str, theirs_v: str) -> str | None:
+    """`git merge-file --diff3` output with every conflict hunk resolved, or
+    None if any hunk differs by more than the version string. Only the
+    hunks are touched: a line outside them is never rewritten."""
+    out: list[str] = []
+    lines = merged.splitlines(keepends=True)
+    i = 0
+    while i < len(lines):
+        if not lines[i].startswith("<<<<<<< "):
+            out.append(lines[i])
+            i += 1
+            continue
+        ours, base, theirs, part = [], [], [], "ours"
+        i += 1
+        while not lines[i].startswith(">>>>>>> "):
+            line = lines[i]
+            if line.startswith("||||||| "):
+                part = "base"
+            elif line.startswith("======="):
+                part = "theirs"
+            else:
+                {"ours": ours, "base": base, "theirs": theirs}[part].append(line)
+            i += 1
+        i += 1
+        ours_s = "".join(ours)
+        base_s = "".join(base).replace(base_v, ours_v)
+        theirs_s = "".join(theirs).replace(theirs_v, ours_v)
+        if theirs_s in (ours_s, base_s):
+            out.append(ours_s)  # the branch changed nothing here but its version
+        elif ours_s == base_s:
+            out.append(theirs_s)  # upstream changed nothing here but its version
+        else:
+            return None
+    return "".join(out)
+
+
+def resolve_version_only_conflicts(repo_root: Path) -> bool:
+    """During a rebase, resolve every conflicted file whose conflicting
+    hunks differ only by the two commits' own VERSION strings (VERSION
+    itself, and whatever version_hooks write it into), taking the upstream
+    side's version; `.lvx/state.json` takes the replayed commit's side.
+    True if nothing is left conflicted; files with a real
+    conflict are left exactly as git left them."""
+    conflicted = _conflicted_paths(repo_root)
+    if not conflicted:
+        return True
+    ours_v = _version_at(repo_root, "HEAD")
+    theirs_v = _version_at(repo_root, "REBASE_HEAD")
+    base_v = _version_at(repo_root, "REBASE_HEAD^")
+    if not (ours_v and theirs_v and base_v):
+        return False
+    remaining = False
+    for path in conflicted:
+        if path == _FINISH_STATE_PATH and _stage(repo_root, 3, path) is not None:
+            # Finish's own bookkeeping, written by nothing else: the commit
+            # being replayed (the finish-state save) is the one that counts.
+            run(["git", "checkout", "--theirs", "--", path], repo_root)
+            run(["git", "add", "--", path], repo_root)
+            continue
+        stages = [_stage(repo_root, n, path) for n in (1, 2, 3)]
+        if any(s is None for s in stages):
+            remaining = True  # add/delete conflicts are never version-only
+            continue
+        base, ours, theirs = stages
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            files = [Path(tmp_dir) / name for name in ("ours", "base", "theirs")]
+            for f, content in zip(files, (ours, base, theirs)):
+                f.write_text(content, encoding="utf-8")
+            merged = run(["git", "merge-file", "-p", "--diff3", *map(str, files)], repo_root, check=False).stdout
+        resolved = _resolve_hunks(merged, base_v, ours_v, theirs_v)
+        if resolved is None:
+            remaining = True
+            continue
+        (repo_root / path).write_text(resolved, encoding="utf-8")
+        run(["git", "add", "--", path], repo_root)
+    return not remaining
+
+
+def _continue_past_version_conflicts(repo_root: Path) -> bool:
+    """Keep the rebase going while every stop is version-only. False when a
+    real conflict (or any other stop) is left for a person."""
+    full_env = {**os.environ, "GIT_EDITOR": "true"}
+    for _ in range(10_000):  # one pass per replayed commit, at most
+        if not is_rebase_in_progress(repo_root):
+            return True
+        if not _conflicted_paths(repo_root) and run(["git", "diff", "--cached", "--quiet"], repo_root, check=False).returncode == 0:
+            # A commit that changed nothing but its version is empty once
+            # resolved: drop it, as `git rebase` itself drops empty picks.
+            step = ["git", "rebase", "--skip"]
+        elif resolve_version_only_conflicts(repo_root):
+            step = ["git", "rebase", "--continue"]
+        else:
+            return False
+        result = subprocess.run(step, cwd=str(repo_root), check=False, capture_output=True, text=True, env=full_env)
+        if result.returncode != 0 and not _conflicted_paths(repo_root) and is_rebase_in_progress(repo_root):
+            if run(["git", "diff", "--cached", "--quiet"], repo_root, check=False).returncode != 0:
+                return False  # stopped for a reason that is not a conflict
+    return False
+
+
 def rebase_onto(repo_root: Path, base_branch: str) -> None:
-    """Raises RebaseConflictError if conflicts occur."""
+    """Raises RebaseConflictError if conflicts occur that are more than
+    each commit's own version string."""
     result = run(["git", "rebase", base_branch], repo_root, check=False)
+    if result.returncode != 0 and is_rebase_in_progress(repo_root) and _continue_past_version_conflicts(repo_root):
+        return
     if result.returncode != 0:
         status = run(["git", "status", "--porcelain"], repo_root, check=False)
         if any(line[:2] in ("UU", "AA", "DD", "AU", "UA", "DU", "UD") for line in status.stdout.splitlines()):
@@ -202,6 +329,8 @@ def rebase_continue(repo_root: Path) -> None:
     result = subprocess.run(
         ["git", "rebase", "--continue"], cwd=str(repo_root), check=False, capture_output=True, text=True, env=full_env
     )
+    if result.returncode != 0 and is_rebase_in_progress(repo_root) and _continue_past_version_conflicts(repo_root):
+        return
     if result.returncode != 0:
         status = run(["git", "status", "--porcelain"], repo_root, check=False)
         if any(line[:2] in ("UU", "AA", "DD", "AU", "UA", "DU", "UD") for line in status.stdout.splitlines()):

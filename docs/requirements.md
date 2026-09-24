@@ -547,3 +547,9 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000264 | **Pre-commit version sync completes before the commit.** When the installed pre-commit hook runs `lws version sync-version-files` on a working branch, the CLI shall compute, write and stage the new VERSION (and version_hooks' files) in the checkout being committed, synchronously and without the daemon, so the commit carries it and no version change is left behind in the working tree. | done |
+
+## Finish resolves version-only rebase conflicts (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000265 | **Finish resolves version-only rebase conflicts.** When a feature or improvement finish hits a rebase conflict that differs only by the two commits' own VERSION strings (in VERSION or a version_hooks-written file) or is in `.lvx/state.json`, the Version Control & Release pillar shall resolve that conflict and continue the finish, and shall still stop the finish on any other conflict. | done |
