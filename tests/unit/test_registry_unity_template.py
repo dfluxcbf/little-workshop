@@ -235,3 +235,5 @@ def test_claude_md_gives_unity_working_rules(unity_project):
     for needle in ("unity status", "com.unity.pipeline", "Library/", ".meta", "tools/run-unity-tests",
                    "git lfs install", "unityyamlmerge", "/mnt/c/little-projects/little-game"):
         assert needle in text, needle
+    # Unity CLI 1.0.0-beta.8's `eval` rejects the plugin skill's --caller/--skill flags.
+    assert "--caller" not in text
