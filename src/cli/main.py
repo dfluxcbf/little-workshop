@@ -222,6 +222,7 @@ def cmd_project_bootstrap(args: argparse.Namespace) -> int:
     params = {
         "name": args.name,
         "dest_dir": args.dest_dir,
+        "template": args.template,
         "owner": args.owner,
         "description": args.description,
         "create_github_repo": args.create_github_repo,
@@ -1730,6 +1731,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_bootstrap = project_sub.add_parser("bootstrap", help="Scaffold and register a new project")
     project_bootstrap.add_argument("name")
     project_bootstrap.add_argument("--dest-dir", required=True)
+    project_bootstrap.add_argument("--template", choices=["python", "unity"], default="python")
     project_bootstrap.add_argument("--owner", default="dfluxcbf")
     project_bootstrap.add_argument("--description", default="")
     project_bootstrap.add_argument("--create-github-repo", action="store_true")

@@ -34,7 +34,7 @@ def bootstrap_project(conn: sqlite3.Connection, paths: Paths, params: BootstrapP
         raise BootstrapError(f"project {params.name!r} is already registered")
 
     dest = Path(params.dest_dir) / params.name
-    scaffold.create_project_tree(dest, params.name)
+    scaffold.create_project_tree(dest, params.name, params.template)
     gitops.init_repo_and_commit(dest, author_email=f"{params.owner}@users.noreply.github.com")
     gitops.create_dev_branch(dest)
 

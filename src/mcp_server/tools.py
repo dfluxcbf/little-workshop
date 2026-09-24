@@ -145,6 +145,7 @@ def _project_bootstrap(paths: Paths, args: JSONDict) -> Any:
     params = {
         "name": args["name"],
         "dest_dir": args["dest_dir"],
+        "template": args.get("template", "python"),
         "owner": args.get("owner", "dfluxcbf"),
         "description": args.get("description", ""),
         "create_github_repo": args.get("create_github_repo", False),
@@ -798,6 +799,8 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({
                  "name": _prop("string", "The new project's name."),
                  "dest_dir": _prop("string", "Directory the project should be scaffolded into."),
+                 "template": _prop("string", "Project layout: python (default) or unity (a Windows Unity game).",
+                                   enum=["python", "unity"]),
                  "owner": _prop("string", "GitHub owner/org for the new repo. Default: dfluxcbf."),
                  "description": _prop("string", "One-line project description."),
                  "create_github_repo": _prop("boolean", "Create and push a GitHub repo. Default: false."),
