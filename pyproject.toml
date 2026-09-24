@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "little-workshop"
-version = "0.2.3"
+version = "0.2.3-dev.1"
 description = "Unified, self-hosted software project-management daemon absorbing little-requirements/little-versions/little-runner/little-pypi/bootstrap-little-project as pillars"
 readme = "README.md"
 license = "MIT"
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=5"]
+dev = ["pytest>=8", "pytest-cov>=5", "pytest-playwright>=0.5"]
 
 [project.scripts]
 lws = "cli.main:main"

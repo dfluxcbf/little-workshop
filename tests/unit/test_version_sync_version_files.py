@@ -182,9 +182,12 @@ def test_a_hook_edit_to_an_already_tracked_file_is_staged(tmp_path):
 
 
 def test_a_real_commit_through_the_installed_pre_commit_hook_carries_the_synced_version(tmp_path):
-    """End to end through git itself: the installed hook calls `lws`, a stand-in
-    here that runs the real sync command in-process, and the commit that lands
-    carries the new VERSION and the hook-propagated file."""
+    """End to end through git itself: the installed hook calls `lws`, here the
+    real CLI entry point (no daemon running), and the commit that lands
+    carries the new VERSION and the hook-propagated file. The CLI must do the
+    sync itself, synchronously: routed through a daemon Job it sat behind the
+    project's queue (held by the agent task making the commit) and landed only
+    after the commit, leaving a dirty tree that blocked the task's finish."""
     import sys
     from pathlib import Path
 
@@ -208,12 +211,13 @@ def test_a_real_commit_through_the_installed_pre_commit_hook_carries_the_synced_
         "import sys, pathlib\n"
         f"sys.path.insert(0, {str(src_dir)!r})\n"
         "assert sys.argv[1:] == ['version', 'sync-version-files', '--project-id', 'little-widget'], sys.argv\n"
-        "from version.commands.sync_version_files import cmd_sync_version_files\n"
-        "sys.exit(0 if cmd_sync_version_files(pathlib.Path.cwd()).success else 1)\n",
+        "from cli.main import main\n"
+        "sys.exit(main())\n",
         encoding="utf-8",
     )
     lws.chmod(0o755)
-    env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin")
+    # An unreachable daemon: a sync that still went through a Job would fail here.
+    env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin", XDG_STATE_HOME=str(tmp_path / "no-daemon"))
 
     _write(repo, "src.py", "x = 1\n")
     result = subprocess.run(["git", "commit", "-m", "feat: x"], cwd=repo, env=env, capture_output=True, text=True)

@@ -303,7 +303,28 @@ def cmd_version_init(args: argparse.Namespace) -> int:
 
 
 def cmd_version_sync_version_files(args: argparse.Namespace) -> int:
-    return _version_job(args, "version.sync_version_files", {})
+    """Runs in-process, synchronously, on the checkout the caller is in --
+    never as a daemon Job. Its only caller is the pre-commit hook, which
+    needs VERSION written and staged *before* git builds the commit; a Job
+    sits behind the project's queue_key, and an agent.run_task holding that
+    queue (the very task making the commit) meant the sync ran only after
+    the run ended, left VERSION staged-but-uncommitted, and blocked the
+    run's own finish on a dirty tree (2026-09-24). A Job also acted on the
+    registered checkout, not necessarily the worktree committing.
+    `--project-id` stays accepted: installed hooks pass it."""
+    from version.commands.sync_version_files import cmd_sync_version_files
+
+    toplevel = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if toplevel.returncode != 0:
+        print(f"error: not inside a git checkout: {toplevel.stderr.strip()}", file=sys.stderr)
+        return 1
+    try:
+        result = cmd_sync_version_files(Path(toplevel.stdout.strip()))
+    except Exception as exc:  # noqa: BLE001 -- the hook reports and never blocks
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print({"success": result.success, "message": result.message, "data": result.data})
+    return 0 if result.success else 1
 
 
 def cmd_version_topic_start(args: argparse.Namespace) -> int:
@@ -1741,7 +1762,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sync-version-files",
         help="Compute and write the current working branch's VERSION, propagate it via version_hooks, and stage everything touched",
     )
-    sync_version_files.add_argument("--project-id", required=True)
+    sync_version_files.add_argument("--project-id", default=None, help="Accepted for installed hooks; the sync acts on the current checkout")
     sync_version_files.set_defaults(func=cmd_version_sync_version_files)
 
     def _add_topic_commands(prefix: str) -> None:
