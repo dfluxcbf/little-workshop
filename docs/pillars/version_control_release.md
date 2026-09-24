@@ -143,6 +143,18 @@ repository in a half-finished state.
   `agent.run_task` making the commit — so it ran only after the run ended:
   the commits carried no bump and the leftover staged VERSION blocked the
   run's own finish ("Working tree is dirty"). REQ-000000264.
+- **Finish resolves version-only rebase conflicts** (2026-09-24): every
+  working branch's first commit bumps VERSION (and the files version_hooks
+  write it into), so two branches cut from the same dev tip always
+  conflicted there once the first had finished, and the second finish
+  stopped for a person. The finish rebase now resolves a conflict hunk
+  whose sides differ only by each commit's own VERSION string (taking
+  upstream's; finish rewrites it anyway) and takes the replayed commit's
+  `.lvx/state.json`; only those, and only inside conflict hunks — any other
+  conflict still stops the finish (`gitops.resolve_version_only_conflicts`,
+  the one exception to M3's never-auto-resolve). `docs/requirements.md` is
+  `merge=union` in `.gitattributes`, since branches only append to it.
+  REQ-000000265.
 
 ## Interfacing
 
