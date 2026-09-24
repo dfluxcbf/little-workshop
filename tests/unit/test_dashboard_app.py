@@ -559,6 +559,7 @@ def test_relative_time_and_duration_helpers():
     assert relative_time("2026-09-21T09:00:00Z", now=now) == "3h ago"
     assert relative_time("2026-09-19T09:00:00Z", now=now) == "2d ago"
     assert relative_time(None) == "" and relative_time("garbage") == ""
+    assert relative_time("2026-09-21T09:00:00", now=now) == "3h ago"  # no timezone: taken as UTC, never a crash
     assert job_duration("2026-09-21T10:00:00Z", "2026-09-21T10:00:00.4Z") == "0.4s"
     assert job_duration("2026-09-21T10:00:00Z", "2026-09-21T10:00:12Z") == "12s"
     assert job_duration("2026-09-21T10:00:00Z", "2026-09-21T10:03:05Z") == "3m 05s"
@@ -1849,6 +1850,66 @@ def test_new_task_page_lists_scheduled_agent_tasks_and_removes_one(test_client, 
     monkeypatch.setattr(client, "remove_scheduled_task", lambda paths, task_id: removed.append(task_id) or {})
     response = test_client.post("/tasks/schedule/t1/remove", follow_redirects=False)
     assert removed == ["t1"] and response.status_code == 303 and response.headers["location"].startswith("/tasks/new")
+
+
+_SCHEDULED_TASK = {
+    "id": "t1", "name": "little-widget: Weekly", "state": "active", "next_run_at": "2026-09-28T07:05:00", "missed_run_at": None,
+    "last_job_id": "job12345abcdef", "created_at": "2026-09-20T10:00:00+00:00",
+    "job_template": {"type": "agent.run_task", "target_pillar": "agent", "project_id": "little-widget",
+                     "params": {"title": "Weekly tidy", "description": "Tidy the README.", "intent": "task", "review_mode": "auto_approve"}},
+    "schedule": {"kind": "recurring", "days_of_week": [0, 4], "time_of_day": "07:05"},
+}
+_SCHEDULED_JOB = {
+    "id": "t2", "name": "Run tests: little-widget", "state": "active", "next_run_at": None, "missed_run_at": "2026-09-23T09:30:00",
+    "last_job_id": None, "created_at": "2026-09-20T10:00:00+00:00",
+    "job_template": {"type": "requirements.run_tests", "target_pillar": "requirements", "project_id": "little-widget",
+                     "params": {"suite_ids": ["s1"], "commitish": "HEAD"}},
+    "schedule": {"kind": "once", "at": "2026-09-23T09:30:00"},
+}
+
+
+def test_scheduled_tasks_are_cards_that_open_their_details(test_client, monkeypatch):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [_SCHEDULED_TASK, _SCHEDULED_JOB])
+    text = test_client.get("/tasks/new").text
+    assert '<a class="polcard" href="/tasks/schedule/t1">' in text
+    assert "Scheduled (1)" in text and "Mon, Fri at 07:05" in text and "next 2026-09-28 07:05" in text
+    assert "/tasks/schedule/t1/remove" not in text  # removing is on the detail page now
+
+
+def test_scheduled_jobs_are_cards_that_open_their_details(test_client, monkeypatch):
+    _stub_job_pages(monkeypatch)
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [_SCHEDULED_TASK, _SCHEDULED_JOB])
+    text = test_client.get("/jobs/schedule").text
+    assert 'href="/jobs/schedule/t2"' in text and "/tasks/schedule/t1" not in text
+    assert '<span class="pill warn">missed</span>' in text and "requirements.run_tests" in text
+
+
+def test_scheduled_task_detail_shows_everything_and_offers_remove(test_client, monkeypatch):
+    monkeypatch.setattr(client, "get_scheduled_task", lambda paths, task_id: _SCHEDULED_TASK)
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: {"id": job_id, "status": "succeeded"})
+    text = test_client.get("/tasks/schedule/t1").text
+    assert "<h1>Weekly tidy</h1>" in text and 'href="/tasks/new"' in text
+    assert "Every Mon, Fri at 07:05" in text and "2026-09-28 07:05" in text
+    assert "Tidy the README." in text and "auto approve" in text
+    assert 'href="/jobs?q=job12345abcdef"' in text and '<span class="pill ok">succeeded</span>' in text
+    assert 'action="/tasks/schedule/t1/remove"' in text
+
+
+def test_scheduled_job_detail_shows_its_job_and_arguments(test_client, monkeypatch):
+    monkeypatch.setattr(client, "get_scheduled_task", lambda paths, task_id: _SCHEDULED_JOB)
+    text = test_client.get("/jobs/schedule/t2").text
+    assert "<h1>Run tests: little-widget</h1>" in text and 'href="/jobs/schedule"' in text
+    assert "<code>requirements.run_tests</code>" in text and "suite ids" in text and "<code>[\"s1\"]</code>" in text
+    assert "Missed run" in text and "not run yet" in text
+    assert 'action="/jobs/schedule/t2/remove"' in text
+
+
+def test_schedule_detail_for_the_other_page_or_a_missing_item_says_so(test_client, monkeypatch):
+    monkeypatch.setattr(client, "get_scheduled_task", lambda paths, task_id: _SCHEDULED_JOB if task_id == "t2" else None)
+    for url in ("/tasks/schedule/t2", "/jobs/schedule/nope"):
+        text = test_client.get(url).text
+        assert "No such scheduled item" in text and "/remove" not in text
 
 
 def test_tasks_list_shows_a_queued_agent_task_as_waiting(test_client, monkeypatch):

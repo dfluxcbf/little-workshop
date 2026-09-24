@@ -514,3 +514,9 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000258 | **A spent one-time scheduled task is deleted.** When a `once` scheduled task fires on schedule, or its missed firing is triggered or dismissed, Orchestration shall delete it, so the New task and Schedule job pages list only tasks that can still fire or still need a missed-run answer; recurring tasks and not-yet-fired `once` tasks are kept, and the Jobs a task spawned stay in history. At startup, Orchestration shall delete any spent `once` task left by an older version. | done |
+
+## Scheduled tasks and jobs as cards (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000259 | **Scheduled tasks and jobs are cards that open their details.** When the user opens New task or Schedule job, the Dashboard shall list the scheduled tasks or jobs as cards and shall open a tapped card's own details page showing its schedule, next and missed run, what it runs, its last Job and a Remove action. | done |

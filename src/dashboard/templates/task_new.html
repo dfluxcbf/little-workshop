@@ -28,21 +28,8 @@
 </form>
 </div>
 
-{% if scheduled %}
-<h2 class="section-label">Scheduled</h2>
-<div class="report-list">
-  {% for t in scheduled %}
-  <article class="report-item">
-    <span class="report-head"><span class="report-title">{{ t.name }}</span><span class="pill {{ 'ok' if t.state == 'active' else 'idle' }}">{{ t.state }}</span></span>
-    <span class="report-desc">
-      {% if t.schedule.kind == 'once' %}Once at {{ t.schedule.at }}{% else %}Every {% for d in t.schedule.days_of_week %}{{ weekdays[d] }}{{ ', ' if not loop.last }}{% endfor %} at {{ t.schedule.time_of_day }}{% endif %}
-      {% if t.next_run_at %} &middot; next {{ t.next_run_at }}{% endif %}
-    </span>
-    <form method="post" action="/tasks/schedule/{{ t.id }}/remove"><button type="submit" class="danger">Remove</button></form>
-  </article>
-  {% endfor %}
-</div>
-{% endif %}
+{% set detail_base = "/tasks/schedule" %}
+{% include "_scheduled_cards.html" %}
 <script>
 (function () {
   var when = document.getElementById("when");

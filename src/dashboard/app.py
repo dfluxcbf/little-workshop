@@ -302,6 +302,8 @@ def relative_time(value: str | None, *, now: datetime | None = None) -> str:
     moment = _parse_time(value)
     if moment is None:
         return ""
+    if moment.tzinfo is None:  # a pillar's own timestamps are UTC; a bare one must not 500 the page
+        moment = moment.replace(tzinfo=timezone.utc)
     seconds = int(((now or datetime.now(timezone.utc)) - moment).total_seconds())
     if seconds < 45:
         return "just now"
@@ -716,6 +718,27 @@ def build_app(paths: Paths) -> FastAPI:
             return _back("/tasks/new", f"Could not schedule the task: {exc}")
         return _back("/tasks/new", f"Task scheduled on {project}.")
 
+    def _schedule_detail(request: Request, task_id: str, *, is_task: bool):
+        base, back, back_label, nav = (
+            ("/tasks/schedule", "/tasks/new", "New task", "new-task") if is_task
+            else ("/jobs/schedule", "/jobs/schedule", "Schedule job", "schedule-job")
+        )
+        try:
+            task, error = client.get_scheduled_task(paths, task_id), None
+        except client.PillarUnavailable as exc:
+            task, error = None, str(exc)
+        if task is not None and ((task.get("job_template") or {}).get("type") == "agent.run_task") != is_task:
+            task = None  # a job opened under /tasks/schedule, or the reverse: not this page's to show
+        last_job = _try(client.get_job, paths, task["last_job_id"]) if task and task.get("last_job_id") else None
+        return _render(
+            request, "schedule_detail.html", t=task, is_task=is_task, last_job=last_job, error=error,
+            detail_base=base, back=back, back_label=back_label, weekdays=WEEKDAYS, nav_active=nav,
+        )
+
+    @app.get("/tasks/schedule/{task_id}", response_class=HTMLResponse)
+    def task_schedule_detail(request: Request, task_id: str):
+        return _schedule_detail(request, task_id, is_task=True)
+
     @app.post("/tasks/schedule/{task_id}/remove")
     def task_schedule_remove(task_id: str):
         try:
@@ -831,6 +854,10 @@ def build_app(paths: Paths) -> FastAPI:
         except client.PillarUnavailable as exc:
             return render(f"Could not schedule: {exc}")
         return _back("/jobs/schedule", f"{label} for {project} scheduled.")
+
+    @app.get("/jobs/schedule/{task_id}", response_class=HTMLResponse)
+    def job_schedule_detail(request: Request, task_id: str):
+        return _schedule_detail(request, task_id, is_task=False)
 
     @app.post("/jobs/schedule/{task_id}/remove")
     def job_schedule_remove(task_id: str):

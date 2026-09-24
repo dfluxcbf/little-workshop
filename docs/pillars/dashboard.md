@@ -115,8 +115,10 @@ are the current state of every pillar.
     (right away / once at a date and time / every week on chosen weekdays) decides whether it
     dispatches an `agent.run_task` Job immediately or files an Orchestration scheduled task — the
     same underlying scheduling this page's own "Schedule task" used to offer as a separate page.
-    Scheduled agent tasks are listed on the same page and can be removed. **Queue task** (a task
-    behind a predecessor) was dropped as a distinct feature.
+    Scheduled agent tasks are listed on the same page as cards (2026-09-24); tapping one opens
+    its details (`/tasks/schedule/{id}`: when, next and missed run, the task's title and
+    description, its last Job) with the Remove button. **Queue task** (a task behind a
+    predecessor) was dropped as a distinct feature.
   - **Jobs** (`/jobs`): previous, running and queued jobs of every type (unchanged panel; see below).
   - **New job** (`/jobs/new`, new 2026-09-23) and **Schedule job** (`/jobs/schedule`, new
     2026-09-23): dispatch or schedule any Orchestration job type, not just `agent.run_task`. Build
@@ -126,7 +128,9 @@ are the current state of every pillar.
     `project_id`, `params`); the template is shown for review/edit before New job dispatches it
     (`POST /v1/jobs`) or Schedule job attaches a schedule to it (`POST /v1/scheduled_tasks`), the
     same "once at a date and time / every week" schedule shape New task uses. Scheduled jobs
-    (excluding `agent.run_task` ones, which live on New task instead) are listed and removable here.
+    (excluding `agent.run_task` ones, which live on New task instead) are listed here as cards
+    (2026-09-24); tapping one opens its details (`/jobs/schedule/{id}`: when, next and missed
+    run, job type and arguments, its last Job) with the Remove button.
   - **Pillars** shows each pillar's full name (Policy & Compliance, Registry & Portfolio, …).
   - **New policy** (`/policies/new`, new 2026-09-23) and **Edit policy** (`/policies/{id}/edit`,
     new 2026-09-23): the same form — the rule in plain language, topic, target pillar, scope and

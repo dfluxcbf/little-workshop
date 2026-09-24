@@ -81,6 +81,10 @@ def scheduled_tasks(paths: Paths) -> list[dict]:
     return _get(paths, "orchestration", "/v1/scheduled_tasks")
 
 
+def get_scheduled_task(paths: Paths, task_id: str) -> dict | None:
+    return _get_optional(paths, "orchestration", f"/v1/scheduled_tasks/{task_id}")
+
+
 def create_scheduled_task(paths: Paths, *, name: str, job_template: dict, schedule: dict) -> dict:
     return _send(paths, "orchestration", "POST", "/v1/scheduled_tasks", json={"name": name, "job_template": job_template, "schedule": schedule})
 

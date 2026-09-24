@@ -1,0 +1,5 @@
+{%- if t.schedule.kind == 'once' -%}
+Once at {{ (t.schedule.at or '')[:16].replace('T', ' ') }}
+{%- else -%}
+Every {% for d in t.schedule.days_of_week %}{{ weekdays[d] }}{{ ', ' if not loop.last }}{% endfor %} at {{ t.schedule.time_of_day }}
+{%- endif -%}
