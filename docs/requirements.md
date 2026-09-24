@@ -572,3 +572,9 @@ Requested directly, same day as the usability refinement above: the original six
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000269 | **A finish lands on the branch's own patch.** When a feature or improvement branch finishes, the Version Control & Release pillar shall set the integration branch's VERSION to the stable form of the branch's -dev version, or to the next patch when the branch's VERSION carries no -dev suffix, and always to a version above the integration branch's version before the merge. | done |
+
+## The version pillar's own commits skip the repository's hooks (2026-09-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000270 | **The version pillar's own commits skip the repository's hooks.** When the Version Control & Release pillar runs git in a project's repository, the pillar shall run it with the repository's hooks disabled, so the installed pre-commit version sync never re-bumps a VERSION the pillar has already written. | done |
