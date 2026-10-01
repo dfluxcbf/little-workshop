@@ -233,6 +233,15 @@ def test_project_bootstrap_passes_all_flags_through_as_params(paths, monkeypatch
     assert params["remote_host"] == "example.com"
     assert params["github_token"] == "tok"
     assert params["ensure_labels"] is True
+    assert params["template"] == "python"
+
+
+def test_project_bootstrap_passes_template_through(paths, monkeypatch):
+    """REQ-000000274."""
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: captured.update(kw) or {"status": "succeeded"})
+    main.main(["project", "bootstrap", "g", "--dest-dir", "/mnt/c/little-projects", "--template", "unity"])
+    assert captured["params"]["template"] == "unity"
 
 
 def test_project_bootstrap_no_labels_flag(paths, monkeypatch):

@@ -49,6 +49,16 @@ Deployment & Servers, Agentic Development — needs somewhere to resolve
   session, or Agentic Development's own dispatch — reaching this pillar
   through the identical `workshop_project_import` MCP tool either way)
   and, later, to Policy & Compliance (M12).
+- **`project.connect_github`** (`POST /v1/jobs/project.connect_github`,
+  REQ-000000279..282, 2026-09-25) — the GitHub half of `project.bootstrap`
+  for a project that is *already registered*, so a missing repo, remote,
+  labels or `repo_url` never needs a remove + re-import (which would
+  cascade-purge every pillar's data). No `origin` remote: create the repo
+  (token, else `gh`), add `origin`, push `master`/`dev`. An `origin`
+  already there: adopt it, never create or push. Then ensure
+  `BOOTSTRAP_LABELS` and record `repo_url` (normalised to
+  `https://host/owner/name`) in the row and `info.registry.json`.
+  Idempotent. `workshop_project_connect_github` / `lws project connect-github`.
 - **`project.remove`** — hard delete, immediate, cascading, no soft-delete,
   no undo (resolved 2026-09-15): purges this pillar's own `projects` row
   and project-files directory. The actual git repository on disk is left

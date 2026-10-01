@@ -34,7 +34,7 @@ SocketLookup = Callable[[str], Path | None]
 # answer — the probing fallback. This set only ever grows by a
 # maintainer's own hand; nothing computes it.
 DECLARED_UNSTOPPABLE_JOB_TYPES: frozenset[str] = frozenset({
-    "project.bootstrap", "project.import", "project.remove",
+    "project.bootstrap", "project.import", "project.remove", "project.connect_github",
     "version.init", "version.feature_start", "version.feature_finish",
     "version.improvement_start", "version.improvement_finish",
     "version.hotfix_start", "version.hotfix_finish",
@@ -61,6 +61,8 @@ DECLARED_UNSTOPPABLE_JOB_TYPES: frozenset[str] = frozenset({
 # confirm`) still defaults to the plain 20s unless it looks this up too.
 DEFAULT_DISPATCH_TIMEOUT_SECONDS = 20.0
 JOB_TYPE_TIMEOUTS: dict[str, float] = {
+    # Real network work: a repo create, two pushes and eleven label upserts.
+    "project.connect_github": 180.0,
     "policy.author": 120.0,
     "policy.activate": 60.0,
     # M17 ecosystem-cutover finding, the same OQ-14 class of defect: a

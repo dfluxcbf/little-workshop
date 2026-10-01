@@ -34,7 +34,7 @@ def bootstrap_project(conn: sqlite3.Connection, paths: Paths, params: BootstrapP
         raise BootstrapError(f"project {params.name!r} is already registered")
 
     dest = Path(params.dest_dir) / params.name
-    scaffold.create_project_tree(dest, params.name)
+    scaffold.create_project_tree(dest, params.name, params.template)
     gitops.init_repo_and_commit(dest, author_email=f"{params.owner}@users.noreply.github.com")
     gitops.create_dev_branch(dest)
 
@@ -44,23 +44,16 @@ def bootstrap_project(conn: sqlite3.Connection, paths: Paths, params: BootstrapP
     labels_created: list[str] = []
 
     if params.create_github_repo:
-        if params.github_token:
-            repo = github.create_repository(
-                params.name,
-                params.github_token,
-                private=not params.public,
-                description=params.description,
+        try:
+            repo = github.create_repo(
+                params.name, params.owner, token=params.github_token,
+                private=not params.public, description=params.description,
             )
-        elif github.gh_available():
-            repo = github.create_repository_with_gh(
-                params.name, params.owner, private=not params.public, description=params.description
-            )
-        else:
+        except github.NoGitHubCredentials as exc:
             raise BootstrapError(
-                "no way to create the GitHub repo: no token given and `gh` is not "
-                "installed/logged in — the project is scaffolded and committed "
+                f"{exc} — the project is scaffolded and committed "
                 "locally; retry with create_github_repo=false or provide a token"
-            )
+            ) from exc
         github_created = True
         remote_url = f"git@{params.remote_host}:{params.owner}/{params.name}.git"
         gitops.add_remote_and_push(dest, remote_url)
@@ -68,13 +61,7 @@ def bootstrap_project(conn: sqlite3.Connection, paths: Paths, params: BootstrapP
         repo_url = repo.get("html_url") or f"https://{params.remote_host}/{params.owner}/{params.name}"
 
         if params.ensure_labels:
-            repo_full_name = f"{params.owner}/{params.name}"
-            for label_name, color, description in github.BOOTSTRAP_LABELS:
-                if params.github_token:
-                    github.ensure_label(repo_full_name, params.github_token, label_name, color, description)
-                elif github.gh_available():
-                    github.ensure_label_with_gh(repo_full_name, label_name, color, description)
-                labels_created.append(label_name)
+            labels_created = github.ensure_bootstrap_labels(f"{params.owner}/{params.name}", params.github_token)
 
     project = Project(name=params.name, path=str(dest), repo_url=repo_url)
     db.insert_project(conn, project)

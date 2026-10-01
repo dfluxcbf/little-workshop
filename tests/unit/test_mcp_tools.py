@@ -68,6 +68,29 @@ def test_project_bootstrap_honors_ensure_labels_false(paths, fake_create_job):
     assert call["params"]["ensure_labels"] is False
 
 
+def test_project_bootstrap_passes_template_defaulting_to_python(paths, fake_create_job):
+    """REQ-000000274."""
+    handler = tools_mod.TOOLS_BY_NAME["workshop_project_bootstrap"].handler
+    handler(paths, {"name": "g", "dest_dir": "/mnt/c/little-projects", "template": "unity"})
+    handler(paths, {"name": "w", "dest_dir": "/tmp"})
+    assert [c["params"]["template"] for c in fake_create_job] == ["unity", "python"]
+    schema = tools_mod.TOOLS_BY_NAME["workshop_project_bootstrap"].input_schema
+    assert schema["properties"]["template"]["enum"] == ["python", "unity"]
+
+
+def test_project_connect_github_builds_registry_job(paths, fake_create_job):
+    """REQ-000000282."""
+    tools_mod.TOOLS_BY_NAME["workshop_project_connect_github"].handler(paths, {"name": "ethereal-lands", "public": True})
+    call = fake_create_job[0]
+    assert call["type"] == "project.connect_github"
+    assert call["target_pillar"] == "registry"
+    assert call["project_id"] == "ethereal-lands"
+    assert call["queue_key"] == "ethereal-lands"
+    assert call["params"]["public"] is True
+    assert call["params"]["owner"] == "dfluxcbf"
+    assert call["params"]["ensure_labels"] is True
+
+
 def test_project_import_builds_registry_job(paths, fake_create_job):
     tools_mod.TOOLS_BY_NAME["workshop_project_import"].handler(
         paths, {"name": "little-widget", "path": "/repos/little-widget"}

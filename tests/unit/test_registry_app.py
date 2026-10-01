@@ -48,6 +48,30 @@ def test_job_bootstrap_creates_project_and_registers(client):
     assert [p["name"] for p in listed] == ["little-widget"]
 
 
+def test_job_bootstrap_unity_template_scaffolds_the_unity_layout(client):
+    """REQ-000000274."""
+    app_client, workdir = client
+    body = app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j1", "params": {"name": "little-game", "dest_dir": str(workdir), "template": "unity"}},
+    ).json()
+    assert body["outcome"] == "succeeded"
+    assert (workdir / "little-game" / "CLAUDE.md").exists()
+    assert not (workdir / "little-game" / "MODULE.bazel").exists()
+
+
+def test_job_bootstrap_unknown_template_fails_without_writing(client):
+    """REQ-000000274."""
+    app_client, workdir = client
+    body = app_client.post(
+        "/v1/jobs/project.bootstrap",
+        json={"job_id": "j1", "params": {"name": "little-game", "dest_dir": str(workdir), "template": "godot"}},
+    ).json()
+    assert body["outcome"] == "failed"
+    assert "template" in body["error"]
+    assert not (workdir / "little-game").exists()
+
+
 def test_job_bootstrap_version_initialized_false_when_version_pillar_unreachable(client):
     """No real Version Control & Release unit is running in this test's
     own paths — `version_initialized` must degrade to False, never fail
