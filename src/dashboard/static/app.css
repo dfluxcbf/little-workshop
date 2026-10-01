@@ -1159,3 +1159,9 @@ details.report-item > .report-approve { margin: 0; padding: 0 12px 12px; }
 .docs-check { text-transform: none; letter-spacing: normal; font-size: 14px; font-weight: 600; color: var(--ink); }
 
 .copy-btn { margin-left: 8px; padding: 3px 10px; font-size: 11px; text-transform: none; letter-spacing: normal; vertical-align: middle; }
+
+.kind-tag { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; }
+.kind-policies { color: var(--cyan-deep); }
+.kind-jobs { color: var(--ink); }
+.gate-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.gate-actions form { margin: 0; }

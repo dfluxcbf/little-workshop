@@ -632,3 +632,11 @@ Requested directly, same day as the usability refinement above: the original six
 | REQ-000000287 | **The standards copy is temporary and deleted when the task completes.** When an agent.run_task run ends by any outcome, the Agent pillar shall delete the temporary directory that holds its copy of the shared project standards. | published |
 | REQ-000000288 | **Starting a task chooses whether it includes the standards.** When a task is started or scheduled or retried from the Dashboard or through workshop_agent_run_task, the Dashboard shall offer an include_standards choice that defaults to included as a checked box on the New task form and carry it through scheduling and retry, so that a run whose choice is off gets no copy. | published |
 | REQ-000000289 | **A missing standards source never fails a task.** If the shared_project_standards folder of little-workshop cannot be found or copied, then the Agent pillar shall run the task without the copy instead of failing it. | published |
+
+## Deciding gated jobs from the Dashboard (2026-10-01)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000290 | **A job awaiting confirmation can be decided from the Dashboard.** When a Job is in pending_confirmation, the Dashboard shall offer Confirm anyway and Cancel and Mark as failed on its Jobs page card and on its Settings attention card. | published |
+| REQ-000000291 | **Each gate action settles the job through Orchestration.** When the user chooses Confirm anyway or Cancel or Mark as failed on a Job awaiting confirmation, the Dashboard shall dispatch it or cancel it or settle it as failed through Orchestration and return to the page it came from with the outcome. | published |
+| REQ-000000292 | **Attention cards are tagged by what they concern.** When the Settings page lists what needs attention, the Dashboard shall tag each card as Policies or Jobs or Incidents according to what it concerns. | published |

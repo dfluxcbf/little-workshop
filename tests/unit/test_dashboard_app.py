@@ -1580,6 +1580,56 @@ def test_attention_lists_an_open_incident_as_a_bug(test_client, monkeypatch):
     assert "ValueError in agent" in page and "boom" in page and 'href="/incidents/i1"' in page and ">bug<" in page
 
 
+def test_attention_cards_carry_a_tag_naming_what_they_are_about(test_client, monkeypatch):
+    """REQ-000000292."""
+    _stub_attention(
+        monkeypatch,
+        policies=[{"id": "p1", "topic": "commit-bumps-version", "enabled": True}],
+        results=[{"policy_id": "p1", "project_id": "little-widget", "outcome": "fail", "detail": "x", "checked_at": "2026-09-21T10:00:00Z"}],
+        jobs=[{"id": "j1", "type": "deployment.deploy", "project_id": "little-widget", "created_at": "2026-09-21T10:00:00Z"}],
+        incidents=[{"id": "i1", "project_id": "little-widget", "pillar": "agent", "exception_type": "ValueError", "message": "boom", "created_at": "2026-09-22T10:00:00Z"}],
+    )
+    assert {i["kind"]: i["tag"] for i in test_client.get("/attention.json").json()["items"]} == {
+        "policy": "Policies", "confirmation": "Jobs", "incident": "Incidents"}
+    page = test_client.get("/settings").text
+    for tag in ("Policies", "Jobs", "Incidents"):
+        assert f">{tag}</span>" in page
+
+
+def test_a_job_awaiting_confirmation_offers_confirm_cancel_and_fail_on_settings_and_jobs(test_client, monkeypatch):
+    """REQ-000000290."""
+    _stub_attention(monkeypatch, policies=[], results=[], jobs=[{"id": "j1", "type": "version.feature_finish", "project_id": "p", "created_at": None}])
+    page = test_client.get("/settings").text
+    for action in ("confirm", "cancel", "fail"):
+        assert f'action="/jobs/j1/gate/{action}"' in page
+    assert 'name="next" value="/settings"' in page
+    _stub_jobs(monkeypatch, [_job(5, status="pending_confirmation", result=None), _job(6, status="failed")])
+    jobs_page = test_client.get("/jobs").text
+    assert jobs_page.count("/gate/confirm") == 1 and "<details class=\"jobcard s-pending_confirmation\" open>" in jobs_page
+
+
+@pytest.mark.parametrize("action,call,result,done", [
+    ("confirm", "confirm_gated_job", {"confirmed": True}, "Confirmed"),
+    ("cancel", "stop_job", {"stopped": True, "reason": None}, "cancelled"),
+    ("fail", "fail_gated_job", {"timed_out": True}, "failed"),
+])
+def test_gate_actions_call_the_matching_orchestration_endpoint(test_client, monkeypatch, action, call, result, done):
+    """REQ-000000291."""
+    seen = []
+    monkeypatch.setattr(client, call, lambda paths, job_id: (seen.append(job_id), result)[1])
+    response = test_client.post(f"/jobs/j1/gate/{action}", data={"next": "/settings"}, follow_redirects=False)
+    assert seen == ["j1"] and response.status_code == 303
+    assert response.headers["location"].startswith("/settings?") and done in unquote(response.headers["location"])
+
+
+def test_gate_action_reports_a_refusal_and_never_redirects_off_site(test_client, monkeypatch):
+    """REQ-000000291."""
+    monkeypatch.setattr(client, "fail_gated_job", lambda paths, job_id: {"timed_out": False, "reason": "job is succeeded, already settled"})
+    refused = test_client.post("/jobs/j1/gate/fail", data={"next": "//evil.example"}, follow_redirects=False)
+    assert refused.headers["location"].startswith("/jobs?status=pending_confirmation") and "already settled" in unquote(refused.headers["location"])
+    assert "Unknown action" in unquote(test_client.post("/jobs/j1/gate/bogus", follow_redirects=False).headers["location"])
+
+
 # -- pillar names ---------------------------------------------------------------
 
 

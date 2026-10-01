@@ -402,3 +402,15 @@ The New task form (also the scheduled and retry paths) has an **Include shared p
 checked by default (REQ-000000288). A hidden `include_standards=0` input precedes the checkbox so an unchecked box
 still posts; a request that omits the field counts as included. The value is stored as the boolean
 `include_standards` in the `agent.run_task` params, and a retry reuses the original run's value.
+
+## Deciding policy-gated jobs; tagged attention cards (2026-10-01)
+
+A Job held in `pending_confirmation` by a failed policy gate has three buttons (REQ-000000290, 291), on its
+Jobs-page card (which opens by default) and on its Settings attention card: **Confirm anyway**
+(`POST /jobs/{id}/gate/confirm`, behind a browser confirm; Orchestration `policy_confirm`), **Cancel**
+(`.../cancel`; Orchestration `stop`, status cancelled) and **Mark as failed** (`.../fail`; Orchestration
+`policy_confirm_timeout`, status failed, error "policy check unconfirmed"). Each releases the job's queue key.
+The form's `next` field (a local path only) says where to return, with the outcome as the flash message.
+
+Each Settings "Needs attention" card carries a tag chip (REQ-000000292): **Policies** (a failing check), **Jobs**
+(awaiting confirmation) or **Incidents** (an open bug). `/attention.json` items carry the same `tag`.
