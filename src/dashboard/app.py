@@ -179,6 +179,10 @@ def starting_up(paths: Paths, starting: _Starting) -> dict[str, set[str]]:
     return found
 
 
+def _local_path(target: str, default: str) -> str:
+    return target if target.startswith("/") and not target.startswith("//") else default
+
+
 def _back(to: str, message: str) -> RedirectResponse:
     from urllib.parse import quote
 
@@ -299,18 +303,18 @@ def collect_attention(paths: Paths) -> list[dict]:
         if associated and project not in associated:
             continue
         items.append({
-            "kind": "policy", "project": project, "title": f"{policy['topic']} is failing",
+            "kind": "policy", "tag": "Policies", "project": project, "title": f"{policy['topic']} is failing",
             "detail": (result.get("detail") or "").strip()[:240], "href": f"/policies/{policy_id}",
             "since": result.get("checked_at"),
         })
     for job in _try(lambda: client.list_jobs(paths, status="pending_confirmation"), default=[]):
         items.append({
-            "kind": "confirmation", "project": job.get("project_id") or "", "title": f"{job['type']} awaits confirmation",
+            "kind": "confirmation", "tag": "Jobs", "job_id": job.get("id"), "project": job.get("project_id") or "", "title": f"{job['type']} awaits confirmation",
             "detail": "", "href": "/jobs?status=pending_confirmation", "since": job.get("created_at"),
         })
     for incident in _try(lambda: client.list_incidents(paths, status="open"), default=[]):
         items.append({
-            "kind": "incident", "project": incident["project_id"],
+            "kind": "incident", "tag": "Incidents", "project": incident["project_id"],
             "title": f"{incident['exception_type']} in {incident['pillar']}",
             "detail": incident.get("message", "")[:240], "href": f"/incidents/{incident['id']}",
             "since": incident.get("created_at"),
@@ -1226,6 +1230,27 @@ def build_app(paths: Paths) -> FastAPI:
         kept = result.get("kept_for_safety", 0)
         note = f" {kept} kept because active work still depends on them." if kept else ""
         return _back("/jobs", f"Deleted {deleted} job{'' if deleted == 1 else 's'} older than {labels[hours]}.{note}")
+
+    @app.post("/jobs/{job_id}/gate/{action}")
+    def job_gate_action(job_id: str, action: str, next: str = Form("/jobs?status=pending_confirmation")):
+        """Decide a policy-gated Job that waits in pending_confirmation: confirm it
+        anyway, cancel it, or settle it as failed."""
+        to = _local_path(next, "/jobs?status=pending_confirmation")
+        calls = {
+            "confirm": (client.confirm_gated_job, "confirmed", "Confirmed: the job is running despite the failed policy check.", "Could not confirm"),
+            "cancel": (client.stop_job, "stopped", "Job cancelled.", "Could not cancel"),
+            "fail": (client.fail_gated_job, "timed_out", "Job marked as failed.", "Could not fail"),
+        }
+        if action not in calls:
+            return _back(to, f"Unknown action: {action}")
+        call, flag, done, refusal = calls[action]
+        try:
+            result = call(paths, job_id)
+        except client.PillarUnavailable as exc:
+            return _back(to, f"{refusal}: {exc}")
+        if not result.get(flag):
+            return _back(to, f"{refusal}: {result.get('reason') or 'it is no longer waiting for confirmation'}")
+        return _back(to, done)
 
     @app.get("/policies", response_class=HTMLResponse)
     def policies(request: Request, message: str | None = None):

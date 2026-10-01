@@ -318,5 +318,15 @@ def stop_job(paths: Paths, job_id: str) -> dict:
     return _send(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/stop")
 
 
+def confirm_gated_job(paths: Paths, job_id: str) -> dict:
+    """Dispatch a policy-gated Job that is pending_confirmation despite the failure: {confirmed, ...}."""
+    return _send(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/policy_confirm")
+
+
+def fail_gated_job(paths: Paths, job_id: str) -> dict:
+    """Settle a policy-gated Job as failed (unconfirmed) and release its queue: {timed_out, ...}."""
+    return _send(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/policy_confirm_timeout")
+
+
 def edit_scheduled_task(paths: Paths, task_id: str, **fields) -> dict:
     return _send(paths, "orchestration", "PATCH", f"/v1/scheduled_tasks/{task_id}", json=fields)

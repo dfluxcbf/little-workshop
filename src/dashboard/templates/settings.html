@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_job_gate_actions.html" import job_gate_actions %}
 {% block title %}Settings — little-workshop{% endblock %}
 {% block content %}
 <h1>Settings</h1>
@@ -6,19 +7,22 @@
 <h2 class="section-label">Needs attention</h2>
 <div class="policy-list">
   {% for i in items %}
-  <a class="polcard" href="{{ i.href }}">
+  {% set tag = i.tag or "Other" %}
+  {% if i.job_id %}<div class="polcard" data-kind="{{ i.kind }}">{% else %}<a class="polcard" data-kind="{{ i.kind }}" href="{{ i.href }}">{% endif %}
     <span class="polcard-head">
-      <span class="polcard-topic">{{ i.title }}</span>
+      <span class="polcard-topic">{% if i.job_id %}<a href="{{ i.href }}">{{ i.title }}</a>{% else %}{{ i.title }}{% endif %}</span>
       {% if i.kind == 'policy' %}<span class="pill fail">failing</span>
       {% elif i.kind == 'incident' %}<span class="pill fail">bug</span>
       {% else %}<span class="pill warn">confirm</span>{% endif %}
     </span>
     {% if i.detail %}<span class="polcard-ears">{{ i.detail }}</span>{% endif %}
     <span class="polcard-meta">
+      <span class="chip kind-tag kind-{{ tag | lower }}">{{ tag }}</span>
       {% if i.project %}<span class="chip">{{ i.project }}</span>{% endif %}
       {% if i.since %}<span class="chip">{{ i.since | reltime }}</span>{% endif %}
     </span>
-  </a>
+    {% if i.job_id %}{{ job_gate_actions(i.job_id, "/settings") }}{% endif %}
+  {% if i.job_id %}</div>{% else %}</a>{% endif %}
   {% else %}
   <p class="muted">Nothing needs you right now: every enabled policy check passes, no job is waiting for confirmation, and no incident is open.</p>
   {% endfor %}

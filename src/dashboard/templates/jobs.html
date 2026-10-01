@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Jobs — little-workshop{% endblock %}
+{% from "_job_gate_actions.html" import job_gate_actions %}
 {% macro fchip(label, href, count, on) -%}
 <a class="fchip{{ ' on' if on }}" href="{{ href }}">{{ label }}<span class="fchip-n">{{ count }}</span></a>
 {%- endmacro %}
@@ -63,7 +64,7 @@
     {% for j in jobs %}
     {% set parts = j.type.split(".", 1) %}
     {% set finished = j.status in ("succeeded", "failed", "cancelled") %}
-    <details class="jobcard s-{{ j.status }}">
+    <details class="jobcard s-{{ j.status }}"{{ " open" if j.status == "pending_confirmation" }}>
       <summary>
         <span class="job-line">
           <span class="job-type">{% if parts | length > 1 %}<span class="job-ns">{{ parts[0] }}.</span>{{ parts[1] }}{% else %}{{ j.type }}{% endif %}</span>
@@ -82,6 +83,7 @@
         {% if j.error %}<span class="job-error">{{ j.error }}</span>{% endif %}
       </summary>
       <div class="job-body">
+        {% if j.status == "pending_confirmation" %}{{ job_gate_actions(j.id, "/jobs?status=pending_confirmation") }}{% endif %}
         <dl class="kv">
           <dt>ID</dt><dd><code>{{ j.id }}</code></dd>
           <dt>Target</dt><dd>{{ j.target_pillar }}</dd>
