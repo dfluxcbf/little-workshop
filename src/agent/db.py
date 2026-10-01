@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     summary TEXT,
     report TEXT,
     pr_url TEXT,
+    description TEXT NOT NULL DEFAULT '',
     source_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -65,6 +66,24 @@ CREATE TABLE IF NOT EXISTS incidents (
     decided_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS doc_updates (
+    job_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    status TEXT NOT NULL,
+    remote_control INTEGER NOT NULL DEFAULT 0,
+    session_name TEXT,
+    unit TEXT,
+    worktree_id TEXT,
+    worktree_path TEXT,
+    base_sha TEXT,
+    comment_ids_json TEXT NOT NULL DEFAULT '[]',
+    result_json TEXT,
+    error TEXT,
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS ci_checks (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -95,6 +114,8 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    if "description" not in {row["name"] for row in conn.execute("PRAGMA table_info(agent_runs)")}:
+        conn.execute("ALTER TABLE agent_runs ADD COLUMN description TEXT NOT NULL DEFAULT ''")
     conn.commit()
     return conn
 
@@ -112,13 +133,13 @@ def new_run_id() -> str:
 
 def create_run(
     conn: sqlite3.Connection, run_id: str, *, job_id: str | None, project_id: str, intent: str,
-    review_mode: str, title: str, source: dict,
+    review_mode: str, title: str, source: dict, description: str = "",
 ) -> None:
     now = _now()
     conn.execute(
-        """INSERT INTO agent_runs (id, job_id, project_id, status, intent, review_mode, title, source_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (run_id, job_id, project_id, RUNNING, intent, review_mode, title, json.dumps(source), now, now),
+        """INSERT INTO agent_runs (id, job_id, project_id, status, intent, review_mode, title, description, source_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (run_id, job_id, project_id, RUNNING, intent, review_mode, title, description, json.dumps(source), now, now),
     )
     conn.commit()
 
@@ -279,3 +300,59 @@ def list_ci_checks(conn: sqlite3.Connection, project_id: str) -> list[dict]:
         "SELECT * FROM ci_checks WHERE project_id = ? ORDER BY ran_at DESC", (project_id,)
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+# -- doc_updates: agent.update_docs jobs ------------------------------------
+
+DOC_UPDATE_STARTING = "starting"
+DOC_UPDATE_RUNNING = "running"
+DOC_UPDATE_DONE = "done"
+DOC_UPDATE_STOPPED = "stopped"
+DOC_UPDATE_FAILED = "failed"
+DOC_UPDATE_ACTIVE = (DOC_UPDATE_STARTING, DOC_UPDATE_RUNNING)
+
+
+def _doc_update(row) -> dict | None:
+    if row is None:
+        return None
+    out = dict(row)
+    out["comment_ids"] = json.loads(out.pop("comment_ids_json") or "[]")
+    out["result"] = json.loads(out.pop("result_json")) if out.get("result_json") else None
+    out["remote_control"] = bool(out["remote_control"])
+    return out
+
+
+def create_doc_update(
+    conn: sqlite3.Connection, job_id: str, *, project_id: str, branch: str, remote_control: bool, comment_ids: list[str],
+) -> None:
+    now = _now()
+    conn.execute(
+        """INSERT INTO doc_updates (job_id, project_id, branch, status, remote_control, comment_ids_json, started_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (job_id, project_id, branch, DOC_UPDATE_STARTING, int(remote_control), json.dumps(comment_ids), now, now),
+    )
+    conn.commit()
+
+
+def update_doc_update(conn: sqlite3.Connection, job_id: str, **fields) -> None:
+    if "result" in fields:
+        fields["result_json"] = json.dumps(fields.pop("result"))
+    fields = {**fields, "updated_at": _now()}
+    assignments = ", ".join(f"{key}=?" for key in fields)
+    conn.execute(f"UPDATE doc_updates SET {assignments} WHERE job_id=?", (*fields.values(), job_id))
+    conn.commit()
+
+
+def get_doc_update(conn: sqlite3.Connection, job_id: str) -> dict | None:
+    return _doc_update(conn.execute("SELECT * FROM doc_updates WHERE job_id = ?", (job_id,)).fetchone())
+
+
+def list_doc_updates(conn: sqlite3.Connection, *, project_id: str | None = None, active_only: bool = False) -> list[dict]:
+    sql, args = "SELECT * FROM doc_updates WHERE 1=1", []
+    if project_id is not None:
+        sql += " AND project_id = ?"
+        args.append(project_id)
+    if active_only:
+        sql += f" AND status IN ({','.join('?' for _ in DOC_UPDATE_ACTIVE)})"
+        args.extend(DOC_UPDATE_ACTIVE)
+    return [_doc_update(r) for r in conn.execute(sql + " ORDER BY started_at DESC", args).fetchall()]

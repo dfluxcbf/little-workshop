@@ -75,7 +75,7 @@ are the current state of every pillar.
 - **Workbench additions (2026-09-21, Control merged into Dashboard 2026-09-22,
   toolbar/task/job/policy workflow overhauled 2026-09-23)**:
   - **Navigation** is grouped. The bottom toolbar has Dashboard (standalone), Actions, Policies and
-    System; a group button reveals its pages (Actions: Task list, New task, Jobs, New job;
+    System; a group button reveals its pages (Actions: Task list, New task, Jobs, New job, Docs;
     Policies: Policies, New policy; System: Pillars, Incidents, Settings) with Back returning to
     the main row, and the group of the current page stays open. On a wide screen the top bar holds
     the four groups and a sub-navigation row lists the active group's pages. Report and New project
@@ -140,7 +140,15 @@ are the current state of every pillar.
     job (2026-09-24) takes its conditions as arguments — minimum delta and minimum patch bumps
     (numbers), how they combine (and/or, which must be chosen) and three checkboxes (all tests,
     all requirements, all policies pass) — shown under one "Conditions" heading; see
-    `docs/pillars/version_control_release.md`'s Release job.
+    `docs/pillars/version_control_release.md`'s Release job. A catalog job can be limited to some
+    projects (`JobSpec.projects`; empty means all): **Update Standards Documentation**
+    (2026-10-01, REQ-000000283..285) is offered only when the project chosen is `little-workshop`
+    — the page narrows the Job list as the project changes, and the server refuses it for any
+    other project. It takes no arguments and queues an `agent.run_task` Job (intent `docs`, manual
+    review, little-workshop's own queue) whose instructions have Claude review every
+    little-workshop standard, every registered policy and every registered project's own rules,
+    then update the Markdown documents in `shared_project_standards/` and nothing else. Run it
+    right away or schedule it like any job; the result is a branch for review on the Tasks page.
   - **Pillars** shows each pillar's full name (Policy & Compliance, Registry & Portfolio, …).
   - **New policy** (`/policies/new`, new 2026-09-23) and **Edit policy** (`/policies/{id}/edit`,
     new 2026-09-23): the same form — the rule in plain language, topic, target pillar, scope and
@@ -155,10 +163,77 @@ are the current state of every pillar.
     unchanged as a JSON endpoint and the banner's link now points to `/settings`.
   - **Data catalog** was removed (2026-09-23) — it duplicated what each owning pillar's own Report/
     Pillars/Secrets panels already show live.
+- **Docs — documentation review** (`/docs`, `/docs/{project}`, `/docs/{project}/view?path=`; 2026-09-28):
+  under Actions, and a "Docs →" link on each project card. FastAPI's own Swagger/ReDoc pages are
+  switched off on this app, since `/docs` is this page. Backed by Agentic Development
+  (`docs/pillars/agentic_development.md`'s "Documentation review").
+  - **Project page**: the branch being reviewed with a Check out control (`agent.docs_checkout`) —
+    reviews happen on whatever branch the project's checkout is on; every markdown file with its
+    open/done comment counts; and **Update docs**: send the branch's open comments to Claude
+    (`agent.update_docs`), right away or once at a later time (a scheduled task), with a Remote
+    Control checkbox. Only one update per project and branch: while one is queued, scheduled or
+    running the form is replaced by that job, with Cancel (queued), Edit time/Remote Control or
+    Delete (scheduled), or Stop (running — discards its worktree and every change in it). Recent
+    finished updates show how many comments were done, the commit, and whether it was pushed.
+  - **Viewer** (its own full-screen page, `templates/docs_view.html` + `static/review.js`/`review.css`):
+    markdown rendered server-side (`dashboard/markdown.py`, markdown-it-py; raw HTML escaped) in dark
+    mode, each block tagged with its source lines, headings with GitHub-style ids; links to other
+    markdown files open in the viewer, `#anchor` links scroll within it, relative images are served
+    through `/docs/{project}/image`. Every `/static/...?v=` URL carries the newest static file's
+    modification time (it used to follow `app.css` alone, so a changed `review.js` was still served
+    from the browser's and the service worker's caches). A branch picker in the header checks out another branch.
+  - **Highlighting**: select text, then the floating yellow button (bottom right) highlights it; the
+    same button on already-highlighted text unhighlights that part (splitting a highlight in two
+    when it is the middle); a selection mixing both highlights all of it, merging what it touches
+    into one highlight (their comments joined).
+  - **Two pages, swiped**: documentation (default) and comments; swipe left for comments, right for
+    documentation (or the header toggle, or ←/→). The comments page lists one slot per highlight in
+    document order, separated by lines: white with the comment rendered as markdown, grey once
+    `Done`, dark (the documentation background) when the highlight has no comment yet — tap a slot
+    to write. Each page scrolls on its own; just before a switch the other page is scrolled so the
+    same highlight and comment sit at the same height on screen — positions map piecewise between
+    highlight *i* and slot *i*, the text between highlights mapping onto the separators, so the two
+    pages' scroll lengths differ and vary along the document. Marks take the height of what is on
+    the current page: a white mark on the documentation page's right edge spans a highlighted
+    section that has a comment (shorter than a longer comment); the yellow strip on the comments
+    page's left edge spans the comment (shorter than a longer highlight). Up/down buttons jump
+    between highlights (documentation) or comments (comments page).
+  - **Keyboard (desktop, 2026-09-28)**: ←/→ switch to documentation/comments; Ctrl+↑/↓ jump to the
+    previous/next highlighted section (documentation) or comment (comments) and select it —
+    stepping from the selected one — so Del can remove a highlight and Enter starts editing the
+    selected comment (outlined in cyan); Ctrl+Enter stops editing a comment (so the arrows work again); Ctrl+Shift+Enter on the selected or
+    edited comment switches to the documentation page with its highlight selected; a single click on a highlight selects all of its
+    text, and Del removes the highlight from whatever highlighted text is selected. On the
+    documentation page Ctrl+Shift+↑/↓ selects the previous/next paragraph (heading, list item, code
+    block, table row — highlighted or not), Enter on selected text does what the floating button
+    does (highlight/unhighlight) and leaves that section selected, and Ctrl+Enter on a selected highlight switches to the comments
+    page editing its comment — on selected text that is not highlighted yet, it highlights it first,
+    in one go. On a desktop-sized screen with a mouse, a column on the left lists the
+    shortcuts for the current page only. The page off
+    screen is `inert`, so Tab never walks into it (it used to, and the browser scrolled the two
+    pages sideways out of place).
+  - **Certified sections**: Ctrl+I (or the green floating button above the yellow one) toggles
+    "Certified" on the selected highlight — on selected plain text it highlights it first — or, on
+    the comments page, on the selected comment. A certified highlight is dark green (light text), its
+    right-edge mark and comment strip green, and its comment slot reads an automatic, read-only
+    "Certified."; it cannot be unhighlighted, edited or finished until the certification is lifted.
+    The reviewer's own comment is not lost: it is kept in the comments file (`certified: true`),
+    just not shown, and comes back when the certification is lifted. Certified sections never go to
+    Claude with a comment (see Agentic Development).
+  - **Links in comments** behave like the document's own: `#anchor` (or the document's own file
+    with an anchor) switches to the documentation page at that section, a relative link to another
+    markdown file opens it in the viewer, and only external links open a new tab.
+  - **Autosave**: 2 seconds after typing stops (and at once when the page is hidden, with
+    `keepalive`, so switching away from the installed app loses nothing), with a small
+    half-transparent little-workshop icon at the top right while a save is in flight.
+  - **After an update**: a section the job edited is highlighted blue, and its comment's strip is
+    blue; a section it removed shows a red ✖ where it was. `Finish` on a done comment deletes it and
+    its highlight; editing a done comment makes it open again, its highlight becoming the (yellow)
+    section the job changed. A comment the running job is working on is read-only.
 - **Tasks** (`/tasks`, `/tasks/new`, `/tasks/{project}/{run}`):
   Agentic Development's runs across every project (including tasks still queued, shown as
   "waiting"), a New task form (`agent.run_task`, immediate or scheduled), and per-run detail with
-  the change report and Finish/Skip for a run awaiting review.
+  the task description as the user wrote it (with a Copy button), the change report and Finish/Skip for a run awaiting review. A failed one-off task (not one launched by a weekly schedule) also has Retry: a page that restarts it right away or schedules it once, never on a recurrence.
 - **Pillars** (`/pillars`, redesigned 2026-09-21): one tappable card per
   pillar, no page heading — the pillar's name is the card's header, with
   its health pill beside it and one compact line below (deployed commit
@@ -320,3 +395,10 @@ page is a live read of the pillar that owns it.
   deploys this pillar for real, not solved by this pass — matching
   `little-runner`'s own existing `tailscale serve` reliance, external to
   its own app.
+
+## New task: include shared project standards (2026-10-01)
+
+The New task form (also the scheduled and retry paths) has an **Include shared project standards** checkbox,
+checked by default (REQ-000000288). A hidden `include_standards=0` input precedes the checkbox so an unchecked box
+still posts; a request that omits the field counts as included. The value is stored as the boolean
+`include_standards` in the `agent.run_task` params, and a retry reuses the original run's value.

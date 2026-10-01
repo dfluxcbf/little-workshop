@@ -43,12 +43,17 @@ class JobSpec:
     description: str
     make: Callable[[str, dict], dict]  # (project, argument values) -> the Job: type, target_pillar, project_id, queue_key, params
     args: tuple[JobArg, ...] = field(default_factory=tuple)
+    projects: tuple[str, ...] = ()  # the only projects offering this job; empty = every project
+
+    def offered_for(self, project: str) -> bool:
+        return not self.projects or project in self.projects
 
 
 def _build(project: str, values: dict) -> dict:
     steps = [BUILD_COMMAND, INSTALL_COMMAND] if values["install"] else [BUILD_COMMAND]
     # A login shell, so the build sees the same PATH (bazel, pipx) a terminal does.
     command = ["bash", "-lc", " && ".join(shlex.join(step) for step in steps)]
+    # include_standards is off: the task edits the original folder, and a copy would only mislead it.
     # The project's own queue: an install must never overlap a Launch of the same project.
     return {"type": "build.run", "target_pillar": "build", "project_id": project, "queue_key": project,
             "params": {"commitish": COMMITISH, "command": command}}
@@ -63,6 +68,41 @@ def _release(project: str, values: dict) -> dict:
     # The project's own queue: nothing else may branch, build or launch it mid-release.
     return {"type": "version.release", "target_pillar": "version", "project_id": project, "queue_key": project,
             "params": dict(values)}
+
+
+WORKSHOP_PROJECT = "little-workshop"
+STANDARDS_FOLDER = "shared_project_standards"
+
+STANDARDS_TITLE = "Update Standards Documentation"
+STANDARDS_DESCRIPTION = f"""Update the `{STANDARDS_FOLDER}/` folder at the root of this repository so it matches what little-workshop's standards and policies say today. Start with `{STANDARDS_FOLDER}/README.md`: it states the folder's rules and the layout you must keep.
+
+Review, in full, before writing anything:
+
+1. Every little-workshop standard: `docs/governance_policy.md`, `docs/requirements_policy.md`, `docs/version_policy.md`, `docs/architecture.md`, `docs/design.md`, `docs/milestones.md`, `docs/open_questions.md`, `docs/pillars/*.md`, the agent prompt templates under `src/agent/templates/prompts/`, `src/dashboard/job_catalog.py`, and the super-repo's `/home/crist/little-projects/docs/policies/*.md`.
+2. Every policy registered in Policy & Compliance: run `lws policy list` and `lws policy projects list` for each policy's rule, scope, gate points and the projects it is attached to, plus the pending drafts in `docs/pending_policy_drafts/`.
+3. Every registered project (`lws project list`): its `CLAUDE.md`, `README.md`, `docs/*_policy.md`, and any project-specific policy. A project on a Windows drive (`/mnt/c/...`) is read where it is.
+
+Then update every document in `{STANDARDS_FOLDER}/`:
+
+- Rewrite each shared standard so it states the rule in force now. Correct what changed; remove what no longer holds; add what is new. Keep each file's purpose and name.
+- Rewrite `policy_register.md` from the live policy list, including the attachment matrix and any discrepancy between a policy's documented scope and where it is actually attached.
+- Give every registered project a `<project name with - replaced by _>_standards/` folder. A policy scoped to specific projects, and any project-specific convention, goes in that project's folder, never in the shared files. Create a folder for a project that lacks one; keep the folder of a project that is no longer registered but say so in its README.
+- Keep `{STANDARDS_FOLDER}/README.md`'s index tables in step with the files that exist, and set every changed file's "Last reviewed" line to today's date.
+
+Rules:
+
+- Markdown files only. No scripts, JSON or generated data in the folder.
+- Compile, do not originate: each file summarises a rule and names its authoritative source. If a source and the folder disagree, the source wins. State only what you verified in the sources this run; record an inconsistency between sources in the relevant file's discrepancy notes instead of picking a side silently.
+- Do not edit anything outside `{STANDARDS_FOLDER}/`: no source documents, no code, no policy, no other project's checkout.
+- When nothing changed for a file, leave it untouched, including its date.
+"""
+
+
+def _update_standards(project: str, values: dict) -> dict:
+    # The project's own queue: it edits the checkout, so nothing else may branch it meanwhile.
+    return {"type": "agent.run_task", "target_pillar": "agent", "project_id": project, "queue_key": project,
+            "params": {"title": STANDARDS_TITLE, "intent": "docs", "review_mode": "manual", "description": STANDARDS_DESCRIPTION,
+                       "include_standards": False}}
 
 
 _CONDITIONS = "Conditions — all must hold before the release branch is started"
@@ -102,6 +142,12 @@ CATALOG: tuple[JobSpec, ...] = (
                    help="Runs every enabled policy that applies to the project."),
         ),
     ),
+    JobSpec(
+        key="update_standards", label=STANDARDS_TITLE,
+        description=(f"Has Claude review every little-workshop standard, every policy and every project's own rules, then "
+                     f"update the documents in {STANDARDS_FOLDER}/. Opens a branch for your review, like any task."),
+        make=_update_standards, projects=(WORKSHOP_PROJECT,),
+    ),
 )
 
 BY_KEY: dict[str, JobSpec] = {spec.key: spec for spec in CATALOG}
@@ -139,6 +185,8 @@ def build_job(project: str, job_key: str, form: Mapping[str, Sequence[str]]) -> 
     spec = BY_KEY.get(job_key)
     if spec is None:
         return None, "Choose a job."
+    if not spec.offered_for(project):
+        return None, f"{spec.label} is not available for {project}."
     values, error = parse(spec, form)
     if error:
         return None, error

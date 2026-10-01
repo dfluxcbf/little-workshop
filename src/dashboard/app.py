@@ -39,19 +39,23 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.workspace import WORKSPACE_ID, workspace_dir
-from dashboard import client, job_catalog, prefs
+from dashboard import client, job_catalog, markdown, prefs
 
 GATE_POINT_VALUES = [
     "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
     "release", "package_publish", "branch_finish", "project_removal", "project_registration",
 ]
+
+# Documentation review's update job, and the Job statuses that count as "not finished yet".
+DOC_UPDATE_JOB = "agent.update_docs"
+ACTIVE_JOB_STATUSES = ("queued", "running", "pending_confirmation")
 
 # Redeploying these restarts a link in the redeploy chain (Orchestration
 # dispatches, Deployment executes), so they are submitted after the rest.
@@ -368,7 +372,8 @@ def pretty_json(value) -> str:
 
 
 def build_app(paths: Paths) -> FastAPI:
-    app = FastAPI(title="little-workshop Dashboard")
+    # No Swagger/ReDoc pages: `/docs` is the documentation-review page.
+    app = FastAPI(title="little-workshop Dashboard", docs_url=None, redoc_url=None)
     install_incident_reporting(app, paths, pillar="dashboard")
     templates = _templates()
     static_dir = importlib.resources.files("dashboard") / "static"
@@ -376,7 +381,13 @@ def build_app(paths: Paths) -> FastAPI:
     templates.env.filters["pretty"] = pretty_json
     templates.env.globals["pillar_name"] = pillar_name
     templates.env.globals["job_duration"] = job_duration
-    templates.env.globals["static_v"] = int(os.path.getmtime(str(static_dir / "app.css")))
+    # Cache-buster for every `/static/...?v=` URL: the newest static file, so a change to
+    # any of them (review.js too, not only app.css) is fetched anew rather than served
+    # from the browser's or the service worker's cache.
+    templates.env.globals["static_v"] = int(max(
+        os.path.getmtime(os.path.join(str(static_dir), name))
+        for name in os.listdir(str(static_dir)) if os.path.isfile(os.path.join(str(static_dir), name))
+    ))
     # follow_symlink: Bazel runfiles trees are symlink forests.
     app.mount("/static", StaticFiles(directory=str(static_dir), follow_symlink=True), name="static")
     starting = _Starting()
@@ -672,6 +683,179 @@ def build_app(paths: Paths) -> FastAPI:
     def projects_redirect():
         return RedirectResponse("/", status_code=307)
 
+    # ---- Docs: documentation review ------------------------------------
+
+    def _doc_update_entries(project: str) -> list[dict]:
+        """This project's update-doc jobs that have not started or are running:
+        Orchestration Jobs still queued/running, and scheduled ones."""
+        entries = []
+        for job in _try(client.list_jobs, paths, default=[]):
+            if job.get("type") == DOC_UPDATE_JOB and job.get("project_id") == project and job.get("status") in ACTIVE_JOB_STATUSES:
+                params = job.get("params") or {}
+                entries.append({"kind": "job", "id": job["id"], "branch": params.get("branch"), "status": job["status"],
+                                "remote_control": bool(params.get("remote_control")), "created_at": job.get("created_at")})
+        for task in _try(lambda: client.scheduled_tasks(paths), default=[]):
+            template = task.get("job_template") or {}
+            if template.get("type") == DOC_UPDATE_JOB and template.get("project_id") == project:
+                params = template.get("params") or {}
+                entries.append({"kind": "scheduled", "id": task["id"], "branch": params.get("branch"), "status": "scheduled",
+                                "remote_control": bool(params.get("remote_control")), "schedule": task.get("schedule") or {},
+                                "at": ((task.get("schedule") or {}).get("at") or "")[:16]})
+        return entries
+
+    @app.get("/docs", response_class=HTMLResponse)
+    def docs_index(request: Request):
+        try:
+            names, error = _project_names(), None
+        except client.PillarUnavailable as exc:
+            names, error = [], str(exc)
+        return _render(request, "docs.html", projects=names, error=error, nav_active="docs")
+
+    @app.get("/docs/{project}", response_class=HTMLResponse)
+    def docs_project(request: Request, project: str):
+        error = None
+        try:
+            overview = client.docs_overview(paths, project)
+        except (client.PillarUnavailable, client.Refused) as exc:
+            overview, error = {"branch": "", "branches": [], "files": [], "dirty": False}, str(exc)
+        entries = _doc_update_entries(project)
+        branch = overview["branch"]
+        open_comments = sum(f["open"] for f in overview["files"])
+        recent = [u for u in _try(client.doc_updates, paths, project, default=[]) if u["status"] not in ("starting", "running")][:5]
+        return _render(
+            request, "docs_project.html", project=project, overview=overview, entries=entries,
+            blocked=[e for e in entries if e["branch"] == branch], open_comments=open_comments, recent=recent,
+            error=error, nav_active="docs",
+        )
+
+    @app.post("/docs/{project}/checkout")
+    def docs_checkout(project: str, branch: str = Form(...), back: str = Form("")):
+        back = back if back.startswith(f"/docs/{project}") else f"/docs/{project}"
+        result = _try(lambda: client.create_job(
+            paths, type="agent.docs_checkout", target_pillar="agent", project_id=project,
+            params={"branch": branch}, queue_key=project, depends_on=[], created_by="dashboard",
+        ))
+        if result is None or result.get("status") != "succeeded":
+            return _back(back, f"Could not check out {branch}: {(result or {}).get('error') or 'orchestration unreachable'}")
+        return _back(back, f"Checked out {branch}.")
+
+    @app.post("/docs/{project}/update")
+    def docs_update(project: str, remote_control: str | None = Form(None), when: str = Form("immediate"), at: str = Form("")):
+        back = f"/docs/{project}"
+        try:
+            branch = client.docs_overview(paths, project)["branch"]
+        except (client.PillarUnavailable, client.Refused) as exc:
+            return _back(back, f"Could not read the project: {exc}")
+        if not branch:
+            return _back(back, "The checkout is not on a branch — check one out first.")
+        if any(e["branch"] == branch for e in _doc_update_entries(project)):
+            return _back(back, f"An update-doc job for {branch} is already queued or running — cancel or delete it first.")
+        params = {"branch": branch, "remote_control": remote_control == "on"}
+        template = {"type": DOC_UPDATE_JOB, "target_pillar": "agent", "project_id": project, "params": params,
+                    "queue_key": f"{project}:docs:{branch}", "depends_on": []}
+        if when == "immediate":
+            result = _try(lambda: client.create_job(paths, **template, created_by="dashboard"))
+            if result is None or result.get("status") not in ("running", "succeeded", "queued"):
+                return _back(back, f"Could not start the update: {(result or {}).get('error') or 'orchestration unreachable'}")
+            return _back(back, f"Update-doc job started for {branch}.")
+        schedule, refusal = _parse_schedule("once", at, "", [], back)
+        if refusal is not None:
+            return refusal
+        try:
+            client.create_scheduled_task(paths, name=f"Update docs: {project} ({branch})", job_template=template, schedule=schedule)
+        except client.PillarUnavailable as exc:
+            return _back(back, f"Could not schedule the update: {exc}")
+        return _back(back, f"Update-doc job for {branch} scheduled.")
+
+    @app.post("/docs/{project}/update/scheduled/{task_id}/edit")
+    def docs_update_edit(project: str, task_id: str, remote_control: str | None = Form(None), at: str = Form("")):
+        back = f"/docs/{project}"
+        task = _try(client.get_scheduled_task, paths, task_id)
+        template = (task or {}).get("job_template") or {}
+        if template.get("type") != DOC_UPDATE_JOB or template.get("project_id") != project:
+            return _back(back, "That scheduled update no longer exists.")
+        schedule, refusal = _parse_schedule("once", at, "", [], back)
+        if refusal is not None:
+            return refusal
+        template = {**template, "params": {**(template.get("params") or {}), "remote_control": remote_control == "on"}}
+        try:
+            client.edit_scheduled_task(paths, task_id, job_template=template, schedule=schedule)
+        except client.PillarUnavailable as exc:
+            return _back(back, f"Could not change it: {exc}")
+        return _back(back, "Scheduled update changed.")
+
+    @app.post("/docs/{project}/update/scheduled/{task_id}/remove")
+    def docs_update_remove(project: str, task_id: str):
+        try:
+            client.remove_scheduled_task(paths, task_id)
+        except client.PillarUnavailable as exc:
+            return _back(f"/docs/{project}", f"Could not delete it: {exc}")
+        return _back(f"/docs/{project}", "Scheduled update deleted.")
+
+    @app.post("/docs/{project}/update/jobs/{job_id}/stop")
+    def docs_update_stop(project: str, job_id: str):
+        try:
+            result = client.stop_job(paths, job_id)
+        except client.PillarUnavailable as exc:
+            return _back(f"/docs/{project}", f"Could not stop it: {exc}")
+        if not result.get("stopped"):
+            return _back(f"/docs/{project}", f"Could not stop it: {result.get('reason')}")
+        return _back(f"/docs/{project}", "Update-doc job stopped.")
+
+    @app.get("/docs/{project}/view", response_class=HTMLResponse)
+    def docs_view(request: Request, project: str, path: str):
+        try:
+            doc = client.doc_file(paths, project, path)
+            overview = client.docs_overview(paths, project)
+            comments = client.review_comments(paths, project, branch=doc["branch"], path=path)
+        except client.Refused as exc:
+            return _render(request, "docs.html", projects=[], error=exc.detail, nav_active="docs")
+        except client.PillarUnavailable as exc:
+            return _render(request, "docs.html", projects=[], error=str(exc), nav_active="docs")
+        for comment in comments:
+            comment["html"] = markdown.render_comment(comment.get("body") or "", project=project, path=path)
+        files = [f["path"] for f in overview["files"]]
+        return templates.TemplateResponse(request, "docs_view.html", {
+            "project": project, "path": path, "branch": doc["branch"], "branches": overview["branches"],
+            "html": markdown.render_document(doc["source"], project=project, path=path),
+            "comments": comments, "files": files,
+            "active_job": next((e for e in _doc_update_entries(project) if e["branch"] == doc["branch"] and e["status"] == "running"), None),
+        })
+
+    @app.get("/docs/{project}/image")
+    def docs_image(project: str, path: str):
+        try:
+            body, media_type = client.doc_image(paths, project, path)
+        except client.Refused as exc:
+            return Response(exc.detail, status_code=exc.status)
+        except client.PillarUnavailable:
+            return Response("agent pillar unreachable", status_code=503)
+        return Response(body, media_type=media_type, headers={"Content-Security-Policy": "script-src 'none'"})
+
+    @app.put("/docs/{project}/comments/{comment_id}")
+    async def docs_comment_put(request: Request, project: str, comment_id: str):
+        try:
+            fields = await request.json()
+        except ValueError:
+            return JSONResponse({"detail": "expected JSON"}, status_code=400)
+        try:
+            comment = client.put_review_comment(paths, project, comment_id, fields if isinstance(fields, dict) else {})
+        except client.Refused as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status)
+        except client.PillarUnavailable as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=503)
+        comment["html"] = markdown.render_comment(comment.get("body") or "", project=project, path=comment.get("path") or "")
+        return comment
+
+    @app.delete("/docs/{project}/comments/{comment_id}")
+    def docs_comment_delete(project: str, comment_id: str):
+        try:
+            return client.delete_review_comment(paths, project, comment_id)
+        except client.Refused as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status)
+        except client.PillarUnavailable as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=503)
+
     # ---- Tasks: Claude on a real branch, under review -------------------
 
     def _parse_schedule(kind: str, at: str, time_of_day: str, day: list[str], back: str):
@@ -690,6 +874,16 @@ def build_app(paths: Paths) -> FastAPI:
                 return None, _back(back, "Choose at least one weekday and a time of day.")
             return {"kind": "recurring", "days_of_week": days, "time_of_day": time_of_day}, None
         return None, _back(back, "Choose when it should run.")
+
+    def _is_recurring_task(project: str, title: str, job: dict | None) -> bool:
+        """A run launched by a weekly schedule comes back by itself; retrying it by hand makes no sense."""
+        if not job or job.get("created_by") != "scheduler":
+            return False
+        return any(
+            (t.get("schedule") or {}).get("kind") == "recurring" and (t.get("job_template") or {}).get("project_id") == project
+            and ((t.get("job_template") or {}).get("params") or {}).get("title") == title
+            for t in _try(client.scheduled_tasks, paths, default=[])
+        )
 
     @app.get("/tasks", response_class=HTMLResponse)
     def tasks(request: Request):
@@ -724,8 +918,12 @@ def build_app(paths: Paths) -> FastAPI:
         project: str = Form(...), title: str = Form(...), description: str = Form(""),
         intent: str = Form("task"), review_mode: str = Form("manual"), when: str = Form("immediate"),
         kind: str = Form("once"), at: str = Form(""), time_of_day: str = Form(""), day: list[str] = Form(default=[]),
+        include_standards: list[str] = Form(default=["1"]),
     ):
-        params = {"title": title, "description": description, "intent": intent, "review_mode": review_mode}
+        params = {
+            "title": title, "description": description, "intent": intent, "review_mode": review_mode,
+            "include_standards": "1" in include_standards,
+        }
         if when == "immediate":
             result = _try(lambda: client.create_job(
                 paths, type="agent.run_task", target_pillar="agent", project_id=project,
@@ -781,7 +979,58 @@ def build_app(paths: Paths) -> FastAPI:
         run = _try(client.agent_run, paths, project, run_id)
         if run is None:
             return _render(request, "tasks.html", runs=[], error=f"no such task {run_id!r} on {project}", nav_active="tasks")
-        return _render(request, "task_detail.html", run=run, nav_active="tasks")
+        job = _try(client.get_job, paths, run["job_id"]) if run.get("job_id") else None
+        description = run.get("description") or str(((job or {}).get("params") or {}).get("description") or "")  # older runs: the Job has it
+        can_retry = run.get("status") == "failed" and not _is_recurring_task(project, run.get("title"), job)
+        return _render(request, "task_detail.html", run=run, description=description, can_retry=can_retry, nav_active="tasks")
+
+    def _retryable_run(project: str, run_id: str):
+        run = _try(client.agent_run, paths, project, run_id)
+        if not run or run.get("status") != "failed":
+            return None, None
+        job = _try(client.get_job, paths, run["job_id"]) if run.get("job_id") else None
+        if _is_recurring_task(project, run.get("title"), job):
+            return None, None
+        params = dict((job or {}).get("params") or {})
+        params.update({k: run.get(k) for k in ("title", "intent", "review_mode") if run.get(k)})
+        params["description"] = run.get("description") or params.get("description") or ""
+        kept = {k: params.get(k, "") for k in ("title", "description", "intent", "review_mode")}
+        kept["include_standards"] = params.get("include_standards", True)
+        return run, kept
+
+    @app.get("/tasks/{project}/{run_id}/retry", response_class=HTMLResponse)
+    def task_retry(request: Request, project: str, run_id: str):
+        run, params = _retryable_run(project, run_id)
+        if run is None:
+            return _back("/tasks", "Only a failed one-off task can be retried.")
+        return _render(request, "task_retry.html", run=run, params=params, nav_active="tasks")
+
+    @app.post("/tasks/{project}/{run_id}/retry")
+    def task_retry_start(project: str, run_id: str, when: str = Form("immediate"), at: str = Form("")):
+        run, params = _retryable_run(project, run_id)
+        back = f"/tasks/{project}/{run_id}/retry"
+        if run is None:
+            return _back("/tasks", "Only a failed one-off task can be retried.")
+        if when == "once":
+            schedule, refusal = _parse_schedule("once", at, "", [], back)
+            if refusal is not None:
+                return refusal
+            template = {
+                "type": "agent.run_task", "target_pillar": "agent", "project_id": project,
+                "params": params, "queue_key": project, "depends_on": [],
+            }
+            try:
+                client.create_scheduled_task(paths, name=f"{project}: {params['title']}", job_template=template, schedule=schedule)
+            except client.PillarUnavailable as exc:
+                return _back(back, f"Could not schedule the task: {exc}")
+            return _back("/tasks", f"Retry scheduled on {project}.")
+        result = _try(lambda: client.create_job(
+            paths, type="agent.run_task", target_pillar="agent", project_id=project,
+            params=params, queue_key=project, depends_on=[], created_by="dashboard",
+        ))
+        if result is None or result.get("status") not in ("running", "succeeded"):
+            return _back(back, f"Could not start the task: {(result or {}).get('error', 'orchestration unreachable')}")
+        return _back("/tasks", f"Task started again on {project}.")
 
     @app.post("/tasks/{project}/{run_id}/{action}")
     def task_settle(project: str, run_id: str, action: str):
@@ -834,7 +1083,7 @@ def build_app(paths: Paths) -> FastAPI:
         )
 
     def _scheduled_jobs() -> list[dict]:
-        return [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") != "agent.run_task"]
+        return [t for t in _try(lambda: client.scheduled_tasks(paths), default=[]) if (t.get("job_template") or {}).get("type") not in ("agent.run_task", DOC_UPDATE_JOB)]
 
     def _job_new_page(request: Request, build_error: str | None = None, chosen: dict | None = None,
                       when: str = "immediate") -> HTMLResponse:

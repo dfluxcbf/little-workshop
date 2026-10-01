@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from common.paths import Paths
@@ -21,9 +22,11 @@ from common.pillar_socket import resolve_pillar_socket
 from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
 from common.workspace import WORKSPACE_ID, workspace_dir
-from agent import db
+from agent import db, review_store
+from agent.doc_update import DocUpdateError, DocUpdateFlow
 from agent.flow import AgentFlow, AgentFlowError
 from agent.query import run_query
+from agent.gitutil import is_dirty as gitutil_is_dirty
 from agent.session_flow import SessionError, SessionFlow, is_trusted, session_name as session_name_for
 
 
@@ -59,6 +62,37 @@ def recover_interrupted_runs(paths: Paths, conn: sqlite3.Connection) -> list[dic
     return runs
 
 
+def resume_doc_updates(paths: Paths, conn: sqlite3.Connection, doc_flow: DocUpdateFlow) -> list[str]:
+    """Startup: an update-doc session runs in its own systemd unit and outlives
+    this process, but its watcher thread did not — start a new one for each job
+    still running. One still `starting` (worktree or session not up yet) never
+    will be: release its comments and fail it."""
+    resumed = []
+    for update in db.list_doc_updates(conn, active_only=True):
+        try:
+            project_dir = Path(resolve_project(paths, update["project_id"])["path"])
+        except ProjectResolutionError:
+            continue
+        if update["status"] == db.DOC_UPDATE_STARTING:
+            review_store.release_job(project_dir, update["job_id"])
+            db.update_doc_update(conn, update["job_id"], status=db.DOC_UPDATE_FAILED, error=INTERRUPTED_RUN_REASON)
+            _complete_orchestration_job(paths, update["job_id"], succeeded=False, result=None, error=INTERRUPTED_RUN_REASON)
+            continue
+        threading.Thread(target=doc_flow.watch, args=(conn, update["job_id"], project_dir), daemon=True).start()
+        resumed.append(update["job_id"])
+    return resumed
+
+
+class ReviewCommentRequest(BaseModel):
+    branch: str | None = None
+    path: str | None = None
+    anchor: dict[str, Any] | None = None
+    body: str = ""
+    status: str = review_store.OPEN
+    change: dict[str, Any] | None = None
+    certified: bool = False
+
+
 class JobRequest(BaseModel):
     job_id: str
     project_id: str | None = None
@@ -67,12 +101,19 @@ class JobRequest(BaseModel):
 
 def build_app(
     paths: Paths, conn: sqlite3.Connection, flow: AgentFlow | None = None, session_flow: SessionFlow | None = None,
+    doc_flow: DocUpdateFlow | None = None,
 ) -> FastAPI:
     app = FastAPI(title="little-workshop Agentic Development")
     install_incident_reporting(app, paths, pillar="agent")
     lock = threading.Lock()
     flow = flow or AgentFlow(paths=paths)
     session_flow = session_flow or SessionFlow(paths=paths)
+    if doc_flow is None:
+        doc_flow = DocUpdateFlow(paths=paths)
+        doc_flow.on_complete = lambda job_id, ok, result, error: _complete_orchestration_job(
+            paths, job_id, succeeded=ok, result=result, error=error,
+        )
+    app.state.doc_flow = doc_flow
 
     def read(fn, *args, **kwargs):
         """Reads must never queue behind `lock`: `agent.run_task`'s worker
@@ -261,6 +302,129 @@ def build_app(
             "project_id": project_id, "running": running, "trusted": trusted,
             "session_name": session_name_for(project_id) if running else None,
         }
+
+    # -- documentation review: docs, comments, and the update-doc job ----------
+
+    def _project_dir(project_id: str) -> Path:
+        try:
+            return Path(resolve_project(paths, project_id)["path"])
+        except ProjectResolutionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+
+    def _review(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except review_store.ReviewError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc))
+
+    @app.get("/v1/docs/{project_id}")
+    def list_docs(project_id: str) -> dict:
+        project_dir = _project_dir(project_id)
+        branch = review_store.current_branch(project_dir)
+        counts: dict[str, dict] = {}
+        for comment in review_store.list_comments(project_dir, branch=branch):
+            entry = counts.setdefault(comment["path"], {"open": 0, "done": 0, "certified": 0})
+            if comment.get("certified"):
+                entry["certified"] += 1
+            else:
+                entry["done" if comment.get("status") == review_store.DONE else "open"] += 1
+        return {
+            "project_id": project_id, "branch": branch, "branches": review_store.list_branches(project_dir),
+            "dirty": gitutil_is_dirty(project_dir),
+            "files": [{"path": f, **counts.get(f, {"open": 0, "done": 0, "certified": 0})} for f in review_store.list_docs(project_dir)],
+        }
+
+    @app.get("/v1/docs/{project_id}/file")
+    def read_doc(project_id: str, path: str) -> dict:
+        project_dir = _project_dir(project_id)
+        return {"path": path, "branch": review_store.current_branch(project_dir), "source": _review(review_store.read_doc, project_dir, path)}
+
+    @app.get("/v1/docs/{project_id}/image")
+    def read_image(project_id: str, path: str) -> Response:
+        body, media_type = _review(review_store.read_image, _project_dir(project_id), path)
+        return Response(body, media_type=media_type)
+
+    @app.get("/v1/reviews/{project_id}")
+    def list_review_comments(project_id: str, branch: str | None = None, path: str | None = None) -> dict:
+        """Comments, newest state; for one file, a done comment's changed section is
+        located in that file as it is now (`change.found`)."""
+        project_dir = _project_dir(project_id)
+        comments = review_store.list_comments(project_dir, branch=branch, path=path)
+        if path is not None:
+            try:
+                source = review_store.read_doc(project_dir, path)
+            except review_store.ReviewError:
+                source = ""
+            for comment in comments:
+                if comment.get("change"):
+                    comment["change"] = review_store.locate_change(source, comment["change"])
+        return {"comments": comments}
+
+    @app.put("/v1/reviews/{project_id}/comments/{comment_id}")
+    def put_review_comment(project_id: str, comment_id: str, request: ReviewCommentRequest) -> dict:
+        return _review(review_store.upsert_comment, _project_dir(project_id), comment_id, request.model_dump())
+
+    @app.delete("/v1/reviews/{project_id}/comments/{comment_id}")
+    def delete_review_comment(project_id: str, comment_id: str) -> dict:
+        return {"deleted": _review(review_store.delete_comment, _project_dir(project_id), comment_id)}
+
+    @app.get("/v1/doc_updates/{project_id}")
+    def list_doc_updates(project_id: str) -> list[dict]:
+        return read(db.list_doc_updates, project_id=project_id)
+
+    @app.post("/v1/jobs/agent.docs_checkout")
+    def job_docs_checkout(request: JobRequest) -> dict:
+        """Switch the project's own checkout to another branch, so its docs can
+        be reviewed there. Git refuses when local changes would be overwritten."""
+        branch = request.params.get("branch")
+        if not request.project_id or not branch:
+            return {"outcome": "failed", "error": "missing project_id or params.branch"}
+        try:
+            project_dir = Path(resolve_project(paths, request.project_id)["path"])
+        except ProjectResolutionError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        if branch not in review_store.list_branches(project_dir):
+            return {"outcome": "failed", "error": f"no branch {branch!r}"}
+        result = review_store._git(project_dir, "checkout", branch)
+        if result.returncode != 0:
+            return {"outcome": "failed", "error": (result.stderr or result.stdout).strip()}
+        return {"outcome": "succeeded", "result": {"branch": review_store.current_branch(project_dir)}}
+
+    @app.post("/v1/jobs/agent.update_docs")
+    def job_update_docs(request: JobRequest) -> dict:
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        try:
+            project_dir = Path(resolve_project(paths, request.project_id)["path"])
+        except ProjectResolutionError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        branch = str(request.params.get("branch") or "")
+        remote_control = bool(request.params.get("remote_control"))
+        try:
+            comments = doc_flow.claim(conn, request.job_id, request.project_id, project_dir, branch, remote_control)
+        except DocUpdateError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        threading.Thread(
+            target=doc_flow.launch,
+            args=(conn, request.job_id, request.project_id, project_dir, branch, comments, remote_control),
+            daemon=True,
+        ).start()
+        return {"outcome": "accepted", "result": {"dispatched": True, "comments": len(comments)}}
+
+    @app.post("/v1/jobs/{job_id}/stop")
+    def stop_job(job_id: str) -> dict:
+        """Orchestration's `stop` probe. Only an update-doc job can be stopped:
+        its session is killed and its worktree removed with every change in it."""
+        update = read(db.get_doc_update, job_id)
+        if update is None:
+            return {"stopped": False, "reason": "not stoppable"}
+        try:
+            project_dir = Path(resolve_project(paths, update["project_id"])["path"])
+        except ProjectResolutionError:
+            project_dir = None
+        if not doc_flow.stop(conn, job_id, project_dir):
+            return {"stopped": False, "reason": f"the update-doc job is {update['status']}"}
+        return {"stopped": True}
 
     # -- incidents: an unhandled exception, awaiting the user's confirmation ----
 

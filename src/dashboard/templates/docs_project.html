@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Docs · {{ project }} — little-workshop{% endblock %}
+{% block content %}
+<h1>{{ project }} <span class="muted" style="font-weight:normal">docs</span></h1>
+
+<div class="card">
+  <form method="post" action="/docs/{{ project }}/checkout" class="docs-branch">
+    <input type="hidden" name="back" value="/docs/{{ project }}">
+    <label for="branch" style="margin-top:0">Reviewing on branch</label>
+    <div class="row">
+      <select name="branch" id="branch">
+        {% for b in overview.branches %}<option value="{{ b }}" {{ 'selected' if b == overview.branch }}>{{ b }}</option>{% endfor %}
+      </select>
+      <button type="submit" data-busy="Checking out…" style="white-space:nowrap">Check out</button>
+    </div>
+    <p class="muted" style="margin:8px 0 0;font-size:12.5px">Comments belong to the branch they were written on; an update job works on the branch checked out here.{% if overview.dirty %} <span class="warn">The checkout has uncommitted changes — git refuses a checkout that would overwrite them.</span>{% endif %}</p>
+  </form>
+</div>
+
+<h2 class="section-label">Documents</h2>
+<div class="report-list">
+  {% for f in overview.files %}
+  <a class="card linkcard docs-file" href="/docs/{{ project }}/view?path={{ f.path | urlencode }}">
+    <span class="docs-file-path">{{ f.path }}</span>
+    <span class="job-tags">
+      {% if f.open %}<span class="chip docs-chip-open">{{ f.open }} open</span>{% endif %}
+      {% if f.done %}<span class="chip docs-chip-done">{{ f.done }} done</span>{% endif %}
+      {% if f.certified %}<span class="chip docs-chip-certified">{{ f.certified }} certified</span>{% endif %}
+    </span>
+  </a>
+  {% else %}
+  {% if not error %}<p class="muted">No markdown files in this project.</p>{% endif %}
+  {% endfor %}
+</div>
+
+<h2 class="section-label">Update docs</h2>
+{% for e in entries %}
+<div class="card">
+  <div class="job-line">
+    <span class="job-type">{{ e.branch }}</span>
+    <span class="pill {{ 'ok' if e.status == 'running' else 'idle' }}">{{ e.status }}</span>
+  </div>
+  <p class="job-meta">Remote Control {{ 'on' if e.remote_control else 'off' }}{% if e.kind == 'scheduled' %} · starts {{ e.at.replace('T', ' ') }}{% endif %}</p>
+  {% if e.kind == 'scheduled' %}
+  <details class="docs-edit">
+    <summary>Edit</summary>
+    <form method="post" action="/docs/{{ project }}/update/scheduled/{{ e.id }}/edit">
+      <label for="at-{{ e.id }}">Start at</label>
+      <input type="datetime-local" name="at" id="at-{{ e.id }}" value="{{ e.at }}" required>
+      <label class="checkrow docs-check"><input type="checkbox" name="remote_control" {{ 'checked' if e.remote_control }}> Remote Control</label>
+      <div class="row" style="margin-top:12px"><button type="submit" class="primary" data-busy="Saving…">Save</button></div>
+    </form>
+  </details>
+  <form method="post" action="/docs/{{ project }}/update/scheduled/{{ e.id }}/remove" class="row" style="margin-top:10px">
+    <button type="submit" class="danger" data-busy="Deleting…" data-confirm="Delete this scheduled update?">Delete</button>
+  </form>
+  {% elif e.status == 'running' %}
+  <form method="post" action="/docs/{{ project }}/update/jobs/{{ e.id }}/stop" class="row" style="margin-top:10px">
+    <button type="submit" class="danger" data-busy="Stopping…" data-confirm="Stop the update? Its worktree is destroyed with every change in it; the comments stay open.">Stop</button>
+  </form>
+  {% else %}
+  <form method="post" action="/docs/{{ project }}/update/jobs/{{ e.id }}/stop" class="row" style="margin-top:10px">
+    <button type="submit" class="danger" data-busy="Cancelling…" data-confirm="Cancel this queued update?">Cancel</button>
+  </form>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if overview.branch and not blocked %}
+<div class="panel" style="padding:18px 20px">
+<form method="post" action="/docs/{{ project }}/update">
+  <p style="margin:0">Send the open comments on <strong>{{ overview.branch }}</strong> ({{ open_comments }} open) to Claude. It works in its own worktree, commits, and pushes to {{ overview.branch }}; the job picks up every comment on the branch as it is when the job starts.</p>
+  <label class="checkrow docs-check"><input type="checkbox" name="remote_control"> Remote Control — follow and talk to the Claude session from the Claude app</label>
+  <label for="when">When</label>
+  <select name="when" id="when">
+    <option value="immediate">Right away</option>
+    <option value="once">Later, at a date and time</option>
+  </select>
+  <div data-when="once" hidden>
+    <label for="at">Start at</label>
+    <input type="datetime-local" name="at" id="at">
+  </div>
+  <div class="row" style="margin-top:16px"><button type="submit" class="primary" data-busy="Sending…">Send for update</button></div>
+</form>
+</div>
+{% elif blocked %}
+<p class="muted">An update for {{ overview.branch }} is already queued or running — cancel or delete it before sending another.</p>
+{% endif %}
+
+{% if recent %}
+<h2 class="section-label">Recent updates</h2>
+{% for u in recent %}
+<div class="card">
+  <div class="job-line"><span class="job-type">{{ u.branch }}</span><span class="pill {{ 'ok' if u.status == 'done' else ('fail' if u.status == 'failed' else 'idle') }}">{{ u.status }}</span></div>
+  <p class="job-meta">{{ u.started_at | reltime }}{% if u.result %} · {{ u.result.done }} of {{ u.result.comments }} comments done{% if u.result.commit %} · commit <code>{{ u.result.commit[:8] }}</code>{% endif %}{% if u.result.pushed %} · pushed{% endif %}{% if u.result.kept_on_branch %} · kept on {{ u.result.kept_on_branch }}{% endif %}{% if not u.result.signalled %} · finished after going idle{% endif %}{% endif %}</p>
+  {% if u.error %}<p class="job-error">{{ u.error }}</p>{% endif %}
+</div>
+{% endfor %}
+{% endif %}
+<script>
+(function () {
+  var when = document.getElementById("when");
+  if (!when) return;
+  function sync() { document.querySelectorAll("[data-when]").forEach(function (el) { el.hidden = el.dataset.when !== when.value; }); }
+  when.addEventListener("change", sync);
+  sync();
+})();
+</script>
+{% endblock %}

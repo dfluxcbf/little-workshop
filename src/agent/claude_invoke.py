@@ -8,6 +8,15 @@ import json
 import re
 from typing import Any
 
+# Every Claude the workshop launches (task jobs, project sessions, doc updates).
+DEFAULT_MODEL = "claude-sonnet-5-5"
+DEFAULT_EFFORT = "medium"
+
+
+def model_args(model: str | None = None, effort: str | None = None) -> list[str]:
+    return ["--model", model or DEFAULT_MODEL, "--effort", effort or DEFAULT_EFFORT]
+
+
 STATUS_DONE, STATUS_PARTIAL, STATUS_FAILED = "done", "partial", "failed"
 STATUS_RE = re.compile(r"^\s*AGENT_STATUS:\s*(done|partial|failed)\s*$", re.IGNORECASE | re.MULTILINE)
 
@@ -31,8 +40,7 @@ def claude_argv(
         argv += ["--remote-control", session_name]
     if user_messages:
         argv += ["--brief"]
-    if model:
-        argv += ["--model", model]
+    argv += model_args(model)
     if max_budget_usd is not None:
         argv += ["--max-budget-usd", str(max_budget_usd)]
     argv += list(extra_args)

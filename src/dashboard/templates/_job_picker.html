@@ -7,7 +7,7 @@
 <label for="job">Job</label>
 <select name="job" id="job" required>
   <option value="" {{ 'selected' if not chosen.job }} disabled>Choose a job…</option>
-  {% for spec in catalog %}<option value="{{ spec.key }}" {{ 'selected' if spec.key == chosen.job }}>{{ spec.label }}</option>{% endfor %}
+  {% for spec in catalog %}<option value="{{ spec.key }}"{% if spec.projects %} data-projects="{{ spec.projects|join(',') }}"{% endif %} {{ 'selected' if spec.key == chosen.job }}>{{ spec.label }}</option>{% endfor %}
 </select>
 {% for spec in catalog %}
 <div class="job-args" data-job="{{ spec.key }}" hidden>
@@ -84,7 +84,18 @@
       })
       .catch(function () { show(box, '<p class="muted job-error">Could not list them right now.</p>'); });
   }
+  // A job limited to some projects is offered only while one of them is chosen.
+  function offerJobs() {
+    Array.prototype.forEach.call(job.options, function (o) {
+      if (!o.dataset.projects) return;
+      var offered = o.dataset.projects.split(",").indexOf(project.value) !== -1;
+      o.hidden = !offered;
+      o.disabled = !offered;
+      if (!offered && o.selected) job.value = "";
+    });
+  }
   function sync() {
+    offerJobs();
     document.querySelectorAll(".job-args").forEach(function (el) {
       var on = el.dataset.job === job.value;
       el.hidden = !on;

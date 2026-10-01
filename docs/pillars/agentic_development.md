@@ -340,3 +340,100 @@ agent, for any UI/UX change, to check it in the browser (desktop and phone viewp
 is serving on the project's real port, and cover the behaviour with pytest-playwright tests under
 `tests/ui/` using relative URLs — which Requirements & Quality then runs against the branch's own app
 (`docs/pillars/requirements_quality.md`, "UI tests with Playwright").
+
+## Documentation review: comments and the update-doc job (2026-09-28)
+
+The backend of the Dashboard's Docs pages (`docs/pillars/dashboard.md`).
+
+- **Docs** (`GET /v1/docs/{project}`, `/file?path=`, `/image?path=`): the
+  project checkout's markdown files (tracked or untracked, never ignored),
+  its current branch and branches, and one file's source or an image it
+  shows. Paths are confined to the project; `.git/` and `.review/` are off
+  limits. `agent.docs_checkout` (a Job) switches the checkout's branch —
+  git itself refuses when local changes would be overwritten.
+- **Comments** live in the project, in `.review/comments.json`
+  (`agent/review_store.py`), never committed: `.review/` goes into the
+  repository's `info/exclude` on the first save, and the update-doc job
+  adds it to `.gitignore` in its commit (new projects get it from
+  `project.bootstrap`'s `.gitignore` template). Each comment has a UUID,
+  the `branch` it was written on, its file, an anchor (source line range
+  plus the exact highlighted text and ~32 characters either side, so it
+  is found again after lines move), its markdown body, `open`/`done`,
+  and — once done — the `change` the job made (`edited`: the new lines
+  and their text; `removed`: where the section was) and the job's `note`.
+  `GET/PUT/DELETE /v1/reviews/{project}[/comments/{id}]` are direct reads
+  and writes, not Jobs — the same exception `/v1/incidents` makes: the
+  Dashboard autosaves two seconds after typing stops, which as Jobs would
+  bury the Jobs page. For one file, a done comment's `change` is located
+  in the file as it is now (`found: false` when its text is gone).
+- **`agent.update_docs`** (`agent/doc_update.py`), params `branch`,
+  `remote_control`; the Dashboard's queue key is `{project}:docs:{branch}`
+  and it refuses a second job for the same project and branch.
+  1. Start (synchronous): refuse if one is already running for that
+     project and branch; claim every open, non-empty comment on the branch
+     (`job_id` set — read-only until the job ends; comments written later
+     are not part of it). Nothing to claim fails the Job.
+     Certified comments (`certified: true`, set by the reviewer with Ctrl+I) are
+     not claimed and are read-only; their text is never sent to Claude. The job
+     file's `certified_sections` lists only their file, lines, highlighted text and
+     source, and the prompt tells Claude the section is well written by the
+     reviewer's standards: not to change it unless absolutely necessary, and then
+     without losing or altering its content, saying so in the note of the comment
+     that forced it.
+  2. The comments go to `update-doc-job.json` (id, path, lines,
+     highlighted text, the source lines verbatim, the comment) and are
+     repeated in the prompt (`templates/prompts/update_docs.md`), which
+     tags the file with `@`.
+  3. Without Remote Control, Deployment & Servers provisions a detached
+     worktree at the branch's tip and Claude runs headless (`claude -p`,
+     which has no trust prompt to hang on) as its own transient
+     `systemd --user` service. With Remote Control, print mode cannot
+     register with the Claude app, so an interactive
+     `claude --worktree lws-docs-<job> --remote-control <name> ... -- "<prompt>"`
+     runs under `dtach` (in a `systemd --user` scope) from the project
+     folder, which Claude Code must already trust: Claude creates and owns
+     the worktree under `.claude/worktrees/`, is told first to reset it to
+     the branch's tip, and nothing is pre-approved, so permission requests
+     are answered from the app. The job files live in `doc-jobs/<job>/` in
+     the pillar's state. Either way the session survives this pillar
+     restarting, and a restart resumes watching it (`resume_doc_updates`).
+     Claude commits but never pushes; publishing refuses commits that are
+     not based on the branch's tip.
+  4. The done signal is Claude writing `.review/update-doc-result.json`
+     (per comment: `edited` with the new lines, `removed`, or `unchanged`
+     with a note). Without it — the session was interrupted, or hung —
+     the work counts as done once the worktree and the session's
+     transcript have been idle for 5 hours.
+  5. Finalize: stop the session, commit anything left, push `HEAD` to the
+     branch, fast-forward the local branch (merge in the checkout when
+     it is on that branch, else move the ref); if neither took it, the
+     commit is kept on `docs-review/<job>`. Then each claimed comment is
+     updated individually by id — `done` with its change, whose text is
+     read from the committed file (never copied from Claude), or back to
+     plain `open` — and the worktree is removed. Claude never edits the
+     comments file.
+  6. Stop (`POST /v1/jobs/{id}/stop`, this pillar's only stoppable Job):
+     the session is killed and the worktree removed with every change in
+     it; the comments are released untouched.
+
+## Shared project standards copy (2026-10-01)
+
+Every `agent.run_task` run is given a **temporary, read-only copy of little-workshop's
+`shared_project_standards/`** (`src/agent/standards.py`; REQ-000000286..289).
+
+- **What is copied**: every Markdown file at the root of `shared_project_standards/` plus the Markdown files
+  of the run's own project folder (`<project id, hyphens as underscores>_standards/`). Other projects'
+  folders and non-Markdown files are left out. A project with no folder gets the root files alone.
+- **Where it lives**: `tempfile.mkdtemp("lws-standards-<run_id>-")/shared_project_standards`, outside every
+  checkout so `_publish` can never commit it. `AgentFlow.run_task` removes the directory in a `finally`, so
+  it is gone whether the run finishes, fails or is stopped. The original is never modified.
+- **How Claude learns of it**: the prompt template `standards.md`, filled into `{standards_instructions}` of
+  `common.md`, names the path, says to read what applies, never edit or commit it, and to prefer the
+  project's own documents on a disagreement.
+- **Source**: the registered `little-workshop` checkout's `shared_project_standards/`
+  (`AgentFlow.standards_root` overrides it for tests). If it cannot be found or copied the run proceeds without
+  the copy; a missing source never fails a task.
+- **Opt-out**: the `include_standards` param, default true. The New task form shows it as a checkbox, checked by
+  default; the choice is carried through scheduling and retry; `workshop_agent_run_task` takes
+  `include_standards: false`. The "Update Standards Documentation" job sets it false, since it edits the
+  original folder.

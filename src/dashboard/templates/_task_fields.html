@@ -14,3 +14,5 @@
   <select name="review_mode" id="review_mode">
     <option value="manual">Manual &mdash; I finish it</option><option value="auto_approve">Auto-approve when done and tests pass</option>
   </select>
+  <label class="chip-check" style="margin-top:12px"><input type="hidden" name="include_standards" value="0"><input type="checkbox" name="include_standards" value="1" id="include_standards" {{ 'checked' if include_standards is not defined or include_standards }}><span>Include shared project standards</span></label>
+  <p class="muted" style="margin:4px 0 0">Gives Claude a temporary, read-only copy of little-workshop&rsquo;s shared standards and this project&rsquo;s own folder. It is deleted when the task completes.</p>

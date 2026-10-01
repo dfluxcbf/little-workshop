@@ -934,3 +934,89 @@ def test_run_task_params_can_turn_playwright_off(paths, conn, tmp_path, monkeypa
 
     assert "--mcp-config" not in _claude_call(runner)
     assert ["which", "npx"] not in runner.calls
+
+
+# --- the temporary copy of shared_project_standards -----------------------------
+
+def _standards_root(tmp_path: Path) -> Path:
+    root = tmp_path / "shared_project_standards"
+    (root / "little_meals_standards").mkdir(parents=True)
+    (root / "README.md").write_text("index", encoding="utf-8")
+    (root / "little_meals_standards" / "README.md").write_text("meals", encoding="utf-8")
+    return root
+
+
+class _SpyingRunner(WritingClaudeRunner):
+    """Records what the prompt names and what sits at that path while Claude runs."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.prompt = ""
+        self.seen: set[str] = set()
+        self.path: Path | None = None
+
+    def run(self, argv, timeout=None, cwd=None):
+        if argv and argv[0] == "claude":
+            self.prompt = argv[2]
+            lines = [ln.strip() for ln in self.prompt.splitlines()]
+            named = [ln for ln in lines if ln.endswith("shared_project_standards") and ln.startswith("/")]
+            if named:
+                self.path = Path(named[0])
+                self.seen = {str(p.relative_to(self.path)) for p in self.path.rglob("*") if p.is_file()}
+        return super().run(argv, timeout=timeout, cwd=cwd)
+
+
+def test_run_task_gives_claude_a_temporary_standards_copy_and_deletes_it(paths, conn, tmp_path, monkeypatch):
+    """REQ-000000286, REQ-000000287."""
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = _SpyingRunner()
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
+
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    assert result.status == db.AWAITING_FINISH
+    assert runner.seen == {"README.md", "little_meals_standards/README.md"}
+    assert "little_meals_standards/" in runner.prompt and "read-only copy" in runner.prompt
+    assert runner.path is not None and not runner.path.exists() and not runner.path.parent.exists()
+
+
+def test_run_task_deletes_the_standards_copy_when_the_task_fails(paths, conn, tmp_path, monkeypatch):
+    """REQ-000000287."""
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = _SpyingRunner(claude_ok=False)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
+
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    assert result.status == db.FAILED
+    assert runner.path is not None and not runner.path.parent.exists()
+
+
+def test_run_task_without_the_standards_option_makes_no_copy(paths, conn, tmp_path, monkeypatch):
+    """REQ-000000288."""
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = _SpyingRunner()
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
+
+    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}, "include_standards": False})
+
+    assert runner.path is None and "Shared project standards" not in runner.prompt and "shared_project_standards" not in runner.prompt
+
+
+def test_run_task_carries_on_when_no_standards_folder_can_be_found(paths, conn, tmp_path, monkeypatch):
+    """REQ-000000289: a missing source never fails a task."""
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = _SpyingRunner()
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=tmp_path / "missing")
+
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    assert result.status == db.AWAITING_FINISH and runner.path is None
