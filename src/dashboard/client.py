@@ -247,3 +247,76 @@ def session_name_for(project_id: str) -> str:
     """Mirrors `agent.session_flow.session_name` — duplicated, never imported
     (no shared import between two pillars' `src/` trees)."""
     return f"lws-{project_id.split('/')[-1]}-session"
+
+
+# -- documentation review (Agentic Development) -------------------------------
+
+
+class Refused(Exception):
+    """The pillar answered, and said no (a 4xx) — `detail` says why."""
+
+    def __init__(self, status: int, detail: str):
+        super().__init__(detail)
+        self.status = status
+        self.detail = detail
+
+
+def _call(paths: Paths, pillar: str, method: str, path: str, *, params: dict | None = None, json: dict | None = None,
+          timeout: float = 10.0) -> httpx.Response:
+    socket_path = resolve_pillar_socket(paths, pillar, timeout=timeout)
+    if socket_path is None:
+        raise PillarUnavailable(f"{pillar} daemon unreachable — Core has no socket for it registered")
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.request(method, path, params=params or {}, json=json)
+    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
+    if 400 <= response.status_code < 500:
+        try:
+            detail = response.json().get("detail", response.text)
+        except ValueError:
+            detail = response.text
+        raise Refused(response.status_code, str(detail))
+    if response.status_code >= 500:
+        raise PillarUnavailable(f"{pillar} daemon failed ({response.status_code})")
+    return response
+
+
+def docs_overview(paths: Paths, project_id: str) -> dict:
+    """{branch, branches, dirty, files: [{path, open, done}]}"""
+    return _call(paths, "agent", "GET", f"/v1/docs/{project_id}").json()
+
+
+def doc_file(paths: Paths, project_id: str, path: str) -> dict:
+    return _call(paths, "agent", "GET", f"/v1/docs/{project_id}/file", params={"path": path}).json()
+
+
+def doc_image(paths: Paths, project_id: str, path: str) -> tuple[bytes, str]:
+    response = _call(paths, "agent", "GET", f"/v1/docs/{project_id}/image", params={"path": path})
+    return response.content, response.headers.get("content-type", "application/octet-stream")
+
+
+def review_comments(paths: Paths, project_id: str, *, branch: str | None = None, path: str | None = None) -> list[dict]:
+    params = {k: v for k, v in {"branch": branch, "path": path}.items() if v is not None}
+    return _call(paths, "agent", "GET", f"/v1/reviews/{project_id}", params=params).json()["comments"]
+
+
+def put_review_comment(paths: Paths, project_id: str, comment_id: str, fields: dict) -> dict:
+    return _call(paths, "agent", "PUT", f"/v1/reviews/{project_id}/comments/{comment_id}", json=fields).json()
+
+
+def delete_review_comment(paths: Paths, project_id: str, comment_id: str) -> dict:
+    return _call(paths, "agent", "DELETE", f"/v1/reviews/{project_id}/comments/{comment_id}").json()
+
+
+def doc_updates(paths: Paths, project_id: str) -> list[dict]:
+    return _get(paths, "agent", f"/v1/doc_updates/{project_id}")
+
+
+def stop_job(paths: Paths, job_id: str) -> dict:
+    """Stop a running Job, or cancel one still queued: {stopped, reason}."""
+    return _send(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/stop")
+
+
+def edit_scheduled_task(paths: Paths, task_id: str, **fields) -> dict:
+    return _send(paths, "orchestration", "PATCH", f"/v1/scheduled_tasks/{task_id}", json=fields)

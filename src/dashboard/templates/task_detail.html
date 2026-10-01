@@ -15,6 +15,26 @@
   <form class="inline" method="post" action="/tasks/{{ run.project_id }}/{{ run.id }}/skip"><button type="submit">Skip</button></form>
 </div>
 {% endif %}
+{% if can_retry %}
+<div class="row"><form class="inline" method="get" action="/tasks/{{ run.project_id }}/{{ run.id }}/retry"><button type="submit" class="primary">Retry</button></form></div>
+{% endif %}
+{% if description %}<section>
+  <h2>Description <button type="button" class="copy-btn" data-copy="task-description">Copy</button></h2>
+  <pre class="log-pre" id="task-description">{{ description }}</pre>
+</section>{% endif %}
 {% if run.summary %}<section><h2>Summary</h2><pre class="log-pre">{{ run.summary }}</pre></section>{% endif %}
 {% if run.report %}<section><h2>Change report</h2><pre class="log-pre">{{ run.report }}</pre></section>{% endif %}
+<script>
+document.querySelectorAll('[data-copy]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var text = document.getElementById(b.dataset.copy).textContent;
+    var done = function (ok) { var t = b.textContent; b.textContent = ok ? 'Copied' : 'Copy failed'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); }); return; }
+    var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+    ta.remove(); done(ok);
+  });
+});
+</script>
 {% endblock %}

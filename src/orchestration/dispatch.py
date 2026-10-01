@@ -113,6 +113,15 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
 # policy.check_project's 1860s; an agent task runs up to an hour). A plain
 # framework rule, not a Policy: `SchedulerThread` enforces it every tick.
 RUNNING_JOB_TIMEOUT = timedelta(hours=6)
+# Job types that legitimately run longer. An update-doc job's Claude session
+# may work for hours and is then given 5 idle hours before it is wrapped up.
+RUNNING_JOB_TIMEOUTS: dict[str, timedelta] = {
+    "agent.update_docs": timedelta(hours=30),
+}
+
+
+def running_timeout_for(job_type: str, default: timedelta = RUNNING_JOB_TIMEOUT) -> timedelta:
+    return RUNNING_JOB_TIMEOUTS.get(job_type, default)
 
 
 def dispatch_timeout_for(job_type: str) -> float:
@@ -282,6 +291,15 @@ def stop_job(
     unreachable, target genuinely stopped it, target says it can't) is a
     plain `{"stopped": bool, "reason": str | None}` the caller can show
     directly."""
+    if job.status == JobStatus.QUEUED:
+        # Not dispatched yet: nothing to interrupt, so stopping it cancels it.
+        with lock if lock is not None else nullcontext():
+            job.status = JobStatus.CANCELLED
+            job.error = "cancelled by user before it started"
+            update_job(conn, job)
+            cascade_dependency_failures(conn)
+        return {"stopped": True, "reason": None}
+
     if job.status == JobStatus.PENDING_CONFIRMATION:
         # Never dispatched: nothing to interrupt, but it holds its
         # queue_key until confirmed or timed out -- stopping it declines it.
@@ -338,7 +356,7 @@ def expire_stuck_jobs(
     with guard:
         stale = [
             job for job in list_jobs(conn, status=JobStatus.RUNNING)
-            if now - (job.updated_at if job.updated_at.tzinfo else job.updated_at.replace(tzinfo=timezone.utc)) >= max_age
+            if now - (job.updated_at if job.updated_at.tzinfo else job.updated_at.replace(tzinfo=timezone.utc)) >= running_timeout_for(job.type, max_age)
         ]
     expired: list[Job] = []
     for job in stale:
@@ -349,7 +367,7 @@ def expire_stuck_jobs(
                 continue
             if current.status == JobStatus.RUNNING:
                 current.status = JobStatus.FAILED
-                current.error = f"timed out: still running after {max_age.total_seconds() / 3600:g} hours"
+                current.error = f"timed out: still running after {running_timeout_for(job.type, max_age).total_seconds() / 3600:g} hours"
                 update_job(conn, current)
                 insert_job_run(conn, current.id, outcome="failed", detail=current.error, started_at=job.updated_at, finished_at=now)
             expired.append(current)

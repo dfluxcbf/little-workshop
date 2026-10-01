@@ -132,3 +132,17 @@ def test_decide_incident_records_the_linked_run(conn):
     db.decide_incident(conn, incident_id, status="confirmed", run_id="run-1")
     incident = db.get_incident(conn, incident_id)
     assert incident["status"] == "confirmed" and incident["run_id"] == "run-1" and incident["decided_at"] is not None
+
+
+def test_a_run_keeps_its_description_and_an_old_database_gains_the_column(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE agent_runs (id TEXT PRIMARY KEY, job_id TEXT, project_id TEXT NOT NULL, status TEXT NOT NULL, "
+                "intent TEXT NOT NULL, branch TEXT, branch_type TEXT, review_mode TEXT NOT NULL, completion_status TEXT, "
+                "title TEXT NOT NULL, summary TEXT, report TEXT, pr_url TEXT, source_json TEXT NOT NULL DEFAULT '{}', "
+                "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    old.commit(); old.close()
+    conn = db.connect(path)
+    db.create_run(conn, "r1", job_id=None, project_id="p", intent="task", review_mode="manual", title="t", source={}, description="write it")
+    assert db.get_run(conn, "r1")["description"] == "write it"

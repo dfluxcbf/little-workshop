@@ -615,3 +615,20 @@ Requested directly, same day as the usability refinement above: the original six
 | REQ-000000280 | **Connect adopts an existing origin remote.** When project.connect_github runs for a registered project whose checkout already has an origin remote, the Registry shall adopt that remote without creating a repository or pushing, and shall record its URL, normalised to https://host/owner/name, as repo_url in the registry and in info.registry.json. | done |
 | REQ-000000281 | **Connect ensures the bootstrap labels and is repeatable.** When project.connect_github runs with ensure_labels (the default) and the repository's owner/name is known, the Registry shall ensure the labels project.bootstrap creates; when it runs again for an already-connected project, the Registry shall leave the project in the same state and report success. | done |
 | REQ-000000282 | **Connect is reachable from MCP and the CLI, and refuses unknown projects.** When a caller invokes workshop_project_connect_github or `lws project connect-github NAME`, the system shall queue a project.connect_github Job for the Registry; when the project is not registered or its path is not a git repository, the Registry shall fail the Job naming the cause and change nothing. | done |
+
+## Update Standards Documentation job (2026-10-01)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000283 | **A catalog job can be limited to some projects.** Where a catalog job names the projects that offer it, the Dashboard shall offer that job on New job only while one of those projects is chosen, and shall refuse to start or schedule it for any other project. | done |
+| REQ-000000284 | **Update Standards Documentation is offered for little-workshop only.** When the project chosen on New job is little-workshop, the Dashboard shall offer the job "Update Standards Documentation"; for every other project it shall not. | done |
+| REQ-000000285 | **Update Standards Documentation has Claude refresh `shared_project_standards/`.** When Update Standards Documentation is started or scheduled, the Dashboard shall queue an `agent.run_task` Job of intent docs for little-workshop, on little-workshop's own queue, whose instructions have Claude review every little-workshop standard, every registered policy and every registered project's own rules, then update every document in `shared_project_standards/` and nothing outside it, as Markdown only. | done |
+
+## Standards copy for tasks (2026-10-01)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000286 | **A task gets a copy of the shared project standards.** When an agent.run_task run is not told otherwise, the Agent pillar shall give the run a copy of little-workshop's `shared_project_standards/` holding every Markdown file at its root and the Markdown files of that project's own folder (`<project id with hyphens as underscores>_standards`), and no other file, name the copy in the prompt as read-only reference material, and leave the original untouched. | published |
+| REQ-000000287 | **The standards copy is temporary and deleted when the task completes.** When an agent.run_task run ends by any outcome, the Agent pillar shall delete the temporary directory that holds its copy of the shared project standards. | published |
+| REQ-000000288 | **Starting a task chooses whether it includes the standards.** When a task is started or scheduled or retried from the Dashboard or through workshop_agent_run_task, the Dashboard shall offer an include_standards choice that defaults to included as a checked box on the New task form and carry it through scheduling and retry, so that a run whose choice is off gets no copy. | published |
+| REQ-000000289 | **A missing standards source never fails a task.** If the shared_project_standards folder of little-workshop cannot be found or copied, then the Agent pillar shall run the task without the copy instead of failing it. | published |

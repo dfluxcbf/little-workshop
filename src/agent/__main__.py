@@ -6,7 +6,7 @@ import uvicorn
 
 from common.paths import Paths
 from agent import db
-from agent.app import build_app, recover_interrupted_runs
+from agent.app import build_app, recover_interrupted_runs, resume_doc_updates
 
 
 def main() -> None:
@@ -18,6 +18,7 @@ def main() -> None:
     # Before serving, so no new run can be mistaken for an interrupted one;
     # reporting to Orchestration is best-effort, its own timeout the backstop.
     recover_interrupted_runs(paths, conn)
+    resume_doc_updates(paths, conn, app.state.doc_flow)
 
     socket_path = paths.socket_path("agent")
     if socket_path.exists():

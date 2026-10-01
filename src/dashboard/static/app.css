@@ -1147,3 +1147,15 @@ details.report-item > .report-approve { margin: 0; padding: 0 12px 12px; }
   .job-choice:has(.pick:checked)::after { top: 6px; right: 7px; font-size: 11px; }
 }
 .job-error { color: var(--fail); }
+
+/* --- Docs (documentation review; the viewer itself is static/review.css) --- */
+
+.docs-file { display: flex; align-items: center; justify-content: space-between; gap: 10px; text-decoration: none; }
+.docs-file-path { font-family: var(--font-mono); font-size: 13.5px; overflow-wrap: anywhere; min-width: 0; }
+.docs-chip-open { background: var(--warn-soft); color: var(--warn); }
+.docs-chip-done { background: oklch(32% 0.08 250); color: oklch(68% 0.15 250); }
+.docs-chip-certified { background: oklch(27% 0.065 152); color: oklch(78% 0.14 152); }
+.docs-edit summary { cursor: pointer; font-size: 13px; color: var(--cyan); margin-top: 8px; }
+.docs-check { text-transform: none; letter-spacing: normal; font-size: 14px; font-weight: 600; color: var(--ink); }
+
+.copy-btn { margin-left: 8px; padding: 3px 10px; font-size: 11px; text-transform: none; letter-spacing: normal; vertical-align: middle; }

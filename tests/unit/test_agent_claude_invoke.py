@@ -16,6 +16,12 @@ def test_claude_argv_includes_session_and_model():
     assert "--model" in argv and "opus" in argv
 
 
+def test_every_claude_defaults_to_sonnet_5_5_at_medium_effort():
+    argv = claude_argv("x")
+    assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+    assert argv[argv.index("--effort") + 1] == "medium"
+
+
 def test_claude_argv_includes_budget():
     argv = claude_argv("x", max_budget_usd=5.0)
     assert "--max-budget-usd" in argv and "5.0" in argv

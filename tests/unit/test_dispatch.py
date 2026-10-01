@@ -207,13 +207,28 @@ def test_dispatch_ready_jobs_uses_the_plain_default_for_an_ordinary_job_type(mon
 # stop_job -- docs/milestones.md M9
 # ---------------------------------------------------------------------------
 
-def test_stop_job_refuses_a_job_that_is_not_running(conn):
-    job = Job(type="agent.run_task", target_pillar="agent", status=JobStatus.QUEUED)
+def test_stop_job_refuses_a_job_that_already_finished(conn):
+    job = Job(type="agent.run_task", target_pillar="agent", status=JobStatus.SUCCEEDED)
     db.insert_job(conn, job)
 
     result = dispatch.stop_job(conn, job, socket_lookup=lambda pillar: None)
 
-    assert result == {"stopped": False, "reason": "job is queued, not running"}
+    assert result == {"stopped": False, "reason": "job is succeeded, not running"}
+
+
+def test_stopping_a_queued_job_cancels_it_without_a_network_call(conn):
+    job = Job(type="agent.update_docs", target_pillar="agent", status=JobStatus.QUEUED)
+    db.insert_job(conn, job)
+
+    result = dispatch.stop_job(conn, job, socket_lookup=lambda pillar: pytest.fail("no dispatch for a queued job"))
+
+    assert result == {"stopped": True, "reason": None}
+    assert db.get_job(conn, job.id).status == JobStatus.CANCELLED
+
+
+def test_update_doc_jobs_get_a_longer_running_timeout_than_the_default():
+    assert dispatch.running_timeout_for("agent.update_docs") > dispatch.RUNNING_JOB_TIMEOUT
+    assert dispatch.running_timeout_for("build.run") == dispatch.RUNNING_JOB_TIMEOUT
 
 
 def test_stop_job_rejects_a_declared_unstoppable_type_without_a_network_call(conn, monkeypatch):

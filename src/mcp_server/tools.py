@@ -687,6 +687,8 @@ def _agent_run_task(paths: Paths, args: JSONDict) -> Any:
         }
     if args.get("playwright_mcp") is False:
         params["playwright_mcp"] = False
+    if args.get("include_standards") is False:
+        params["include_standards"] = False
     return client.create_job(
         paths, type="agent.run_task", target_pillar="agent", project_id=args["project_id"],
         params=params, queue_key=args["project_id"], depends_on=[], created_by="mcp",
@@ -1167,6 +1169,7 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "base": _prop("string", "Base branch/commit to branch from."),
                  "branch": _prop("string", "Explicit branch name (branch_mode 'existing') or override (branch_mode 'new')."),
                  "playwright_mcp": _prop("boolean", "Attach the Playwright MCP server so the agent can drive the app in a browser (default true)."),
+                 "include_standards": _prop("boolean", "Give the agent a temporary read-only copy of little-workshop's shared_project_standards (default true)."),
              }, ["project_id", "title"]), _agent_run_task),
     ToolSpec("workshop_agent_finish_task", "Explicitly finish a run awaiting review: publish its branch/PR and report.",
              _schema({"project_id": _PROJECT_ID, "run_id": _prop("string", "The run's id.")}, ["project_id", "run_id"]), _agent_finish_task),

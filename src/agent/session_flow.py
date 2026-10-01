@@ -28,6 +28,7 @@ import json
 import os
 from pathlib import Path
 
+from agent.claude_invoke import model_args
 from common import playwright
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
@@ -106,7 +107,7 @@ class SessionFlow:
             socket.unlink()
 
         name = session_name(project_id)
-        argv = ["dtach", "-n", str(socket), "claude", "--remote-control", name]
+        argv = ["dtach", "-n", str(socket), "claude", "--remote-control", name, *model_args()]
         if self.playwright_mcp:
             # Last, since `--mcp-config` takes every value after it.
             argv += playwright.mcp_claude_args(

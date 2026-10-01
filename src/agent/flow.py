@@ -19,7 +19,7 @@ from typing import Callable
 from common import playwright
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
-from agent import db, gitutil, report, requirements_client, templates_util, version_client
+from agent import db, gitutil, report, requirements_client, standards, templates_util, version_client
 from agent.branching import BranchingError, BranchingSpec, MODE_AUTO, MODE_EXISTING, MODE_NEW, resolve as resolve_branching
 from agent.claude_invoke import claude_argv, parse_claude_output, parse_status
 from agent.github_adapter import GitHubAdapter, GitHubError, parse_github_slug
@@ -69,6 +69,8 @@ class AgentFlow:
     # Playwright as standard: every run gets the Playwright MCP server
     # (common/playwright.py) unless a run's own params turn it off.
     playwright_mcp: bool = True
+    # Where little-workshop's `shared_project_standards/` is; None asks the Registry.
+    standards_root: Path | None = None
 
     def __post_init__(self) -> None:
         if self.github is None:
@@ -140,14 +142,20 @@ class AgentFlow:
 
     # -- Claude --------------------------------------------------------------
 
-    def _render_prompt(self, *, project_id: str, project_dir: Path, title: str, description: str, intent: str, branch: str, specified: bool, integ: str, result_file: Path, playwright_mcp: bool = False) -> str:
+    def _render_prompt(self, *, project_id: str, project_dir: Path, title: str, description: str, intent: str, branch: str, specified: bool, integ: str, result_file: Path, playwright_mcp: bool = False, standards_dir: Path | None = None) -> str:
         instructions = templates_util.render(
             templates_util.read_prompt("branching_specified.md" if specified else "branching_auto.md"),
             branch=branch, integration_branch=integ,
         ).strip()
+        standards_instructions = ""
+        if standards_dir is not None:
+            standards_instructions = templates_util.render(
+                templates_util.read_prompt("standards.md"),
+                standards_dir=str(standards_dir), project_folder=standards.project_folder_name(project_id), project_id=project_id,
+            ).strip() + "\n\n"
         return templates_util.render(
             templates_util.read_prompt("common.md"),
-            project_id=project_id, project_dir=str(project_dir), title=title, description=description or "(no description)",
+            standards_instructions=standards_instructions, project_id=project_id, project_dir=str(project_dir), title=title, description=description or "(no description)",
             intent=intent, branching_instructions=instructions, result_file=str(result_file),
             intent_instructions=templates_util.read_prompt(f"{intent}.md").strip(),
             ui_instructions=templates_util.render(
@@ -201,8 +209,32 @@ class AgentFlow:
         """`run_id` may be supplied by the caller (the Job handler
         generates it up front, before dispatching this potentially
         hour-long call to a background thread, so it can hand the run_id
-        back in its immediate `accepted` response)."""
+        back in its immediate `accepted` response).
+
+        Unless `params["include_standards"]` is false, the task gets a temporary copy of
+        `shared_project_standards/` that is deleted when the task completes."""
         run_id = run_id or db.new_run_id()
+        standards_dir = self._standards_copy(project_id, params, run_id)
+        try:
+            return self._run_task(conn, project_id, project_dir, repo_url, params, run_id, standards_dir)
+        finally:
+            standards.remove_copy(standards_dir)
+
+    def _standards_copy(self, project_id: str, params: dict, run_id: str) -> Path | None:
+        if not params.get("include_standards", True):
+            return None
+        root = self.standards_root or standards.resolve_standards_root(self.paths)
+        if root is None or not root.is_dir():
+            return None
+        try:
+            return standards.make_copy(root, project_id, run_id=run_id)
+        except OSError:
+            return None
+
+    def _run_task(
+        self, conn: sqlite3.Connection, project_id: str, project_dir: Path, repo_url: str | None, params: dict,
+        run_id: str, standards_dir: Path | None,
+    ) -> RunTaskResult:
         title = params.get("title") or f"task for {project_id}"
         description = params.get("description", "")
         intent = params.get("intent", "task")
@@ -223,7 +255,7 @@ class AgentFlow:
                 auto_approve=(review_mode == "auto_approve"),
             )
 
-        db.create_run(conn, run_id, job_id=job_id, project_id=project_id, intent=intent, review_mode=review_mode, title=title, source=source)
+        db.create_run(conn, run_id, job_id=job_id, project_id=project_id, intent=intent, review_mode=review_mode, title=title, source=source, description=description)
 
         try:
             self._require_clean(project_dir)
@@ -251,7 +283,7 @@ class AgentFlow:
         prompt = self._render_prompt(
             project_id=project_id, project_dir=project_dir, title=title, description=description, intent=intent,
             branch=branch, specified=resolved_spec.specified, integ=integ, result_file=result_file,
-            playwright_mcp=bool(playwright_args),
+            playwright_mcp=bool(playwright_args), standards_dir=standards_dir,
         )
 
         try:

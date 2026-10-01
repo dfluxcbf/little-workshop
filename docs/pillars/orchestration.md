@@ -113,6 +113,15 @@ that pillar's existing Job type.
   response (stopped, or "not stoppable") is authoritative. Declaration
   is the fast, common path; probing is the correctness fallback for
   anything a pillar's author didn't get around to declaring.
+  (2026-09-28) Stopping a Job that is still `queued` — never dispatched —
+  cancels it outright, no call to its pillar, the same way stopping one
+  awaiting policy confirmation declines it; documentation review's
+  queued update-doc jobs rely on this for their Cancel button.
+- **Stuck-Job timeout per type** (2026-09-28): a Job `running` for
+  longer than 6 hours is still presumed lost, except for the types in
+  `dispatch.py`'s `RUNNING_JOB_TIMEOUTS` — today only `agent.update_docs`
+  (30 hours), whose Claude session may work for hours and is then given
+  5 idle hours before it is wrapped up.
 - **`queue` generalizes `queue_key`**, rather than adding a second,
   parallel concurrency mechanism: `queue_key` gains a configurable
   *capacity* (default 1, so every existing caller's behavior — and M1's

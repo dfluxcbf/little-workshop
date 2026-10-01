@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ path.split('/')[-1] }} · {{ project }} — little-workshop</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#0b0e1a">
+<link rel="icon" href="/static/icons/favicon-64.png">
+<meta name="color-scheme" content="dark">
+<link rel="stylesheet" href="/static/app.css?v={{ static_v }}">
+<link rel="stylesheet" href="/static/review.css?v={{ static_v }}">
+</head>
+<body class="rv-body">
+<div id="rv" class="rv" data-project="{{ project }}" data-path="{{ path }}" data-branch="{{ branch }}">
+  <header class="rv-bar">
+    <a class="rv-back" href="/docs/{{ project }}" aria-label="All documents">&larr;</a>
+    <div class="rv-title">
+      <span class="rv-file">{{ path }}</span>
+      <form method="post" action="/docs/{{ project }}/checkout" class="rv-branch">
+        <input type="hidden" name="back" value="/docs/{{ project }}/view?path={{ path | urlencode }}">
+        <select name="branch" aria-label="Branch" onchange="this.form.submit()">
+          {% for b in branches %}<option value="{{ b }}" {{ 'selected' if b == branch }}>{{ b }}</option>{% endfor %}
+        </select>
+      </form>
+    </div>
+    <div class="rv-nav">
+      <button type="button" data-rv="prev" aria-label="Previous">&#8593;</button>
+      <button type="button" data-rv="next" aria-label="Next">&#8595;</button>
+      <button type="button" data-rv="toggle" class="rv-toggle"><span data-label-docs>Comments &rarr;</span><span data-label-comments hidden>&larr; Docs</span></button>
+    </div>
+  </header>
+  {% if active_job %}<div class="rv-note">An update-doc job is running on {{ branch }}. The comments it is working on are locked until it ends; new ones are not part of it.</div>{% endif %}
+  <div class="rv-viewport">
+    <div class="rv-track">
+      <section class="rv-pane rv-docs" aria-label="Documentation">
+        <div class="rv-doc">
+          <article class="rv-md md">{{ html | safe }}</article>
+          <div class="rv-marks" aria-hidden="true"></div>
+        </div>
+      </section>
+      <section class="rv-pane rv-comments" aria-label="Comments">
+        <div class="rv-slots"></div>
+        <p class="rv-empty muted">No highlights yet. Select text on the documentation page and tap the highlighter.</p>
+      </section>
+    </div>
+  </div>
+  <aside class="rv-keys" aria-label="Keyboard shortcuts">
+    <h2>Keyboard</h2>
+    <dl data-keys="docs">
+      <dt>&rarr;</dt><dd>Comments page</dd>
+      <dt>Ctrl + &uarr; / &darr;</dt><dd>Previous / next highlight (selects it)</dd>
+      <dt>Ctrl + Shift + &uarr; / &darr;</dt><dd>Previous / next paragraph (selects it)</dd>
+      <dt>Click a highlight</dt><dd>Select it</dd>
+      <dt>Enter</dt><dd>Highlight / unhighlight the selected text</dd>
+      <dt>Del</dt><dd>Unhighlight the selected text</dd>
+      <dt>Ctrl + Enter</dt><dd>Comment on the selected highlight (highlights plain text first)</dd>
+      <dt>Ctrl + I</dt><dd>Certify / lift the certification of the selected section</dd>
+    </dl>
+    <dl data-keys="comments" hidden>
+      <dt>&larr;</dt><dd>Documentation page</dd>
+      <dt>Ctrl + &uarr; / &darr;</dt><dd>Previous / next comment (selects it)</dd>
+      <dt>Enter</dt><dd>Edit the selected comment</dd>
+      <dt>Ctrl + Enter</dt><dd>Stop editing</dd>
+      <dt>Ctrl + Shift + Enter</dt><dd>Show the selected / edited comment's highlight</dd>
+      <dt>Ctrl + I</dt><dd>Certify / lift the certification of the selected comment's section</dd>
+    </dl>
+  </aside>
+  <button type="button" class="rv-fab rv-fab-certify" data-rv="certify" aria-label="Certify or lift the certification of the selected section">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.4 1.7 2.9-.1 1 2.7 2.4 1.7-.9 2.8.9 2.8-2.4 1.7-1 2.7-2.9-.1L12 21l-2.4-1.7-2.9.1-1-2.7-2.4-1.7.9-2.8-.9-2.8 2.4-1.7 1-2.7 2.9.1L12 3Z"></path><path d="M8.5 12.2l2.5 2.5 4.5-5"></path></svg>
+  </button>
+  <button type="button" class="rv-fab" data-rv="highlight" aria-label="Highlight or unhighlight the selected text" disabled>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l-4 4v4h4l4-4"></path><path d="M13 15l6-6-4-4-6 6 4 4Z"></path><path d="M4 21h16" opacity=".5"></path></svg>
+  </button>
+  <img class="rv-saving" src="/static/icons/icon-192.png" alt="Saving" hidden>
+  <div class="rv-toast" role="status" hidden></div>
+</div>
+<script type="application/json" id="rv-data">{{ {"comments": comments, "files": files} | tojson }}</script>
+<script src="/static/review.js?v={{ static_v }}"></script>
+</body>
+</html>

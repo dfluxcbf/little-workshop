@@ -181,6 +181,15 @@ def test_agent_run_task_playwright_mcp_is_on_unless_turned_off(paths, fake_creat
     assert [c["params"].get("playwright_mcp") for c in fake_create_job] == [None, None, False]
 
 
+def test_agent_run_task_standards_copy_is_on_unless_turned_off(paths, fake_create_job):
+    """REQ-000000288."""
+    handler = tools_mod.TOOLS_BY_NAME["workshop_agent_run_task"].handler
+    handler(paths, {"project_id": "little-meals", "title": "t"})
+    handler(paths, {"project_id": "little-meals", "title": "t", "include_standards": True})
+    handler(paths, {"project_id": "little-meals", "title": "t", "include_standards": False})
+    assert [c["params"].get("include_standards") for c in fake_create_job] == [None, None, False]
+
+
 def test_agent_run_task_includes_branching_when_branch_mode_given(paths, fake_create_job):
     tools_mod.TOOLS_BY_NAME["workshop_agent_run_task"].handler(
         paths,

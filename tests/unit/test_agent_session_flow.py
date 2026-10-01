@@ -186,4 +186,4 @@ def test_start_without_npx_or_when_disabled_has_no_playwright(paths, tmp_path, m
         SessionFlow(paths, runner=runner, playwright_mcp=enabled).start("little-widget", tmp_path)
         launch = next(c for c in runner.calls if c[0] == "systemd-run")
         assert "--mcp-config" not in launch
-        assert launch[-1] == "lws-little-widget-session"
+        assert launch[-5:] == ["lws-little-widget-session", "--model", "claude-sonnet-5-5", "--effort", "medium"]

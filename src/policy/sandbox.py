@@ -24,7 +24,7 @@ from pathlib import Path
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from policy.models import CheckOutcome
 
-IMAGE_TAG = "little-workshop-policy-sandbox:5"
+IMAGE_TAG = "little-workshop-policy-sandbox:6"
 DEFAULT_CHECK_TIMEOUT_SECONDS = 1800.0
 # The sandbox's whole point is to check a project WITHOUT being able to
 # affect anything else — including, concretely, little-workshop's own live
@@ -61,12 +61,14 @@ DEFAULT_PIDS_LIMIT = "2048"
 # pyproject.toml does, so a coverage-policy failure is worth checking against
 # this list before assuming it's real project debt. pytest-playwright added in
 # image :5 -- little-workshop's own tests/ui/ imports it; with no --base-url
-# those tests skip, so no browser is needed in the image.
+# those tests skip, so no browser is needed in the image. Image :6 only forces a rebuild:
+# markdown-it-py had been added to the list below without a new tag, so the cached :5 image
+# lacked it and the Dashboard's tests could not even be collected.
 _DOCKERFILE = (
     "FROM python:3.12-slim\n"
     "RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*\n"
     "RUN pip install --no-cache-dir pytest pytest-cov coverage "
-    "fastapi uvicorn pydantic httpx jinja2 python-multipart pyyaml apscheduler "
+    "fastapi uvicorn pydantic httpx jinja2 python-multipart markdown-it-py pyyaml apscheduler "
     "itsdangerous pywebpush pytest-playwright\n"
 )
 

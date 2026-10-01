@@ -87,6 +87,7 @@ __pycache__/
 .pytest_cache/
 bazel-*
 MODULE.bazel.lock
+.review/
 """
 
 

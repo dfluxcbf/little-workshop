@@ -10,8 +10,11 @@ Applies to every unattended Claude run launched by Agentic Development
 ## What the run is given
 
 Project id and checkout path, task title, intent (`task`, `bug`, `milestone`, `docs`), the task
-description, the ground rules, branching and UI instructions, and the report path. It is **not**
-given these standards unless the prompt points at them.
+description, the ground rules, branching and UI instructions, and the report path. Unless the task was
+started with the standards option off, it also gets a **temporary read-only copy of
+`shared_project_standards/`** (the root Markdown files plus its own project's folder), deleted when the run
+completes; read what applies, and never edit or commit it. Without that option it is **not** given these
+standards unless the prompt points at them.
 
 ## Ground rules
 

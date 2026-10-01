@@ -349,6 +349,73 @@ def test_task_detail_offers_finish_and_skip_when_awaiting(test_client, monkeypat
     assert "/tasks/little-widget/r1/finish" in text and "/tasks/little-widget/r1/skip" in text and "# report" in text
 
 
+def test_task_detail_shows_the_description_with_a_copy_button(test_client, monkeypatch):
+    monkeypatch.setattr(client, "agent_run", lambda paths, project, run_id: {
+        "id": run_id, "project_id": project, "title": "t", "status": "failed", "branch": None, "job_id": None,
+        "completion_status": None, "pr_url": None, "summary": "boom", "report": None, "description": "Do <b>this</b> & that",
+    })
+    text = test_client.get("/tasks/little-widget/r1").text
+    assert "Do &lt;b&gt;this&lt;/b&gt; &amp; that" in text and 'data-copy="task-description"' in text
+
+
+def test_task_detail_of_an_older_run_takes_the_description_from_its_job(test_client, monkeypatch):
+    monkeypatch.setattr(client, "agent_run", lambda paths, project, run_id: {
+        "id": run_id, "project_id": project, "title": "t", "status": "failed", "branch": None, "job_id": "j1",
+        "completion_status": None, "pr_url": None, "summary": "boom", "report": None, "description": "",
+    })
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id, **kw: {"params": {"description": "from the job"}})
+    assert "from the job" in test_client.get("/tasks/little-widget/r1").text
+
+
+def _failed_run(job_id="j1", status="failed"):
+    return lambda paths, project, run_id: {
+        "id": run_id, "project_id": project, "title": "t", "status": status, "branch": None, "job_id": job_id, "intent": "docs",
+        "review_mode": "manual", "completion_status": None, "pr_url": None, "summary": "boom", "report": None, "description": "d",
+    }
+
+
+def test_failed_one_off_task_offers_retry(test_client, monkeypatch):
+    monkeypatch.setattr(client, "agent_run", _failed_run())
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id, **kw: {"created_by": "dashboard", "params": {}})
+    assert "/tasks/little-widget/r1/retry" in test_client.get("/tasks/little-widget/r1").text
+    assert "once" in test_client.get("/tasks/little-widget/r1/retry").text.lower()
+
+
+def test_retry_keeps_a_standards_choice_made_when_the_task_was_started(test_client, monkeypatch):
+    """REQ-000000288."""
+    monkeypatch.setattr(client, "agent_run", _failed_run())
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id, **kw: {"created_by": "dashboard", "params": {"include_standards": False}})
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **f: jobs.append(f) or {"status": "running"})
+    test_client.post("/tasks/little-widget/r1/retry", data={"when": "immediate"})
+    assert jobs[0]["params"]["include_standards"] is False
+
+
+def test_retry_is_not_offered_for_non_failed_or_recurring_tasks(test_client, monkeypatch):
+    monkeypatch.setattr(client, "agent_run", _failed_run(status="finished"))
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id, **kw: {"created_by": "dashboard", "params": {}})
+    assert "/retry" not in test_client.get("/tasks/little-widget/r1").text
+    monkeypatch.setattr(client, "agent_run", _failed_run())
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id, **kw: {"created_by": "scheduler", "params": {}})
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [{"schedule": {"kind": "recurring"}, "job_template": {"project_id": "little-widget", "params": {"title": "t"}}}])
+    assert "/retry" not in test_client.get("/tasks/little-widget/r1").text
+    assert test_client.post("/tasks/little-widget/r1/retry", data={"when": "immediate"}, follow_redirects=False).headers["location"].startswith("/tasks?")
+
+
+def test_retry_starts_now_or_schedules_once_never_recurring(test_client, monkeypatch):
+    monkeypatch.setattr(client, "agent_run", _failed_run())
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id, **kw: {"created_by": "dashboard", "params": {}})
+    jobs, scheduled = [], []
+    monkeypatch.setattr(client, "create_job", lambda paths, **f: jobs.append(f) or {"status": "running"})
+    monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **f: scheduled.append(f) or {})
+    test_client.post("/tasks/little-widget/r1/retry", data={"when": "immediate"})
+    assert jobs[0]["params"] == {"title": "t", "description": "d", "intent": "docs", "review_mode": "manual", "include_standards": True}
+    test_client.post("/tasks/little-widget/r1/retry", data={"when": "once", "at": "2999-01-01T10:00"})
+    assert scheduled[0]["schedule"]["kind"] == "once" and scheduled[0]["job_template"]["params"]["description"] == "d"
+    test_client.post("/tasks/little-widget/r1/retry", data={"when": "recurring", "at": "2999-01-01T10:00"})
+    assert len(jobs) == 2 and len(scheduled) == 1  # "recurring" is not a retry option: it falls back to starting now
+
+
 def test_task_detail_for_a_missing_run_is_not_a_500(test_client, monkeypatch):
     monkeypatch.setattr(client, "agent_run", lambda paths, project, run_id: None)
     response = test_client.get("/tasks/p/nope")
@@ -869,7 +936,7 @@ def test_stylesheet_carries_no_violet(test_client):
 
 
 def test_service_worker_cache_name_is_bumped_with_the_icons(test_client):
-    assert "workshop-shell-v4" in test_client.get("/sw.js").text
+    assert "workshop-shell-v5" in test_client.get("/sw.js").text
 
 
 def test_every_icon_fills_its_whole_canvas_with_the_dark_ground():
@@ -1792,6 +1859,44 @@ def test_new_task_immediate_dispatches_a_job(test_client, monkeypatch):
     assert job["type"] == "agent.run_task" and job["project_id"] == "little-widget" and job["params"]["title"] == "Add search"
 
 
+def test_new_task_form_offers_the_standards_checkbox_checked_by_default(test_client, monkeypatch):
+    """REQ-000000288."""
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    text = test_client.get("/tasks/new").text
+    box = re.search(r'<input type="checkbox" name="include_standards"[^>]*>', text)
+    assert box and " checked" in box.group(0)
+    assert "Include shared project standards" in text
+
+
+def _post_task(test_client, monkeypatch, data):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    created = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: (created.append(kw), {"status": "running"})[1])
+    test_client.post("/tasks/new", data={"project": "little-widget", "title": "t", "when": "immediate", **data}, follow_redirects=False)
+    return created[0]["params"]
+
+
+def test_new_task_includes_the_standards_when_the_box_is_checked_or_absent(test_client, monkeypatch):
+    """REQ-000000288."""
+    assert _post_task(test_client, monkeypatch, {"include_standards": ["0", "1"]})["include_standards"] is True
+    assert _post_task(test_client, monkeypatch, {})["include_standards"] is True
+
+
+def test_new_task_leaves_the_standards_out_when_the_box_is_unchecked(test_client, monkeypatch):
+    """REQ-000000288."""
+    assert _post_task(test_client, monkeypatch, {"include_standards": "0"})["include_standards"] is False
+
+
+def test_a_scheduled_task_keeps_the_standards_choice(test_client, monkeypatch):
+    """REQ-000000288."""
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
+    scheduled = []
+    monkeypatch.setattr(client, "create_scheduled_task", lambda paths, **kw: scheduled.append(kw) or {})
+    test_client.post("/tasks/new", data={
+        "project": "little-widget", "title": "t", "when": "once", "at": "2099-01-01T08:00", "include_standards": "0"}, follow_redirects=False)
+    assert scheduled[0]["job_template"]["params"]["include_standards"] is False
+
+
 def test_new_task_immediate_reports_a_failure_to_start(test_client, monkeypatch):
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
     monkeypatch.setattr(client, "create_job", lambda paths, **kw: {"status": "failed", "error": "agent unreachable"})
@@ -2269,6 +2374,61 @@ def test_job_new_release_starts_a_release_job_with_its_conditions(test_client, m
                              "all_tests": True, "all_requirements": False, "all_policies": True}
 
 
+def test_update_standards_is_offered_for_little_workshop_only(test_client, monkeypatch):
+    """REQ-000000283, REQ-000000284."""
+    _stub_job_pages(monkeypatch)
+    text = test_client.get("/jobs/new").text
+    option = re.search(r'<option value="update_standards" data-projects="([^"]*)"[^>]*>([^<]*)</option>', text)
+    assert option and option.group(1) == "little-workshop" and option.group(2) == "Update Standards Documentation"
+    # the other jobs carry no restriction
+    assert 'value="build" data-projects' not in text and 'value="release" data-projects' not in text
+    # the page narrows the Job list as the project changes
+    assert "offerJobs()" in text and "dataset.projects" in text
+
+
+def test_update_standards_is_refused_for_any_other_project(test_client, monkeypatch):
+    """REQ-000000283."""
+    created, scheduled = [], []
+    _stub_job_pages(monkeypatch, created=created, scheduled=scheduled)
+    response = test_client.post("/jobs/new", data={"project": "little-widget", "job": "update_standards"}, follow_redirects=False)
+    assert response.status_code == 200 and "Update Standards Documentation is not available for little-widget." in response.text
+    response = test_client.post("/jobs/new", data={
+        "project": "little-widget", "job": "update_standards", "when": "once", "at": "2099-01-01T08:00"}, follow_redirects=False)
+    assert response.status_code == 200 and "is not available for little-widget" in response.text
+    _wait_for(created)
+    assert created == [] and scheduled == []
+
+
+def test_update_standards_queues_a_docs_task_for_little_workshop(test_client, monkeypatch):
+    """REQ-000000285."""
+    created = []
+    _stub_job_pages(monkeypatch, created=created)
+    response = test_client.post("/jobs/new", data={"project": "little-workshop", "job": "update_standards"}, follow_redirects=False)
+    assert response.status_code == 303 and "Update Standards Documentation started for little-workshop" in unquote(response.headers["location"])
+    _wait_for(created)
+    job = created[0]
+    assert (job["type"], job["target_pillar"], job["project_id"], job["queue_key"]) == ("agent.run_task", "agent", "little-workshop", "little-workshop")
+    params = job["params"]
+    assert (params["title"], params["intent"], params["review_mode"]) == ("Update Standards Documentation", "docs", "manual")
+    assert params["include_standards"] is False  # it edits the original; a copy would only mislead it
+    text = params["description"]
+    for needed in ("shared_project_standards/", "docs/governance_policy.md", "lws policy list", "lws project list",
+                   "Markdown files only", "Do not edit anything outside"):
+        assert needed in text
+
+
+def test_update_standards_can_be_scheduled(test_client, monkeypatch):
+    """REQ-000000285: the same Job template is what a schedule files."""
+    scheduled = []
+    _stub_job_pages(monkeypatch, scheduled=scheduled)
+    response = test_client.post("/jobs/new", data={
+        "project": "little-workshop", "job": "update_standards", "when": "once", "at": "2099-01-01T08:00"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert scheduled[0]["name"] == "Update Standards Documentation: little-workshop"
+    assert scheduled[0]["job_template"]["type"] == "agent.run_task"
+    assert scheduled[0]["job_template"]["project_id"] == "little-workshop"
+
+
 @pytest.mark.parametrize("data, message", [
     ({"arg_combine": "and", "arg_min_delta": "-3"}, "Minimum delta (lines changed) must be a whole number, 0 or more."),
     ({"arg_combine": "and", "arg_min_patch_bumps": "two"}, "Minimum patch bumps must be a whole number, 0 or more."),
@@ -2553,3 +2713,9 @@ def test_report_without_a_project_shows_a_placeholder_so_any_project_can_be_pick
     assert 'value="little-widget" selected' not in text
     chosen = test_client.get("/report", params={"project": "little-widget"}).text
     assert "Choose a project" not in chosen and 'value="little-widget" selected' in chosen
+
+
+def test_service_worker_falls_back_to_a_cached_stylesheet_when_offline(test_client):
+    """Regression: on a flaky phone connection the versioned app.css?v= fetch
+    failed and the page rendered unstyled, although /static/app.css was cached."""
+    assert "ignoreSearch: true" in test_client.get("/sw.js").text

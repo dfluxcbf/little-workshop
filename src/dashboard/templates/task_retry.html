@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Retry {{ run.title }} — little-workshop{% endblock %}
+{% block content %}
+<h1>Retry: {{ run.title }}</h1>
+<p class="lede"><a href="/tasks/{{ run.project_id }}/{{ run.id }}">&larr; The failed run</a> &middot; {{ run.project_id }}</p>
+<div class="panel" style="padding:18px 20px">
+<form method="post" action="/tasks/{{ run.project_id }}/{{ run.id }}/retry">
+  <label for="description">Task</label>
+  <pre class="log-pre" id="description">{{ params.description or '(no description)' }}</pre>
+  <label for="when">When</label>
+  <select name="when" id="when">
+    <option value="immediate">Right away</option>
+    <option value="once">Once, at a date and time</option>
+  </select>
+  <div data-when="once" hidden>
+    <label for="at">Date and time</label>
+    <input type="datetime-local" name="at" id="at">
+  </div>
+  <div class="row" style="margin-top:16px"><button type="submit" class="primary">Retry task</button></div>
+</form>
+</div>
+<script>
+(function () {
+  var when = document.getElementById("when");
+  function sync() { document.querySelectorAll("[data-when]").forEach(function (el) { el.hidden = el.dataset.when !== when.value; }); }
+  when.addEventListener("change", sync);
+  sync();
+})();
+</script>
+{% endblock %}
