@@ -103,7 +103,7 @@ are the current state of every pillar.
     suite is linked to a requirement's own done/passing state and is hidden from this tab so it
     doesn't duplicate every test under one giant heading (REQ-000000215, correcting
     REQ-000000212's own "same suite grouping" wording — module suites are never linked to a
-    requirement, so they don't affect done/passing). A search box and a verdict filter apply to
+    requirement, so they don't affect done/passing). A test the hidden aggregate suite ran more recently than its module suite did shows the aggregate's newer verdict, so the tab never contradicts the requirement verdicts. A search box and a verdict filter apply to
     both tabs.
   - **New project** (`/projects/new`): the form behind `project.bootstrap` — creates the basic files,
     a git repository on `dev` with version tracking, and registers it under the workspace directory;
