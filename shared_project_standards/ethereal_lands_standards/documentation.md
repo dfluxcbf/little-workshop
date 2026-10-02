@@ -1,6 +1,6 @@
 # Ethereal Lands documentation rules
 
-Source: `.claude/AGENTS.md` in the project, plus [../documentation_standard.md](../documentation_standard.md).
+Source: `AGENTS.md` and `.claude/rules/docs.md` in the project, plus [../documentation_standard.md](../documentation_standard.md).
 
 ## Layout
 
@@ -11,7 +11,7 @@ Source: `.claude/AGENTS.md` in the project, plus [../documentation_standard.md](
 - `docs/machination/`: ELM planning and reference.
 - `docs/architecture.md` and `docs/milestones.md`: currently short; these are the shared-standard
   documents most in need of completion.
-- `docs/playthrough_testing/` is mentioned in some task descriptions but does not exist.
+- `docs/playthrough_testing/`: playthrough reports and their refined insights (merged 2026-10-02).
 
 ## Rules
 
@@ -33,4 +33,4 @@ Source: `.claude/AGENTS.md` in the project, plus [../documentation_standard.md](
 Honour it exactly. Typical protected areas for documentation tasks: `docs/design/`, `docs/game/`.
 The sub-project `docs/machination/` should be treated as protected unless the task names it.
 
-Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).
+Last reviewed: 2026-10-02 (instructions moved to the root `AGENTS.md` and `.claude/rules/`).

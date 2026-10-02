@@ -210,6 +210,17 @@ def test_a_skipped_checks_detail_is_the_skip_reason():
     assert "no release yet" in result.detail
 
 
+def test_a_coloured_failure_still_records_its_assertion_message():
+    """FORCE_COLOR makes pytest colour every line: the reasons must survive it."""
+    red, bold, reset = "\x1b[31m", "\x1b[1m", "\x1b[0m"
+    coloured = "\n".join(f"{bold}{red}{line}{reset}" if line.startswith(("E ", "FAILED", "1 failed")) else line
+                         for line in PYTEST_FAIL.splitlines()) + "\n"
+    result = sandbox._parse_verdict(coloured, 1)
+    assert result.outcome == CheckOutcome.FAIL
+    assert result.detail.splitlines()[0] == "AssertionError: VERSION 0.1.0 is not higher than 0.1.0. Fix: raise VERSION."
+    assert "\x1b" not in result.detail
+
+
 def test_a_long_detail_is_capped():
     out = "".join(f"E   line {i} {'x' * 80}\n" for i in range(200)) + "1 failed in 1s\n"
     detail = sandbox._parse_verdict(out, 1).detail
@@ -237,7 +248,7 @@ def test_the_sandbox_passes_environment_and_input_files_to_the_script():
                              inputs={"message": "feat: x", "VERSION": "1.0.0\n"}, runner=runner, timeout=5.0)
     run = next(c for c in runner.calls if c[:2] == ["docker", "run"])
     assert "POLICY_COMMIT_DIR=/policy/input" in run and "COLUMNS=400" in run
-    assert "--tb=short" in run
+    assert "--tb=short" in run and "--color=no" in run
     assert runner.files == {"message": "feat: x", "VERSION": "1.0.0\n"}
 
 

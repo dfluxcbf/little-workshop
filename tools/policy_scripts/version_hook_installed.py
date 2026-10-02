@@ -13,6 +13,7 @@ no commit-history walk."""
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -38,22 +39,38 @@ def _base_version(v):
     return re.sub(r"-(dev|rc)\.\d+$", "", v)
 
 
-def _other_file_carries_the_version(base):
+def _project_files():
+    """The project's own files: what git tracks or would track. Ignored build output, caches and
+    vendored packages (a Unity project's Library/ holds thousands) never carry the project's version."""
+    listed = subprocess.run(
+        ["git", "-c", "safe.directory=*", "-C", str(PROJECT), "ls-files", "--cached", "--others",
+         "--exclude-standard", "-z"],
+        capture_output=True, text=True,
+    )
+    if listed.returncode == 0:
+        return [PROJECT / p for p in sorted(set(listed.stdout.split("\0"))) if p]
+    found = []
     for root, dirs, files in os.walk(PROJECT):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith("bazel-")]
-        for name in files:
-            path = Path(root) / name
-            if path == PROJECT / "VERSION":
+        found += [Path(root) / name for name in files]
+    return found
+
+
+def _other_file_carries_the_version(base):
+    """The first file besides VERSION that carries `base` as a whole version, or None."""
+    exact = re.compile(r"(?<![\d.])" + re.escape(base) + r"(?![\d])")
+    for path in _project_files():
+        if path == PROJECT / "VERSION" or any(part in SKIP_DIRS for part in path.relative_to(PROJECT).parts):
+            continue
+        try:
+            if not path.is_file() or path.stat().st_size > MAX_SIZE:
                 continue
-            try:
-                if path.stat().st_size > MAX_SIZE:
-                    continue
-                text = path.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-            if base in text:
-                return True
-    return False
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if exact.search(text):
+            return path.relative_to(PROJECT)
+    return None
 
 
 def test_version_hook_installed_and_propagation_registered_where_needed():
@@ -88,11 +105,12 @@ def test_version_hook_installed_and_propagation_registered_where_needed():
     if version is None:
         pytest.skip("no VERSION file; nothing to propagate")
     base = _base_version(version)
-    if not _other_file_carries_the_version(base):
+    carrier = _other_file_carries_the_version(base)
+    if carrier is None:
         pytest.skip("no other file carries the current VERSION value; nothing to propagate")
 
     assert version_hooks, (
-        f"another file besides VERSION carries {base!r} but "
+        f"{carrier} carries {base!r} besides VERSION but "
         ".lvx/config.json's version_hooks is empty. Fix: register a "
         "propagation script (workshop_version_config_add_hook; little-meals' "
         "tools/on_version_bump.py is the pattern) so that file follows VERSION "

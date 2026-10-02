@@ -16,7 +16,7 @@ def test_create_project_tree_writes_the_standard_layout(tmp_path):
     assert (dest / "MODULE.bazel").read_text().count("little_widget") == 1
     assert (dest / "src" / ".gitkeep").exists()
     assert (dest / "tests" / ".gitkeep").exists()
-    assert len(written) == 15
+    assert len(written) == 18  # the layout, AGENTS.md and the 7 generated .claude files
 
 
 def test_create_project_tree_rejects_existing_destination(tmp_path):

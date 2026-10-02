@@ -1,6 +1,8 @@
 """Policy `commit-cites-requirement` (version pillar; gates commit, branch_finish): a commit
-that changes a file under src/ cites the requirements it affects (REQ-nnnnnnnnn) or, if it
-affects none, REQ-NONE (any letter case) -- never both.
+that changes the project's source -- a file under src/ or, in a Unity project (one with
+ProjectSettings/ProjectVersion.txt), under Assets/, Packages/, ProjectSettings/ or tools/ --
+cites the requirements it affects (REQ-nnnnnnnnn) or, if it affects none, REQ-NONE (any letter
+case) -- never both.
 
 Judges the commit being made when the commit-msg hook runs it (POLICY_COMMIT_DIR holds its
 message and changed paths), otherwise HEAD. One commit is judged, never the whole history,
@@ -16,6 +18,7 @@ import pytest
 
 PROJECT = os.environ.get("POLICY_PROJECT_DIR", "/project")
 COMMIT_DIR = os.environ.get("POLICY_COMMIT_DIR")
+UNITY_ROOTS = ("Assets/", "Packages/", "ProjectSettings/", "tools/")
 REQ_RE = re.compile(r"(?<![A-Za-z0-9-])REQ-\d{9}(?!\d)")
 NONE_RE = re.compile(r"(?<![A-Za-z0-9-])REQ-NONE(?![A-Za-z0-9])", re.IGNORECASE)
 FIX = (
@@ -53,6 +56,13 @@ def _commit():
     return msg.stdout, [line for line in touched.stdout.splitlines() if line.strip()]
 
 
+def source_roots():
+    """Where the project's source lives: src/, plus a Unity project's own folders."""
+    if os.path.isfile(os.path.join(PROJECT, "ProjectSettings", "ProjectVersion.txt")):
+        return ("src/",) + UNITY_ROOTS
+    return ("src/",)
+
+
 def test_commit_touching_src_cites_requirement_id():
     message, files = _commit()
     cites_req = bool(REQ_RE.search(message))
@@ -62,11 +72,12 @@ def test_commit_touching_src_cites_requirement_id():
         "requirement is affected. Fix: keep the requirement ids and drop REQ-NONE (or the reverse)."
         f"\nMessage: {message.strip()!r}"
     )
-    src = [f for f in files if f.startswith("src/")]
+    roots = source_roots()
+    src = [f for f in files if f.startswith(roots)]
     if not src:
-        pytest.skip("the commit changes nothing under src/")
+        pytest.skip(f"the commit changes nothing under {', '.join(roots)}")
     assert cites_req or cites_none, (
-        f"The commit changes {len(src)} file(s) under src/ ({', '.join(src[:3])}"
+        f"The commit changes {len(src)} source file(s) ({', '.join(src[:3])}"
         f"{', ...' if len(src) > 3 else ''}) but its message cites no requirement. {FIX}"
         f"\nMessage: {message.strip()!r}"
     )

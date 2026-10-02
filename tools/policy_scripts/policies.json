@@ -17,8 +17,8 @@
     {
       "topic": "commit-bumps-version",
       "target_pillar": "version",
-      "scope_level": "project",
-      "scope_target": "little-workshop",
+      "scope_level": "all_projects",
+      "scope_target": null,
       "created_by": "user",
       "ears_text": "WHEN a commit is made, the commit's VERSION file shall have a higher version precedence than its parent commit's VERSION file.",
       "gate_points": [
@@ -30,8 +30,8 @@
     {
       "topic": "branch-commit-dev-suffix",
       "target_pillar": "version",
-      "scope_level": "project",
-      "scope_target": "little-workshop",
+      "scope_level": "all_projects",
+      "scope_target": null,
       "created_by": "user",
       "ears_text": "WHEN a commit is made on a working branch (not master, dev, release/*, hotfix/* or support/*), the commit's VERSION shall be the next patch version of the commit the branch was cut from with the suffix -dev.N, where N is 1 for the branch's first commit and one more than its parent's N for every later commit.",
       "gate_points": [
@@ -46,12 +46,129 @@
       "scope_level": "all_projects",
       "scope_target": null,
       "created_by": "user",
-      "ears_text": "WHEN a commit changes a file under src/, the commit message shall cite either at least one requirement id in the form REQ-nnnnnnnnn or, if the commit affects no requirement, REQ-NONE (in any letter case); IF a commit message cites REQ-NONE, THEN it shall not cite any requirement id.",
+      "ears_text": "WHEN a commit changes a file under src/ or, in a Unity project, under Assets/, Packages/, ProjectSettings/ or tools/, the commit message shall cite either at least one requirement id in the form REQ-nnnnnnnnn or, if the commit affects no requirement, REQ-NONE (in any letter case); IF a commit message cites REQ-NONE, THEN it shall not cite any requirement id.",
       "gate_points": [
         "commit",
         "branch_finish"
       ],
       "script": "commit_cites_requirement.py"
+    },
+    {
+      "topic": "unity-meta-files-paired",
+      "target_pillar": "version",
+      "scope_level": "all_projects",
+      "scope_target": null,
+      "created_by": "framework",
+      "ears_text": "WHERE the project is a Unity project, WHEN a commit adds or deletes a file or folder under Assets/, the commit shall add or delete that file's or folder's .meta file with it, and shall not add or delete a .meta file apart from its asset.",
+      "gate_points": [
+        "commit",
+        "branch_finish"
+      ],
+      "script": "unity_meta_files_paired.py",
+      "projects": [
+        {
+          "project_id": "little-home",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-meals",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-mindcheck",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-spectrum",
+          "gating_enabled": false
+        },
+        {
+          "project_id": "little-workshop",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "ethereal-lands",
+          "gating_enabled": true
+        }
+      ]
+    },
+    {
+      "topic": "lfs-tracked-files-are-pointers",
+      "target_pillar": "version",
+      "scope_level": "all_projects",
+      "scope_target": null,
+      "created_by": "framework",
+      "ears_text": "WHERE the project's .gitattributes routes files to Git LFS, WHEN a commit adds or changes a file that .gitattributes routes to Git LFS, the commit shall store that file as a Git LFS pointer.",
+      "gate_points": [
+        "commit",
+        "branch_finish"
+      ],
+      "script": "lfs_tracked_files_are_pointers.py",
+      "projects": [
+        {
+          "project_id": "little-home",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-meals",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-mindcheck",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-spectrum",
+          "gating_enabled": false
+        },
+        {
+          "project_id": "little-workshop",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "ethereal-lands",
+          "gating_enabled": true
+        }
+      ]
+    },
+    {
+      "topic": "no-committed-secrets",
+      "target_pillar": "version",
+      "scope_level": "all_projects",
+      "scope_target": null,
+      "created_by": "user",
+      "ears_text": "WHEN a commit adds or changes a file, the commit shall not introduce a private key, a provider token or API key in a recognisable format, or an environment file (.env or .env.<name>, other than a template such as .env.example).",
+      "gate_points": [
+        "commit",
+        "branch_finish"
+      ],
+      "script": "no_committed_secrets.py",
+      "projects": [
+        {
+          "project_id": "little-home",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-meals",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-mindcheck",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-spectrum",
+          "gating_enabled": false
+        },
+        {
+          "project_id": "little-workshop",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "ethereal-lands",
+          "gating_enabled": true
+        }
+      ]
     },
     {
       "topic": "merge-commit-message-format",
@@ -261,7 +378,7 @@
       "scope_level": "all_projects",
       "scope_target": null,
       "created_by": "framework",
-      "ears_text": "The project shall carry .claude/AGENTS.md and a .claude/settings.json that registers the .claude/hooks/lws_scope_guard.py PreToolUse hook, and shall not carry a CLAUDE.md.",
+      "ears_text": "The project shall carry an AGENTS.md briefing (at the root or as .claude/AGENTS.md) that imports little-workshop's shared briefing section (.claude/little-workshop.md), the generated .claude/rules/claude-instructions.md rule and workshop-lifecycle and policy-preflight skills, and a .claude/settings.json that registers the .claude/hooks/lws_scope_guard.py PreToolUse hook for Bash, the file-edit tools and the little-workshop MCP tools, and shall not carry a CLAUDE.md, .claude/CLAUDE.md or CLAUDE.local.md anywhere.",
       "gate_points": [
         "branch_finish"
       ],
@@ -290,6 +407,44 @@
       ]
     },
     {
+      "topic": "claude-instructions-valid",
+      "target_pillar": "registry",
+      "scope_level": "all_projects",
+      "scope_target": null,
+      "created_by": "framework",
+      "ears_text": "The project's Claude Code instructions shall load as written: every @path import in an AGENTS.md or a .claude/rules/ file shall resolve to a file inside the project, every rule shall have frontmatter that parses with no field but paths and paths patterns that each match a file in the project, every skill and subagent shall have a description (a subagent also a name), every script a skill names and every hook script .claude/settings.json runs shall exist, no instruction file shall load more than 200 lines, and the instructions a session loads at launch shall total no more than 250 lines.",
+      "gate_points": [
+        "branch_finish"
+      ],
+      "script": "claude_instructions_valid.py",
+      "projects": [
+        {
+          "project_id": "little-home",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-meals",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-mindcheck",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "little-spectrum",
+          "gating_enabled": false
+        },
+        {
+          "project_id": "little-workshop",
+          "gating_enabled": true
+        },
+        {
+          "project_id": "ethereal-lands",
+          "gating_enabled": true
+        }
+      ]
+    },
+    {
       "topic": "wheel-filename-has-version",
       "target_pillar": "build",
       "scope_level": "all_projects",
@@ -300,6 +455,24 @@
         "package_publish"
       ],
       "script": "wheel_filename_has_version.py"
+    },
+    {
+      "topic": "design-index-and-schema-current",
+      "target_pillar": "build",
+      "scope_level": "project",
+      "scope_target": "ethereal-lands",
+      "created_by": "user",
+      "ears_text": "The design index blocks and docs/design/README.md shall match what tools/update_design_index.py writes, and Assets/Machination/Schema/machination.schema.json shall match what tools/elm-schema.py writes.",
+      "gate_points": [
+        "branch_finish"
+      ],
+      "script": "design_index_and_schema_current.py",
+      "projects": [
+        {
+          "project_id": "ethereal-lands",
+          "gating_enabled": true
+        }
+      ]
     }
   ]
 }

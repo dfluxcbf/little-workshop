@@ -250,3 +250,103 @@ def test_the_hook_calls_lws_only_on_a_working_branch(tmp_path):
         subprocess.run(["git", "commit", "-m", f"on {branch}"], cwd=repo, env=env, check=True, capture_output=True)
 
     assert calls.read_text().split() == ["improvement/x", "feature/y"]
+
+
+# --- REQ pending (the pre-commit sync numbers an amend from HEAD's parent and stages only its own
+# changes) -------------------------------------------------------------------------------------
+
+def test_an_amend_is_numbered_from_heads_parent(tmp_path):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    cmd_topic_start(repo, prefix="feature", name="widgets")
+    _write(repo, "a.py", "a = 1\n")
+    cmd_sync_version_files(repo)
+    _git(["commit", "-m", "feat: a"], repo)
+
+    result = cmd_sync_version_files(repo, amend=True)  # amending the branch's first commit
+    assert result.data["version"] == "0.1.1-dev.1" and result.data["amend"]
+    _git(["commit", "--amend", "--no-verify", "-m", "feat: a, amended"], repo)
+
+    _write(repo, "b.py", "b = 1\n")
+    assert cmd_sync_version_files(repo).data["version"] == "0.1.1-dev.2"
+    _git(["commit", "-m", "feat: b"], repo)
+    assert cmd_sync_version_files(repo, amend=True).data["version"] == "0.1.1-dev.2"
+
+
+def test_an_amend_with_nothing_of_the_branch_to_replace_counts_as_a_first_commit(tmp_path):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    cmd_topic_start(repo, prefix="feature", name="widgets")
+    _write(repo, "a.py", "a = 1\n")
+    result = cmd_sync_version_files(repo, amend=True)
+    assert result.data["version"] == "0.1.1-dev.1" and not result.data["amend"]
+
+
+def test_the_sync_stages_only_what_it_changed(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / "notes.md").write_text("tracked\n", encoding="utf-8")
+    _add_version_hook(
+        repo,
+        "import sys, pathlib\n"
+        "pathlib.Path('propagated.txt').write_text(sys.argv[1])\n",
+    )
+    cmd_topic_start(repo, prefix="feature", name="widgets")
+
+    _write(repo, "src.py", "x = 1\n")  # staged by the author
+    (repo / "notes.md").write_text("an unrelated edit, not for this commit\n", encoding="utf-8")
+    (repo / "scratch.txt").write_text("untracked work\n", encoding="utf-8")
+    result = cmd_sync_version_files(repo)
+
+    staged = set(_git(["diff", "--cached", "--name-only"], repo).stdout.split())
+    assert staged == {"VERSION", "propagated.txt", "src.py"}
+    assert result.data["files_touched"] == ["VERSION", "propagated.txt"]
+    assert _git(["diff", "--name-only"], repo).stdout.split() == ["notes.md"]
+    assert "scratch.txt" in _git(["ls-files", "--others", "--exclude-standard"], repo).stdout
+
+
+def test_amending_commit_finds_the_git_process_among_the_ancestors(tmp_path):
+    from version.commands import sync_version_files as sync
+
+    table = {30: (20, ["/bin/sh", ".githooks/pre-commit"]), 20: (10, ["/usr/bin/git", "commit", "--amend", "-m", "x"]),
+             10: (1, ["bash"])}
+    original = sync._process
+    try:
+        sync._process = table.get
+        assert sync.amending_commit(start_pid=30)
+        table[20] = (10, ["git", "commit", "-m", "x"])
+        assert not sync.amending_commit(start_pid=30)
+        assert not sync.amending_commit(start_pid=10)  # no git above: not an amend
+    finally:
+        sync._process = original
+
+
+def test_a_real_amend_through_the_installed_hook_keeps_the_branchs_number(tmp_path):
+    """End to end through git: the hook runs as git's child, so the sync sees `--amend`."""
+    import sys
+    from pathlib import Path
+
+    repo = make_repo(tmp_path)
+    install_pre_commit_hook(repo, "little-widget")
+    _git(["add", "-A"], repo)
+    _git(["commit", "--no-verify", "-m", "chore: install hook"], repo)
+    _git(["checkout", "dev"], repo)
+    _git(["merge", "--ff-only", "master"], repo)
+    cmd_topic_start(repo, prefix="feature", name="widgets")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    src_dir = Path(__file__).resolve().parents[2] / "src"
+    (bin_dir / "lws").write_text(
+        f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(src_dir)!r})\n"
+        "from cli.main import main\nsys.exit(main())\n", encoding="utf-8")
+    (bin_dir / "lws").chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin", XDG_STATE_HOME=str(tmp_path / "no-daemon"))
+
+    _write(repo, "src.py", "x = 1\n")
+    subprocess.run(["git", "commit", "-m", "feat: x"], cwd=repo, env=env, check=True, capture_output=True)
+    assert _git(["show", "HEAD:VERSION"], repo).stdout.strip() == "0.1.1-dev.1"
+    done = subprocess.run(["git", "commit", "--amend", "-m", "feat: x REQ-NONE"], cwd=repo, env=env,
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert _git(["show", "HEAD:VERSION"], repo).stdout.strip() == "0.1.1-dev.1"
+    assert _git(["status", "--porcelain"], repo).stdout == ""

@@ -253,32 +253,32 @@
       "Bash(python3 tools/sync_policies.py --apply*)"
     ],
     "deny": [
-      "Bash(git merge*)",
-      "Bash(git cherry-pick*)",
-      "Bash(git tag*)",
-      "Bash(git push*)",
-      "Bash(git branch -d*)",
-      "Bash(git branch -D*)",
-      "Bash(git reset --hard*)",
-      "Bash(git clean*)",
-      "Bash(git commit*--no-verify*)",
-      "Bash(systemd-run*)",
-      "Bash(systemctl --user start*)",
-      "Bash(systemctl --user stop*)",
-      "Bash(systemctl --user restart*)",
-      "Bash(systemctl --user kill*)",
-      "Bash(twine*)",
-      "Bash(pipx install*)",
-      "Bash(gh repo create*)",
-      "Bash(gh pr create*)",
-      "Bash(gh pr merge*)",
-      "Bash(gh release*)"
+      "Bash(git merge *)",
+      "Bash(git cherry-pick *)",
+      "Bash(git tag *)",
+      "Bash(git push *)",
+      "Bash(git branch -d *)",
+      "Bash(git branch -D *)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean *)",
+      "Bash(git commit *--no-verify*)",
+      "Bash(systemd-run *)",
+      "Bash(systemctl --user start *)",
+      "Bash(systemctl --user stop *)",
+      "Bash(systemctl --user restart *)",
+      "Bash(systemctl --user kill *)",
+      "Bash(twine *)",
+      "Bash(pipx install *)",
+      "Bash(gh repo create *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr merge *)",
+      "Bash(gh release *)"
     ]
   },
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|mcp__little-workshop__.*",
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__little-workshop__.*",
         "hooks": [
           {
             "type": "command",

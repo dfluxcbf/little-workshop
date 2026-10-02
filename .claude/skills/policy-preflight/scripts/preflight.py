@@ -22,6 +22,8 @@ from pathlib import Path
 GATE_POINTS = ("branch_finish", "release", "package_publish", "build_install", "server_launch",
                "deploy_redeploy", "server_stop", "project_removal")
 _SUMMARY = re.compile(r"(\d+) (failed|passed|skipped)")
+# Terminal colour codes: a coloured `E   ...` line would hide the assertion message from the report.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def checkout_root():
@@ -78,16 +80,17 @@ def evaluate_locally(project, gate_point, root):
             script.write_text(policy["test_script"], encoding="utf-8")
             run = subprocess.run(
                 [sys.executable, "-m", "pytest", str(script), "-q", "-rA", "--tb=short", "--no-header",
-                 "-p", "no:cacheprovider"],
+                 "-p", "no:cacheprovider", "--color=no"],
                 capture_output=True, text=True, env=env, cwd=scratch,
             )
-            counts = {kind: int(n) for n, kind in _SUMMARY.findall(run.stdout.strip().splitlines()[-1] if run.stdout.strip() else "")}
+            stdout = _ANSI.sub("", run.stdout)
+            counts = {kind: int(n) for n, kind in _SUMMARY.findall(stdout.strip().splitlines()[-1] if stdout.strip() else "")}
             outcome = ("fail" if counts.get("failed") or run.returncode not in (0, 1) else
                        "pass" if counts.get("passed") else "not_applicable" if counts.get("skipped") else "error")
             reasons = [line[2:].strip() if line.startswith("E ") else line.strip()
-                       for line in run.stdout.splitlines() if line.startswith(("E ", "SKIPPED "))]
+                       for line in stdout.splitlines() if line.startswith(("E ", "SKIPPED "))]
             results.append({"topic": policy["topic"], "ears_text": policy["ears_text"], "gating": policy.get("gating", True),
-                            "outcome": outcome, "detail": "\n".join(dict.fromkeys(reasons)) or run.stdout[-800:]})
+                            "outcome": outcome, "detail": "\n".join(dict.fromkeys(reasons)) or stdout[-800:]})
     return {
         "project_id": project, "gate_point": gate_point, "results": results, "local": True,
         "blocking": [r["topic"] for r in results if r["outcome"] == "fail" and r["gating"]],

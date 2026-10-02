@@ -52,8 +52,10 @@ Deployment & Servers, Agentic Development — needs somewhere to resolve
 - **Claude Code files in a new project** (REQ-000000293..298):
   `project.bootstrap` also writes, for both templates (`registry/claude_templates.py`),
   `.claude/settings.json`, `.claude/hooks/lws_scope_guard.py` and `.claude/AGENTS.md`, and no
-  `CLAUDE.md`: Claude Code reads `AGENTS.md` only where a project has none, so the unity layout's working
-  rules moved from its root `CLAUDE.md` into `.claude/AGENTS.md`. `.claude/settings.local.json` and
+  `CLAUDE.md`: Claude Code reads `AGENTS.md` only where a project has no `CLAUDE.md` or `CLAUDE.local.md`,
+  so the unity layout's working rules moved from its root `CLAUDE.md` into `.claude/AGENTS.md`. A
+  registered project may keep its briefing as a root `AGENTS.md` instead, which Claude Code reads the same
+  way (ethereal-lands does; `claude-config-present` accepts either). `.claude/settings.local.json` and
   `.claude/worktrees/` are gitignored. The settings pre-allow the read-only, routine and policy-gated
   (finish, release, deploy, publish; the policy gate is their check) `little-workshop` MCP tools and `lws`
   commands, with every `lws` command that takes `--project-id` bound to the new project's own id; make the
@@ -67,6 +69,12 @@ Deployment & Servers, Agentic Development — needs somewhere to resolve
   name that is not a usable id (letters, digits, `.`, `_`, `-`). little-workshop's own `.claude/settings.json`
   is the same table bound to `little-workshop`, plus its platform administration, held equal by a unit test;
   the `little-projects` super-repository, whose sessions manage every project, allows all of it instead.
+  Since 2026-10-02 the generated set (`claude_files()`) also holds `.claude/little-workshop.md` (the briefing
+  section every project shares, imported by its `AGENTS.md`), the path-scoped rule
+  `.claude/rules/claude-instructions.md` and the `workshop-lifecycle` skill, and the guard also runs for the
+  file-edit tools: it refuses the denied raw commands with the route to take, and hand edits of generated
+  files or a `CLAUDE.md` (`docs/pillars/policy_compliance.md`, "the second pass"). `tools/sync_claude_files.py`
+  rewrites the set in a registered project's checkout, keeping the entries the project added to its settings.
 - **`project.connect_github`** (`POST /v1/jobs/project.connect_github`,
   REQ-000000279..282, 2026-09-25) — the GitHub half of `project.bootstrap`
   for a project that is *already registered*, so a missing repo, remote,

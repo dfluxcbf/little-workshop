@@ -5,6 +5,8 @@ REQ- followed by nine digits."""
 import os
 import re
 import pathlib
+import subprocess
+
 import pytest
 
 ROOT = pathlib.Path(os.environ.get("POLICY_PROJECT_DIR", "/project"))
@@ -56,6 +58,19 @@ def _is_test_file(path: pathlib.Path) -> bool:
     )
 
 
+def _project_files(root):
+    """The project's own files: what git tracks or would track (never ignored build output,
+    caches or vendored packages such as Unity's Library/), else every file under the checkout."""
+    listed = subprocess.run(
+        ["git", "-c", "safe.directory=*", "-C", str(root), "ls-files", "--cached", "--others",
+         "--exclude-standard", "-z"],
+        capture_output=True, text=True,
+    )
+    if listed.returncode == 0:
+        return [root / p for p in sorted(set(listed.stdout.split("\0"))) if p]
+    return sorted(root.rglob("*"))
+
+
 def _constants(text: str) -> dict[str, str]:
     """{NAME: "REQ-nnnnnnnnn"} for every simple `NAME = "REQ-nnnnnnnnn"` line
     in the file (any indentation level -- module or class scope alike)."""
@@ -71,7 +86,7 @@ def _collect():
     markers = []  # (relpath, lineno, text, constants)
     if not ROOT.is_dir():
         return markers
-    for path in sorted(ROOT.rglob("*")):
+    for path in _project_files(ROOT):
         try:
             if not path.is_file() or not _is_test_file(path):
                 continue

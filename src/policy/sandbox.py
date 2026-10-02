@@ -144,10 +144,20 @@ def ensure_image(*, runner: CommandRunner = DEFAULT_RUNNER, tag: str = IMAGE_TAG
 # every result row.
 DETAIL_LIMIT = 4000
 _REASON_PREFIXES = ("E ", "SKIPPED ", "FAILED ", "ERROR ")
+# Terminal colour codes. pytest colours its output when the environment asks for it
+# (FORCE_COLOR, PY_COLORS), and a coloured `E   ...` line starts with an escape code, so none
+# matched `_REASON_PREFIXES` and the detail fell back to pytest's last lines, losing the
+# assertion message. The sandbox runs pytest with `--color=no`; this covers any other caller.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def plain(text: str) -> str:
+    """`text` without terminal colour codes."""
+    return _ANSI.sub("", text)
 
 
 def _explain(stdout: str, *, limit: int = DETAIL_LIMIT) -> str:
-    lines = stdout.strip().splitlines()
+    lines = plain(stdout).strip().splitlines()
     summary = lines[-1].strip("= ").strip() if lines else ""
     reasons: list[str] = []
     for line in lines:
@@ -162,6 +172,7 @@ def _explain(stdout: str, *, limit: int = DETAIL_LIMIT) -> str:
 
 
 def _parse_verdict(stdout: str, exit_code: int) -> SandboxResult:
+    stdout = plain(stdout)
     detail = _explain(stdout)
     if exit_code not in (0, 1):
         return SandboxResult(outcome=CheckOutcome.FAIL, detail=f"test script did not run cleanly (exit {exit_code}):\n{detail}")
@@ -227,6 +238,7 @@ def run_policy_check(
         argv += [
             "-w", "/policy", tag,
             "python", "-m", "pytest", "test_policy.py", "-rA", "--tb=short", "--no-header", "-q", "-p", "no:cacheprovider",
+            "--color=no",
         ]
 
         try:

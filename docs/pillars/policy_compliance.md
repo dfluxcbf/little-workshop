@@ -971,6 +971,10 @@ release or publish.
 **Readable verdicts.** A check's recorded detail is the failure's reasons — the assertion messages and
 skip reasons pytest prints — and the summary line, not pytest's last five lines (which held only
 `FAILED ... - A...`). Every script's assertion message says what is wrong and how to fix it.
+Since 2026-10-02 the sandbox and the preflight's local fallback run pytest with `--color=no` and
+strip colour codes before reading the reasons: with `FORCE_COLOR` or `PY_COLORS` set, every line
+started with an escape code, none matched, and the detail fell back to pytest's last lines, which
+drop the assertion message.
 
 **Policies as code.** Every policy's script is a file in `tools/policy_scripts/`, and its EARS text,
 target pillar, scope and gate points are in `tools/policy_scripts/policies.json`.
@@ -990,5 +994,85 @@ newest production tag's commit must be in the integration branch's history (merg
 cherry-picked), but not on its first-parent line (a non-fast-forward merge).
 
 Two framework policies check that a project carries this integration: `commit-policy-hook-installed`
-(the commit-msg hook and `core.hooksPath`) and `claude-config-present` (`.claude/AGENTS.md`, the scope
-guard registered in `.claude/settings.json`, no `CLAUDE.md`).
+(the commit-msg hook and `core.hooksPath`) and `claude-config-present` (an `AGENTS.md` briefing at the
+root or as `.claude/AGENTS.md`, the scope guard registered in `.claude/settings.json`, the
+`policy-preflight` skill, and no `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`, any of which makes
+Claude Code skip `AGENTS.md`). The second pass below widened `claude-config-present`.
+
+## Policies are the hard layer of a project's Claude instructions (2026-10-02)
+
+A project's Claude Code instructions come in layers that load at different moments: the `AGENTS.md`
+briefing in every session, `.claude/rules/` files when Claude reads a file their `paths:` match, skills
+when a task calls for them. All three are read and weighed, never executed, so a rule that must hold
+every time is not a sentence in them: it is a hook in the project (`.claude/hooks/`, refusing a tool call
+before it happens) or a policy here, run by the commit-msg hook on the commit being made and by the gate
+before a finish, with a failure message addressed to whoever reads it, a person or Claude, that says what
+to do instead. The instructions then only need to say that the rule exists and what enforces it.
+
+Policies that came out of this, and what they replaced:
+
+- `claude-instructions-valid` (registry; `branch_finish`; all projects): the instructions load as
+  written. Every `@path` import resolves (Claude Code skips a missing one silently), every path-scoped
+  rule's frontmatter parses (otherwise the rule loads in every session) and each of its patterns
+  matches a file (otherwise it never loads), every script a skill names and every hook script
+  `.claude/settings.json` runs exists, and no instruction file loads more than 200 lines (block-level
+  HTML comments, which Claude Code strips, do not count).
+- `unity-meta-files-paired` (version; `commit`, `branch_finish`; all projects, applies to Unity
+  projects): an asset and its `.meta` are added and deleted together, folders included, and no `.meta`
+  is added or deleted apart from its asset. It replaced "never commit an asset without its `.meta`".
+- `lfs-tracked-files-are-pointers` (version; `commit`, `branch_finish`; all projects, applies where
+  `.gitattributes` routes files to LFS): a file routed to LFS is committed as a pointer. It replaced
+  "never commit a binary outside Git LFS". At commit time it reads the staged blob from the index; a
+  blob only a temporary index holds (`git commit -a`) is left to the branch-finish check.
+- `design-index-and-schema-current` (build; `branch_finish`; project ethereal-lands): the generated
+  design index and ELM schema match their generators (`--check`). It replaced "generated, never
+  hand-edited" for those files; ethereal-lands' edit guard hook refuses the hand edit itself.
+- `commit-cites-requirement` now also covers a Unity project's own folders (`Assets/`, `Packages/`,
+  `ProjectSettings/`, `tools/`), which had left the rule unenforced on the Unity layout.
+- `commit-bumps-version` and `branch-commit-dev-suffix` are scoped to all projects, matching the projects
+  they were already attached to and the pre-commit hook every project carries.
+- `requirement-marker-registered`, `requirement-marker-id-format`, `version-hook-installed` and
+  `wheel-filename-has-version` list the project's files through `git ls-files` (tracked, or untracked and
+  not ignored) instead of walking the checkout. On a Unity project the walk went through `Library/` (tens
+  of thousands of package files on a slow Windows-drive mount), took minutes, and judged vendored code:
+  a package's test comment could have failed the marker policies, and any package file holding the
+  project's version string triggered `version-hook-installed`, which now also matches the version whole
+  (`10.1.5` no longer carries `0.1.5`) and names the file it found.
+
+## Briefings, rules, skills and the guard: the second pass (2026-10-02)
+
+The first pass made policies the hard layer; this one moves what was still prose in every briefing to where
+it loads or is enforced, and checks the result.
+
+- **The guard refuses with the route.** The generated `.claude/hooks/lws_scope_guard.py` runs for Bash, the
+  file-edit tools and the little-workshop MCP tools. Besides a call naming another project, it refuses the
+  raw commands `.claude/settings.json` denies (`git merge`, `tag`, `push`, `cherry-pick`, branch deletion,
+  `reset --hard`, `clean`, `commit --no-verify` or `-n`, a `core.hooksPath` override, `systemctl --user
+  start|stop|restart|kill`, `systemd-run`, `twine`, `pipx install`, `gh repo create`, `gh pr create|merge`,
+  `gh release`), in any spelling it can parse (`git -C . merge`, `bash -c '...'`), and its reason names the
+  little-workshop route instead (`claude_templates.ROUTES`); a permission denial alone said nothing. It also
+  refuses a hand edit of what little-workshop generates (`VERSION`, `.githooks/`, its `.claude/` files) and
+  of any `CLAUDE.md` or `CLAUDE.local.md`. The deny rules stay as the backstop.
+- **The shared briefing is generated and imported.** The lifecycle, enforcement and scope sections every
+  project's `AGENTS.md` repeated are `.claude/little-workshop.md`, which the briefing imports
+  (`@little-workshop.md`); the routing table and the steps before a finish moved into the generated
+  `workshop-lifecycle` skill, loaded when the work reaches one of them. The generated path-scoped rule
+  `.claude/rules/claude-instructions.md` says where an instruction belongs; it loads when Claude reads an
+  instruction file. `tools/sync_claude_files.py` rewrites the generated files in a registered project,
+  merging the project's own settings entries back in.
+- `claude-config-present` now also requires the briefing's import of the shared section, the generated rule
+  and skills, and the guard registered for every tool it judges, and refuses a `CLAUDE.md` or
+  `CLAUDE.local.md` anywhere in the project.
+- `claude-instructions-valid` now also fails an import outside the project (it loads only after the user
+  approves external imports, and never in the sandbox or another clone), a rule frontmatter field other
+  than `paths` (Claude Code ignores it, so a misspelt `paths` loads the rule in every session), a skill or
+  subagent without a description, and more than 250 lines loaded at session start (the root briefing, the
+  rules without `paths` and everything they import).
+- `no-committed-secrets` (version; `commit`, `branch_finish`; all projects): a commit introduces no private
+  key, no token or API key in a recognisable provider format and no environment file. Only matches the
+  file's previous version did not hold count, and a line marked `pragma: allowlist secret` is skipped, so a
+  test's fake value has a way out.
+- The settings' deny rules end at a word (`git merge *`, which also matches a bare `git merge`):
+  `git merge*` also denied the read-only `git merge-base`. `tools/sync_claude_files.py` drops the
+  retired patterns (`claude_templates.RETIRED_RULES`) from a project's settings instead of keeping
+  them as the project's own.
