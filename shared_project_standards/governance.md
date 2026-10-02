@@ -32,12 +32,19 @@ before relying on either; the maintenance job flags the mismatch.
 
 ## Policy lifecycle (Policy & Compliance)
 
-- A policy is one EARS statement plus a generated test script, per scope (`all_projects` or
-  `project`), with **gate points** (`branch_finish`, `release`, `package_publish`) where failure
-  blocks the action.
+- A policy is one EARS statement plus a test script, per scope (`all_projects` or `project`), with
+  **gate points** where failure blocks: `commit` (the project's commit-msg hook refuses the commit)
+  and the Job categories in use, `branch_finish`, `release` and `package_publish`. Every policy is
+  code in little-workshop's `tools/policy_scripts/` (script plus `policies.json`), and
+  `tools/sync_policies.py --apply` puts a reviewed change live.
+- Hard rules are enforced where the change is made, not only at the gate: by git hooks
+  (commit-time policies), Claude Code hooks (a project's scope guard), and a session's
+  `policy-preflight` skill before a gated action. Prose instructions carry context and judgment,
+  not the rules a script can check.
 - New policies pass four gates in `policy.author`: EARS compliance, mechanical enforceability,
   conflict check, then human activation. Drafts are decided in the Dashboard, never auto-approved
-  (`docs/pending_policy_drafts/README.md`).
+  (`docs/pending_policy_drafts/README.md`); a change to an active policy is reviewed as a change to
+  its files.
 - **History-based checks judge only the newest commit or tag, never the whole past.** A past mistake
   must not fail a policy forever.
 - Framework policies are hard rules while in force; changing one is development of little-workshop
@@ -59,4 +66,4 @@ arguments. Never free-form and never drafted by Claude. In this checkout (branch
 holds `build`, `run_tests` and `release`; see [README.md](README.md#maintenance) for the job that
 maintains this folder.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-02 (hand edit: policies as code; enforcement by hooks and preflight).

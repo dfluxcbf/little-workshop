@@ -13,6 +13,7 @@ from __future__ import annotations
 import sqlite3
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,31 @@ class JobRequest(BaseModel):
     job_id: str
     project_id: str | None = None
     params: dict[str, Any] = {}
+
+
+class PendingCommit(BaseModel):
+    """The commit a `commit-msg` hook is about to let through, as the hook
+    itself sees it (its message, the paths it changes, its staged VERSION).
+    Computed by the caller from its own index, which may be a temporary one
+    git only exposes to the hook, so the sandbox never has to guess it."""
+    message: str
+    files: list[str] = []
+    version: str | None = None
+
+
+class EvaluateRequest(BaseModel):
+    project_id: str
+    gate_point: str
+    commit: PendingCommit | None = None
+    # The checkout to judge when it is not the registered one (a git worktree an agent or a
+    # session commits in). Accepted only if it shares the registered checkout's repository.
+    checkout: str | None = None
+
+
+# A script judging a pending commit finds it here (the sandbox's `/policy/input`):
+# `message`, `files` (one path per line) and, when the commit has one, `VERSION`.
+COMMIT_INPUT_DIR = "/policy/input"
+EVALUATE_WORKERS = 4
 
 
 def _require(params: dict, *names: str) -> str | None:
@@ -101,12 +127,18 @@ def _validate_gate_points_against_target(gate_points: list[GatePoint], target_pi
     open_questions.md`'s `OQ-15`): the project it would gate doesn't
     exist in the registry yet at the moment any project-bound check
     could try to mount its checkout, a genuine chicken-and-egg problem
-    a project-bound policy can never resolve. Every other gate point is
-    free to be either."""
+    a project-bound policy can never resolve. `commit` is the reverse: it
+    judges a pending commit in a project checkout, so it is project-bound
+    only. Every other gate point is free to be either."""
     if GatePoint.PROJECT_REGISTRATION in gate_points and target_pillar != PILLAR_ITSELF:
         return (
             "gate_points: 'project_registration' may only be used on a framework-bound policy "
             f"(target_pillar == {PILLAR_ITSELF!r}) — a project-bound policy has no project to check yet"
+        )
+    if GatePoint.COMMIT in gate_points and target_pillar == PILLAR_ITSELF:
+        return (
+            "gate_points: 'commit' judges the commit being made in a project's checkout, so only a "
+            "project-bound policy may gate it"
         )
     return None
 
@@ -214,7 +246,10 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
 
         project_bound = target_pillar != PILLAR_ITSELF
         try:
-            test_script = gates.generate_test_script(query_fn, gate1.ears_text, project_bound=project_bound)
+            test_script = gates.generate_test_script(
+                query_fn, gate1.ears_text, project_bound=project_bound,
+                judges_commits=GatePoint.COMMIT in gate_points,
+            )
         except AgentClientError as exc:
             return {"outcome": "failed", "error": f"authoring pipeline could not reach Agentic Development: {exc}"}
 
@@ -512,18 +547,42 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             return Path(__file__).resolve().parents[2]
         return Path(resolve_project(paths, project_id)["path"])
 
-    def _mounts_for_policy(policy: Policy, project_id: str) -> dict[Path, str | tuple[str, ...]]:
+    def _mounts_for_policy(
+        policy: Policy, project_id: str, checkout: Path | None = None,
+    ) -> dict[Path, str | tuple[str, ...]]:
         if policy.scope_level == ScopeLevel.ALL_PROJECTS and policy.target_pillar == PILLAR_ITSELF:
             # framework-bound: little-workshop's own enumerated source/docs
             repo_root = _project_root_for_policy(policy, project_id)
             return {repo_root / "src": "/framework/src", repo_root / "docs": "/framework/docs"}
-        project_dir = _project_root_for_policy(policy, project_id)
+        project_dir = checkout or _project_root_for_policy(policy, project_id)
         project_files_dir = paths.project_dir(project_id)
         mounts = sandbox.git_dir_mount(project_dir)
         mounts[project_dir] = ("/project", *((mounts[project_dir],) if project_dir in mounts else ()))
         if project_files_dir.exists():
             mounts[project_files_dir] = "/project-files"
         return mounts
+
+    def _git_common_dir(path: Path) -> Path | None:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return Path(proc.stdout.strip()).resolve() if proc.returncode == 0 and proc.stdout.strip() else None
+
+    def _checkout_of(project_id: str, checkout: str) -> Path:
+        """`checkout` if it is a checkout of this project's own repository (the registered one,
+        or a git worktree of it); a check must never read another project's files."""
+        candidate = Path(checkout)
+        if not candidate.is_absolute() or not candidate.is_dir():
+            raise ProjectResolutionError(f"checkout {checkout!r} is not an existing absolute directory")
+        registered = Path(resolve_project(paths, project_id)["path"])
+        common = _git_common_dir(candidate)
+        if common is None or common != _git_common_dir(registered):
+            raise ProjectResolutionError(f"{checkout!r} is not a checkout of project {project_id!r}")
+        return candidate.resolve()
 
     def _current_head_sha(repo_root: Path) -> str:
         """Cheap, host-side (no Docker) HEAD lookup — the state a
@@ -680,6 +739,19 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             policy = resolve_winning_policy(conn, topic=topic, project_id=project_id)
         return {"topic": topic, "project_id": project_id, "policy": policy.model_dump(mode="json") if policy else None}
 
+    def _gating_winners(project_id: str, requested: set[GatePoint]) -> list[tuple[Policy, bool]]:
+        """Every currently-winning policy for this project whose own gate
+        points intersect `requested`, with whether its gating is on here."""
+        _seed_unseeded()
+        with lock:
+            topics = {p.topic for p in db.list_policies(conn) if requested & set(p.gate_points)}
+            winners = []
+            for topic in sorted(topics):
+                winner = resolve_winning_policy(conn, topic=topic, project_id=project_id)
+                if winner is not None and requested & set(winner.gate_points):
+                    winners.append((winner, gating_enabled_for(winner, project_id)))
+        return winners
+
     @app.get("/v1/policies/gating-for-job")
     def get_gating_for_job(project_id: str, categories: str) -> list[dict]:
         """Every currently-winning policy, for this project, whose own
@@ -689,15 +761,58 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         gating off for this project the check is still returned so it runs
         (for analysis) — it just cannot block."""
         requested = {GatePoint(c) for c in categories.split(",") if c}
-        _seed_unseeded()
-        with lock:
-            topics = {p.topic for p in db.list_policies(conn) if requested & set(p.gate_points)}
-            winners = []
-            for topic in sorted(topics):
-                winner = resolve_winning_policy(conn, topic=topic, project_id=project_id)
-                if winner is not None and requested & set(winner.gate_points):
-                    winners.append({**winner.model_dump(mode="json"), "gating": gating_enabled_for(winner, project_id)})
-        return winners
+        return [{**winner.model_dump(mode="json"), "gating": gating}
+                for winner, gating in _gating_winners(project_id, requested)]
+
+    @app.post("/v1/policies/evaluate")
+    def evaluate(request: EvaluateRequest) -> dict:
+        """Run, now and in the sandbox, every policy that would gate
+        `gate_point` for this project, and answer with each verdict and its
+        reason. Nothing is recorded and nothing is held: this is the early
+        warning, not the gate — the `commit-msg` hook's check of the commit
+        being made (`commit`, with `commit` describing it), and a session's
+        preflight before it asks for a gated action (`branch_finish`,
+        `release`, ...). `blocking` lists the topics that fail with gating on,
+        which is exactly what the real gate would hold."""
+        try:
+            gate_point = GatePoint(request.gate_point)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"unknown gate point {request.gate_point!r}")
+        if gate_point == GatePoint.COMMIT and request.commit is None:
+            raise HTTPException(status_code=400, detail="gate point 'commit' needs the pending commit ('commit')")
+        env: dict[str, str] = {}
+        inputs: dict[str, str] = {}
+        if request.commit is not None:
+            env["POLICY_COMMIT_DIR"] = COMMIT_INPUT_DIR
+            inputs["message"] = request.commit.message
+            inputs["files"] = "\n".join(request.commit.files)
+            if request.commit.version is not None:
+                inputs["VERSION"] = request.commit.version
+
+        try:
+            checkout = _checkout_of(request.project_id, request.checkout) if request.checkout else None
+        except ProjectResolutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        def run_one(winner: Policy, gating: bool) -> dict:
+            entry = {"policy_id": winner.id, "topic": winner.topic, "ears_text": winner.ears_text, "gating": gating}
+            try:
+                mounts = _mounts_for_policy(winner, request.project_id, checkout)
+                verdict = sandbox.run_policy_check(winner.test_script, mounts, env=env, inputs=inputs)
+            except (ProjectResolutionError, SandboxUnavailable) as exc:
+                return {**entry, "outcome": "error", "detail": str(exc)}
+            return {**entry, "outcome": verdict.outcome.value, "detail": verdict.detail}
+
+        winners = _gating_winners(request.project_id, {gate_point})
+        with ThreadPoolExecutor(max_workers=EVALUATE_WORKERS) as pool:
+            results = list(pool.map(lambda pair: run_one(*pair), winners))
+        return {
+            "project_id": request.project_id,
+            "gate_point": gate_point.value,
+            "results": results,
+            "blocking": [r["topic"] for r in results if r["outcome"] == CheckOutcome.FAIL.value and r["gating"]],
+            "errors": [r["topic"] for r in results if r["outcome"] == "error"],
+        }
 
     @app.get("/v1/policies/{policy_id}")
     def get_policy(policy_id: str) -> dict:

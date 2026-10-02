@@ -985,6 +985,12 @@ def test_policy_gating_for_job_calls_client(paths, monkeypatch):
     assert calls[0] == ((paths, "proj-a", ["server_launch"]), {})
 
 
+def test_policy_evaluate_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "policy_evaluate", result={"blocking": []})
+    tools_mod.TOOLS_BY_NAME["workshop_policy_evaluate"].handler(paths, {"project_id": "proj-a", "gate_point": "branch_finish"})
+    assert calls[0] == ((paths, "proj-a", "branch_finish"), {})
+
+
 def test_policy_draft_import_builds_job(paths, fake_create_job):
     drafts = [{"topic": "t", "ears_text": "x", "test_script": "s", "target_pillar": "version"}]
     tools_mod.TOOLS_BY_NAME["workshop_policy_draft_import"].handler(paths, {"drafts": drafts})

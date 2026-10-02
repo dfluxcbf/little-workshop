@@ -4,6 +4,7 @@ and is failed, so it stops holding its queue_key and its dependants."""
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -98,13 +99,20 @@ def test_a_pillar_that_can_stop_the_job_is_asked_first(conn, monkeypatch):
 
 def test_the_scheduler_thread_expires_stuck_jobs_as_soon_as_it_starts(conn):
     stuck = _job(conn, age=timedelta(hours=9))
-    thread = SchedulerThread(conn, socket_lookup=_no_pillar, interval_seconds=60)
+    # The thread shares this connection, so every use of it holds the lock, as in orchestration/__main__.py.
+    lock = threading.Lock()
+    thread = SchedulerThread(conn, socket_lookup=_no_pillar, interval_seconds=60, lock=lock)
     thread.start()
+
+    def status():
+        with lock:
+            return db.get_job(conn, stuck.id).status
+
     try:
         for _ in range(100):
-            if db.get_job(conn, stuck.id).status == JobStatus.FAILED:
+            if status() == JobStatus.FAILED:
                 break
             time.sleep(0.02)
-        assert db.get_job(conn, stuck.id).status == JobStatus.FAILED
+        assert status() == JobStatus.FAILED
     finally:
         thread.stop()

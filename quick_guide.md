@@ -88,11 +88,11 @@ lws build run --project-id my-project --commitish master --command "pytest"
 lws build publish-pypi ...
 
 lws policy list
-lws policy author --ears-text "..." --topic ... --target-pillar ... \
-    --scope-level all_projects --created-by user
-lws policy activate <draft.json>          # Gate 4 — requires --approved
+lws policy evaluate --project-id my-project --gate-point branch_finish   # preflight: nothing recorded or held
 lws policy configure <policy-id> --disable
-lws policy waiver grant --policy-id <id> --project-id <id> --reason "..."
+lws policy projects set <policy-id> --project my-project --project-no-gating other-project
+python3 tools/sync_policies.py [--apply]   # in little-workshop: policies as code -> the live pillar
+lws version install-hooks --project-id my-project   # in a checkout: VERSION sync + commit-time policies
 ```
 
 Every command is `lws <noun> <verb> [flags]`; `lws <noun> --help` lists them.
@@ -106,8 +106,8 @@ A browser-facing panel view of the same state, bound to a Unix socket like
 every other pillar (no network port — put a reverse proxy or `tailscale
 serve` in front of it for real remote access, same model `little-runner`
 already used). Panels today: pillar Overview, Projects, Jobs, and a full
-Policy management screen (enable/disable, gate-point multi-select, waiver
-grant/revoke, read-only script view). Reach it locally with:
+Policy management screen (enable/disable, gate-point multi-select, project
+selection with per-project gating, read-only script view). Reach it locally with:
 
 ```bash
 curl --unix-socket ~/.local/state/little-workshop/sockets/dashboard.sock http://x/
@@ -115,17 +115,17 @@ curl --unix-socket ~/.local/state/little-workshop/sockets/dashboard.sock http://
 
 ## Policies, in one paragraph
 
-A policy is EARS-worded text plus a generated pytest script, authored
-through a four-gate pipeline (`policy author` → review → `policy activate
---approved`). Framework policies (`created_by: framework`) always win over
-project policies and can't be silently shadowed — but a project that
-genuinely can't comply gets an explicit, reasoned, revocable **waiver**
-instead of a policy edit. Each policy optionally **gates** one or more
-action categories (`build_install`, `server_launch`, `deploy_redeploy`,
-`self_redeploy`, `server_stop`, `release`, `package_publish`,
-`branch_finish`, `project_removal`, `project_registration`) — a failing
-check on a gated action holds the Job at `pending_confirmation` until a
-human confirms it or a 10-minute watchdog fails it. See
+A policy is an EARS-worded rule plus one pytest script, run in a Docker sandbox. Every policy is code
+in `tools/policy_scripts/` (script plus `policies.json`), put live with `tools/sync_policies.py --apply`
+after review; new candidates still go through the four-gate authoring pipeline and are approved in the
+Dashboard. Framework policies always win over project policies on a topic. Each policy applies to the
+projects selected for it, with gating on or off per project, and gates zero or more points: `commit`
+(each project's `.githooks/commit-msg` refuses a commit that breaks it, printing the fix), and the Job
+categories `build_install`, `server_launch`, `deploy_redeploy`, `self_redeploy`, `server_stop`,
+`release`, `package_publish`, `branch_finish`, `project_removal`, `project_registration` — a failing
+check on a gated Job holds it at `pending_confirmation` until a human confirms it or a 10-minute
+watchdog fails it. `lws policy evaluate` (each project's `policy-preflight` skill) runs the same checks
+beforehand without recording or holding anything. See
 `docs/pillars/policy_compliance.md` for the full story.
 
 ## MCP (for Claude or another agent)

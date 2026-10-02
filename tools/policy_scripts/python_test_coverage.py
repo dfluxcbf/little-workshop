@@ -1,3 +1,10 @@
+"""Policy `python-test-coverage` (requirements pillar; gates branch_finish): the project's own
+Python test suite covers at least 90 percent of its statements.
+
+Runs the suite (tests/unit when the project has one, else tests/) with coverage in the sandbox,
+which has no network: a test-time dependency the sandbox image does not carry fails the check
+with pytest's own output attached."""
+
 import os
 import re
 import subprocess
@@ -7,6 +14,10 @@ import pytest
 
 PROJECT = os.environ.get("POLICY_PROJECT_DIR", "/project")
 THRESHOLD = 90
+FIX = (
+    "Fix: add tests for the uncovered lines `--cov-report=term-missing` lists (run "
+    "`python3 -m pytest tests/unit --cov=src --cov-report=term-missing` locally)."
+)
 
 TOTAL_RE = re.compile(r"^TOTAL\s+\d+\s+\d+\s+(\d+)%\s*$", re.MULTILINE)
 
@@ -55,4 +66,11 @@ def test_python_statement_coverage_is_at_least_90_percent():
         f"possibly a dependency this check's own sandbox doesn't carry):\n{result.stdout[-4000:]}\n{result.stderr[-2000:]}"
     )
     percent = int(match.group(1))
-    assert percent >= THRESHOLD, f"statement coverage is {percent}%, below the required {THRESHOLD}%"
+    # The modules not fully covered, with the lines term-missing lists for each.
+    missing = "\n".join(
+        line for line in result.stdout.splitlines()
+        if (m := re.match(r"^src/\S+\s+\d+\s+\d+\s+(\d+)%", line)) and int(m.group(1)) < 100
+    )
+    assert percent >= THRESHOLD, (
+        f"Statement coverage is {percent}%, below the required {THRESHOLD}%. {FIX}\n{missing[-3000:]}"
+    )

@@ -127,24 +127,40 @@ def gate3b_conflict_check(query: QueryFn, ears_text: str, existing_policies: lis
 _CODE_FENCE_RE = re.compile(r"^```(?:python)?\s*\n(.*?)\n```\s*$", re.DOTALL)
 
 
-def generate_test_script(query: QueryFn, ears_text: str, *, project_bound: bool) -> str:
+def generate_test_script(query: QueryFn, ears_text: str, *, project_bound: bool, judges_commits: bool = False) -> str:
+    """The prompt states the script contract every policy script follows (2026-10-02): the
+    checkout path overridable by one environment variable, so the same script also runs from a
+    git hook or a session's preflight; a pending commit read from `POLICY_COMMIT_DIR` when the
+    policy gates `commit`; and failure messages that say how to fix what failed."""
     scope_note = (
         "This policy is project-bound: the script may only read the target project's own "
-        "repository checkout, real-mounted read-only inside the sandbox at the fixed path "
-        "/project (use that literal path directly — never an environment variable, never a "
-        "walk-up from the working directory, since the script's own cwd is /policy, not "
-        "inside the checkout). If the requirement also needs little-workshop's own "
-        "project-files directory for this project, it is mounted read-only at /project-files."
+        "repository checkout, real-mounted read-only inside the sandbox at /project. Resolve it "
+        "exactly as `PROJECT = os.environ.get(\"POLICY_PROJECT_DIR\", \"/project\")` -- that one "
+        "environment variable with that default, never a walk-up from the working directory, "
+        "since the script's own cwd is /policy, not inside the checkout. If the requirement also "
+        "needs little-workshop's own project-files directory for this project, it is mounted "
+        "read-only at /project-files."
         if project_bound else
         "This policy is framework-bound: the script may only read little-workshop's own "
         "source and docs, real-mounted read-only inside the sandbox at the fixed paths "
         "/framework/src and /framework/docs (use those literal paths directly)."
     )
+    commit_note = (
+        " This policy also gates `commit`: the project's commit-msg hook runs it against the "
+        "commit being made. When the environment variable POLICY_COMMIT_DIR is set, judge that "
+        "pending commit instead of HEAD: its message is the file `message`, the paths it changes "
+        "are in `files` (one per line) and its VERSION, when it has one, is in `VERSION`, all "
+        "inside POLICY_COMMIT_DIR; its parent is the checkout's HEAD. When it is unset, judge HEAD "
+        "against its first parent."
+        if judges_commits else ""
+    )
     prompt = (
         "Write ONE pytest test script (a single Python file's full contents, nothing else) "
         "that mechanically enforces this EARS requirement. Use `pytest.skip()` for the "
         "not-applicable case (an optional-feature 'WHERE' requirement whose feature isn't "
-        f"present), distinct from an assertion failure. {scope_note}\n\n"
+        f"present), distinct from an assertion failure. {scope_note}{commit_note} Every "
+        "assertion message says what is wrong and how to fix it, in a sentence a developer or "
+        "an agent can act on, because that message is all they see when the policy fails.\n\n"
         f"Requirement:\n{ears_text}\n\n"
         "Reply with only the script's own source code, no explanation."
     )

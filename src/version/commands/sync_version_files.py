@@ -71,6 +71,45 @@ def install_pre_commit_hook(repo_root: Path, project_id: str) -> Path:
     return hook_path
 
 
+_COMMIT_MSG_HOOK_NAME = "commit-msg"
+_COMMIT_MSG_TEMPLATE = """#!/bin/sh
+# Installed by little-workshop (`lws version install-hooks`, also run by `lws version init`).
+# Runs every Policy & Compliance policy that gates `commit` for this project against
+# the commit being made -- its message, its staged files and VERSION -- in the policy
+# sandbox, and refuses the commit when one fails, printing what to fix. If lws, the
+# daemon or Docker is unavailable it warns and lets the commit through: the same
+# policies still gate the branch finish. little-workshop's own finish and bookkeeping
+# commits run with hooks off. See little-workshop's docs/pillars/policy_compliance.md.
+if ! command -v lws >/dev/null 2>&1; then
+    echo "commit-msg: lws not found; commit-time policies were not checked" >&2
+    exit 0
+fi
+if ! lws policy evaluate --help >/dev/null 2>&1; then
+    echo "commit-msg: this lws predates 'lws policy evaluate'; commit-time policies were not checked" >&2
+    exit 0
+fi
+exec lws policy evaluate --project-id '{project_id}' --gate-point commit --commit-message-file "$1" --fail-open
+"""
+
+
+def install_commit_msg_hook(repo_root: Path, project_id: str) -> Path:
+    """Write `.githooks/commit-msg`, which runs the project's commit-gated policies on
+    every commit (policy gate point `commit`), and point `core.hooksPath` at it."""
+    hook_dir = repo_root / _HOOK_DIR
+    hook_dir.mkdir(parents=True, exist_ok=True)
+    hook_path = hook_dir / _COMMIT_MSG_HOOK_NAME
+    hook_path.write_text(_COMMIT_MSG_TEMPLATE.format(project_id=project_id), encoding="utf-8")
+    hook_path.chmod(0o755)
+    run(["git", "config", "core.hooksPath", _HOOK_DIR], repo_root)
+    return hook_path
+
+
+def install_git_hooks(repo_root: Path, project_id: str) -> list[Path]:
+    """Every hook a registered project carries: the VERSION sync (pre-commit) and the
+    commit-time policy check (commit-msg). Idempotent."""
+    return [install_pre_commit_hook(repo_root, project_id), install_commit_msg_hook(repo_root, project_id)]
+
+
 def _lvx_managed_prefixes(repo_root: Path) -> tuple[str, ...]:
     """release/, hotfix/, support/ -- branches whose VERSION little-workshop's
     own finish commands already write directly, feature/improvement excluded

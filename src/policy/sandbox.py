@@ -105,6 +105,14 @@ def git_dir_mount(project_dir: Path) -> dict[Path, str | tuple[str, ...]]:
         return {}
     container_git_dir = pointer if posixpath.isabs(pointer) else posixpath.normpath(posixpath.join("/project", pointer))
     mounts = {host_git_dir: container_git_dir}
+    # A git worktree's own directory (`.git/worktrees/<name>`) holds only HEAD and its index;
+    # objects and refs live in the common directory its `commondir` file points at.
+    commondir_file = host_git_dir / "commondir"
+    if commondir_file.is_file():
+        common = commondir_file.read_text(encoding="utf-8").strip()
+        host_common = (host_git_dir / common).resolve()
+        if host_common.is_dir() and host_common != host_git_dir:
+            mounts[host_common] = common if posixpath.isabs(common) else posixpath.normpath(posixpath.join(container_git_dir, common))
     config = host_git_dir / "config"
     match = re.search(r"(?m)^\s*worktree\s*=\s*(\S+)\s*$", config.read_text(encoding="utf-8")) if config.is_file() else None
     if match:
@@ -130,10 +138,33 @@ def ensure_image(*, runner: CommandRunner = DEFAULT_RUNNER, tag: str = IMAGE_TAG
         raise SandboxUnavailable(f"could not build the policy sandbox image: {build.stderr or build.stdout}")
 
 
+# What a check's verdict is recorded with: the reason, not pytest's last few lines. The
+# assertion messages (`E   ...`) and skip reasons are what tell a person or Claude what to fix;
+# the final summary line says how many tests ran. Capped so one runaway script cannot bloat
+# every result row.
+DETAIL_LIMIT = 4000
+_REASON_PREFIXES = ("E ", "SKIPPED ", "FAILED ", "ERROR ")
+
+
+def _explain(stdout: str, *, limit: int = DETAIL_LIMIT) -> str:
+    lines = stdout.strip().splitlines()
+    summary = lines[-1].strip("= ").strip() if lines else ""
+    reasons: list[str] = []
+    for line in lines:
+        if not line.startswith(_REASON_PREFIXES):
+            continue
+        text = line[2:].strip() if line.startswith("E ") else line.strip()
+        if text and text not in reasons:
+            reasons.append(text)
+    detail = "\n".join([*reasons, summary]) if reasons else "\n".join(lines[-5:])
+    suffix = "\n[... truncated]"
+    return detail if len(detail) <= limit else detail[: limit - len(suffix)] + suffix
+
+
 def _parse_verdict(stdout: str, exit_code: int) -> SandboxResult:
-    tail = "\n".join(stdout.strip().splitlines()[-5:])
+    detail = _explain(stdout)
     if exit_code not in (0, 1):
-        return SandboxResult(outcome=CheckOutcome.FAIL, detail=f"test script did not run cleanly (exit {exit_code}):\n{tail}")
+        return SandboxResult(outcome=CheckOutcome.FAIL, detail=f"test script did not run cleanly (exit {exit_code}):\n{detail}")
 
     summary_line = stdout.strip().splitlines()[-1] if stdout.strip() else ""
     failed_match = _FAILED_RE.search(summary_line)
@@ -144,22 +175,26 @@ def _parse_verdict(stdout: str, exit_code: int) -> SandboxResult:
     skipped = int(skipped_match.group(1)) if skipped_match else 0
 
     if failed > 0:
-        return SandboxResult(outcome=CheckOutcome.FAIL, detail=tail)
+        return SandboxResult(outcome=CheckOutcome.FAIL, detail=detail)
     if passed > 0:
-        return SandboxResult(outcome=CheckOutcome.PASS, detail=tail)
+        return SandboxResult(outcome=CheckOutcome.PASS, detail=detail)
     if skipped > 0:
-        return SandboxResult(outcome=CheckOutcome.NOT_APPLICABLE, detail=tail)
-    return SandboxResult(outcome=CheckOutcome.FAIL, detail=f"no tests ran:\n{tail}")
+        return SandboxResult(outcome=CheckOutcome.NOT_APPLICABLE, detail=detail)
+    return SandboxResult(outcome=CheckOutcome.FAIL, detail=f"no tests ran:\n{detail}")
 
 
 def run_policy_check(
     test_script: str, mounts: dict[Path, str | tuple[str, ...]], *,
+    env: dict[str, str] | None = None, inputs: dict[str, str] | None = None,
     timeout: float = DEFAULT_CHECK_TIMEOUT_SECONDS, runner: CommandRunner = DEFAULT_RUNNER, tag: str = IMAGE_TAG,
 ) -> SandboxResult:
     """`mounts` maps a real host path to the read-only path it should
     appear at inside the container — the project-bound/framework-bound
     allowlist, built by the caller from the policy's own scope, never
-    guessed here."""
+    guessed here. `env` is passed to the script as environment variables;
+    `inputs` are small text files the caller hands the script (a pending
+    commit's message, its staged files and VERSION), mounted read-only at
+    `/policy/input/<name>` — data the caller computed, never a host path."""
     ensure_image(runner=runner, tag=tag)
 
     container_name = f"lws-policy-check-{uuid.uuid4().hex[:12]}"
@@ -167,21 +202,31 @@ def run_policy_check(
     with tempfile.TemporaryDirectory(prefix="lws-policy-check-") as scratch:
         script_path = Path(scratch) / "test_policy.py"
         script_path.write_text(test_script, encoding="utf-8")
+        input_dir = Path(scratch) / "input"
+        input_dir.mkdir()
+        for name, content in (inputs or {}).items():
+            if "/" in name or name.startswith("."):
+                raise ValueError(f"invalid sandbox input name {name!r}")
+            (input_dir / name).write_text(content, encoding="utf-8")
 
         argv = [
             "docker", "run", "--rm", f"--name={container_name}",
             "--network", "none", "--read-only", "--tmpfs", "/tmp",
             f"--cpus={DEFAULT_CPUS}", f"--memory={DEFAULT_MEMORY}", f"--memory-swap={DEFAULT_MEMORY}",
             f"--pids-limit={DEFAULT_PIDS_LIMIT}",
-            "-e", "PYTHONDONTWRITEBYTECODE=1",
+            # Wide enough that pytest's summary lines keep the whole assertion message.
+            "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "COLUMNS=400",
             "-v", f"{script_path}:/policy/test_policy.py:ro",
+            "-v", f"{input_dir}:/policy/input:ro",
         ]
+        for name, value in sorted((env or {}).items()):
+            argv += ["-e", f"{name}={value}"]
         for host_path, container_paths in mounts.items():
             for container_path in ((container_paths,) if isinstance(container_paths, str) else container_paths):
                 argv += ["-v", f"{host_path}:{container_path}:ro"]
         argv += [
             "-w", "/policy", tag,
-            "python", "-m", "pytest", "test_policy.py", "-rA", "--no-header", "-q", "-p", "no:cacheprovider",
+            "python", "-m", "pytest", "test_policy.py", "-rA", "--tb=short", "--no-header", "-q", "-p", "no:cacheprovider",
         ]
 
         try:
