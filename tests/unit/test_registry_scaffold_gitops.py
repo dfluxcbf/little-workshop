@@ -16,7 +16,7 @@ def test_create_project_tree_writes_the_standard_layout(tmp_path):
     assert (dest / "MODULE.bazel").read_text().count("little_widget") == 1
     assert (dest / "src" / ".gitkeep").exists()
     assert (dest / "tests" / ".gitkeep").exists()
-    assert len(written) == 10
+    assert len(written) == 13
 
 
 def test_create_project_tree_rejects_existing_destination(tmp_path):

@@ -12,7 +12,7 @@ registered project reads this folder first.
   source. Where a source and this folder disagree, the source wins and this folder is wrong.
 - **Shared standards at the top level; per-project material in `<project>_standards/`.** A policy
   that applies to every project goes in the shared files. A policy scoped to specific projects, and
-  any project-specific convention (a `CLAUDE.md` rule, a toolchain quirk), goes in that project's
+  any project-specific convention (an `AGENTS.md` rule, a toolchain quirk), goes in that project's
   folder.
 - **Kept current by the "Update Standards Documentation" job**, which reviews every little-workshop
   standard and every policy and rewrites these files (see [Maintenance](#maintenance)).
@@ -61,11 +61,11 @@ agent task (intent `docs`, manual review) that asks Claude to:
    `docs/policies/*.md`;
 2. review every policy registered in Policy & Compliance (`lws policy list`,
    `lws policy projects list`), plus the pending drafts in `docs/pending_policy_drafts/`;
-3. review every registered project's `CLAUDE.md`, `README.md` and `docs/*_policy.md`;
+3. review every registered project's `.claude/AGENTS.md`, `README.md` and `docs/*_policy.md`;
 4. update every document in this folder, add a folder for any project that lacks one, and keep the
    folder of a project that is no longer registered, saying so in its README.
 
 Hand edits are allowed for a one-off correction but must be dated in the file's "Last reviewed" line
 and will be reconciled by the next job run.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).

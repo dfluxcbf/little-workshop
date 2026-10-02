@@ -8,6 +8,8 @@ those are written here -- only what the repository needs around them.
 
 from __future__ import annotations
 
+from registry import claude_templates
+
 TEST_RESULTS_DIR = "TestResults"
 
 
@@ -17,7 +19,7 @@ def readme_md(name: str) -> str:
 TBD, purpose not yet defined.
 
 A Unity game for Windows. See `docs/design.md` for details as they're
-filled in, and `CLAUDE.md` for how Claude sessions work in this project.
+filled in, and `.claude/AGENTS.md` for how Claude sessions work in this project.
 
 ## First-time setup
 
@@ -79,6 +81,10 @@ crashlytics-build.properties
 
 # tools/run-unity-tests output
 /{TEST_RESULTS_DIR}/
+
+# Claude Code per-machine settings
+.claude/settings.local.json
+.claude/worktrees/
 """
 
 
@@ -109,7 +115,7 @@ _UNITY_YAML_PATTERNS = [
 
 def gitattributes() -> str:
     """REQ-000000275. The `unityyamlmerge` driver itself is configured per
-    clone (see CLAUDE.md); without it git falls back to a normal text merge."""
+    clone (see .claude/AGENTS.md); without it git falls back to a normal text merge."""
     lines = [
         "# Line endings: normalise text, let each tool check out its own style",
         "* text=auto",
@@ -132,13 +138,16 @@ def gitattributes() -> str:
     return "\n".join(lines)
 
 
-def claude_md(name: str) -> str:
-    """REQ-000000278."""
+def agents_md(name: str) -> str:
+    """The unity layout's `.claude/AGENTS.md`: the working rules of REQ-000000278, where
+    REQ-000000294 puts them, then the lifecycle routing every project shares."""
     return f"""# {name} — notes for Claude
 
 A Unity game targeting Windows. The checkout lives on the Windows drive
 (`C:\\little-projects\\{name}`, `/mnt/c/little-projects/{name}` from WSL)
 and is managed from WSL by little-workshop.
+
+{claude_templates.WHY_AGENTS_MD}
 
 ## Working with the Editor
 
@@ -171,6 +180,7 @@ little-workshop's `workshop_requirements_import_junit`. Batch mode cannot
 open a project the Editor already has open — close it first, or run the
 tests from the open Editor via the Unity CLI.
 
+{claude_templates.lifecycle_md(name)}
 ## Per-clone git setup
 
     git lfs install

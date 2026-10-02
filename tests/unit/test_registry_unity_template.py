@@ -66,7 +66,8 @@ def test_unity_template_writes_the_unity_layout_not_the_python_one(unity_project
     rel = sorted(str(p.relative_to(dest)) for p in written)
     assert rel == sorted([
         "docs/design.md", "docs/architecture.md", "docs/milestones.md", "README.md", "VERSION",
-        ".gitignore", ".gitattributes", "CLAUDE.md", "tools/run-unity-tests", "tools/nunit_to_junit.py",
+        ".gitignore", ".gitattributes", ".claude/AGENTS.md", "tools/run-unity-tests", "tools/nunit_to_junit.py",
+        ".claude/settings.json", ".claude/hooks/lws_scope_guard.py",
     ])
     assert not (dest / "MODULE.bazel").exists()
     assert not (dest / "src").exists()
@@ -78,7 +79,7 @@ def test_default_template_is_still_the_python_layout(tmp_path):
     dest = tmp_path / "little-widget"
     scaffold.create_project_tree(dest, "little-widget")
     assert (dest / "MODULE.bazel").exists()
-    assert not (dest / "CLAUDE.md").exists()
+    assert not (dest / "CLAUDE.md").exists() and not (dest / ".claude" / "CLAUDE.md").exists()
 
 
 def test_unknown_template_is_rejected_before_anything_is_written(tmp_path):
@@ -227,11 +228,12 @@ def test_runner_explains_a_missing_unity_project(unity_project):
     assert "create the Unity project first" in result.stderr
 
 
-# --- REQ-000000278: CLAUDE.md -----------------------------------------------
+# --- REQ-000000278: Unity working rules, in .claude/AGENTS.md (REQ-000000294) ---
 
-def test_claude_md_gives_unity_working_rules(unity_project):
+def test_agents_md_gives_unity_working_rules(unity_project):
     dest, _ = unity_project
-    text = (dest / "CLAUDE.md").read_text()
+    assert not (dest / "CLAUDE.md").exists()
+    text = (dest / ".claude" / "AGENTS.md").read_text()
     for needle in ("unity status", "com.unity.pipeline", "Library/", ".meta", "tools/run-unity-tests",
                    "git lfs install", "unityyamlmerge", "/mnt/c/little-projects/little-game"):
         assert needle in text, needle

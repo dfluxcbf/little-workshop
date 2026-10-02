@@ -56,7 +56,7 @@ def test_job_bootstrap_unity_template_scaffolds_the_unity_layout(client):
         json={"job_id": "j1", "params": {"name": "little-game", "dest_dir": str(workdir), "template": "unity"}},
     ).json()
     assert body["outcome"] == "succeeded"
-    assert (workdir / "little-game" / "CLAUDE.md").exists()
+    assert (workdir / "little-game" / ".claude" / "AGENTS.md").exists()
     assert not (workdir / "little-game" / "MODULE.bazel").exists()
 
 

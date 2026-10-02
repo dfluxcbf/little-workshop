@@ -26,9 +26,11 @@ as `first_run.md` or `ui_design.md`. Every document is reachable from `design.md
 `architecture.md` or the project `README.md`.
 
 A project `README.md` carries a one-paragraph purpose, first-time setup, the canonical commands,
-and a pointer to `docs/`. A `CLAUDE.md` holds only what a Claude session must know before touching
+and a pointer to `docs/`. A `.claude/AGENTS.md` holds only what a Claude session must know before touching
 the project (tooling, hard "never" rules, test and deploy commands) and links to `docs/` for
-everything else.
+everything else. It is `AGENTS.md`, not `CLAUDE.md` or `AGENT.md`, and a project has no `CLAUDE.md`:
+Claude Code reads `AGENTS.md` only where there is none, and does not read `AGENT.md` at all (hand edit
+2026-10-01, the rule moved to `.claude/AGENTS.md` for every project).
 
 ## Writing rules
 
@@ -78,4 +80,4 @@ tool and must not be hand-edited. Directories a task declares untouchable stay u
   `docs/policies/documentation_policy.md`; the super-repo's `docs/policies/` holds only
   `build_policy.md`. This file is therefore the working statement of the documentation rules.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).

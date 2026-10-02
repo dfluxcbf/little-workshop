@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from registry import templates, unity_templates
+from registry import claude_templates, templates, unity_templates
 
 TEMPLATES = ("python", "unity")
 
@@ -25,6 +25,9 @@ def create_project_tree(dest: Path, name: str, template: str = "python") -> list
         raise ValueError(f"unknown template {template!r}, expected one of {', '.join(TEMPLATES)}")
     if dest.exists():
         raise FileExistsError(f"{dest} already exists")
+    # Built before anything is written: a name that cannot be a project id raises here, not
+    # halfway through the tree (REQ-000000296).
+    claude_files = claude_templates.claude_files(name, template)
 
     written: list[Path] = []
 
@@ -44,7 +47,9 @@ def create_project_tree(dest: Path, name: str, template: str = "python") -> list
         write("README.md", unity_templates.readme_md(name))
         write(".gitignore", unity_templates.gitignore())
         write(".gitattributes", unity_templates.gitattributes())
-        write("CLAUDE.md", unity_templates.claude_md(name))
+        write(claude_templates.AGENTS_PATH, unity_templates.agents_md(name))
+        for rel_path, content in claude_files.items():
+            write(rel_path, content)
         write("VERSION", templates.version_file())
         write("tools/run-unity-tests", unity_templates.run_unity_tests(), executable=True)
         write("tools/nunit_to_junit.py", unity_templates.nunit_to_junit_py())
@@ -55,6 +60,9 @@ def create_project_tree(dest: Path, name: str, template: str = "python") -> list
 
     write("README.md", templates.readme_md(name))
     write(".gitignore", templates.gitignore())
+    for rel_path, content in claude_files.items():
+        write(rel_path, content)
+    write(claude_templates.AGENTS_PATH, claude_templates.agents_md(name))
     write("VERSION", templates.version_file())
     write("MODULE.bazel", templates.module_bazel(module_name_for(name)))
     write("BUILD.bazel", templates.build_bazel())

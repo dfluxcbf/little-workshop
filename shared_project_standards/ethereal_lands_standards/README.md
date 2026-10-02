@@ -12,7 +12,7 @@ manages it from WSL.
 
 | File | Role |
 |---|---|
-| `CLAUDE.md` | Editor, design-doc, ELM and "Never" rules; test and per-clone setup |
+| `.claude/AGENTS.md` | Editor, design-doc, ELM and "Never" rules; test and per-clone setup (no `CLAUDE.md` or `AGENT.md`) |
 | `docs/design.md`, `docs/design/NN-*.md` | Game design (overview plus one topic per file, numbered) |
 | `docs/design/README.md` | Generated index; never hand-edited |
 | `docs/design/16-open-items.md` | Open questions with `#q-NN` and `#o-NN` anchors |
@@ -35,4 +35,4 @@ It does keep the conventions the shared policies check: a `VERSION`, a `.lvx/con
 requirement-marker policies would skip it. Attaching `version-format`, `commit-cites-requirement`
 and `ssh-remotes-no-embedded-credentials` is a decision for the owner.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).
