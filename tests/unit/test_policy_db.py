@@ -137,11 +137,11 @@ def test_new_policy_defaults_to_enabled_with_no_gate_points(conn):
     assert fetched.gate_points == []
 
 
-def test_gate_point_has_all_ten_2026_09_16_categories():
+def test_gate_point_has_the_ten_2026_09_16_categories_and_commit():
     from policy.models import GatePoint
 
     assert {p.value for p in GatePoint} == {
-        "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
+        "commit", "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
         "release", "package_publish", "branch_finish", "project_removal", "project_registration",
     }
 

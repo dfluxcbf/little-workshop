@@ -3,7 +3,9 @@ that every registered project keeps: a `settings.json` that routes lifecycle
 commands through little-workshop (its MCP server `little-workshop`, or `lws`)
 instead of raw git/systemd/twine and binds every `lws` command to the project's
 own id, the PreToolUse hook that keeps a project's session from naming another
-project, and the `AGENTS.md` that tells Claude about both.
+project, the `policy-preflight` skill that runs the policies a gated action
+would hit before asking for it, and the `AGENTS.md` briefing that tells Claude
+about all of them.
 
 The same table is checked in as little-workshop's own `.claude/settings.json`
 (held equal by a unit test); the `little-projects` super-repository, which runs
@@ -18,6 +20,8 @@ MCP = "mcp__little-workshop__"
 SETTINGS_PATH = ".claude/settings.json"
 GUARD_PATH = ".claude/hooks/lws_scope_guard.py"
 AGENTS_PATH = ".claude/AGENTS.md"
+PREFLIGHT_SKILL_PATH = ".claude/skills/policy-preflight/SKILL.md"
+PREFLIGHT_SCRIPT_PATH = ".claude/skills/policy-preflight/scripts/preflight.py"
 
 # Why the instructions file is `.claude/AGENTS.md` and a project has no `CLAUDE.md` (REQ-000000294).
 WHY_AGENTS_MD = (
@@ -42,7 +46,7 @@ MCP_READ_ONLY = (
     "workshop_requirements_suite_list",
     "workshop_policy_list", "workshop_policy_get", "workshop_policy_results", "workshop_policy_winning",
     "workshop_policy_gating_for_job", "workshop_policy_projects_list", "workshop_policy_catalog_list",
-    "workshop_policy_draft_list", "workshop_policy_check_project",
+    "workshop_policy_draft_list", "workshop_policy_check_project", "workshop_policy_evaluate",
     "workshop_deployment_status", "workshop_deployment_history", "workshop_deployment_branches",
     "workshop_deployment_confirmation_status",
     "workshop_build_run_list", "workshop_build_run_status", "workshop_build_package_list",
@@ -130,7 +134,7 @@ LWS_READ_ONLY = (
     "version branch-audit",
     "requirements list", "requirements report", "requirements suite list",
     "requirements use-case list", "requirements milestone list", "requirements result list",
-    "policy winning", "policy check-project", "policy gating-for-job", "policy results",
+    "policy winning", "policy check-project", "policy gating-for-job", "policy results", "policy evaluate",
     "policy projects list",
     "deployment status", "deployment history", "deployment confirmation", "deployment branches",
     "build run-list", "build package-list",
@@ -140,7 +144,7 @@ LWS_READ_ONLY = (
 LWS_ROUTINE = (
     "version feature-start", "version improvement-start", "version hotfix-start", "version support-start",
     "version release-candidate-cut", "version issue-set", "version issue-unset",
-    "version sync-version-files",
+    "version sync-version-files", "version install-hooks",
     "requirements create", "requirements update", "requirements suite create",
     "requirements use-case create", "requirements milestone create", "requirements link",
     "requirements unlink", "requirements result record", "requirements import-junit",
@@ -196,7 +200,7 @@ DENY_REROUTED = (
     ("git branch -D*", "workshop_version_*_finish deletes finished branches"),
     ("git reset --hard*", "destructive"),
     ("git clean*", "destructive"),
-    ("git commit*--no-verify*", "the pre-commit hook syncs VERSION"),
+    ("git commit*--no-verify*", "the pre-commit (VERSION sync) and commit-msg (commit-time policies) hooks"),
     ("systemd-run*", "workshop_deployment_*"),
     ("systemctl --user start*", "workshop_deployment_deploy"),
     ("systemctl --user stop*", "workshop_deployment_stop"),
@@ -217,8 +221,11 @@ READ_ONLY_BASH = (
     "gh pr view*", "gh pr list*", "gh pr checks*", "gh issue view*", "gh issue list*",
 )
 
-# Local commits are the normal flow; the pre-commit hook and the policies judge them.
+# Local commits are the normal flow; the pre-commit hook and the commit-msg policy hook judge them.
 COMMIT_BASH = ("git add*", "git commit*")
+
+# The policy-preflight skill's script: it only evaluates policies, records and holds nothing.
+SKILL_BASH = (f"python3 {PREFLIGHT_SCRIPT_PATH}*",)
 
 # What a session runs to test the project: the template's own runner. "bazel" is for a registered
 # project that is neither Python nor Unity (a TypeScript or C++ project built with Bazel).
@@ -227,6 +234,26 @@ TEST_BASH = {
     "bazel": ("bazel build*", "bazel test*", "bazel query*"),
     "unity": ("tools/run-unity-tests*",),
 }
+
+
+# little-workshop's own Claude Code settings: the scaffolded table plus what only this repository needs
+# (REQ-000000295). Its checked-in .claude/ files are claude_files("little-workshop", "python",
+# **OWN_SETTINGS); a unit test keeps them equal. The live-install guard denies running
+# tests/integration beside the installed pillars (REQ-000000304).
+LIVE_INSTALL_GUARD_PATH = ".claude/hooks/live_install_guard.py"
+OWN_SETTINGS = dict(
+    platform=True,
+    extra_allow=("python3 tools/sync_versions.py*", "tools/check_system_deps.sh*", "python3 tools/sync_policies.py*"),
+    extra_ask=("bazel run //:install*", "bazel run //*_server*", "python3 tools/sync_policies.py --apply*"),
+    extra_hooks=({
+        "matcher": "Bash",
+        "hooks": [{
+            "type": "command",
+            "command": f'python3 "${{CLAUDE_PROJECT_DIR}}"/{LIVE_INSTALL_GUARD_PATH}',
+            "timeout": 10,
+        }],
+    },),
+)
 
 
 def is_project_id(name: str) -> bool:
@@ -239,8 +266,9 @@ def _checked_id(project_id: str) -> str:
     return project_id
 
 
-def guard_hooks(project_id: str) -> dict:
-    """The `hooks` block registering the scope guard for Bash and every little-workshop MCP tool."""
+def guard_hooks(project_id: str, extra_pre_tool_use: tuple[dict, ...] = ()) -> dict:
+    """The `hooks` block registering the scope guard for Bash and every little-workshop MCP tool,
+    then any project-specific PreToolUse entries (little-workshop's own live-install guard)."""
     return {
         "PreToolUse": [{
             "matcher": f"Bash|{MCP}.*",
@@ -249,21 +277,23 @@ def guard_hooks(project_id: str) -> dict:
                 "command": f'python3 "${{CLAUDE_PROJECT_DIR}}"/{GUARD_PATH} {_checked_id(project_id)}',
                 "timeout": 10,
             }],
-        }],
+        }, *extra_pre_tool_use],
     }
 
 
 def settings(project_id: str, template: str = "python", *, platform: bool = False,
-             extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = ()) -> dict:
+             extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = (),
+             extra_hooks: tuple[dict, ...] = ()) -> dict:
     """The `.claude/settings.json` of project `project_id`.
 
     Every `lws` command that takes `--project-id` is pre-allowed only with this project's id; the
     guard hook denies a call that names another. `platform=True` (little-workshop itself) also
-    pre-allows the tools that administer little-workshop rather than a project."""
+    pre-allows the tools that administer little-workshop rather than a project. `extra_hooks` are
+    PreToolUse entries added after the scope guard."""
     project = _checked_id(project_id)
     if template not in TEST_BASH:
         raise ValueError(f"unknown template {template!r}, expected one of {', '.join(TEST_BASH)}")
-    bash = (*READ_ONLY_BASH, *COMMIT_BASH, *TEST_BASH[template], *extra_allow)
+    bash = (*READ_ONLY_BASH, *COMMIT_BASH, *TEST_BASH[template], *SKILL_BASH, *extra_allow)
     allow = [f"Bash({c})" for c in bash]
     allow += [f"Bash(lws {c} *)" for c in LWS_READ_ONLY_ANY]
     allow += [f"Bash(lws {c} --project-id {project} *)" for c in (*LWS_READ_ONLY, *LWS_ROUTINE, *LWS_GATED)]
@@ -279,14 +309,15 @@ def settings(project_id: str, template: str = "python", *, platform: bool = Fals
             "ask": ask,
             "deny": [f"Bash({c})" for c, _ in DENY_REROUTED],
         },
-        "hooks": guard_hooks(project),
+        "hooks": guard_hooks(project, extra_hooks),
     }
 
 
 def settings_json(project_id: str, template: str = "python", *, platform: bool = False,
-                  extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = ()) -> str:
+                  extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = (),
+                  extra_hooks: tuple[dict, ...] = ()) -> str:
     return json.dumps(settings(project_id, template, platform=platform, extra_allow=extra_allow,
-                               extra_ask=extra_ask), indent=2) + "\n"
+                               extra_ask=extra_ask, extra_hooks=extra_hooks), indent=2) + "\n"
 
 
 # The guard hook (REQ-000000297). A real, standalone script copied into each project: the
@@ -458,26 +489,230 @@ def scope_guard_py() -> str:
             .replace("@@NAMED_PROJECT@@", items(MCP_NAMED_PROJECT)))
 
 
+# The policy-preflight skill (REQ-000000301): the same two files in every project. The skill tells
+# Claude when to run it and how to act on the result; the script does the work.
+_PREFLIGHT_SKILL = """---
+name: policy-preflight
+description: Runs the little-workshop policies that would gate an action on this project (a branch finish by default; also release, package_publish, server_launch, deploy_redeploy) against this checkout, and reports each failure with how to fix it. Use before workshop_version_*_finish, a release or a publish, and when a commit or a gated job was refused by a policy.
+---
+
+# Policy preflight
+
+little-workshop checks this project's policies when it is asked to finish a branch, release, deploy or
+publish, and holds the action in `pending_confirmation` if one fails. Running the same checks first lets
+you fix the failures while the change is still in front of you.
+
+Run it from the repository root:
+
+```
+python3 .claude/skills/policy-preflight/scripts/preflight.py                      # branch_finish
+python3 .claude/skills/policy-preflight/scripts/preflight.py --gate-point release
+```
+
+It evaluates the policies in little-workshop's sandbox (`lws policy evaluate`: the checks the gate runs,
+nothing recorded or held). If the installed `lws` or the running Policy pillar predates that, it runs the
+same policy scripts here and says so. Exit 0: nothing blocks; 1: a gating policy fails; 2: the policies
+could not be evaluated. A policy that runs the test suite (python-test-coverage) takes minutes.
+
+## Acting on the result
+
+Each failure names the policy, its rule and what to change. Fix the cause in the project, commit (the
+commit-msg hook re-checks the commit-level policies), and run the preflight again until nothing blocks.
+
+A policy is the project's agreed rule, so change the project, not the policy, and leave a held action for
+the user to confirm. If a failure looks wrong, or cannot be fixed in this project, report it with the
+policy's output and let the user decide.
+
+## Finishing a branch
+
+1. Run the project's Definition-of-Done test suite and record the run with `workshop_requirements_run_tests`.
+2. Run this preflight and fix what blocks.
+3. Finish with `workshop_version_<type>_finish`. If it lands in `pending_confirmation`, report which policy
+   held it (`workshop_policy_results`).
+"""
+
+_PREFLIGHT_SOURCE = r'''#!/usr/bin/env python3
+"""Run the little-workshop policies that would gate an action on this project, against this
+checkout, and print every failure with its reason. The `policy-preflight` skill's script.
+
+    python3 .claude/skills/policy-preflight/scripts/preflight.py [--gate-point branch_finish]
+
+Evaluates in little-workshop's policy sandbox (`lws policy evaluate`: the checks the gate itself
+runs, nothing recorded or held). When the installed lws or the running Policy pillar predates
+that, it runs the same policy scripts here, outside the sandbox, and says so.
+Exit 0: nothing blocks. 1: a gating policy fails. 2: the policies could not be evaluated.
+Generated by little-workshop (registry/claude_templates.py): change the generator, not this copy."""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+GATE_POINTS = ("branch_finish", "release", "package_publish", "build_install", "server_launch",
+               "deploy_redeploy", "server_stop", "project_removal")
+_SUMMARY = re.compile(r"(\d+) (failed|passed|skipped)")
+
+
+def checkout_root():
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    return Path(top.stdout.strip()) if top.returncode == 0 and top.stdout.strip() else Path.cwd()
+
+
+def project_id(root):
+    """The project's little-workshop id: the scope guard's argument in .claude/settings.json,
+    else the checkout's directory name (the ids are directory names)."""
+    try:
+        settings = json.loads((root / ".claude" / "settings.json").read_text(encoding="utf-8"))
+        for entry in (settings.get("hooks") or {}).get("PreToolUse") or []:
+            for hook in entry.get("hooks") or []:
+                match = re.search(r"lws_scope_guard\.py\s+(\S+)", hook.get("command", ""))
+                if match:
+                    return match.group(1)
+    except (OSError, ValueError):
+        pass
+    return root.name
+
+
+def evaluate_in_sandbox(project, gate_point, root):
+    """(result, None), or (None, why it could not run here) -- None reason means: fall back."""
+    try:
+        run = subprocess.run(
+            ["lws", "policy", "evaluate", "--project-id", project, "--gate-point", gate_point,
+             "--checkout", str(root), "--json"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return None, "lws is not installed"
+    if run.returncode in (0, 1) and run.stdout.strip():
+        return json.loads(run.stdout), None
+    error = (run.stderr or run.stdout).strip()
+    if "invalid choice" in error or "predates policy evaluate" in error:
+        return None, None  # an lws or a Policy pillar from before `policy evaluate`
+    return None, error or f"lws policy evaluate exited {run.returncode}"
+
+
+def evaluate_locally(project, gate_point, root):
+    """The same policies, fetched from little-workshop, run here with pytest outside the sandbox."""
+    listed = subprocess.run(
+        ["lws", "policy", "gating-for-job", "--project-id", project, "--categories", gate_point],
+        capture_output=True, text=True,
+    )
+    if listed.returncode != 0:
+        raise RuntimeError((listed.stderr or listed.stdout).strip() or "lws policy gating-for-job failed")
+    results = []
+    env = {**os.environ, "POLICY_PROJECT_DIR": str(root), "COLUMNS": "300", "PYTHONDONTWRITEBYTECODE": "1"}
+    with tempfile.TemporaryDirectory(prefix="policy-preflight-") as scratch:
+        for policy in json.loads(listed.stdout).get("policies", []):
+            script = Path(scratch) / "test_policy.py"
+            script.write_text(policy["test_script"], encoding="utf-8")
+            run = subprocess.run(
+                [sys.executable, "-m", "pytest", str(script), "-q", "-rA", "--tb=short", "--no-header",
+                 "-p", "no:cacheprovider"],
+                capture_output=True, text=True, env=env, cwd=scratch,
+            )
+            counts = {kind: int(n) for n, kind in _SUMMARY.findall(run.stdout.strip().splitlines()[-1] if run.stdout.strip() else "")}
+            outcome = ("fail" if counts.get("failed") or run.returncode not in (0, 1) else
+                       "pass" if counts.get("passed") else "not_applicable" if counts.get("skipped") else "error")
+            reasons = [line[2:].strip() if line.startswith("E ") else line.strip()
+                       for line in run.stdout.splitlines() if line.startswith(("E ", "SKIPPED "))]
+            results.append({"topic": policy["topic"], "ears_text": policy["ears_text"], "gating": policy.get("gating", True),
+                            "outcome": outcome, "detail": "\n".join(dict.fromkeys(reasons)) or run.stdout[-800:]})
+    return {
+        "project_id": project, "gate_point": gate_point, "results": results, "local": True,
+        "blocking": [r["topic"] for r in results if r["outcome"] == "fail" and r["gating"]],
+        "errors": [r["topic"] for r in results if r["outcome"] == "error"],
+    }
+
+
+def report(result):
+    counts = {}
+    for entry in result["results"]:
+        counts[entry["outcome"]] = counts.get(entry["outcome"], 0) + 1
+    labels = (("fail", "failed"), ("error", "could not run"), ("pass", "passed"), ("not_applicable", "not applicable"))
+    summary = ", ".join(f"{counts[k]} {label}" for k, label in labels if counts.get(k)) or "no policy gates it"
+    where = " (run here, outside the sandbox)" if result.get("local") else ""
+    lines = [f"Policies gating {result['gate_point']} for {result['project_id']}{where}: {summary}"]
+    for entry in result["results"]:
+        if entry["outcome"] in ("fail", "error"):
+            gating = "" if entry.get("gating", True) else " (gating off here: reported, never blocks)"
+            lines.append(f"\n{'FAIL' if entry['outcome'] == 'fail' else 'ERROR'} {entry['topic']}{gating}")
+            lines.append(f"  rule: {entry.get('ears_text', '')}")
+            lines.extend(f"  {line}" for line in str(entry.get("detail", "")).splitlines())
+    if result.get("blocking"):
+        lines.append(f"\nWould hold the action: {', '.join(result['blocking'])}.")
+    return "\n".join(lines)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Run the policies that would gate an action, against this checkout.")
+    parser.add_argument("--gate-point", default="branch_finish", choices=GATE_POINTS)
+    parser.add_argument("--project-id", default=None, help="Default: read from the checkout")
+    parser.add_argument("--local", action="store_true", help="Run the policy scripts here instead of in the sandbox")
+    args = parser.parse_args(argv)
+    root = checkout_root()
+    project = args.project_id or project_id(root)
+
+    result = None
+    if not args.local:
+        result, problem = evaluate_in_sandbox(project, args.gate_point, root)
+        if problem:
+            print(f"error: the policies could not be evaluated: {problem}", file=sys.stderr)
+            return 2
+    if result is None:
+        try:
+            result = evaluate_locally(project, args.gate_point, root)
+        except (RuntimeError, ValueError) as exc:
+            print(f"error: the policies could not be evaluated: {exc}", file=sys.stderr)
+            return 2
+    print(report(result))
+    if result.get("blocking"):
+        return 1
+    return 2 if result.get("errors") else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+
+def preflight_skill_md() -> str:
+    """The text of `.claude/skills/policy-preflight/SKILL.md`."""
+    return _PREFLIGHT_SKILL
+
+
+def preflight_py() -> str:
+    """The text of `.claude/skills/policy-preflight/scripts/preflight.py`."""
+    return _PREFLIGHT_SOURCE
+
+
 def claude_files(project_id: str, template: str = "python", *, platform: bool = False,
-                 extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = ()) -> dict[str, str]:
+                 extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = (),
+                 extra_hooks: tuple[dict, ...] = ()) -> dict[str, str]:
     """Path (relative to the project root) -> text of the mechanical files under `.claude/`: the
-    settings and the guard. The `AGENTS.md` is separate (`agents_md`): a registered project keeps
-    its own."""
+    settings, the guard and the policy-preflight skill. The `AGENTS.md` is separate (`agents_md`):
+    a registered project keeps its own."""
     return {
         SETTINGS_PATH: settings_json(project_id, template, platform=platform, extra_allow=extra_allow,
-                                     extra_ask=extra_ask),
+                                     extra_ask=extra_ask, extra_hooks=extra_hooks),
         GUARD_PATH: scope_guard_py(),
+        PREFLIGHT_SKILL_PATH: preflight_skill_md(),
+        PREFLIGHT_SCRIPT_PATH: preflight_py(),
     }
 
 
 def lifecycle_md(name: str) -> str:
-    """The sections every project's `.claude/AGENTS.md` shares: routing and scope (REQ-000000294)."""
+    """The sections every project's `.claude/AGENTS.md` shares: routing, what enforces the rules, and
+    scope (REQ-000000294, REQ-000000305)."""
     return f"""## Lifecycle goes through little-workshop
 
-This project is registered in little-workshop as `{name}`. Policies gate branch finishes, releases, deploys
-and publishes, so those actions are made through the `little-workshop` MCP server (tools `workshop_<pillar>_*`,
-registered at user scope as `lws mcp serve`) or the `lws` CLI, never through raw git, systemd or twine.
-`.claude/settings.json` denies the raw forms.
+This project is registered in little-workshop as `{name}`. Branch finishes, releases, deploys and publishes go
+through the `little-workshop` MCP server (tools `workshop_<pillar>_*`, registered at user scope as `lws mcp serve`)
+or the `lws` CLI, because that is where the project's policies are checked. `.claude/settings.json` denies the raw
+git, systemd and twine forms.
 
 | To do this | Use |
 |---|---|
@@ -486,13 +721,22 @@ registered at user scope as `lws mcp serve`) or the `lws` CLI, never through raw
 | Deploy, stop or inspect a server | `workshop_deployment_*` |
 | Publish a package | `workshop_build_publish_*` |
 | Record requirements and test runs | `workshop_requirements_*` |
-| Check policies before finishing | `workshop_policy_check_project`, `workshop_policy_gating_for_job` |
+| See what a gated action would hit, and why | the `policy-preflight` skill (`workshop_policy_evaluate`) |
 | Push / create the GitHub repository | `workshop_project_connect_github` |
 
-Gated actions (finish, release, deploy, publish) are pre-allowed because the policy gate is the check: a failure
-holds the action in `pending_confirmation`; report it, never work around it. Decisions that stand in for a
-human (`workshop_policy_confirm`, `workshop_agent_finish_task`/`skip_task`, scheduling, project registration)
-prompt.
+## What enforces the rules
+
+The project's rules are Policy & Compliance policies, checked by code rather than remembered:
+
+- On every commit, `.githooks/commit-msg` runs the policies that gate `commit` (VERSION bumps and format,
+  requirement citations) and refuses a commit that breaks one, printing the rule and how to fix it. Fix it and
+  commit again (`--no-verify` is denied). On `feature/` and `improvement/` branches `.githooks/pre-commit` writes
+  `VERSION` for you.
+- Before a gated action (finish, release, deploy, publish) little-workshop runs the policies gating it, and a
+  failure holds the action in `pending_confirmation`. Run the `policy-preflight` skill first and fix what it
+  reports; if an action is still held, report it rather than working around it.
+- Decisions that stand in for a human (`workshop_policy_confirm`, `workshop_agent_finish_task`/`skip_task`,
+  scheduling, project registration) always prompt.
 
 ## Scope: this project only
 
@@ -504,19 +748,28 @@ from `little-projects`, which allows all of little-workshop.
 """
 
 
+# Kept out of Claude's context (Claude Code strips block-level HTML comments), for whoever edits the file.
+BRIEFING_NOTE = """<!-- A briefing, loaded into every session: keep it short and about this project. Guidance for one
+part of the tree goes in .claude/rules/ with `paths:` frontmatter, procedures in .claude/skills/, and a rule
+that must hold every time in a hook or a little-workshop policy, not in a sentence here. -->"""
+
+
 def agents_md(name: str) -> str:
     """`.claude/AGENTS.md` for the python layout (REQ-000000294); the unity layout has its own."""
     return f"""# {name}
 
-Managed by little-workshop. Read `docs/design.md` and `docs/architecture.md` first.
+{BRIEFING_NOTE}
+
+Managed by little-workshop. Read `docs/design.md` (what and why) and `docs/architecture.md` (how) before changing
+code.
 
 {WHY_AGENTS_MD}
 
 {lifecycle_md(name)}
-## Rules
+## Working here
 
-- Every commit raises `VERSION` (use `tools/sync_versions.py`-style propagation where the project has one).
-- Commits cite exactly one of `REQ-nnnnnnnnn` or `REQ-NONE`; subjects read `feat|impr|fix (<issue or -1>): <title>`.
-- Behaviour changes ship with tests tagged with requirement ids. Unit tests are network-free and never skip.
-- Run tests with `python3 -m pytest tests/unit`.
+- Tests: `python3 -m pytest tests/unit` (the Definition-of-Done suite: network-free, never skipping).
+- Every commit raises `VERSION`, and one that changes `src/` cites `REQ-nnnnnnnnn` or `REQ-NONE`; the commit-msg
+  hook checks both. Subjects read `feat|impr|fix (<issue or -1>): <title>`.
+- Behaviour changes ship with tests tagged with the requirement ids they cover.
 """

@@ -6,8 +6,9 @@ registered project reads this folder first.
 
 ## Rules for this folder
 
-- **Markdown only.** No scripts, JSON, or generated data live here. Policy test scripts stay in
-  the Policy & Compliance pillar (`tools/policy_scripts/`, the app's database).
+- **Markdown only.** No scripts, JSON, or generated data live here. Policy scripts and their
+  rules live in little-workshop's `tools/policy_scripts/` (`policies.json`) and in the Policy &
+  Compliance pillar's database, which `tools/sync_policies.py` keeps equal.
 - **It compiles; it does not originate.** Each file summarises a rule and names its authoritative
   source. Where a source and this folder disagree, the source wins and this folder is wrong.
 - **Shared standards at the top level; per-project material in `<project>_standards/`.** A policy
@@ -60,7 +61,8 @@ agent task (intent `docs`, manual review) that asks Claude to:
    `src/agent/templates/prompts/`, `src/dashboard/job_catalog.py`, and the super-repo's
    `docs/policies/*.md`;
 2. review every policy registered in Policy & Compliance (`lws policy list`,
-   `lws policy projects list`), plus the pending drafts in `docs/pending_policy_drafts/`;
+   `lws policy projects list`), their code in `tools/policy_scripts/`, plus any pending drafts in
+   `docs/pending_policy_drafts/`;
 3. review every registered project's `.claude/AGENTS.md`, `README.md` and `docs/*_policy.md`;
 4. update every document in this folder, add a folder for any project that lacks one, and keep the
    folder of a project that is no longer registered, saying so in its README.
@@ -68,4 +70,5 @@ agent task (intent `docs`, manual review) that asks Claude to:
 Hand edits are allowed for a one-off correction but must be dated in the file's "Last reviewed" line
 and will be reconciled by the next job run.
 
-Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).
+Last reviewed: 2026-10-01 (hand edits 2026-10-01: instructions moved to `.claude/AGENTS.md`;
+2026-10-02: policies as code).

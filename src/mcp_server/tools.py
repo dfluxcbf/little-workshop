@@ -49,7 +49,7 @@ _FORCE = _prop("boolean", "Proceed even if the working tree is dirty. Default: f
 _ACTION = _prop("string", "Resume ('continue') or cancel ('abort') a finish paused by a conflict.", enum=["continue", "abort"])
 _ISSUE = _prop("integer", "Tracker issue number to link to this branch.")
 _GATE_POINT_VALUES = [
-    "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
+    "commit", "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
     "release", "package_publish", "branch_finish", "project_removal", "project_registration",
 ]
 _GATE_POINTS = _prop(
@@ -620,6 +620,10 @@ def _policy_gating_for_job(paths: Paths, args: JSONDict) -> Any:
     return client.policy_gating_for_job(paths, args["project_id"], args["categories"])
 
 
+def _policy_evaluate(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_evaluate(paths, args["project_id"], args["gate_point"])
+
+
 def _policy_list(paths: Paths, args: JSONDict) -> Any:
     return client.policy_list(paths, args.get("topic"))
 
@@ -1147,6 +1151,15 @@ TOOLS: tuple[ToolSpec, ...] = (
              "of action categories — what Orchestration itself consults before dispatching a Job.",
              _schema({"project_id": _PROJECT_ID, "categories": _GATE_POINTS}, ["project_id", "categories"]),
              _policy_gating_for_job),
+    ToolSpec("workshop_policy_evaluate", "Run now, in the policy sandbox, every policy that would gate "
+             "a gate point for a project, and return each verdict with its reason; `blocking` lists what the "
+             "real gate would hold. Nothing is recorded or held. Use it before a gated action (branch_finish "
+             "before workshop_version_*_finish, release before a release) to fix failures first. A "
+             "branch_finish run includes policies that run the project's test suite and can take minutes.",
+             _schema({"project_id": _PROJECT_ID,
+                      "gate_point": _prop("string", "The gate point to evaluate.",
+                                          enum=[g for g in _GATE_POINT_VALUES if g != "commit"])},
+                     ["project_id", "gate_point"]), _policy_evaluate),
     ToolSpec("workshop_policy_catalog_list", "List every candidate framework policy in "
              "docs/pillars/policy_catalog.md (M13) — none is active until authored and activated.",
              _schema(), _policy_catalog_list),

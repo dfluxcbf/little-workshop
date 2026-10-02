@@ -48,7 +48,15 @@ class GatePoint(str, Enum):
     `DEPLOY_REDEPLOY`/`RELEASE` (or newly covering a previously
     ungated Job type) once real usage showed the original six
     conflated meaningfully different blast radii — see
-    `docs/requirements.md`'s policy-usability-refinement follow-up."""
+    `docs/requirements.md`'s policy-usability-refinement follow-up.
+
+    `COMMIT` (2026-10-02) gates no Job: it is checked by the project's
+    `commit-msg` git hook (`lws policy evaluate --gate-point commit`,
+    installed with the VERSION pre-commit hook) against the commit being
+    made, so a commit-level rule refuses the commit itself instead of
+    holding the branch finish much later. Only project-bound policies may
+    gate it."""
+    COMMIT = "commit"
     BUILD_INSTALL = "build_install"
     SERVER_LAUNCH = "server_launch"
     DEPLOY_REDEPLOY = "deploy_redeploy"

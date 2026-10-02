@@ -143,6 +143,8 @@ def agents_md(name: str) -> str:
     REQ-000000294 puts them, then the lifecycle routing every project shares."""
     return f"""# {name} — notes for Claude
 
+{claude_templates.BRIEFING_NOTE}
+
 A Unity game targeting Windows. The checkout lives on the Windows drive
 (`C:\\little-projects\\{name}`, `/mnt/c/little-projects/{name}` from WSL)
 and is managed from WSL by little-workshop.

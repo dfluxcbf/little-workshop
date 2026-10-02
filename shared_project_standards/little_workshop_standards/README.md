@@ -2,7 +2,8 @@
 
 Checkout: `/home/crist/little-projects/little-workshop`. Repository:
 `git@github.com:dfluxcbf/little-workshop.git`. Python, FastAPI pillars, Bazel; Dashboard, `lws` CLI
-and MCP server are thin proxies over the pillars.
+and MCP server are thin proxies over the pillars. This file is imported into every Claude session
+in the project (by `.claude/AGENTS.md`), so it stays short and current.
 
 ## Governing documents
 
@@ -15,37 +16,34 @@ and MCP server are thin proxies over the pillars.
 | `docs/pillars/*.md` | One specification per pillar |
 | `docs/open_questions.md` | `OQ-NNN` tracker |
 
-## Project-specific policies
+## Policies, as code
 
-Scope `project`, target `little-workshop`, gate `branch_finish` (details in
-[../policy_register.md](../policy_register.md)):
+Every Policy & Compliance policy is a script in `tools/policy_scripts/` plus its entry in
+`tools/policy_scripts/policies.json` (rule, scope, gate points); `python3 tools/sync_policies.py`
+shows what differs from the live pillar and `--apply` replaces it. Besides the policies every project
+is attached to ([../policy_register.md](../policy_register.md)), little-workshop's own are:
 
-- `commit-bumps-version`: every commit raises `VERSION` precedence over its parent.
-- `branch-commit-dev-suffix`: first commit of a working branch is next patch plus `-dev.1`, later
-  commits count up.
-- `back-merge-no-ff`, `hotfix-propagates-by-merge`: merges, never cherry-picks, and no
-  fast-forward.
-
-Their scripts live in `tools/policy_scripts/` and compare only the newest commit with its parent.
-Documented as little-workshop-only, but the first two are also attached with gating on to four other
-projects ([../policy_register.md](../policy_register.md)).
+- `commit-bumps-version` (also gating `commit`): every commit raises `VERSION` precedence over its
+  parent.
+- `branch-commit-dev-suffix` (also gating `commit`): a working branch's first commit is the next patch
+  plus `-dev.1`, later commits count up.
+- `back-merge-no-ff`, `hotfix-propagates-by-merge`: a finished release or hotfix reaches `dev` through a
+  non-fast-forward merge, never a cherry-pick (judged on history: the newest production tag).
 
 ## Conventions particular to this project
 
-- `.lvx/config.json` (tracked) registers `tools/on_version_bump.py`; `.githooks/pre-commit` syncs
-  `VERSION` on `feature/*` and `improvement/*` commits. `docs/governance_policy.md` still says there
-  is no `.lvx/config.json` (see [../governance.md](../governance.md)).
+- `.githooks/pre-commit` syncs `VERSION` on `feature/*` and `improvement/*` commits (`.lvx/config.json`
+  registers `tools/on_version_bump.py`); `.githooks/commit-msg` runs the policies gating `commit`.
+  `lws version install-hooks --project-id little-workshop` (re)installs both.
 - Run `tools/sync_versions.py` whenever `VERSION` changes; `pyproject.toml` is never edited by hand.
-- Commits under `src/` cite `REQ-nnnnnnnnn` or `REQ-NONE`. Prefix commit subjects with `feat:`,
-  `impr:` or `fix:`.
-- Test suites: `tests/unit` (the DoD "Unit tests" suite, never skipping in a sandbox), `tests/integration`,
-  `tests/ui` (Playwright). See [../testing_standard.md](../testing_standard.md).
+- Commits that change `src/` cite `REQ-nnnnnnnnn` or `REQ-NONE`. Subjects read
+  `feat|impr|fix (<issue or -1>): <title>`.
+- Test suites: `tests/unit` (the DoD "Unit tests" suite, never skipping in a sandbox),
+  `tests/integration` (stops the live pillars: never beside the live install), `tests/ui` (Playwright).
+  See [../testing_standard.md](../testing_standard.md).
 - New user-triggerable jobs are `JobSpec` entries in `src/dashboard/job_catalog.py`; never free-form.
-  On `dev` the catalog holds `build`, `run_tests`, `release`; the "Update Standards Documentation"
-  job (little-workshop only) is on `feature/doc-review`.
-- Servers (little-meals, mindcheck, home) are launched on demand; down is normal.
-- The state home is `~/.config/little-workshop`; pillars run as `systemd --user` units.
 - Agent prompt templates are in `src/agent/templates/prompts/`; changing them changes every task, so
   update [../agent_task_standard.md](../agent_task_standard.md) in the same change.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-02 (hand edit: policies as code, commit-time policies, file imported by
+`.claude/AGENTS.md`).

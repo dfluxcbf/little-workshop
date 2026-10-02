@@ -79,8 +79,8 @@ STANDARDS_DESCRIPTION = f"""Update the `{STANDARDS_FOLDER}/` folder at the root 
 Review, in full, before writing anything:
 
 1. Every little-workshop standard: `docs/governance_policy.md`, `docs/requirements_policy.md`, `docs/version_policy.md`, `docs/architecture.md`, `docs/design.md`, `docs/milestones.md`, `docs/open_questions.md`, `docs/pillars/*.md`, the agent prompt templates under `src/agent/templates/prompts/`, `src/dashboard/job_catalog.py`, and the super-repo's `/home/crist/little-projects/docs/policies/*.md`.
-2. Every policy registered in Policy & Compliance: run `lws policy list` and `lws policy projects list` for each policy's rule, scope, gate points and the projects it is attached to, plus the pending drafts in `docs/pending_policy_drafts/`.
-3. Every registered project (`lws project list`): its `.claude/AGENTS.md` (or a `CLAUDE.md` where one remains), `README.md`, `docs/*_policy.md`, and any project-specific policy. A project on a Windows drive (`/mnt/c/...`) is read where it is.
+2. Every policy registered in Policy & Compliance: run `lws policy list` and `lws policy projects list` for each policy's rule, scope, gate points and the projects it is attached to; its code in `tools/policy_scripts/` (one script per policy plus `policies.json`); and any pending drafts in `docs/pending_policy_drafts/`.
+3. Every registered project (`lws project list`): its `.claude/AGENTS.md` (or a `CLAUDE.md` where one remains) and `.claude/rules/`, `README.md`, `docs/*_policy.md`, and any project-specific policy. A project on a Windows drive (`/mnt/c/...`) is read where it is.
 
 Then update every document in `{STANDARDS_FOLDER}/`:
 

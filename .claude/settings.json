@@ -22,8 +22,10 @@
       "Bash(bazel build*)",
       "Bash(bazel test*)",
       "Bash(bazel query*)",
+      "Bash(python3 .claude/skills/policy-preflight/scripts/preflight.py*)",
       "Bash(python3 tools/sync_versions.py*)",
       "Bash(tools/check_system_deps.sh*)",
+      "Bash(python3 tools/sync_policies.py*)",
       "Bash(lws core status *)",
       "Bash(lws project list *)",
       "Bash(lws job list *)",
@@ -55,6 +57,7 @@
       "Bash(lws policy check-project --project-id little-workshop *)",
       "Bash(lws policy gating-for-job --project-id little-workshop *)",
       "Bash(lws policy results --project-id little-workshop *)",
+      "Bash(lws policy evaluate --project-id little-workshop *)",
       "Bash(lws policy projects list --project-id little-workshop *)",
       "Bash(lws deployment status --project-id little-workshop *)",
       "Bash(lws deployment history --project-id little-workshop *)",
@@ -74,6 +77,7 @@
       "Bash(lws version issue-set --project-id little-workshop *)",
       "Bash(lws version issue-unset --project-id little-workshop *)",
       "Bash(lws version sync-version-files --project-id little-workshop *)",
+      "Bash(lws version install-hooks --project-id little-workshop *)",
       "Bash(lws requirements create --project-id little-workshop *)",
       "Bash(lws requirements update --project-id little-workshop *)",
       "Bash(lws requirements suite create --project-id little-workshop *)",
@@ -122,6 +126,7 @@
       "mcp__little-workshop__workshop_policy_catalog_list",
       "mcp__little-workshop__workshop_policy_draft_list",
       "mcp__little-workshop__workshop_policy_check_project",
+      "mcp__little-workshop__workshop_policy_evaluate",
       "mcp__little-workshop__workshop_deployment_status",
       "mcp__little-workshop__workshop_deployment_history",
       "mcp__little-workshop__workshop_deployment_branches",
@@ -244,7 +249,8 @@
       "Bash(lws agent session-start *)",
       "Bash(lws agent session-stop *)",
       "Bash(bazel run //:install*)",
-      "Bash(bazel run //*_server*)"
+      "Bash(bazel run //*_server*)",
+      "Bash(python3 tools/sync_policies.py --apply*)"
     ],
     "deny": [
       "Bash(git merge*)",
@@ -277,6 +283,16 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/lws_scope_guard.py little-workshop",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/live_install_guard.py",
             "timeout": 10
           }
         ]

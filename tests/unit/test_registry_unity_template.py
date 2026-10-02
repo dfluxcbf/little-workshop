@@ -68,6 +68,7 @@ def test_unity_template_writes_the_unity_layout_not_the_python_one(unity_project
         "docs/design.md", "docs/architecture.md", "docs/milestones.md", "README.md", "VERSION",
         ".gitignore", ".gitattributes", ".claude/AGENTS.md", "tools/run-unity-tests", "tools/nunit_to_junit.py",
         ".claude/settings.json", ".claude/hooks/lws_scope_guard.py",
+        ".claude/skills/policy-preflight/SKILL.md", ".claude/skills/policy-preflight/scripts/preflight.py",
     ])
     assert not (dest / "MODULE.bazel").exists()
     assert not (dest / "src").exists()

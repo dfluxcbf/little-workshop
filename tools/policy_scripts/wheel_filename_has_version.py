@@ -1,4 +1,5 @@
-"""Policy `wheel-filename-has-version`: every wheel a project builds is named <name>-<version>-<tags>.whl.
+"""Policy `wheel-filename-has-version` (build pillar; gates package_publish): every wheel a
+project builds is named <name>-<version>-<tags>.whl.
 
 A `py_wheel` rule that declares no `version` yields an unversioned file name,
 which the package index refuses to publish. Checked statically on the
@@ -15,6 +16,7 @@ PROJECT = Path(os.environ.get("POLICY_PROJECT_DIR", "/project"))
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__"}
 WHEEL_RE = re.compile(r"^[^-]+-\d[^-]*(-\d[^-]*)?-[^-]+-[^-]+-[^-]+\.whl$")
 PY_WHEEL_RE = re.compile(r"\bpy_wheel\s*\(")
+FIX = "Fix: give every py_wheel rule a `version` (read from VERSION), then rebuild."
 
 
 def build_files():
@@ -48,7 +50,7 @@ def test_every_py_wheel_declares_a_version():
     if not blocks:
         pytest.skip("the project defines no py_wheel")
     missing = [str(p.relative_to(PROJECT)) for p, body in blocks if not re.search(r"\bversion\s*=", body)]
-    assert not missing, f"py_wheel without a version (its file name would carry none): {missing}"
+    assert not missing, f"py_wheel rules without a version, so their file names carry none: {missing}. {FIX}"
 
 
 def test_every_built_wheel_carries_its_version_in_the_file_name():
@@ -56,4 +58,4 @@ def test_every_built_wheel_carries_its_version_in_the_file_name():
     if not wheels:
         pytest.skip("no wheel has been built yet")
     bad = [w.name for w in wheels if not WHEEL_RE.match(w.name)]
-    assert not bad, f"wheel file names without <name>-<version>-<tags>: {bad}"
+    assert not bad, f"Built wheels whose names lack <name>-<version>-<tags>: {bad}. {FIX}"

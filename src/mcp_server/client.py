@@ -207,6 +207,13 @@ def policy_gating_for_job(paths: Paths, project_id: str, categories: list[str], 
     return _get(paths, "policy", "/v1/policies/gating-for-job", params={"project_id": project_id, "categories": ",".join(categories)}, timeout=timeout)
 
 
+def policy_evaluate(paths: Paths, project_id: str, gate_point: str, *, timeout: float = 1900.0) -> dict:
+    """Run the policies gating `gate_point` for the project now, unrecorded. Long timeout: a
+    branch_finish preflight includes policies that run the project's own test suite."""
+    return _mutate(paths, "policy", "POST", "/v1/policies/evaluate",
+                   json={"project_id": project_id, "gate_point": gate_point}, timeout=timeout)
+
+
 def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> dict:
     return _get(paths, "agent", f"/v1/runs/{project_id}", params={"status": status} if status else None, timeout=timeout)
 

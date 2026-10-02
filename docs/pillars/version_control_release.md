@@ -178,6 +178,16 @@ repository in a half-finished state.
   call the pillar makes now runs with `core.hooksPath=/dev/null`
   (`gitops.run`); the hook stays for commits an agent or a person makes.
   REQ-000000270.
+- **The commit-msg policy hook** (2026-10-02): `lws version install-hooks`
+  (and `version.init` with a project id) also writes `.githooks/commit-msg`,
+  which runs `lws policy evaluate --gate-point commit` on the commit being
+  made, so the policies gating `commit` refuse a bad commit when it is made
+  rather than at the finish (`docs/pillars/policy_compliance.md`,
+  "Enforcement moves to the moment of the change"). `install-hooks` runs in
+  the CLI, on the checkout it is called in, and touches nothing but
+  `.githooks/` and `core.hooksPath` — `version.init` also rewrites
+  `.lvx/config.json`. The pillar's own commits still skip both hooks.
+  REQ-000000306.
 
 ## Interfacing
 
