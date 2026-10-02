@@ -17,17 +17,30 @@ human or agent noticed and fixed it by hand (2026-09-22's finding).
 A no-op on any branch little-workshop's own finish commands already
 manage directly (integration, production, release/hotfix/support) --
 those write VERSION themselves as part of finishing, and this command
-running there too would just fight that."""
+running there too would just fight that.
+
+`git commit --amend` replaces HEAD instead of adding a commit, so the commit
+being made is numbered from HEAD's parent: counted from HEAD, an amended first
+commit came out `-dev.2` and failed branch-commit-dev-suffix (2026-10-02).
+Git tells a pre-commit hook nothing about an amend, so the sync reads its own
+ancestry: the hook runs as a child of the `git commit` making the commit.
+
+Only what the sync itself changed is staged -- VERSION and the files the
+version hooks wrote -- never the rest of the working tree: staging every
+modified and untracked file swept unrelated work into the commit."""
 
 from __future__ import annotations
 
+import hashlib
+import os
+import subprocess
 from pathlib import Path
 
 from version.common import CommandResult, get_integration_branch, get_production_branch, run_version_hooks
 from version.configstore import load_config
 from version.gitops import current_branch, get_commit_sha, is_ancestor, run
-from version.stages import bump_dev, bump_patch
-from version.workflows import read_version, write_version
+from version.stages import GitflowVersion, bump_dev, bump_patch
+from version.workflows import VERSION_FILE, read_version, write_version
 
 _HOOK_DIR = ".githooks"
 _HOOK_NAME = "pre-commit"
@@ -118,7 +131,66 @@ def _lvx_managed_prefixes(repo_root: Path) -> tuple[str, ...]:
     return tuple(cfg["prefixes"][k] for k in ("release", "hotfix", "support"))
 
 
-def cmd_sync_version_files(repo_root: Path) -> CommandResult:
+def _process(pid: int) -> tuple[int, list[str]] | None:
+    """(parent pid, argv) of process `pid`, or None when it cannot be read."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            argv = [a.decode(errors="replace") for a in fh.read().split(b"\0") if a]
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            stat = fh.read().decode(errors="replace")
+        return int(stat[stat.rindex(")") + 2:].split()[1]), argv
+    except (OSError, ValueError, IndexError):
+        pass
+    try:  # no /proc (macOS, some Windows shells): ask ps
+        listed = subprocess.run(["ps", "-o", "ppid=", "-o", "args=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=5)
+        ppid, _, args = listed.stdout.strip().partition(" ")
+        return (int(ppid), args.split()) if listed.returncode == 0 and args else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def amending_commit(start_pid: int | None = None, max_depth: int = 8) -> bool:
+    """Whether this process runs under `git commit --amend`: the nearest git process among its
+    ancestors (the hook's caller) was started with `--amend`."""
+    pid = os.getppid() if start_pid is None else start_pid
+    for _ in range(max_depth):
+        if pid <= 1:
+            return False
+        found = _process(pid)
+        if found is None:
+            return False
+        parent, argv = found
+        if argv and os.path.basename(argv[0]).removesuffix(".exe") == "git":
+            return "--amend" in argv
+        pid = parent
+    return False
+
+
+def _version_at(repo_root: Path, commit: str) -> GitflowVersion | None:
+    shown = run(["git", "show", f"{commit}:{VERSION_FILE}"], repo_root, check=False)
+    try:
+        return GitflowVersion.parse(shown.stdout.strip()) if shown.returncode == 0 else None
+    except ValueError:
+        return None
+
+
+def _unstaged(repo_root: Path) -> dict[str, str | None]:
+    """Every file with unstaged changes, or untracked and not ignored -> a digest of its content."""
+    modified = run(["git", "diff", "--name-only", "-z"], repo_root, check=False).stdout.split("\0")
+    untracked = run(["git", "ls-files", "--others", "--exclude-standard", "-z"], repo_root, check=False).stdout.split("\0")
+    digests: dict[str, str | None] = {}
+    for rel in filter(None, modified + untracked):
+        try:
+            digests[rel] = hashlib.sha256((repo_root / rel).read_bytes()).hexdigest()
+        except OSError:
+            digests[rel] = None
+    return digests
+
+
+def cmd_sync_version_files(repo_root: Path, *, amend: bool | None = None) -> CommandResult:
+    """`amend`: whether the commit being made replaces HEAD; None reads it from the process
+    ancestry (`amending_commit`)."""
     branch = current_branch(repo_root)
     integ = get_integration_branch(repo_root)
     prod = get_production_branch(repo_root)
@@ -133,31 +205,45 @@ def cmd_sync_version_files(repo_root: Path) -> CommandResult:
 
     current = read_version(repo_root)
     head_sha = get_commit_sha(repo_root)
+    if amend is None:
+        amend = amending_commit()
+    # An amend replaces HEAD, so the commit being made is numbered from HEAD's parent -- unless
+    # HEAD is still the integration branch's (nothing of this branch's own to replace).
+    parent = ""
+    if amend and not is_ancestor(repo_root, head_sha, integ):
+        parent = run(["git", "rev-parse", "--verify", "-q", "HEAD^"], repo_root, check=False).stdout.strip()
+    if parent:
+        base = _version_at(repo_root, parent) or current
+        first = is_ancestor(repo_root, parent, integ)
+        new_version = bump_dev(bump_patch(base)) if first else bump_dev(base)
     # HEAD unchanged from the integration branch's own tip means no commit has
     # been made on this working branch yet -- the one about to be created is
     # the branch's first, and gets next-patch, -dev.1.
-    if is_ancestor(repo_root, head_sha, integ):
+    elif is_ancestor(repo_root, head_sha, integ):
         new_version = bump_dev(bump_patch(current))
     else:
         new_version = bump_dev(current)
 
+    before = _unstaged(repo_root)
     write_version(repo_root, new_version)
     hook_errors = run_version_hooks(repo_root, str(new_version))
 
-    # `git diff --name-only` alone misses a hook-created *new* file (it's
-    # untracked, not modified) -- a version_hooks script is free to write one
-    # (2026-09-22's own test caught this), so both are needed.
-    modified = run(["git", "diff", "--name-only"], repo_root, check=False).stdout.splitlines()
-    untracked = run(["git", "ls-files", "--others", "--exclude-standard"], repo_root, check=False).stdout.splitlines()
-    touched = sorted({p.strip() for p in modified + untracked if p.strip()})
-    if touched:
-        run(["git", "add", "--", *touched], repo_root)
+    # What the sync changed: VERSION, and every file the version hooks modified or created
+    # (a hook is free to write a new, untracked file). A file that already had unstaged
+    # changes before keeps them out of the commit only if the hooks left it alone.
+    after = _unstaged(repo_root)
+    touched = sorted({VERSION_FILE} | {rel for rel, digest in after.items() if rel not in before or before[rel] != digest})
+    run(["git", "add", "--", *touched], repo_root)
+    mixed = [rel for rel in touched if rel in before and rel != VERSION_FILE]
 
-    message = f"Synced VERSION to {new_version} on {branch!r}."
+    message = f"Synced VERSION to {new_version} on {branch!r}{' (amending HEAD)' if parent else ''}."
+    if mixed:
+        message += ("\nWarning: the version hooks changed files that already had unstaged changes, now staged with "
+                    "them: " + ", ".join(mixed))
     if hook_errors:
         message += "\nWarning: some version hooks failed:\n" + "\n".join(hook_errors)
     return CommandResult(
         success=True,
         message=message,
-        data={"version": str(new_version), "hook_errors": hook_errors, "files_touched": touched},
+        data={"version": str(new_version), "hook_errors": hook_errors, "files_touched": touched, "amend": bool(parent)},
     )

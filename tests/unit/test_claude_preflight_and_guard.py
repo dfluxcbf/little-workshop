@@ -117,6 +117,24 @@ def test_preflight_runs_the_policies_locally_when_it_falls_back(tmp_path, monkey
     assert "Would hold the action: version-format." in capsys.readouterr().out
 
 
+def test_preflight_keeps_the_reason_when_the_environment_forces_colour(tmp_path, monkeypatch):
+    """FORCE_COLOR or PY_COLORS made pytest colour its lines, and the fallback lost the reason."""
+    monkeypatch.setenv("FORCE_COLOR", "3")
+    monkeypatch.setenv("PY_COLORS", "1")
+    preflight = _preflight_module(tmp_path)
+    checkout = tmp_path / "proj"
+    checkout.mkdir()
+    policies = {"policies": [{"topic": "always-fails", "ears_text": "x", "gating": True, "test_script":
+                              "def test_x():\n    assert False, 'the reason. Fix: do the thing.'\n"}]}
+    real_run = subprocess.run
+    monkeypatch.setattr(preflight.subprocess, "run",
+                        lambda argv, **kw: _Completed(0, json.dumps(policies)) if argv[:1] == ["lws"] else real_run(argv, **kw))
+    result = preflight.evaluate_locally("p", "branch_finish", checkout)
+    (entry,) = result["results"]
+    assert entry["outcome"] == "fail" and "the reason. Fix: do the thing." in entry["detail"]
+    assert "\x1b" not in entry["detail"]
+
+
 def test_preflight_exit_codes(tmp_path, monkeypatch, capsys):
     preflight = _preflight_module(tmp_path)
     monkeypatch.setattr(preflight, "checkout_root", lambda: tmp_path)
@@ -138,19 +156,24 @@ def test_preflight_exit_codes(tmp_path, monkeypatch, capsys):
 
 # --- REQ-000000305: the briefing says what enforces the rules -------------------------------------
 
-@pytest.mark.parametrize("text", [
+@pytest.mark.parametrize("agents", [
     claude_templates.agents_md("little-widget"), unity_templates.agents_md("little-widget"),
 ])
-def test_agents_md_says_what_enforces_the_rules(text):
-    for needle in (".githooks/commit-msg", "`--no-verify` is denied", "policy-preflight", "pending_confirmation",
-                   "lws_scope_guard", "<!-- A briefing"):
-        assert needle in text, needle
+def test_agents_md_says_what_enforces_the_rules(agents):
+    """Through the shared section it imports: every project's briefing ends with the import."""
+    assert agents.rstrip().endswith(claude_templates.SHARED_BRIEFING_IMPORT)
+    assert "<!-- A briefing" in agents
+    shared = claude_templates.shared_briefing_md("little-widget")
+    for needle in (".githooks/commit-msg", ".githooks/pre-commit", "refuses the raw git", "policy-preflight",
+                   "pending_confirmation", "lws_scope_guard", "no committed secrets"):
+        assert needle in shared, needle
 
 
 def test_workshops_own_agents_md_is_a_short_briefing_that_imports_its_conventions():
     text = (REPO / ".claude" / "AGENTS.md").read_text()
     assert len(text.splitlines()) < 120
     assert "@../shared_project_standards/little_workshop_standards/README.md" in text
+    assert "\n@little-workshop.md\n" in text
     assert (REPO / "shared_project_standards" / "little_workshop_standards" / "README.md").is_file()
     for rule in (REPO / ".claude" / "rules").glob("*.md"):
         assert rule.read_text().startswith("---\npaths:\n"), rule.name

@@ -4,6 +4,7 @@ project's pytest configuration registers a requirement marker, where its tests u
 import os
 import configparser
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -52,10 +53,23 @@ def _is_test_file(path):
     )
 
 
+def _project_files(root):
+    """The project's own files: what git tracks or would track (never ignored build output,
+    caches or vendored packages such as Unity's Library/), else every file under the checkout."""
+    listed = subprocess.run(
+        ["git", "-c", "safe.directory=*", "-C", str(root), "ls-files", "--cached", "--others",
+         "--exclude-standard", "-z"],
+        capture_output=True, text=True,
+    )
+    if listed.returncode == 0:
+        return [root / p for p in sorted(set(listed.stdout.split("\0"))) if p]
+    return sorted(root.rglob("*"))
+
+
 def _uses_requirement_markers():
     if not PROJECT.is_dir():
         return False
-    for path in PROJECT.rglob("*"):
+    for path in _project_files(PROJECT):
         if not path.is_file() or not _is_test_file(path):
             continue
         try:

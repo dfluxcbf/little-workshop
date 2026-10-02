@@ -19,7 +19,8 @@ from policy.models import GatePoint
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "tools" / "policy_scripts"
 MANIFEST = json.loads((SCRIPTS / "policies.json").read_text())["policies"]
-COMMIT_LEVEL = {"commit-bumps-version", "branch-commit-dev-suffix", "version-format", "commit-cites-requirement"}
+COMMIT_LEVEL = {"commit-bumps-version", "branch-commit-dev-suffix", "version-format", "commit-cites-requirement",
+                "unity-meta-files-paired", "lfs-tracked-files-are-pointers", "no-committed-secrets"}
 
 
 def script(topic: str) -> Path:
@@ -338,7 +339,419 @@ def test_claude_config_present(tmp_path):
     assert verdict("claude-config-present", repo)[0] == "pass"
     (repo / "CLAUDE.md").write_text("x\n")
     outcome, out = verdict("claude-config-present", repo)
-    assert outcome == "fail" and "ignores .claude/AGENTS.md" in out
+    assert outcome == "fail" and "instead of AGENTS.md" in out
     (repo / "CLAUDE.md").unlink()
     (repo / ".claude" / "settings.json").write_text(json.dumps({"hooks": {}}))
     assert verdict("claude-config-present", repo)[0] == "fail"
+
+
+def _scaffold_claude(repo, agents_at=".claude/AGENTS.md"):
+    from registry import claude_templates
+
+    for rel, text in claude_templates.claude_files("proj", "python").items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text)
+    (repo / agents_at).parent.mkdir(parents=True, exist_ok=True)
+    text = claude_templates.agents_md("proj")
+    if agents_at == "AGENTS.md":  # a root briefing imports the shared section by its path from the root
+        text = text.replace(claude_templates.SHARED_BRIEFING_IMPORT, "@" + claude_templates.SHARED_BRIEFING_PATH)
+    (repo / agents_at).write_text(text)
+
+
+def test_claude_config_present_accepts_a_root_agents_md_and_refuses_claude_local(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo, agents_at="AGENTS.md")
+    assert verdict("claude-config-present", repo)[0] == "pass"
+    (repo / "CLAUDE.local.md").write_text("mine\n")
+    outcome, out = verdict("claude-config-present", repo)
+    assert outcome == "fail" and "CLAUDE.local.md" in out
+    (repo / "CLAUDE.local.md").unlink()
+    (repo / ".claude" / "skills" / "policy-preflight" / "scripts" / "preflight.py").unlink()
+    outcome, out = verdict("claude-config-present", repo)
+    assert outcome == "fail" and "policy-preflight" in out
+
+
+def test_claude_instructions_valid_passes_on_the_scaffold_and_skips_without_instructions(tmp_path):
+    repo = make_repo(tmp_path)
+    assert verdict("claude-instructions-valid", repo)[0] == "skip"
+    _scaffold_claude(repo)
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+
+
+def test_claude_instructions_valid_follows_imports_outside_code(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo, agents_at="AGENTS.md")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "handoff.md").write_text("state\n")
+    agents = repo / "AGENTS.md"
+    agents.write_text(agents.read_text() + "\nSession state: @docs/handoff.md\n"
+                      "Literal: `@docs/missing.md`, and in a block:\n```\n@docs/also-missing.md\n```\n"
+                      "Mail me at someone@example.com or ping @maintainer.\n")
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+    agents.write_text(agents.read_text() + "Also @docs/gone.md.\n")
+    outcome, out = verdict("claude-instructions-valid", repo)
+    assert outcome == "fail" and "@docs/gone.md" in out and "backticks" in out
+
+
+def test_claude_instructions_valid_checks_path_scoped_rules(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo)
+    (repo / "src" / "api").mkdir(parents=True)
+    (repo / "src" / "api" / "h.ts").write_text("x\n")
+    rules = repo / ".claude" / "rules"
+    rules.mkdir(exist_ok=True)
+    (rules / "api.md").write_text('---\npaths:\n  - "src/**/*.{ts,tsx}"\n---\n# API\n')
+    (rules / "always.md").write_text("# Always loaded\n")
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+    (rules / "stale.md").write_text('---\npaths: "lib/**/*.ts, src/api/*.ts"\n---\n# Stale\n')
+    outcome, out = verdict("claude-instructions-valid", repo)
+    assert outcome == "fail" and "'lib/**/*.ts' matches no file" in out
+    (rules / "stale.md").write_text("---\npaths: [unclosed\n---\n# Broken\n")
+    outcome, out = verdict("claude-instructions-valid", repo)
+    assert outcome == "fail" and "does not parse" in out
+
+
+def test_claude_instructions_valid_checks_skill_and_hook_scripts_and_size(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo)
+    skill = repo / ".claude" / "skills" / "check" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: check\ndescription: Checks.\n---\nRun `python3 scripts/check.py`.\n")
+    outcome, out = verdict("claude-instructions-valid", repo)
+    assert outcome == "fail" and "scripts/check.py" in out
+    (skill.parent / "scripts").mkdir()
+    (skill.parent / "scripts" / "check.py").write_text("print(1)\n")
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+    settings = json.loads((repo / ".claude" / "settings.json").read_text())
+    settings["hooks"]["PostToolUse"] = [{"matcher": "Edit", "hooks": [
+        {"type": "command", "command": 'python3 "${CLAUDE_PROJECT_DIR}"/.claude/hooks/gone.py'}]}]
+    (repo / ".claude" / "settings.json").write_text(json.dumps(settings))
+    outcome, out = verdict("claude-instructions-valid", repo)
+    assert outcome == "fail" and ".claude/hooks/gone.py" in out
+    del settings["hooks"]["PostToolUse"]
+    (repo / ".claude" / "settings.json").write_text(json.dumps(settings))
+    agents = repo / ".claude" / "AGENTS.md"
+    agents.write_text(agents.read_text() + "<!-- a long maintainer note\n" + "x\n" * 300 + "-->\n")
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"  # HTML comments never load
+    agents.write_text(agents.read_text() + "line\n" * 250)
+    outcome, out = verdict("claude-instructions-valid", repo)
+    assert outcome == "fail" and "limit 200" in out
+
+
+# --- REQ-000000307: commit-level policies judge the pending commit (the Unity source folders) -
+
+def plain_repo(tmp_path):
+    (tmp_path / "plain").mkdir()
+    return make_repo(tmp_path / "plain")
+
+
+def unity_repo(tmp_path):
+    repo = make_repo(tmp_path, branch="dev")
+    (repo / "ProjectSettings").mkdir()
+    (repo / "ProjectSettings" / "ProjectVersion.txt").write_text("m_EditorVersion: 6000.6.0f1\n")
+    commit(repo, "unity", path="Assets/Existing.cs")
+    commit(repo, "unity meta", path="Assets/Existing.cs.meta")
+    return repo
+
+
+def test_commit_cites_requirement_covers_a_unity_projects_source(tmp_path):
+    repo = unity_repo(tmp_path)
+    outcome, out = verdict("commit-cites-requirement", repo, pending(tmp_path, "feat: x", ["Assets/Game/A.cs"]))
+    assert outcome == "fail" and "Assets/Game/A.cs" in out
+    assert verdict("commit-cites-requirement", repo, pending(tmp_path, "x\n\nREQ-NONE", ["tools/elm"]))[0] == "pass"
+    assert verdict("commit-cites-requirement", repo, pending(tmp_path, "docs", ["docs/a.md"]))[0] == "skip"
+    plain = plain_repo(tmp_path)
+    assert verdict("commit-cites-requirement", plain, pending(tmp_path, "feat: x", ["Assets/A.cs"]))[0] == "skip"
+
+
+# --- REQ pending (unity-meta-files-paired): an asset and its .meta are committed together -------
+
+def test_unity_meta_files_paired_judges_the_pending_commit(tmp_path):
+    repo = unity_repo(tmp_path)
+    (repo / "Assets" / "New").mkdir()
+    (repo / "Assets" / "New" / "B.cs").write_text("x\n")
+    outcome, out = verdict("unity-meta-files-paired", repo, pending(tmp_path, "c", ["Assets/New/B.cs"]))
+    assert outcome == "fail" and "Assets/New/B.cs is added without Assets/New/B.cs.meta" in out
+    assert "the new folder Assets/New is added without Assets/New.meta" in out and "Fix:" in out
+    (repo / "Assets" / "New" / "B.cs.meta").write_text("guid: 1\n")
+    (repo / "Assets" / "New.meta").write_text("guid: 2\n")
+    files = ["Assets/New/B.cs", "Assets/New/B.cs.meta", "Assets/New.meta"]
+    assert verdict("unity-meta-files-paired", repo, pending(tmp_path, "c", files))[0] == "pass"
+    (repo / "Assets" / "Existing.cs").unlink()
+    outcome, out = verdict("unity-meta-files-paired", repo, pending(tmp_path, "c", ["Assets/Existing.cs"]))
+    assert outcome == "fail" and "Assets/Existing.cs is deleted but Assets/Existing.cs.meta is kept" in out
+    (repo / "Assets" / "Orphan.cs.meta").write_text("guid: 3\n")
+    outcome, out = verdict("unity-meta-files-paired", repo, pending(tmp_path, "c", ["Assets/Orphan.cs.meta"]))
+    assert outcome == "fail" and "Assets/Orphan.cs does not exist" in out
+    assert verdict("unity-meta-files-paired", repo, pending(tmp_path, "c", ["docs/a.md"]))[0] == "skip"
+
+
+def test_unity_meta_files_paired_judges_head_and_respects_unitys_exclusions(tmp_path):
+    repo = unity_repo(tmp_path)
+    commit(repo, "fixture", path="Assets/Fixtures~/case.yaml")
+    assert verdict("unity-meta-files-paired", repo)[0] == "skip"
+    commit(repo, "asset", path="Assets/C.cs")
+    outcome, out = verdict("unity-meta-files-paired", repo)
+    assert outcome == "fail" and "Assets/C.cs is added without Assets/C.cs.meta" in out
+    (repo / "Assets" / "D.cs").write_text("x\n")
+    (repo / "Assets" / "D.cs.meta").write_text("guid: 4\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "paired")
+    assert verdict("unity-meta-files-paired", repo)[0] == "pass"
+    plain = plain_repo(tmp_path)
+    assert verdict("unity-meta-files-paired", plain)[0] == "skip"
+
+
+# --- REQ pending (lfs-tracked-files-are-pointers): LFS-routed files are committed as pointers ----
+
+RAW = ("-c", "filter.lfs.clean=", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=", "-c", "filter.lfs.required=false")
+POINTER_TEXT = "version https://git-lfs.github.com/spec/v1\noid sha256:" + "0" * 64 + "\nsize 3\n"
+
+
+def lfs_repo(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / ".gitattributes").write_text("*.png filter=lfs diff=lfs merge=lfs -text\n")
+    git(repo, *RAW, "add", "-A")
+    git(repo, *RAW, "commit", "-q", "-m", "attributes")
+    return repo
+
+
+def test_lfs_tracked_files_are_pointers_judges_head(tmp_path):
+    repo = lfs_repo(tmp_path)
+    (repo / "a.png").write_bytes(b"\x89PNG raw bytes")
+    git(repo, *RAW, "add", "-A")
+    git(repo, *RAW, "commit", "-q", "-m", "raw")
+    outcome, out = verdict("lfs-tracked-files-are-pointers", repo)
+    assert outcome == "fail" and "a.png" in out and "git lfs install" in out
+    (repo / "b.png").write_text(POINTER_TEXT)
+    git(repo, *RAW, "add", "-A")
+    git(repo, *RAW, "commit", "-q", "-m", "pointer")
+    assert verdict("lfs-tracked-files-are-pointers", repo)[0] == "pass"
+    (repo / "notes.txt").write_text("text only\n")
+    git(repo, *RAW, "add", "notes.txt")
+    git(repo, *RAW, "commit", "-q", "-m", "text only")
+    assert verdict("lfs-tracked-files-are-pointers", repo)[0] == "skip"
+
+
+def test_lfs_tracked_files_are_pointers_judges_the_staged_blob(tmp_path):
+    repo = lfs_repo(tmp_path)
+    (repo / "c.png").write_bytes(b"\x89PNG raw bytes")
+    git(repo, *RAW, "add", "c.png")
+    assert verdict("lfs-tracked-files-are-pointers", repo, pending(tmp_path, "c", ["c.png"]))[0] == "fail"
+    (repo / "c.png").write_text(POINTER_TEXT)
+    git(repo, *RAW, "add", "c.png")
+    assert verdict("lfs-tracked-files-are-pointers", repo, pending(tmp_path, "c", ["c.png"]))[0] == "pass"
+    assert verdict("lfs-tracked-files-are-pointers", plain_repo(tmp_path))[0] == "skip"
+
+
+# --- REQ pending (design-index-and-schema-current): ethereal-lands' generated files are current ---
+
+def test_design_index_and_schema_current_runs_both_checks(tmp_path):
+    repo = make_repo(tmp_path)
+    assert verdict("design-index-and-schema-current", repo)[0] == "skip"
+    (repo / "tools").mkdir()
+    ok = "import sys\nassert sys.argv[1:] == ['--check']\n"
+    (repo / "tools" / "update_design_index.py").write_text(ok)
+    (repo / "tools" / "elm-schema.py").write_text(ok)
+    assert verdict("design-index-and-schema-current", repo)[0] == "pass"
+    (repo / "tools" / "elm-schema.py").write_text("import sys\nprint('schema is out of date', file=sys.stderr)\nsys.exit(1)\n")
+    outcome, out = verdict("design-index-and-schema-current", repo)
+    assert outcome == "fail" and "schema is out of date" in out and "Fix:" in out
+
+
+# --- REQ pending (project files only): policies judge the project's own files, not ignored ones ---
+
+def test_version_hook_installed_ignores_git_ignored_folders_and_partial_versions(tmp_path):
+    repo = make_repo(tmp_path, version="0.1.5")
+    (repo / ".githooks").mkdir()
+    (repo / ".githooks" / "pre-commit").write_text("#!/bin/sh\nlws version sync-version-files --project-id x\n")
+    (repo / ".lvx").mkdir()
+    (repo / ".lvx" / "config.json").write_text(json.dumps({"version_hooks": []}))
+    (repo / ".gitignore").write_text("Library/\n")
+    (repo / "Library" / "PackageCache").mkdir(parents=True)
+    (repo / "Library" / "PackageCache" / "package.json").write_text('{"version": "0.1.5"}\n')
+    (repo / "notes.md").write_text("Unity 10.1.5 and 0.1.50 are other versions.\n")
+    assert verdict("version-hook-installed", repo)[0] == "skip"
+    (repo / "package.json").write_text('{"version": "0.1.5"}\n')
+    outcome, out = verdict("version-hook-installed", repo)
+    assert outcome == "fail" and "package.json carries '0.1.5'" in out
+
+
+# Built at run time: written out, the marker would be a malformed one in this repository's own tests.
+MARKER = "@pytest.mark." + "requirement"
+
+
+def test_requirement_marker_id_format_ignores_git_ignored_folders(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / ".gitignore").write_text("Library/\n")
+    vendored = repo / "Library" / "PackageCache" / "Tests"
+    vendored.mkdir(parents=True)
+    (vendored / "test_vendor.py").write_text(MARKER + '("REQ-1")\ndef test_x(): pass\n')
+    assert verdict("requirement-marker-id-format", repo)[0] == "skip"
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_own.py").write_text(MARKER + '("REQ-1")\ndef test_y(): pass\n')
+    assert verdict("requirement-marker-id-format", repo)[0] == "fail"
+
+
+def test_claude_instructions_valid_ignores_tracked_files_deleted_in_the_checkout(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "AGENTS.md").write_text("# docs\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "nested briefing")
+    (repo / "docs" / "AGENTS.md").unlink()
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+
+
+# --- REQ pending (claude-config-present, second pass): the briefing imports the shared section, the
+# generated files are there and the guard sees every tool it judges -----------------------------
+
+def test_claude_config_present_requires_the_shared_import_the_generated_files_and_a_full_guard(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo)
+    assert verdict("claude-config-present", repo)[0] == "pass"
+    agents = repo / ".claude" / "AGENTS.md"
+    briefing = agents.read_text()
+    agents.write_text(briefing.replace("@little-workshop.md", "`@little-workshop.md`"))
+    outcome, out = verdict("claude-config-present", repo)
+    assert outcome == "fail" and "does not import the section every project shares" in out
+    agents.write_text(briefing)
+    (repo / ".claude" / "skills" / "workshop-lifecycle" / "SKILL.md").unlink()
+    outcome, out = verdict("claude-config-present", repo)
+    assert outcome == "fail" and "workshop-lifecycle" in out and "sync_claude_files.py" in out
+    _scaffold_claude(repo)
+    settings = json.loads((repo / ".claude" / "settings.json").read_text())
+    settings["hooks"]["PreToolUse"][0]["matcher"] = "Bash|mcp__little-workshop__.*"
+    (repo / ".claude" / "settings.json").write_text(json.dumps(settings))
+    outcome, out = verdict("claude-config-present", repo)
+    assert outcome == "fail" and "Edit, Write, MultiEdit, NotebookEdit" in out
+
+
+def test_claude_config_present_refuses_a_claude_md_anywhere_in_the_project(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo)
+    (repo / "src" / "ui").mkdir(parents=True)
+    (repo / "src" / "ui" / "CLAUDE.md").write_text("notes\n")
+    outcome, out = verdict("claude-config-present", repo)
+    assert outcome == "fail" and "src/ui/CLAUDE.md" in out
+
+
+# --- REQ pending (claude-instructions-valid, second pass): imports stay inside the project, rules
+# use only `paths`, skills and subagents say when to use them, and a session starts small -------
+
+def test_claude_instructions_valid_refuses_an_import_from_outside_the_project(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo)
+    agents = repo / ".claude" / "AGENTS.md"
+    agents.write_text(agents.read_text() + "\nPersonal: @~/.claude/mine.md\n")
+    outcome, out = verdict("claude-instructions-valid", repo)
+    assert outcome == "fail" and "@~/.claude/mine.md, outside the project" in out
+
+
+def test_claude_instructions_valid_refuses_rule_fields_other_than_paths(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo)
+    (repo / "src").mkdir()
+    (repo / "src" / "a.py").write_text("x = 1\n")
+    rule = repo / ".claude" / "rules" / "python.md"
+    rule.write_text('---\nglobs:\n  - "src/**/*.py"\n---\n# Python\n')
+    outcome, out = verdict("claude-instructions-valid", repo)
+    assert outcome == "fail" and "'globs' is ignored and the rule loads in every session" in out
+    rule.write_text('---\npaths:\n  - "src/**/*.py"\n---\n# Python\n')
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+
+
+def test_claude_instructions_valid_requires_skill_and_subagent_descriptions(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo)
+    skill = repo / ".claude" / "skills" / "release-notes" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: release-notes\n---\n# Release notes\n")
+    agent = repo / ".claude" / "agents" / "reviewer.md"
+    agent.parent.mkdir(parents=True)
+    agent.write_text("Review the diff.\n")
+    outcome, out = verdict("claude-instructions-valid", repo)
+    assert outcome == "fail" and "release-notes/SKILL.md: has no `description`" in out
+    assert "reviewer.md: has no frontmatter" in out
+    skill.write_text("---\nname: release-notes\ndescription: >\n  Writes release notes. Use before a release.\n---\n# Notes\n")
+    agent.write_text("---\nname: reviewer\ndescription: Reviews a diff against the rules.\n---\nReview the diff.\n")
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+
+
+def test_claude_instructions_valid_limits_what_a_session_starts_with(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "state.md").write_text("state\n" * 150)
+    agents = repo / ".claude" / "AGENTS.md"
+    agents.write_text(agents.read_text() + "\n@../docs/state.md\n")
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+    (repo / ".claude" / "rules" / "everywhere.md").write_text("# No paths, so every session\n" + "rule\n" * 80)
+    outcome, out = verdict("claude-instructions-valid", repo)
+    assert outcome == "fail" and "Every session starts with" in out and "limit 250" in out
+    assert "docs/state.md 150" in out and ".claude/rules/everywhere.md 81" in out
+    (repo / ".claude" / "rules" / "everywhere.md").write_text('---\npaths:\n  - "docs/**"\n---\n' + "rule\n" * 80)
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+
+
+# --- REQ pending (no-committed-secrets): a commit introduces no secret --------------------------
+
+FAKE_AWS_KEY = "AKIA" + "Z7Q2" * 4
+FAKE_PRIVATE_KEY = "-----BEGIN " + "OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+
+
+def _stage(repo, path, text):
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text)
+    git(repo, "add", path)
+
+
+def test_no_committed_secrets_judges_the_pending_commit(tmp_path):
+    repo = make_repo(tmp_path)
+    _stage(repo, "src/settings.py", f'AWS_KEY = "{FAKE_AWS_KEY}"\n')
+    outcome, out = verdict("no-committed-secrets", repo, pending(tmp_path, files=["src/settings.py"]))
+    assert outcome == "fail" and "src/settings.py:1: an AWS access key id (AKIAZ7Q2...)" in out
+    assert FAKE_AWS_KEY not in out, "the report never repeats the secret"
+    _stage(repo, "src/settings.py", f'AWS_KEY = "{FAKE_AWS_KEY}"  # pragma: allowlist secret\n')
+    assert verdict("no-committed-secrets", repo, pending(tmp_path, files=["src/settings.py"]))[0] == "pass"
+    _stage(repo, "deploy/id_ed25519", FAKE_PRIVATE_KEY)
+    outcome, out = verdict("no-committed-secrets", repo, pending(tmp_path, files=["deploy/id_ed25519"]))
+    assert outcome == "fail" and "a private key" in out
+
+
+def test_no_committed_secrets_refuses_environment_files_but_not_templates(tmp_path):
+    repo = make_repo(tmp_path)
+    _stage(repo, ".env.example", "DATABASE_URL=postgres://user:change-me@localhost/db\n")
+    assert verdict("no-committed-secrets", repo, pending(tmp_path, files=[".env.example"]))[0] == "pass"
+    _stage(repo, "src/.env", "DATABASE_URL=postgres://user:hunter2@localhost/db\n")
+    outcome, out = verdict("no-committed-secrets", repo, pending(tmp_path, files=["src/.env"]))
+    assert outcome == "fail" and "src/.env: an environment file" in out
+
+
+def test_no_committed_secrets_judges_head_and_only_what_the_commit_introduces(tmp_path):
+    repo = make_repo(tmp_path)
+    assert verdict("no-committed-secrets", repo)[0] == "skip"  # HEAD has no parent
+    _stage(repo, "notes.txt", f"old {FAKE_AWS_KEY}\n")
+    git(repo, "commit", "-q", "-m", "an old mistake")
+    _stage(repo, "notes.txt", f"old {FAKE_AWS_KEY}\nnew line\n")
+    git(repo, "commit", "-q", "-m", "touch the file again")
+    assert verdict("no-committed-secrets", repo)[0] == "pass"  # already in the parent: not this commit's
+    _stage(repo, "tool.bin", "\0binary " + FAKE_AWS_KEY)
+    git(repo, "commit", "-q", "-m", "binary")
+    assert verdict("no-committed-secrets", repo)[0] == "pass"  # binary content is not judged
+    token = "gh" + "p_" + "a1B2" * 9
+    _stage(repo, "ci.yml", f"token: {token}\n")
+    git(repo, "commit", "-q", "-m", "token")
+    outcome, out = verdict("no-committed-secrets", repo)
+    assert outcome == "fail" and "ci.yml:1: a GitHub token" in out
+
+
+def test_no_committed_secrets_does_not_flag_its_own_patterns():
+    from importlib import util
+
+    spec = util.spec_from_file_location("secrets_policy", script("no-committed-secrets"))
+    module = util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.findings(script("no-committed-secrets").read_text()) == []

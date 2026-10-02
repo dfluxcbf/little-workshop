@@ -1,6 +1,6 @@
 # Ethereal Lands: Unity and Windows
 
-Source: the project's `.claude/AGENTS.md` and `README.md`.
+Source: the project's `AGENTS.md`, `.claude/rules/` and `README.md`.
 
 ## Where it runs
 
@@ -55,4 +55,4 @@ git config merge.unityyamlmerge.driver "'<Editor>/Data/Tools/UnityYAMLMerge.exe'
 A task for this project must name the Windows checkout path, must not assume Bazel or a `src/` tree,
 and should state which of `docs/design/`, `docs/game/`, `docs/machination/` are read-only.
 
-Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).
+Last reviewed: 2026-10-02 (instructions moved to the root `AGENTS.md` and `.claude/rules/`).

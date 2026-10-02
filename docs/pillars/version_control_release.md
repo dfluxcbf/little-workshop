@@ -143,6 +143,16 @@ repository in a half-finished state.
   `agent.run_task` making the commit — so it ran only after the run ended:
   the commits carried no bump and the leftover staged VERSION blocked the
   run's own finish ("Working tree is dirty"). REQ-000000264.
+- **Pre-commit sync handles an amend and stages only its own changes**
+  (2026-10-02): `git commit --amend` replaces HEAD, so the sync numbers the
+  commit from HEAD's parent (an amended first commit stays `-dev.1`; counted
+  from HEAD it became `-dev.2` and failed `branch-commit-dev-suffix`). Git
+  does not tell a pre-commit hook it is amending, so the sync reads its own
+  process ancestry for the `git commit --amend` that ran the hook. It stages
+  `VERSION` and the files the version hooks changed, no longer every modified
+  or untracked file in the checkout (which swept unrelated work into the
+  commit), and warns when a hook rewrote a file that already had unstaged
+  edits. REQ pending.
 - **Finish resolves version-only rebase conflicts** (2026-09-24): every
   working branch's first commit bumps VERSION (and the files version_hooks
   write it into), so two branches cut from the same dev tip always

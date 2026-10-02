@@ -68,7 +68,7 @@ def test_bootstrap_writes_settings_routing_lifecycle_through_little_workshop(tmp
     assert f"{mcp}workshop_policy_confirm" in perms["ask"]
     assert f"{mcp}workshop_policy_confirm" not in perms["allow"]
     assert set(perms["allow"]).isdisjoint(perms["ask"])
-    for raw in ("git merge*", "git tag*", "git push*", "git cherry-pick*", "systemd-run*", "twine*"):
+    for raw in ("git merge *", "git tag *", "git push *", "git cherry-pick *", "systemd-run *", "twine *"):
         assert f"Bash({raw})" in perms["deny"], raw
     assert set(perms["allow"]).isdisjoint(perms["deny"])
 
@@ -211,11 +211,12 @@ def test_project_bound_lws_commands_take_project_id_and_the_others_do_not():
 
 # --- REQ-000000297: the scope guard ------------------------------------------
 
-def test_settings_register_the_guard_for_bash_and_the_mcp_tools():
+def test_settings_register_the_guard_for_bash_the_edit_tools_and_the_mcp_tools():
     hooks = claude_templates.settings(PROJECT)["hooks"]["PreToolUse"]
     assert len(hooks) == 1
     matcher = hooks[0]["matcher"]
-    assert re.fullmatch(matcher, "Bash") and re.fullmatch(matcher, GUARD_TOOL)
+    for tool in ("Bash", GUARD_TOOL, "Edit", "Write", "MultiEdit", "NotebookEdit"):
+        assert re.fullmatch(matcher, tool), tool
     assert not re.fullmatch(matcher, "Read") and not re.fullmatch(matcher, "mcp__playwright__browser_click")
     (hook,) = hooks[0]["hooks"]
     assert hook["type"] == "command"
@@ -363,21 +364,31 @@ def test_bootstrap_writes_agents_md_and_no_claude_md(tmp_path, template):
     assert not list(dest.rglob("CLAUDE.md")) and not list(dest.rglob("AGENT.md"))
 
 
+def _briefing(dest) -> str:
+    """The scaffolded briefing as a session loads it: AGENTS.md with the shared section it imports."""
+    agents = (dest / ".claude" / "AGENTS.md").read_text()
+    assert agents.rstrip().endswith(claude_templates.SHARED_BRIEFING_IMPORT)
+    return agents + (dest / claude_templates.SHARED_BRIEFING_PATH).read_text()
+
+
 @pytest.mark.parametrize("template", ["python", "unity"])
 def test_agents_md_routes_lifecycle_through_little_workshop_and_names_the_scope(tmp_path, template):
     dest = tmp_path / "little-widget"
     scaffold.create_project_tree(dest, "little-widget", template)
-    text = (dest / ".claude" / "AGENTS.md").read_text()
-    for needle in ("little-widget", "workshop_version_", "workshop_deployment_", "pending_confirmation",
-                   "--project-id little-widget", "lws_scope_guard", "little-projects",
-                   "never add a `CLAUDE.md` here"):
+    text = _briefing(dest)
+    for needle in ("little-widget", "workshop-lifecycle", "pending_confirmation", "--project-id little-widget",
+                   "lws_scope_guard", "little-projects", "CLAUDE.md"):
         assert needle in text, needle
+    skill = (dest / claude_templates.LIFECYCLE_SKILL_PATH).read_text()
+    for needle in ("workshop_version_", "workshop_deployment_", "--project-id little-widget",
+                   "workshop_requirements_run_tests", "policy-preflight"):
+        assert needle in skill, needle
 
 
 def test_python_agents_md_carries_the_commit_and_test_rules(tmp_path):
     dest = tmp_path / "little-widget"
     scaffold.create_project_tree(dest, "little-widget")
-    text = (dest / ".claude" / "AGENTS.md").read_text()
+    text = _briefing(dest)
     for needle in ("REQ-NONE", "python3 -m pytest tests/unit", "VERSION"):
         assert needle in text, needle
 
@@ -403,3 +414,158 @@ def test_only_workshop_itself_pre_allows_the_platform_administration_tools():
     for command in claude_templates.LWS_PLATFORM:
         assert f"Bash(lws {command} *)" in own["allow"]
         assert f"Bash(lws {command} *)" in other["ask"]
+
+
+# --- REQ pending (the guard refuses raw lifecycle commands with the route) ----------------------
+
+def test_every_denied_command_names_a_route():
+    for pattern, route in claude_templates.DENY_REROUTED:
+        assert route in claude_templates.ROUTES, pattern
+    deny = claude_templates.settings(PROJECT)["permissions"]["deny"]
+    assert deny == [f"Bash({pattern})" for pattern, _ in claude_templates.DENY_REROUTED]
+
+
+@pytest.mark.parametrize("command, denied", [
+    ("git merge feature/x", True), ("git merge", True), ("git tag v1.0.0", True), ("git tag", True),
+    ("git push origin dev", True), ("git branch -D old", True), ("git reset --hard HEAD", True),
+    ("git commit -m wip --no-verify", True), ("systemctl --user restart x", True), ("twine upload dist/*", True),
+    ("gh pr create --fill", True), ("gh release create v1", True),
+    ("git merge-base dev HEAD", False), ("git merge-base --is-ancestor a b", False), ("git tags-of-mine", False),
+    ("git pushd", False), ("git branch --show-current", False), ("git reset HEAD~1", False),
+    ("git commit -m wip", False), ("git commit-tree abc", False), ("systemctl --user status x", False),
+    ("gh pr view 3", False), ("gh pr list", False), ("pipx list", False),
+])
+def test_deny_rules_stop_at_a_word(command, denied):
+    """`git merge*` denied `git merge-base` too; each rule now ends at a word."""
+    deny = claude_templates.settings(PROJECT)["permissions"]["deny"]
+    assert any(_rule_matches(rule, command) for rule in deny) is denied, command
+
+
+def test_the_retired_deny_rules_are_not_written_any_more():
+    deny = set(claude_templates.settings(PROJECT)["permissions"]["deny"])
+    assert not deny & set(claude_templates.RETIRED_RULES)
+    assert len(claude_templates.RETIRED_RULES) == len(claude_templates.DENY_REROUTED)
+
+
+@pytest.mark.parametrize("command, route", [
+    ("git merge feature/x", "merge"),
+    ("git -C . merge --no-ff feature/x", "merge"),
+    ("git cherry-pick abc123", "cherry-pick"),
+    ("git tag v1.2.3", "tag"),
+    ("git status && git push origin dev", "push"),
+    ("bash -c 'git push --force'", "push"),
+    ("git branch -D old", "branch-delete"),
+    ("git branch --delete old", "branch-delete"),
+    ("git reset --hard HEAD~1", "destructive"),
+    ("git clean -fdx", "destructive"),
+    ("git commit -am wip --no-verify", "no-verify"),
+    ("git commit -nm wip", "no-verify"),
+    ("git -c core.hooksPath=/dev/null commit -m wip", "hooks-path"),
+    ("git config core.hooksPath /dev/null", "hooks-path"),
+    ("git config --unset core.hooksPath", "hooks-path"),
+    ("systemctl --user restart little-widget", "systemd"),
+    ("systemd-run --user lmeals serve", "systemd"),
+    ("FOO=1 twine upload dist/*", "publish"),
+    ("pipx install dist/x.whl", "install"),
+    ("gh pr create --fill", "github"),
+    ("gh pr merge 3", "github"),
+    ("gh release create v1.0.0", "github"),
+    ("gh repo create x", "github"),
+])
+def test_guard_refuses_a_raw_lifecycle_command_with_its_route(tmp_path, command, route):
+    reason = _guard(tmp_path, _bash(command))
+    assert reason is not None and claude_templates.ROUTES[route] in reason, reason
+
+
+@pytest.mark.parametrize("command", [
+    "git merge-base dev HEAD",
+    "git commit -m 'drop the -n flag'",
+    "git commit -mn",
+    "git commit -a -m wip",
+    "git branch --show-current",
+    "git branch -vv",
+    "git reset HEAD~1",
+    "git config core.hooksPath",
+    "git config core.hooksPath .githooks",
+    "git log --tags --simplify-by-decoration",
+    "systemctl --user status little-widget",
+    "pipx list",
+    "gh pr view 3",
+    "echo 'git push'",
+    "cat <<'EOF'\ngit merge x\nEOF",
+])
+def test_guard_lets_everything_else_through(tmp_path, command):
+    assert _guard(tmp_path, _bash(command)) is None
+
+
+# --- REQ pending (the guard refuses hand edits of generated files and of a CLAUDE.md) -----------
+
+def _edit(path, tool="Write"):
+    key = "notebook_path" if tool == "NotebookEdit" else "file_path"
+    return {"tool_name": tool, "tool_input": {key: str(path)}}
+
+
+def _guard_in(tmp_path, root, event):
+    script = tmp_path / "lws_scope_guard.py"
+    script.write_text(claude_templates.scope_guard_py())
+    done = subprocess.run([sys.executable, str(script), PROJECT], input=json.dumps(event), capture_output=True,
+                          text=True, env={"PATH": "/usr/bin:/bin", "CLAUDE_PROJECT_DIR": str(root)})
+    assert done.returncode == 0 and done.stderr == "", done.stderr
+    return json.loads(done.stdout)["hookSpecificOutput"]["permissionDecisionReason"] if done.stdout else None
+
+
+@pytest.mark.parametrize("rel, tool, needle", [
+    ("CLAUDE.md", "Write", "reads AGENTS.md only where"),
+    ("src/ui/CLAUDE.local.md", "Write", "reads AGENTS.md only where"),
+    (".claude/CLAUDE.md", "Edit", "reads AGENTS.md only where"),
+    ("CLAUDE.md", "NotebookEdit", "reads AGENTS.md only where"),
+    ("VERSION", "Edit", "little-workshop writes VERSION"),
+    (".githooks/commit-msg", "Write", "lws version install-hooks --project-id little-widget"),
+    (".claude/hooks/lws_scope_guard.py", "Edit", "sync_claude_files.py --write"),
+    (".claude/little-workshop.md", "MultiEdit", "sync_claude_files.py --write"),
+    (".claude/rules/claude-instructions.md", "Write", "sync_claude_files.py --write"),
+    (".claude/skills/workshop-lifecycle/SKILL.md", "Edit", "sync_claude_files.py --write"),
+    (".claude/skills/policy-preflight/scripts/preflight.py", "Edit", "sync_claude_files.py --write"),
+])
+def test_guard_refuses_a_hand_edit_of_a_generated_file_or_a_claude_md(tmp_path, rel, tool, needle):
+    root = tmp_path / "proj"
+    root.mkdir()
+    reason = _guard_in(tmp_path, root, _edit(root / rel, tool))
+    assert reason is not None and needle in reason and rel in reason, reason
+    assert _guard_in(tmp_path, root, _edit(rel, tool)) == reason  # a path relative to the project too
+
+
+@pytest.mark.parametrize("rel", [".claude/AGENTS.md", ".claude/settings.json", ".claude/rules/api.md",
+                                 "src/app.py", "docs/VERSION.md"])
+def test_guard_lets_the_projects_own_files_be_edited(tmp_path, rel):
+    root = tmp_path / "proj"
+    root.mkdir()
+    assert _guard_in(tmp_path, root, _edit(root / rel)) is None
+
+
+def test_guard_leaves_files_outside_the_project_alone(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    assert _guard_in(tmp_path, root, _edit(tmp_path / "other" / "CLAUDE.md")) is None
+    assert _guard_in(tmp_path, root, _edit(tmp_path / "other" / "VERSION")) is None
+
+
+# --- REQ pending (generated briefing section, rule and lifecycle skill) -------------------------
+
+@pytest.mark.parametrize("template", ["python", "unity"])
+def test_bootstrap_writes_the_shared_section_the_rule_and_the_lifecycle_skill(tmp_path, template):
+    dest = tmp_path / PROJECT
+    scaffold.create_project_tree(dest, PROJECT, template)
+    for rel, text in claude_templates.claude_files(PROJECT, template).items():
+        assert (dest / rel).read_text() == text, rel
+    rule = (dest / claude_templates.INSTRUCTIONS_RULE_PATH).read_text()
+    assert rule.startswith('---\npaths:\n  - ".claude/**"\n')
+    skill = (dest / claude_templates.LIFECYCLE_SKILL_PATH).read_text()
+    assert skill.startswith("---\nname: workshop-lifecycle\ndescription: ")
+
+
+def test_only_workshop_itselfs_shared_section_administers_little_workshop():
+    own = claude_templates.shared_briefing_md("little-workshop", platform=True)
+    other = claude_templates.shared_briefing_md(PROJECT)
+    assert "administers little-workshop" in own and "administers" not in other
+    assert "policy authoring and project registration belong in" in other

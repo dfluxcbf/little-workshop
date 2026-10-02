@@ -140,7 +140,7 @@ def gitattributes() -> str:
 
 def agents_md(name: str) -> str:
     """The unity layout's `.claude/AGENTS.md`: the working rules of REQ-000000278, where
-    REQ-000000294 puts them, then the lifecycle routing every project shares."""
+    REQ-000000294 puts them, then an import of the section every project shares."""
     return f"""# {name} — notes for Claude
 
 {claude_templates.BRIEFING_NOTE}
@@ -148,8 +148,6 @@ def agents_md(name: str) -> str:
 A Unity game targeting Windows. The checkout lives on the Windows drive
 (`C:\\little-projects\\{name}`, `/mnt/c/little-projects/{name}` from WSL)
 and is managed from WSL by little-workshop.
-
-{claude_templates.WHY_AGENTS_MD}
 
 ## Working with the Editor
 
@@ -163,14 +161,16 @@ and is managed from WSL by little-workshop.
   (`.asmdef`) per feature; put tests in `Assets/Tests/EditMode` and
   `Assets/Tests/PlayMode` with their own test `.asmdef`s.
 
-## Never
+## What Unity owns
 
-- Never edit or commit `Library/`, `Temp/`, `Obj/`, `Logs/`, `UserSettings/`
-  or `Build*/` — Unity regenerates them.
-- Never add, move, rename or delete an asset without its `.meta` file, and
-  never hand-write a `.meta` GUID — let the Editor create them.
-- Never commit binary assets outside Git LFS; `.gitattributes` already
-  routes them, so run `git lfs install` once per clone.
+- `Library/`, `Temp/`, `Obj/`, `Logs/`, `UserSettings/` and `Build*/` are
+  Unity's and git-ignored: never edit or commit them.
+- An asset is added, moved, renamed or deleted together with its `.meta`
+  file, whose GUID the Editor writes; the commit hook refuses a commit that
+  separates them (`unity-meta-files-paired`).
+- Binary assets go through Git LFS, which `.gitattributes` routes (run
+  `git lfs install` once per clone); the commit hook refuses one committed
+  as a plain blob (`lfs-tracked-files-are-pointers`).
 
 ## Tests
 
@@ -182,12 +182,13 @@ little-workshop's `workshop_requirements_import_junit`. Batch mode cannot
 open a project the Editor already has open — close it first, or run the
 tests from the open Editor via the Unity CLI.
 
-{claude_templates.lifecycle_md(name)}
 ## Per-clone git setup
 
     git lfs install
     git config merge.unityyamlmerge.name "Unity SmartMerge"
     git config merge.unityyamlmerge.driver "'<Editor>/Data/Tools/UnityYAMLMerge.exe' merge -p %O %B %A %A"
+
+{claude_templates.SHARED_BRIEFING_IMPORT}
 """
 
 

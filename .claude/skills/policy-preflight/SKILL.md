@@ -28,11 +28,4 @@ commit-msg hook re-checks the commit-level policies), and run the preflight agai
 
 A policy is the project's agreed rule, so change the project, not the policy, and leave a held action for
 the user to confirm. If a failure looks wrong, or cannot be fixed in this project, report it with the
-policy's output and let the user decide.
-
-## Finishing a branch
-
-1. Run the project's Definition-of-Done test suite and record the run with `workshop_requirements_run_tests`.
-2. Run this preflight and fix what blocks.
-3. Finish with `workshop_version_<type>_finish`. If it lands in `pending_confirmation`, report which policy
-   held it (`workshop_policy_results`).
+policy's output and let the user decide. The steps around a finish are in the `workshop-lifecycle` skill.
