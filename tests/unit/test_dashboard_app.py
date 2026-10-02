@@ -2769,3 +2769,20 @@ def test_service_worker_falls_back_to_a_cached_stylesheet_when_offline(test_clie
     """Regression: on a flaky phone connection the versioned app.css?v= fetch
     failed and the page rendered unstyled, although /static/app.css was cached."""
     assert "ignoreSearch: true" in test_client.get("/sw.js").text
+
+
+def test_report_tests_follow_a_newer_whole_run_of_the_aggregate_suite(test_client, monkeypatch):
+    """Requirements are judged by the aggregate "Unit tests" suite's latest run; the Tests panel
+    (per-module suites, aggregate hidden) must show that same newer run, not a stale older import."""
+    _stub_report(monkeypatch)
+    monkeypatch.setattr(client, "requirements_suites", lambda paths, project: [
+        {"id": "s1", "name": "test_widget"}, {"id": "agg", "name": "Unit tests"}])
+    monkeypatch.setattr(client, "requirements_test_results", lambda paths, project: [
+        {"suite_id": "s1", "test_name": "t::a", "verdict": "passed", "executed_at": "2026-09-21T10:00:00Z"},
+        {"suite_id": "s1", "test_name": "t::b", "verdict": "passed", "executed_at": "2026-09-21T10:00:00Z"},
+        {"suite_id": "agg", "test_name": "t::a", "verdict": "passed", "executed_at": "2026-09-22T10:00:00Z"},
+        {"suite_id": "agg", "test_name": "t::b", "verdict": "failed", "executed_at": "2026-09-22T10:00:00Z"},
+    ])
+    text = test_client.get("/report", params={"project": "little-widget"}).text
+    assert re.search(r'report-test-name">t::b</span>\s*<span class="pill fail">failed', text)
+    assert re.search(r'report-test-name">t::a</span>\s*<span class="pill ok">passed', text)
