@@ -1,6 +1,6 @@
 # Ethereal Lands documentation rules
 
-Source: `CLAUDE.md` in the project, plus [../documentation_standard.md](../documentation_standard.md).
+Source: `.claude/AGENTS.md` in the project, plus [../documentation_standard.md](../documentation_standard.md).
 
 ## Layout
 
@@ -33,4 +33,4 @@ Source: `CLAUDE.md` in the project, plus [../documentation_standard.md](../docum
 Honour it exactly. Typical protected areas for documentation tasks: `docs/design/`, `docs/game/`.
 The sub-project `docs/machination/` should be treated as protected unless the task names it.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).

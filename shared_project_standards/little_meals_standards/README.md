@@ -6,7 +6,7 @@ Meal-planning facilitator and recipe book for a two-person household. Python, Fa
 
 ## Governing documents in the project
 
-`CLAUDE.md`, `README.md`, `docs/design.md`, `docs/architecture.md`, `docs/milestones.md`,
+`.claude/AGENTS.md`, `README.md`, `docs/design.md`, `docs/architecture.md`, `docs/milestones.md`,
 `docs/requirements_policy.md`, `docs/version_policy.md`, `docs/first_run.md`, `docs/ui_design.md`.
 
 ## Project conventions
@@ -25,7 +25,7 @@ Meal-planning facilitator and recipe book for a two-person household. Python, Fa
 
 ## Documentation to reconcile
 
-`CLAUDE.md`, `docs/requirements_policy.md` and `docs/version_policy.md` still say requirements and
+`docs/requirements_policy.md` and `docs/version_policy.md` still say requirements and
 versions are managed exclusively through `lreq` and `lvx` and by a `bundle-littles` database. The
 shared standards say little-workshop's Requirements and Version pillars are the system of record and
 that `lreq`/`lvx` and `bundle-littles` were uninstalled on 2026-09-22 (as little-mindcheck's policy
@@ -38,4 +38,4 @@ statement.
 `hotfix-propagates-by-merge` ([../policy_register.md](../policy_register.md)). No policy is scoped to it
 alone.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).

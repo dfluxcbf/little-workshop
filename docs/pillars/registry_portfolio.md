@@ -49,6 +49,24 @@ Deployment & Servers, Agentic Development — needs somewhere to resolve
   session, or Agentic Development's own dispatch — reaching this pillar
   through the identical `workshop_project_import` MCP tool either way)
   and, later, to Policy & Compliance (M12).
+- **Claude Code files in a new project** (REQ-000000293..298):
+  `project.bootstrap` also writes, for both templates (`registry/claude_templates.py`),
+  `.claude/settings.json`, `.claude/hooks/lws_scope_guard.py` and `.claude/AGENTS.md`, and no
+  `CLAUDE.md`: Claude Code reads `AGENTS.md` only where a project has none, so the unity layout's working
+  rules moved from its root `CLAUDE.md` into `.claude/AGENTS.md`. `.claude/settings.local.json` and
+  `.claude/worktrees/` are gitignored. The settings pre-allow the read-only, routine and policy-gated
+  (finish, release, deploy, publish; the policy gate is their check) `little-workshop` MCP tools and `lws`
+  commands, with every `lws` command that takes `--project-id` bound to the new project's own id; make the
+  tools and commands that stand in for a human decision, register or remove a project, or administer
+  little-workshop (policy confirm, agent finish/skip, scheduling, bootstrap/import, policy authoring) ask; and
+  deny the raw `git merge/tag/push/cherry-pick`, `systemd-run`/`systemctl --user`, `twine` and `gh` forms of
+  what a policy gates, so those go through the MCP server or `lws`. A permission rule cannot match an MCP tool's
+  arguments, so the PreToolUse hook `lws_scope_guard.py` (registered for Bash and every `little-workshop` tool)
+  denies a call that names another project, or leaves `project_id` out of a tool where that means every
+  project. The project name becomes that id inside rules and a shell command, so `project.bootstrap` rejects a
+  name that is not a usable id (letters, digits, `.`, `_`, `-`). little-workshop's own `.claude/settings.json`
+  is the same table bound to `little-workshop`, plus its platform administration, held equal by a unit test;
+  the `little-projects` super-repository, whose sessions manage every project, allows all of it instead.
 - **`project.connect_github`** (`POST /v1/jobs/project.connect_github`,
   REQ-000000279..282, 2026-09-25) — the GitHub half of `project.bootstrap`
   for a project that is *already registered*, so a missing repo, remote,

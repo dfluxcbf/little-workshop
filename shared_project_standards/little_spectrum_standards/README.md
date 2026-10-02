@@ -30,7 +30,7 @@ Checkout: `/home/crist/little-projects/little-spectrum`. Repository
 
 `docs/version_policy.md` says no version hooks are configured (`version_hooks: []`); the config now
 lists `tools/on_version_bump.py`. `docs/requirements_policy.md` and `docs/version_policy.md` still
-describe `lreq` / `lvx`. The project has no `CLAUDE.md` or `README.md`.
+describe `lreq` / `lvx`. The project has no `README.md`; its instructions are in `.claude/AGENTS.md` (2026-10-01).
 
 ## Policies
 
@@ -38,4 +38,4 @@ Only 3 policies gate this project: `commit-bumps-version`, `branch-commit-dev-su
 `version-hook-installed`. The other 14 are attached with gating off
 ([../policy_register.md](../policy_register.md)).
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).

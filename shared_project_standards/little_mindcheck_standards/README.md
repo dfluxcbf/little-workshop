@@ -26,11 +26,11 @@ This is the model project for the shared standards: it has already **migrated of
 ## Documentation to reconcile
 
 `docs/version_policy.md` says "No version hook script yet"; `tools/on_version_bump.py` exists and is
-registered in `.lvx/config.json`. The project has no `CLAUDE.md`.
+registered in `.lvx/config.json`. Its instructions are in `.claude/AGENTS.md` (2026-10-01).
 
 ## Policies
 
 17 of 19 policies gate this project, all except `back-merge-no-ff` and `hotfix-propagates-by-merge`
 ([../policy_register.md](../policy_register.md)). No policy is scoped to it alone.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).

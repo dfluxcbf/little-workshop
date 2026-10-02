@@ -235,13 +235,24 @@ def build_report(paths: Paths, project: str) -> dict:
     # (tools/import_requirements.py's import_module_suites), which is what a human wants to
     # browse here; the aggregate would otherwise duplicate every test under one giant heading.
     suites = {sid: name for sid, name in all_suites.items() if name != AGGREGATE_SUITE_NAME}
+    all_results = client.requirements_test_results(paths, project)
+    # The aggregate suite's latest run is what requirements are judged by, so a test it ran
+    # more recently than its module suite did takes that newer verdict here as well.
+    aggregate_ids = {sid for sid, name in all_suites.items() if name == AGGREGATE_SUITE_NAME}
+    aggregate_runs = [r for r in all_results if r["suite_id"] in aggregate_ids]
+    newest_run = max((r["executed_at"] for r in aggregate_runs), default=None)
+    newest_by_test = {r["test_name"]: r for r in aggregate_runs if r["executed_at"] == newest_run}
     latest: dict[tuple[str, str], dict] = {}
-    for result in client.requirements_test_results(paths, project):
+    for result in all_results:
         if result["suite_id"] not in suites:
             continue
         key = (result["suite_id"], result["test_name"])
         if key not in latest or result["executed_at"] >= latest[key]["executed_at"]:
             latest[key] = result
+    for key, result in latest.items():
+        newer = newest_by_test.get(key[1])
+        if newer is not None and newer["executed_at"] > result["executed_at"]:
+            latest[key] = newer
     tests = [
         {"suite": suites[sid], "name": name, "verdict": r["verdict"], "detail": r.get("detail", "")}
         for (sid, name), r in latest.items()

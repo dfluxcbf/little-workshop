@@ -27,11 +27,11 @@ folder and a `docker-compose.yml`, built with Bazel.
 
 `docs/version_policy.md` says "No version hook script yet", but `tools/on_version_bump.py` exists and
 is registered in `.lvx/config.json`; `docs/requirements_policy.md` and `docs/version_policy.md` still
-describe `lreq` / `lvx`. The live configuration is authoritative. The project has no `CLAUDE.md`.
+describe `lreq` / `lvx`. The live configuration is authoritative. Its `.claude/AGENTS.md` (2026-10-01) says so.
 
 ## Policies
 
 17 of 19 policies gate this project, all except `back-merge-no-ff` and `hotfix-propagates-by-merge`
 ([../policy_register.md](../policy_register.md)). No policy is scoped to it alone.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).

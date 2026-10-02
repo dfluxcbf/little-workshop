@@ -21,7 +21,7 @@ from pathlib import Path
 
 from common.paths import Paths
 from common.projectfiles import ProjectFilesClient
-from registry import db, gitops, github, scaffold
+from registry import claude_templates, db, gitops, github, scaffold
 from registry.models import BootstrapParams, BootstrapResult, Project
 
 
@@ -30,6 +30,12 @@ class BootstrapError(Exception):
 
 
 def bootstrap_project(conn: sqlite3.Connection, paths: Paths, params: BootstrapParams) -> BootstrapResult:
+    if not claude_templates.is_project_id(params.name):
+        # The name becomes the project id inside the scaffolded .claude/settings.json rules (REQ-000000296).
+        raise BootstrapError(
+            f"{params.name!r} is not a usable project name: use letters, digits, '.', '_' and '-', "
+            "starting with a letter or digit"
+        )
     if db.get_project(conn, params.name) is not None:
         raise BootstrapError(f"project {params.name!r} is already registered")
 
