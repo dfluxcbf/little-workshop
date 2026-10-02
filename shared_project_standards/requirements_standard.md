@@ -61,7 +61,8 @@ A milestone is done only when every one of its requirements is done.
 - `REQ-NONE` covers refactors, typo fixes, version bumps written by a hook, and little-workshop's own
   bookkeeping commits (version bumps, finish and release state, changelogs). Merge commits never use
   it.
-- Enforced by policy `commit-cites-requirement` at `branch_finish`.
+- Enforced by policy `commit-cites-requirement` on every commit (the commit-msg hook) and at
+  `branch_finish`.
 
 ## Tests and requirements
 
@@ -88,4 +89,4 @@ The report takes the **worst** verdict of the linked suite's latest run. See
   requirements are imported into it. `docs/requirements.md` also cites
   `docs/policies/documentation_policy.md`, which does not exist.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-02 (hand edit: commit-cites-requirement also checked at commit).

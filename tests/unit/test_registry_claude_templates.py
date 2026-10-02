@@ -15,11 +15,7 @@ OTHER = "little-gadget"
 GUARD_TOOL = f"{claude_templates.MCP}workshop_version_status"
 
 # What little-workshop's own `.claude/settings.json` adds to the scaffolded table (REQ-000000295).
-OWN_SETTINGS = dict(
-    platform=True,
-    extra_allow=("python3 tools/sync_versions.py*", "tools/check_system_deps.sh*"),
-    extra_ask=("bazel run //:install*", "bazel run //*_server*"),
-)
+OWN_SETTINGS = claude_templates.OWN_SETTINGS
 
 
 def _settings(dest):

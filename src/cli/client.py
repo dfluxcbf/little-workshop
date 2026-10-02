@@ -589,6 +589,46 @@ def policy_gating_for_job(paths: Paths, project_id: str, categories: list[str], 
         ) from exc
 
 
+class PolicyEvaluationRefused(Exception):
+    """Policy & Compliance refused the request itself (an unknown gate point, a checkout
+    that is not the project's): nothing ran."""
+
+
+def policy_evaluate(
+    paths: Paths, project_id: str, gate_point: str, *, commit: dict | None = None, checkout: str | None = None,
+    timeout: float = 1900.0,
+) -> dict:
+    """Run, now, every policy gating `gate_point` for the project, in the sandbox, and
+    return each verdict. Nothing is recorded or held. Long timeout: a branch_finish
+    preflight includes policies that run the project's own test suite."""
+    body: dict = {"project_id": project_id, "gate_point": gate_point}
+    if commit is not None:
+        body["commit"] = commit
+    if checkout is not None:
+        body["checkout"] = checkout
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.post("/v1/policies/evaluate", json=body)
+    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        raise PolicyPillarUnavailable(
+            "Policy & Compliance daemon unreachable -- policies only run in its sandbox"
+        ) from exc
+    if response.status_code == 400:
+        try:
+            detail = response.json().get("detail", response.text)
+        except ValueError:
+            detail = response.text
+        raise PolicyEvaluationRefused(str(detail))
+    if response.status_code in (404, 405):
+        raise PolicyPillarUnavailable(
+            "the running Policy & Compliance pillar predates policy evaluate; redeploy it "
+            "(workshop_deployment_redeploy_pillar policy)"
+        )
+    if response.status_code != 200:
+        raise PolicyPillarUnavailable(f"Policy & Compliance answered HTTP {response.status_code}")
+    return response.json()
+
+
 class DeploymentPillarUnavailable(Exception):
     pass
 

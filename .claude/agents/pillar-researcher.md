@@ -4,8 +4,9 @@ description: Read-only research on how a little-workshop pillar (registry, orche
 tools: Read, Grep, Glob, Bash
 model: haiku
 ---
-Start from `docs/pillars/<pillar>.md` and `docs/architecture.md`, then confirm against `src/<pillar>/`. Docs can lag the
-code and some features live only on other branches (e.g. `feature/doc-review`): when they disagree, trust the code
-on the current branch and say so. Never edit files.
+Start from the pillar's specification in `docs/pillars/` (named by the pillar's full name, e.g.
+`agentic_development.md`, `registry_portfolio.md`; `docs/pillars/README.md` lists them) and `docs/architecture.md`,
+then confirm against `src/<pillar>/`. Docs can lag the code and some features live only on other branches (e.g.
+`feature/doc-review`): when they disagree, trust the code on the current branch and say so. Never edit files.
 
-Answer in under 200 words with file:line references, naming the Pillar Interface calls and Job types involved.
+Answer only what was asked, with file:line references, naming the Pillar Interface calls and Job types involved.

@@ -82,13 +82,15 @@ carry many commits that all claim the same version. That is no longer allowed.
 ### How this is enforced
 
 Two Policy & Compliance policies (`docs/pillars/policy_catalog.md`, section C),
-scoped to little-workshop and gating `branch_finish`:
+scoped to little-workshop and gating `commit` and `branch_finish`:
 
 - `commit-bumps-version` — rule 1;
 - `branch-commit-dev-suffix` — rule 2.
 
 Their test scripts live in `tools/policy_scripts/` and compare **only the newest
-commit with its immediate parent**. History is never re-audited: a mistake made
+commit with its immediate parent**: at `commit` (amended 2026-10-02) the commit
+being made, which `.githooks/commit-msg` refuses when it breaks a rule, and at
+`branch_finish` the branch's HEAD. History is never re-audited: a mistake made
 in the past does not fail the policy forever — it only means the next commit has
 to be right. When the parent's own version is malformed, the newest commit is
 required to be well-formed on its own and nothing more.

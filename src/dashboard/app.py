@@ -49,7 +49,7 @@ from common.workspace import WORKSPACE_ID, workspace_dir
 from dashboard import client, job_catalog, markdown, prefs
 
 GATE_POINT_VALUES = [
-    "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
+    "commit", "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
     "release", "package_publish", "branch_finish", "project_removal", "project_registration",
 ]
 

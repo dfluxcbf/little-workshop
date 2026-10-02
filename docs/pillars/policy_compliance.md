@@ -894,9 +894,9 @@ Supersedes the placeholder `policy_rules`, `policy_check_results` pair in
   `all_projects`), scope_target (a project id, a project-set id, or null
   for all-projects), created_by (`user` | `framework`), **enabled**
   (bool, default true — refined 2026-09-16, see "Action-gating checks"),
-  **gate_points** (a set of the six gate-point categories this policy
-  gates on failure, default empty — refined 2026-09-16), created_at,
-  amended_at.
+  **gate_points** (a set of the gate-point categories this policy gates
+  on failure, default empty — refined 2026-09-16; `commit` added
+  2026-10-02), created_at, amended_at.
 - `policy_check_results` — policy id, project id, outcome (`pass` | `fail`
   | `not_applicable`), checked_at, job id.
 - `policy_projects` (added 2026-09-21, replacing `policy_waivers`) —
@@ -939,3 +939,56 @@ stack (fastapi, uvicorn, pydantic, httpx, jinja2, python-multipart, pyyaml, apsc
 alongside `pytest`/`pytest-cov`/`coverage`. A project needing a dependency outside that
 list fails the check with the pytest output attached, rather than silently reporting a
 pass it never actually measured.
+
+## Enforcement moves to the moment of the change (2026-10-02)
+
+A gate at `branch_finish` catches a broken rule late: a commit that forgot to raise `VERSION` or to
+cite a requirement is only found when the branch is finished, long after the session that made it has
+moved on. Three additions put the same policies where the change is made, for a person and for a
+Claude session alike, without a second copy of any rule.
+
+**The `commit` gate point.** It gates no Job: the project's `.githooks/commit-msg` hook (installed with
+the VERSION pre-commit hook by `lws version install-hooks` and `lws version init`) runs
+`lws policy evaluate --gate-point commit` for the commit being made, and git refuses the commit when a
+policy gating `commit` fails with gating on, printing each policy's rule and its reason. The hook reads
+the pending commit itself — the message after git's cleanup, the paths it changes and its staged
+`VERSION`, from the index git hands the hook (`GIT_INDEX_FILE` may point at a temporary one) — and the
+script gets them as files in `POLICY_COMMIT_DIR`. When `lws`, the daemon or Docker is unavailable the
+hook warns and lets the commit through (`--fail-open`): the same policies still gate the finish. Only a
+project-bound policy may gate `commit`; little-workshop's own finish and bookkeeping commits run with
+hooks off. `commit-bumps-version`, `branch-commit-dev-suffix`, `commit-cites-requirement` and
+`version-format` gate `commit` and `branch_finish`.
+
+**`policy.evaluate`** (`POST /v1/policies/evaluate`; `lws policy evaluate`, `workshop_policy_evaluate`)
+runs, now and in the sandbox, every winning policy that gates a gate point for a project and answers
+with each verdict and reason, and `blocking`: the topics the real gate would hold. Nothing is recorded
+and nothing is held — it is the early warning, not the gate (`policy.check_project` stays the only thing
+that records results). It can judge a git worktree of the project instead of the registered checkout
+(`checkout`, accepted only if it shares the registered checkout's repository), since agents and
+sessions commit in worktrees. Each project's scaffolded `policy-preflight` skill runs it before a finish,
+release or publish.
+
+**Readable verdicts.** A check's recorded detail is the failure's reasons — the assertion messages and
+skip reasons pytest prints — and the summary line, not pytest's last five lines (which held only
+`FAILED ... - A...`). Every script's assertion message says what is wrong and how to fix it.
+
+**Policies as code.** Every policy's script is a file in `tools/policy_scripts/`, and its EARS text,
+target pillar, scope and gate points are in `tools/policy_scripts/policies.json`.
+`python3 tools/sync_policies.py` lists what differs from the live pillar; `--apply` replaces each
+differing policy in place (`policy.activate` with its id, which keeps its project selection) and
+creates a missing one with the projects its entry names. Applying is Gate 4: the person who runs it has
+reviewed the files, like any other change to them. Every script follows one contract, which the
+authoring prompt (`gates.generate_test_script`) also states: the checkout is
+`os.environ.get("POLICY_PROJECT_DIR", "/project")`, so the same script runs in the sandbox, from the
+hook and from the preflight; a policy gating `commit` judges the pending commit when `POLICY_COMMIT_DIR`
+is set; only the newest commit or tag is judged.
+
+**Judged on state, not on text.** `back-merge-no-ff` and `hotfix-propagates-by-merge` had been static
+scans of the project's source for `git merge` and "cherry-pick", and failed on the very text that
+forbids merging by hand (`registry/claude_templates.py`'s deny table). They now judge history: the
+newest production tag's commit must be in the integration branch's history (merged, not
+cherry-picked), but not on its first-parent line (a non-fast-forward merge).
+
+Two framework policies check that a project carries this integration: `commit-policy-hook-installed`
+(the commit-msg hook and `core.hooksPath`) and `claude-config-present` (`.claude/AGENTS.md`, the scope
+guard registered in `.claude/settings.json`, no `CLAUDE.md`).

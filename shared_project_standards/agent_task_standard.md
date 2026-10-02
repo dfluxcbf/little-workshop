@@ -23,8 +23,10 @@ standards unless the prompt points at them.
 2. **Definition of done** for milestone-shaped work: docs updated, requirements created or updated,
    code complete, automated tests written, the project's test suite green. Never claim `done` with
    any part missing.
-3. Commit as you go; each commit cites `REQ-nnnnnnnnn` or `REQ-NONE`, never both. **Do not push**; do
-   not create PRs, comments or labels.
+3. Commit as you go; each commit cites `REQ-nnnnnnnnn` or `REQ-NONE`, never both. The project's
+   commit-msg hook checks each commit against the policies gating `commit` and refuses one that breaks
+   a rule, printing the fix; the agent fixes it and commits again, never bypassing the hook.
+   **Do not push**; do not create PRs, comments or labels.
 4. Never delete or rewrite files unrelated to the task. When ambiguous, choose the most reasonable
    interpretation and state the assumption in the summary.
 5. Branch per the task: specified branch, or `feature/` (milestone) / `improvement/` (everything
@@ -75,4 +77,5 @@ checkout location for a project that lives on the Windows side.
   accompanying fix"; the Update Standards task further forbids edits outside
   `shared_project_standards/`. The task description is the narrower rule.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-02 (hand edit: commit-time policy checks, mirroring
+`src/agent/templates/prompts/common.md`).

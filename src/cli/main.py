@@ -358,6 +358,22 @@ def cmd_version_sync_version_files(args: argparse.Namespace) -> int:
     return 0 if result.success else 1
 
 
+def cmd_version_install_hooks(args: argparse.Namespace) -> int:
+    """Install (or refresh) the project's git hooks in the current checkout: the
+    pre-commit VERSION sync and the commit-msg policy check. In-process, like
+    sync-version-files: it writes `.githooks/` and `core.hooksPath` where the caller is,
+    and touches nothing else (`lws version init` also rewrites `.lvx/config.json`)."""
+    from version.commands.sync_version_files import install_git_hooks
+
+    toplevel = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if toplevel.returncode != 0:
+        print(f"error: not inside a git checkout: {toplevel.stderr.strip()}", file=sys.stderr)
+        return 1
+    installed = install_git_hooks(Path(toplevel.stdout.strip()), args.project_id)
+    _print({"success": True, "hooks": [str(path) for path in installed], "core.hooksPath": ".githooks"})
+    return 0
+
+
 def cmd_version_topic_start(args: argparse.Namespace) -> int:
     return _version_job(args, f"version.{args.prefix}_start", {"name": args.name, "issue": args.issue, "force": args.force})
 
@@ -1161,6 +1177,86 @@ def cmd_policy_check_all(args: argparse.Namespace) -> int:
     return _policy_job(args, "policy.check_all", {"policy_id": args.policy_id})
 
 
+GATE_POINTS = (
+    "commit", "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
+    "release", "package_publish", "branch_finish", "project_removal", "project_registration",
+)
+
+
+def format_evaluation(result: dict) -> str:
+    """Readable for a person at a terminal and for Claude reading a refused commit:
+    one summary line, then every failure and error with its reason."""
+    results = result.get("results", [])
+    counts: dict[str, int] = {}
+    for entry in results:
+        counts[entry["outcome"]] = counts.get(entry["outcome"], 0) + 1
+    order = (("fail", "failed"), ("error", "could not run"), ("pass", "passed"), ("not_applicable", "not applicable"))
+    summary = ", ".join(f"{counts[k]} {label}" for k, label in order if counts.get(k)) or "no policy gates it"
+    lines = [f"little-workshop policies gating {result.get('gate_point')} for {result.get('project_id')}: {summary}"]
+    for entry in results:
+        if entry["outcome"] not in ("fail", "error"):
+            continue
+        tag = "FAIL" if entry["outcome"] == "fail" else "ERROR"
+        gating = "" if entry.get("gating", True) else " (gating off for this project: reported, never blocks)"
+        lines.append(f"\n{tag} {entry['topic']}{gating}\n  rule: {entry.get('ears_text', '')}")
+        lines.extend(f"  {line}" for line in str(entry.get("detail", "")).splitlines())
+    if result.get("blocking"):
+        lines.append(
+            f"\nBlocked by: {', '.join(result['blocking'])}. Fix what each failure says and try again; "
+            "the rule's script is shown by `lws policy list --topic <topic>`."
+        )
+    return "\n".join(lines)
+
+
+def cmd_policy_evaluate(args: argparse.Namespace) -> int:
+    """Exit 0: nothing blocks. 1: a gating policy fails. 2: policies could not be
+    evaluated (daemon or sandbox unavailable, request refused), unless --fail-open,
+    which a git hook passes so an unavailable daemon never stops a commit -- the
+    same policies still gate the branch finish."""
+    from cli.commit_info import checkout_root, pending_commit
+
+    paths = Paths.from_env()
+    commit = None
+    checkout = None
+    if args.gate_point == "commit":
+        if not args.commit_message_file:
+            print("error: --gate-point commit needs --commit-message-file (the hook's $1)", file=sys.stderr)
+            return 2
+        root = checkout_root()
+        if root is None:
+            print("error: --gate-point commit runs inside the checkout being committed to", file=sys.stderr)
+            return 2
+        commit = pending_commit(root, Path(args.commit_message_file))
+        checkout = str(root)
+    elif args.checkout:
+        checkout = str(Path(args.checkout).resolve())
+
+    def unavailable(reason: str) -> int:
+        if args.fail_open:
+            print(f"warning: policies gating {args.gate_point} were not checked: {reason}. "
+                  "They still gate the branch finish.", file=sys.stderr)
+            return 0
+        print(f"error: {reason}", file=sys.stderr)
+        return 2
+
+    try:
+        result = client.policy_evaluate(paths, args.project_id, args.gate_point, commit=commit, checkout=checkout)
+    except client.PolicyPillarUnavailable as exc:
+        return unavailable(str(exc))
+    except client.PolicyEvaluationRefused as exc:
+        return unavailable(f"Policy & Compliance refused the request: {exc}")
+
+    if args.json:
+        _print(result)
+    else:
+        print(format_evaluation(result), file=sys.stderr if result.get("blocking") else sys.stdout)
+    if result.get("blocking"):
+        return 1
+    if result.get("errors"):
+        return unavailable(f"{', '.join(result['errors'])} could not run")
+    return 0
+
+
 def cmd_policy_results(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     _print(client.policy_check_results(paths, args.policy_id, args.project_id))
@@ -1811,6 +1907,13 @@ def build_parser() -> argparse.ArgumentParser:
     sync_version_files.add_argument("--project-id", default=None, help="Accepted for installed hooks; the sync acts on the current checkout")
     sync_version_files.set_defaults(func=cmd_version_sync_version_files)
 
+    install_hooks = version_sub.add_parser(
+        "install-hooks",
+        help="Install the project's git hooks in this checkout: VERSION sync (pre-commit) and policy check (commit-msg)",
+    )
+    install_hooks.add_argument("--project-id", required=True, help="Baked into the hooks")
+    install_hooks.set_defaults(func=cmd_version_install_hooks)
+
     def _add_topic_commands(prefix: str) -> None:
         start = version_sub.add_parser(f"{prefix}-start", help=f"Start a {prefix}/* branch")
         start.add_argument("--project-id", required=True)
@@ -2178,7 +2281,7 @@ def build_parser() -> argparse.ArgumentParser:
     policy_author.add_argument("--scope-target", default=None)
     policy_author.add_argument("--created-by", default="user", choices=["user", "framework"])
     policy_author.add_argument("--policy-id", default=None, help="Editing an existing policy: exclude it from conflict checks")
-    policy_author.add_argument("--gate-points", default=None, help="Comma-separated: build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
+    policy_author.add_argument("--gate-points", default=None, help="Comma-separated: commit,build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
     policy_author.add_argument("--save-draft", action="store_true", help="Keep the result as a draft to review and approve in the Dashboard")
     policy_author.add_argument("--source", default=None, help="With --save-draft: where the rule came from")
     policy_author.set_defaults(func=cmd_policy_author)
@@ -2230,8 +2333,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     policy_gating_for_job = policy_sub.add_parser("gating-for-job", help="Which policies currently gate a project for a given set of action categories")
     policy_gating_for_job.add_argument("--project-id", required=True)
-    policy_gating_for_job.add_argument("--categories", required=True, help="Comma-separated: build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
+    policy_gating_for_job.add_argument("--categories", required=True, help="Comma-separated: commit,build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
     policy_gating_for_job.set_defaults(func=cmd_policy_gating_for_job)
+
+    policy_evaluate = policy_sub.add_parser(
+        "evaluate",
+        help="Run now, in the sandbox, every policy that gates a gate point for a project, without "
+             "recording or holding anything: the commit-msg hook's check, or a preflight before a gated action",
+    )
+    policy_evaluate.add_argument("--project-id", required=True)
+    policy_evaluate.add_argument("--gate-point", required=True, choices=GATE_POINTS)
+    policy_evaluate.add_argument("--commit-message-file", default=None,
+                                 help="With --gate-point commit: the message file git hands the commit-msg hook")
+    policy_evaluate.add_argument("--checkout", default=None,
+                                 help="Judge this checkout (a git worktree of the project) instead of the registered one")
+    policy_evaluate.add_argument("--fail-open", action="store_true",
+                                 help="Exit 0 with a warning when the policies cannot be evaluated (what git hooks pass)")
+    policy_evaluate.add_argument("--json", action="store_true", help="Print the raw result")
+    policy_evaluate.set_defaults(func=cmd_policy_evaluate)
 
     policy_catalog = policy_sub.add_parser("catalog", help="docs/pillars/policy_catalog.md's ~50 candidate framework policies (M13)")
     policy_catalog_sub = policy_catalog.add_subparsers(dest="policy_catalog_command", required=True)

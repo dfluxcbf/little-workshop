@@ -58,10 +58,14 @@ restart at `1` when the base changes. `master` always holds a stable version.
    edit the field by hand. Where another file carries the version, the VERSION auto-sync pre-commit
    hook is installed and a propagation script registered (`version-hook-installed`).
 
-The hook installed by `lws version init` (`.githooks/pre-commit`) runs `lws version
-sync-version-files` on `feature/*` and `improvement/*` branches only; it never blocks a commit, since
-the policies are the enforcement. `release/*`, `hotfix/*`, `support/*`, `dev` and `master` get their
-`VERSION` from the finish commands.
+Two hooks are installed by `lws version install-hooks` (and `lws version init`). `.githooks/pre-commit`
+runs `lws version sync-version-files` on `feature/*` and `improvement/*` branches only and never blocks.
+`.githooks/commit-msg` runs the policies gating `commit` (`commit-bumps-version`,
+`branch-commit-dev-suffix`, `version-format`, `commit-cites-requirement`) against the commit being made
+and refuses it when one fails, printing the fix; when little-workshop is unreachable it warns and lets
+the commit through, and the same policies still gate the branch finish. `release/*`, `hotfix/*`,
+`support/*`, `dev` and `master` get their `VERSION` from the finish commands, whose commits run with
+hooks off.
 
 Documented as a little-workshop rule (`docs/version_policy.md`, which names `commit-bumps-version`
 and `branch-commit-dev-suffix` as scoped to little-workshop), but the live system also attaches both
@@ -93,4 +97,4 @@ requirements pass, all policies pass. A running app is relaunched when the relea
 - Stray branches, detached HEAD and extra worktrees are observed read-only by the cross-repo
   branch audit.
 
-Last reviewed: 2026-10-01.
+Last reviewed: 2026-10-02 (hand edit: the commit-msg policy hook).
