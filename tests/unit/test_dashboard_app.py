@@ -518,7 +518,7 @@ def test_a_job_card_expands_to_ids_timestamps_params_and_result(test_client, mon
     _stub_jobs(monkeypatch, [_job(7, depends_on=["1234567890abcdef"], queue_key="dashboard")])
     text = test_client.get("/jobs").text
     assert "00000007aaaabbbbccccdddd" in text and "2026-09-21T10:07:00.000000Z" in text
-    assert "Waits on" in text and "<code>12345678</code>" in text
+    assert "Waits on" in text and "no longer in the history (12345678)" in text
     assert "&#34;commit&#34;: &#34;abc123&#34;" in text and "&#34;version&#34;: &#34;0.1.1&#34;" in text
     assert ">Params<" in text and ">Result<" in text
 
@@ -1016,7 +1016,7 @@ def _capture_jobs(monkeypatch):
     return jobs, done
 
 
-def test_redeploy_submits_one_job_per_selected_pillar_self_affecting_last(test_client, monkeypatch):
+def test_redeploy_submits_one_job_per_selected_pillar_in_dependency_order(test_client, monkeypatch):
     pillars = {**_TWO_PILLARS, "deployment": {"status": "healthy", "crash_count": 0}}
     monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": pillars})
     jobs, done = _capture_jobs(monkeypatch)
@@ -1026,9 +1026,13 @@ def test_redeploy_submits_one_job_per_selected_pillar_self_affecting_last(test_c
     )
     assert response.status_code == 303 and "started" in response.headers["location"]
     assert done.wait(5)
-    assert [j["params"]["pillar"] for j in jobs] == ["policy", "registry", "deployment"]
+    assert sorted(j["params"]["pillar"] for j in jobs) == ["deployment", "policy", "registry"]
     assert all(j["type"] == "deployment.redeploy_pillar" and j["params"]["commit"] == "abc123" for j in jobs)
-    assert [j["queue_key"] for j in jobs] == ["policy", "registry", "deployment"]
+    by_pillar = {j["params"]["pillar"]: j for j in jobs}
+    assert all(j["queue_key"] == name for name, j in by_pillar.items())
+    # policy and registry have no rule between them: one batch, then deployment (it performs the redeploys)
+    assert by_pillar["policy"]["depends_on"] == by_pillar["registry"]["depends_on"] == []
+    assert sorted(by_pillar["deployment"]["depends_on"]) == sorted([by_pillar["policy"]["id"], by_pillar["registry"]["id"]])
 
 
 def test_redeploy_requires_a_selection(test_client, monkeypatch):
@@ -2943,3 +2947,131 @@ def test_moving_a_task_to_done_runs_the_dismiss_job(test_client, monkeypatch):
     assert response.headers["location"].startswith("/tasks")
     monkeypatch.setattr(client, "create_job", lambda paths, **fields: {"status": "failed", "error": "did not fail"})
     assert "did%20not%20fail" in test_client.post("/tasks/w/a/dismiss", follow_redirects=False).headers["location"].replace("+", "%20")
+
+
+# --- REQ-000000312: The CLI and the Dashboard show what a job is doing ---
+
+def _waiting_page(test_client, monkeypatch, deps, **overrides):
+    waiting = _job(9, status="queued", depends_on=[d["id"] for d in deps], **overrides)
+    _stub_jobs(monkeypatch, [waiting, *deps])
+    return test_client.get("/jobs").text
+
+
+def test_a_job_lists_what_it_waits_on_by_name_linked_and_coloured_by_state(test_client, monkeypatch):
+    deps = [
+        _job(1, type="policy.check_project", project_id="little-workshop", status="succeeded"),
+        _job(2, type="requirements.run_tests", project_id="little-workshop", status="failed"),
+        _job(3, type="build.run", project_id="little-workshop", status="running"),
+        _job(4, type="deployment.deploy", project_id="little-workshop", status="pending_confirmation"),
+        _job(5, type="version.release", project_id="little-workshop", status="queued"),
+    ]
+    text = _waiting_page(test_client, monkeypatch, deps)
+    for dep, css, word in zip(deps, ("ok", "fail", "run", "warn", "idle"), ("succeeded", "failed", "running", "pending confirmation", "queued")):
+        assert f'<a class="dep {css}" href="/jobs/{dep["id"]}" title="{word}">{dep["type"]} · little-workshop</a>' in text
+    assert "dep-state" not in text  # the colour says the state; the word is only a tooltip
+
+
+def test_a_dependency_that_is_a_task_links_to_the_task_page_with_its_title(test_client, monkeypatch):
+    dep = _job(1, type="agent.run_task", project_id="w", status="failed")
+    monkeypatch.setattr(client, "agent_runs", lambda paths, project: [{"id": "run-1", "job_id": dep["id"], "title": "Fix the thing"}])
+    text = _waiting_page(test_client, monkeypatch, [dep])
+    assert '<a class="dep fail" href="/tasks/w/run-1" title="failed">Task: Fix the thing · w</a>' in text
+
+
+def test_a_dependency_deleted_from_the_history_is_said_so_without_a_link(test_client, monkeypatch):
+    waiting = _job(9, status="queued", depends_on=["deadbeefdeadbeef"])
+    _stub_jobs(monkeypatch, [waiting])
+    text = test_client.get("/jobs").text
+    assert '<span class="dep gone" title="gone">A job no longer in the history (deadbeef)</span>' in text
+
+
+def test_the_job_page_has_a_waits_on_section(test_client, monkeypatch):
+    dep = _job(1, type="policy.check_project", project_id="little-workshop", status="succeeded")
+    job = _job(9, status="queued", depends_on=[dep["id"]], steps=[])
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: job)
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [job, dep])
+    text = test_client.get(f"/jobs/{job['id']}").text
+    assert "Waits on" in text and f'href="/jobs/{dep["id"]}"' in text and "policy.check_project · little-workshop" in text
+
+
+def _step(key, detail, state="succeeded"):
+    return {"key": key, "title": key, "position": 0, "state": state, "detail": detail, "prompt": None, "needs_attention": False,
+            "runtime_seconds": 0.1, "expected_seconds": None, "attention_since": None, "attention_expires_at": None}
+
+
+def test_a_policy_job_card_shows_which_policy_it_runs(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1, type="policy.check_project", target_pillar="policy", project_id="little-workshop", params={"policy_id": "p1"}, result=None)])
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [
+        {"id": "p1", "topic": "commit-bumps-version", "ears_text": "When a commit is made, VERSION shall rise."}])
+    text = test_client.get("/jobs").text
+    assert '<b>commit-bumps-version</b>' in text and "When a commit is made, VERSION shall rise." in text
+
+
+def test_a_policy_job_without_an_id_shows_the_policy_in_its_params(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1, type="policy.author", target_pillar="policy", params={"topic": "new-rule", "ears_text": "The system shall x."}, result=None)])
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [])
+    text = test_client.get("/jobs").text
+    assert "<b>new-rule</b>" in text and "The system shall x." in text
+
+
+def _version_card(test_client, monkeypatch, job, steps=()):
+    _stub_jobs(monkeypatch, [job])
+    monkeypatch.setattr(client, "jobs_steps", lambda paths, ids: {job["id"]: list(steps)})
+    return test_client.get("/jobs").text
+
+
+def test_a_finish_card_shows_the_branch_and_the_version_transition(test_client, monkeypatch):
+    job = _job(1, type="version.improvement_finish", target_pillar="version", params={}, result={"merged_branch": "improvement/x", "new_version": "0.2.33"})
+    text = _version_card(test_client, monkeypatch, job, [_step("check_branch", "improvement/x -> dev"), _step("bump_version", "0.2.32 -> 0.2.33")])
+    assert "<code>improvement/x → dev</code>" in text and "<code>0.2.32 → 0.2.33</code>" in text
+
+
+def test_a_finish_that_predates_steps_shows_the_branch_and_the_new_version(test_client, monkeypatch):
+    job = _job(1, type="version.improvement_finish", target_pillar="version", params={}, result={"merged_branch": "improvement/x", "new_version": "0.2.33"})
+    text = _version_card(test_client, monkeypatch, job)
+    assert "<code>improvement/x</code>" in text and "<code>0.2.33</code>" in text and "→" not in text.split("job-subject version")[1].split("</span>")[1]
+
+
+def test_a_start_card_knows_its_branch_before_it_has_run(test_client, monkeypatch):
+    job = _job(1, type="version.hotfix_start", target_pillar="version", status="queued", params={"name": "urgent"}, result=None)
+    assert "<code>hotfix/urgent</code>" in _version_card(test_client, monkeypatch, job)
+
+
+def test_a_release_card_lists_every_version_it_moves(test_client, monkeypatch):
+    job = _job(1, type="version.release_finish", target_pillar="version", params={}, result={"stable_version": "0.3.0"})
+    steps = [_step("check_branch", "release/0.3.0 (release 0.3.0)"), _step("finalize_version", "0.3.0-dev.2 -> 0.3.0"), _step("bump_version", "0.3.0 -> 0.4.0 on master"), _step("next_patch", "dev at 0.4.1")]
+    text = _version_card(test_client, monkeypatch, job, steps)
+    for shown in ("0.3.0-dev.2 → 0.3.0", "0.3.0 → 0.4.0 on master", "dev at 0.4.1"):
+        assert f"<code>{shown}</code>" in text
+
+
+def test_the_job_page_shows_what_the_job_is_about(test_client, monkeypatch):
+    job = _job(1, type="version.feature_start", target_pillar="version", params={"name": "widgets"}, result={"branch": "feature/widgets"}, steps=[])
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: job)
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [job])
+    assert "<code>feature/widgets</code>" in test_client.get(f"/jobs/{job['id']}").text
+
+
+# --- REQ-000000314: Pillars are redeployed in batches ordered by their dependencies ---
+
+def test_the_pillars_page_redeploys_the_chosen_pillars_in_batches(test_client, monkeypatch):
+    import threading
+
+    created, done = [], threading.Event()
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": {n: {"status": "healthy"} for n in ("orchestration", "policy", "dashboard")}})
+
+    def create_job(paths, **fields):
+        created.append(fields)
+        if len(created) == 3:
+            done.set()
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(client, "create_job", create_job)
+    response = test_client.post("/pillars/redeploy", data={"pillar": ["policy", "orchestration", "dashboard"], "commit": "abc123"}, follow_redirects=False)
+    assert done.wait(5)
+    by_pillar = {f["project_id"]: f for f in created}
+    assert by_pillar["orchestration"]["depends_on"] == []
+    assert by_pillar["dashboard"]["depends_on"] == [by_pillar["orchestration"]["id"]]
+    assert by_pillar["policy"]["depends_on"] == [by_pillar["dashboard"]["id"]]
+    assert {f["created_by"] for f in created} == {"dashboard"} and {f["params"]["commit"] for f in created} == {"abc123"}
+    assert "orchestration" in unquote(response.headers["location"]) and "→" in unquote(response.headers["location"])

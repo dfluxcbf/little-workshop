@@ -117,7 +117,7 @@ MCP_ASK = (
 MCP_PLATFORM = (
     "workshop_policy_check_all", "workshop_policy_author", "workshop_policy_draft_import",
     "workshop_policy_catalog_run", "workshop_policy_remove", "workshop_policy_activate",
-    "workshop_policy_configure", "workshop_deployment_redeploy_pillar",
+    "workshop_policy_configure", "workshop_deployment_redeploy_pillar", "workshop_deployment_redeploy_pillars",
 )
 
 # Tools whose `project_id` is optional: left out, they act on every project, so the guard
@@ -194,7 +194,7 @@ LWS_ASK = (
 # Administration of little-workshop itself, as MCP_PLATFORM.
 LWS_PLATFORM = (
     "policy author", "policy draft import", "policy activate", "policy configure", "policy remove",
-    "policy check-all", "policy catalog run", "deployment redeploy-pillar",
+    "policy check-all", "policy catalog run", "deployment redeploy-pillar", "deployment redeploy-pillars",
 )
 
 # Left to the default prompt on purpose: plumbing the pillars call themselves, host

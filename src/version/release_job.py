@@ -31,6 +31,7 @@ from version.common import get_integration_branch, get_production_branch
 from version.configstore import load_release_finish_state
 from version.gitops import checkout, commit_file, current_branch, get_commit_sha, is_ancestor, is_dirty, list_tags, run, write_file_in_repo, no_requirement
 from common.job_steps import key_prefix, step
+from common.redeploy_plan import submit_redeploy_batches
 from version.stages import GitflowVersion
 
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's own empty tree: "since the beginning"
@@ -44,9 +45,6 @@ _SHORTSTAT = re.compile(r"(\d+) (insertion|deletion)")
 _FAILING_VERDICTS = ("failed", "error")
 TEST_RUN_TIMEOUT_SECONDS = 1920.0  # the run's own 1800s ceiling, plus worktree setup
 POLICY_CHECK_TIMEOUT_SECONDS = 1920.0  # the sandbox's own 1800s ceiling, plus image start
-# Their restart interrupts the redeploy machinery itself, so they go last
-# (the same order the Dashboard's Pillars page uses).
-SELF_AFFECTING_PILLARS = ("deployment", "orchestration")
 
 
 class ReleaseServices(Protocol):
@@ -296,18 +294,17 @@ def relaunch(services: ReleaseServices, project_id: str, repo: Path, integration
     this Job off mid-way."""
     if is_little_workshop(repo):
         commit = get_commit_sha(repo, integration_branch)
-        chosen = sorted(
-            (name for name, info in services.pillars().items() if info.get("status") != "disabled"),
-            key=lambda name: (name in SELF_AFFECTING_PILLARS, SELF_AFFECTING_PILLARS.index(name) if name in SELF_AFFECTING_PILLARS else 0, name),
+        chosen = [name for name, info in services.pillars().items() if info.get("status") != "disabled"]
+        # In dependency order (common/redeploy_plan.py), every batch after this release Job: a pillar
+        # restarting can never cut it off mid-way.
+        plan = submit_redeploy_batches(
+            services.create_job, chosen, commit, created_by="version.release", depends_on=[release_job_id],
         )
-        job_ids, previous = [], release_job_id
-        for name in chosen:  # one after another: never two pillars restarting at once
-            previous = services.create_job({
-                "type": "deployment.redeploy_pillar", "target_pillar": "deployment", "project_id": name,
-                "params": {"pillar": name, "commit": commit}, "queue_key": name, "depends_on": [previous],
-            })
-            job_ids.append(previous)
-        return {"action": "redeploy_pillars", "pillars": chosen, "commit": commit, "job_ids": job_ids}
+        job_ids = [row["job_id"] for batch in plan for row in batch]
+        return {
+            "action": "redeploy_pillars", "pillars": [row["pillar"] for batch in plan for row in batch],
+            "batches": [[row["pillar"] for row in batch] for batch in plan], "commit": commit, "job_ids": job_ids,
+        }
 
     status = services.deployment_status(project_id)
     if status is None or not status.get("listening"):

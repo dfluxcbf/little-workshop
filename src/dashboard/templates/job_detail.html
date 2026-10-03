@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% from "_job_steps.html" import job_steps %}
+{% from "_job_deps.html" import job_deps %}
+{% from "_job_subject.html" import job_subject %}
 {% block title %}{{ job.type if job else "Job" }} — little-workshop{% endblock %}
 {% block content %}
 {% if job %}
@@ -20,6 +22,7 @@
       <span class="chip">{{ job.created_by }}</span>
       <code class="chip">{{ job.id }}</code>
     </div>
+    <div class="job-subjects">{{ job_subject(subjects) }}</div>
     {% if job.error %}<p class="job-error">{{ job.error }}</p>{% endif %}
   </section>
 
@@ -28,6 +31,13 @@
       <span class="dcard-note">{{ job.steps | selectattr("state", "equalto", "succeeded") | list | length }} of {{ job.steps | length }} done</span></div>
     {{ job_steps(job.id, job.steps) }}
   </section>
+
+  {% if dependencies %}
+  <section class="dcard">
+    <div class="dcard-head"><span class="dcard-title">Waits on</span><span class="dcard-note">this job starts when these have succeeded</span></div>
+    {{ job_deps(dependencies) }}
+  </section>
+  {% endif %}
 
   <details class="dcard collapsible">
     <summary class="dcard-head"><span class="dcard-title">Details</span></summary>
