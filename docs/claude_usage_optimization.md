@@ -16,7 +16,7 @@ including the Claude Code data already on this machine ([§3](#3-what-the-data-o
   OpenTelemetry export, switched on once in the user-level `~/.claude/settings.json`; user-level Claude Code
   hooks that post session start and end to little-workshop; and the local transcripts as a backfill. Duplicates
   are removed by API request id.
-- **A new optional pillar, Usage & Efficiency (`usage`),** owns the intake, the store, the analysis and the
+- **A new optional pillar, Usage & Efficiency (`usage`), which the owner decided is essential,** owns the intake, the store, the analysis and the
   desired Claude configuration. The Dashboard, the MCP server and `lws` show what it holds, like every other
   pillar.
 - **Findings come from deterministic detectors, not from Claude.** Optimizations are applied through routes
@@ -49,7 +49,7 @@ about 400k tokens of context into each request, and that re-read accounts for mo
 | How do I apply a common optimization to every project? | Change `claude_templates.py` or a policy once, then sync every project and check it with a policy | [§10.3](#103-applying-a-common-optimization-to-every-project) |
 | How do optimizations keep using little-workshop? | Generated files and policies hold each change in place, and an adoption detector notices when Claude goes around a route | [§14](#14-keeping-the-optimization-inside-the-framework) |
 | How do we find work that can be automated into little-workshop? | Mine repeated tool-call episodes, give each a determinism score and a token cost, and propose the high scorers | [§11](#11-automation-mining) |
-| How do we take work Claude does and make it run without Claude? | Turn the deterministic episodes into jobs, tools or triggers. Every later run of that code costs no tokens. | [§11.4](#114-what-the-mining-produces) |
+| How do we take work Claude does and make it run without Claude? | Turn the deterministic episodes into jobs, tools or triggers. Every later run of that code costs no tokens. The Dashboard also recommends how often to run each task and a sequential night-time schedule ([§9](#9-seeing-the-interpreted-data)). | [§11.4](#114-what-the-mining-produces) |
 | How do we take token usage into account? | Record tokens per job, set budgets per job type, schedule around plan usage, and rank work by tokens saved | [§12](#12-token-usage-as-an-input) |
 | How do we tell deterministic work from work that needs judgment? | A rubric: are the arguments derivable, is the output stable, can it be checked, does it write new prose? | [§11.2](#112-deterministic-hybrid-or-heuristic) |
 | Can little-workshop do what git hooks do, beyond git? | Yes: workshop triggers (an event starts a job), next to the git hooks and Claude hooks that exist already | [§13](#13-workshop-triggers-hooks-beyond-git) |
@@ -61,16 +61,16 @@ little-workshop would write them into configuration.
 
 | The notes say | Claude Code's documentation says | What it means for little-workshop |
 |---|---|---|
-| Enable telemetry with `OTEL_SDK_DISABLED=false` and `OTEL_EXPORTER_OTLP_ENDPOINT` | The switch is `CLAUDE_CODE_ENABLE_TELEMETRY=1`, plus `OTEL_METRICS_EXPORTER` and/or `OTEL_LOGS_EXPORTER` (`otlp`, `prometheus`, `console`, `none`), `OTEL_EXPORTER_OTLP_PROTOCOL` (`grpc`, `http/json`, `http/protobuf`) and the endpoint | The profile in [§6](#6-configuration-dependencies) uses the documented variables |
-| Telemetry can be set up per project | **Claude Code ignores `OTEL_*` exporter variables in a project's `.claude/settings.json` and `.claude/settings.local.json`**, so a repository cannot capture content. They work in `~/.claude/settings.json`, in managed settings or in the environment. | Telemetry is a **user-scope** setting. `claude_templates.py` cannot carry it. Runs that little-workshop starts get it from the environment. |
+| Enable telemetry with `OTEL_SDK_DISABLED=false` and `OTEL_EXPORTER_OTLP_ENDPOINT` | The switch is `CLAUDE_CODE_ENABLE_TELEMETRY=1`, plus `OTEL_METRICS_EXPORTER` and/or `OTEL_LOGS_EXPORTER` (`otlp`, `prometheus`, `console`, `none`), `OTEL_EXPORTER_OTLP_PROTOCOL` (`grpc`, `http/json`, `http/protobuf`) and the endpoint | The profile in [§6](#6-configuration-dependencies) uses the documented variables. little-workshop sets this configuration up itself, at install time, so nobody writes these variables by hand |
+| Telemetry can be set up per project | **Claude Code ignores `OTEL_*` exporter variables in a project's `.claude/settings.json` and `.claude/settings.local.json`**, so a repository cannot capture content. They work in `~/.claude/settings.json`, in managed settings or in the environment. | Telemetry is a **user-scope** setting. `claude_templates.py` cannot carry it. Runs that little-workshop starts get it from the environment. The user-scope profile covers every Claude session on this machine, so usage is seen for the whole machine and then split by project ([§7.3](#73-attribution-to-a-project)). |
 | Input, output, cache-read and cache-creation token counters | `claude_code.token.usage` with `type` = `input`, `output`, `cacheRead`, `cacheCreation`, plus attributes `model`, `query_source` (main, subagent, auxiliary), `effort`, `agent.name`, `skill.name`, `mcp_server.name`. Each `claude_code.api_request` event carries all four counts, `cost_usd`, `duration_ms`, `request_id` and `query_source`. | Per-request events are the main record. Metrics add session counts, active time and lines changed. |
-| Cost counters show real spend | `claude_code.cost.usage` and `cost_usd` are **client-side estimates at list price** (unless managed settings define `modelPricing`), not the bill | On a subscription, dollars are only a common unit for comparing token types and models. The real limit is the plan's 5-hour and 7-day usage ([§12](#12-token-usage-as-an-input)). |
+| Cost counters show real spend | `claude_code.cost.usage` and `cost_usd` are **client-side estimates at list price** (unless managed settings define `modelPricing`), not the bill | The owner is on a Max plan and pays for no additional usage, so dollars here are never money spent. On a subscription, dollars are only a common unit for comparing token types and models. The real limit is the plan's 5-hour and 7-day usage ([§12](#12-token-usage-as-an-input)). |
 | Cache reads cost 10% of input | 0.1× for Sonnet 5.5 and Haiku 4.5. Opus 5.5 is 0.05× ($0.20 per million tokens against $4) and Fable 5.1 is 0.025× ($0.25 against $10). | The pricing table is per model and configurable |
 | Cache creation costs 25% of input | A cache write costs **1.25×** input with the 5-minute TTL and **2×** with the 1-hour TTL | A one-shot run that writes a 1-hour cache pays double for nothing ([§3](#3-what-the-data-on-this-machine-already-says), F4) |
 | The cache lives for 5 minutes | 5 minutes on an API key. On a subscription, within plan usage, the **main conversation gets 1 hour**; subagents and compaction get 5 minutes. Both can be set: `promptCacheTtl` / `CLAUDE_CODE_PROMPT_CACHE_TTL`, and `subagentPromptCacheTtl` / `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` (`5m` or `1h`). | Choose the TTL per kind of run: `5m` for one-shot `-p` calls |
 | Structure requests so cached content is reused | Caching is automatic and matches an exact prefix. It is per model and **scoped to one machine and working directory**. The cache is invalidated by: switching model, changing effort (on most models), turning on fast mode, changing the set of loaded tools, compaction, many images, and upgrading Claude Code. Editing files or CLAUDE.md mid-session, changing permission mode and invoking skills keep it. | Detector D3 names miss causes. Runs that little-workshop starts use a stable working directory. |
 | Use `.claudeignore` | **Not a Claude Code feature** (it exists only as feature requests). Hard exclusion is `permissions.deny` with `Read(...)` rules. Build output belongs in `.gitignore`. Instruction files can be skipped with `claudeMdExcludes`. | The project profile writes deny rules for heavy generated paths |
-| Code intelligence plugins send symbols instead of whole files | Real: official LSP plugins, for example `pyright-lsp`, `typescript-lsp`, `clangd-lsp` and `csharp-lsp`. Each needs its language-server binary on `PATH`. They give Claude an `LSP` tool (definitions, references) and diagnostics after each edit. | Per-language plugin and binary checks ([§6](#6-configuration-dependencies)) |
+| Code intelligence plugins send symbols instead of whole files | Real: official LSP plugins, for example `pyright-lsp`, `typescript-lsp`, `clangd-lsp` and `csharp-lsp`. Each needs its language-server binary on `PATH`. They give Claude an `LSP` tool (definitions, references) and diagnostics after each edit. | Per-language plugin and binary checks ([§6](#6-configuration-dependencies)). little-workshop handles them itself: its install installs the missing plugins and language servers, and project bootstrap enables the plugin |
 | `/doctor` checks `.claudeignore`, plugins, settings, the OpenTelemetry endpoint and proxies | `/doctor` checks **installation health, invalid settings files, unused extensions, duplicate subagent names, and checked-in CLAUDE.md content Claude can derive from the codebase**, and proposes fixes it applies after you confirm. `claude doctor` in a shell is a read-only version that does not start a session. `/doctor prompt-audit` audits instruction files for stale or conflicting content (v2.1.283+, runs through Claude, costs tokens). The documentation says nothing about checking an OpenTelemetry endpoint. | `usage.doctor` runs `claude doctor`. Telemetry is checked by watching for data at the intake, and by `claude --debug-file` showing `[3P telemetry]` errors. |
 | Batch operations | In Claude Code terms: set model and effort at the start of a session and leave them; make independent tool calls in parallel in one turn; avoid turns that only wait | Detectors D6 and D9; a blocking job wait ([§11](#11-automation-mining)) |
 | (not in the notes) | `/usage` (session tokens plus a `Prompt cache (main)` line with hit ratio, misses and their likely cause); `/context` (what fills the window); `/insights` (an HTML report on your habits, which costs tokens); the statusline JSON (`cost`, `context_window`, `prompt_cache`, `rate_limits.five_hour` and `seven_day`); `claude -p --output-format json` (`total_cost_usd`, `usage`, `modelUsage`, `num_turns`, `session_id`); hooks, including the `http` type, with `session_id`, `cwd` and `transcript_path`; and transcripts at `~/.claude/projects/<dir>/<session>.jsonl`, whose format is internal and kept 30 days | These are the sources in [§7](#7-collecting-the-data) |
@@ -129,6 +129,35 @@ What it says:
   Transcripts are deleted after 30 days (`cleanupPeriodDays` is not set), so this history disappears unless it
   is imported.
 
+### Where little-workshop itself made things harder
+
+The owner's reading of the same data, split by what each stored session worked on (best-effort numbers from
+transcripts):
+
+- **Building it is the main cost.** About 56% of all context tokens were spent in sessions that worked on
+  little-workshop. Only 28% went to the five projects it exists to serve. That is an investment, and it pays off
+  only if work on those projects gets cheaper. Nothing measures that today ([§9](#9-seeing-the-interpreted-data)).
+- **Its own mechanics create extra turns.**
+  - Jobs run in the background, so Claude checks their status over and over: about 360 requests that only
+    checked or waited.
+  - little-workshop runs its own pillars, so every change to it means redeploying them, which Claude did one
+    pillar at a time (240 calls).
+  - Together that is roughly 2–3% of usage. Both have code fixes: a "wait for job" tool, and an automatic
+    redeploy after a branch finishes.
+- **A small fixed cost on every request.** The briefings, skill list and MCP tool names add about 15k tokens to
+  each session's start (44k against 29k in an empty folder). Claude re-reads them on every request, which is
+  at most about 4% of usage. The 250-line policy keeps this from growing.
+- **Its own Claude calls were set up badly.** `agent.query` runs each call in a new folder, so it gets only a 40%
+  cache hit rate. That is tiny in absolute terms.
+- **What it has not touched yet is the biggest cost.** Long sessions re-send about 400k tokens of context on
+  every request. That happens in the project folders too (little-mindcheck averages 454k per request), so it is
+  a session-length problem, not a root-only one. Nothing in little-workshop addresses it yet.
+
+Verdict: it did not make things more difficult. It built the place where automation lives and the means to
+enforce it. What is missing is the feedback loop: knowing what to automate next and whether a change helped.
+Without that, we cannot say whether little-workshop has paid for itself yet. The risk to watch is
+little-workshop becoming the project that spends the tokens it was meant to save.
+
 ## 4. Goals and non-goals
 
 Goals:
@@ -140,6 +169,9 @@ Goals:
   and after.
 - A steady flow of automation candidates: work Claude repeats that code could do for zero tokens.
 - Token usage as an input to scheduling and to the choice of model and budget.
+- Recommend when to run automated work. The Dashboard suggests a schedule for each task and how often it should
+  run, preferring quiet hours (the middle of the night) with tasks run one after another. Even before work is
+  automated, a candidate that is only recommended for automation already gets a recommended schedule.
 
 Non-goals:
 
@@ -198,7 +230,7 @@ The `http/json` protocol keeps parsing in the standard library, with no protobuf
 `forward_to` setting can copy the OTLP stream to an external collector later. The proxy and its port are
 decision 2 in [§16](#16-decisions-for-the-owner).
 
-**Alternative considered:** run an OpenTelemetry Collector with Prometheus and Grafana. It works, but it adds
+**Alternative considered, not accepted by the owner:** run an OpenTelemetry Collector with Prometheus and Grafana. It works, but it adds
 three services. That contradicts the design goal of being smaller than an assembly of tools, and it would still
 not do attribution, detectors or jobs.
 
@@ -211,10 +243,10 @@ apply it, keeping your own entries).
 
 | Scope | Where | What it carries | Who applies it | How it is checked |
 |---|---|---|---|---|
-| **User** | `~/.claude/settings.json` (applies to every session on this machine) | `env`: `CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_METRICS_EXPORTER=otlp`, `OTEL_LOGS_EXPORTER=otlp`, `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>`, `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`, `OTEL_METRICS_INCLUDE_REPOSITORY=true`, `OTEL_LOG_TOOL_DETAILS=1` (decision 3). `hooks`: `SessionStart`, `SessionEnd`, `PreCompact` and `PostCompact` as `http` hooks to the intake. Optional `statusLine` (decision 5). Optional `cleanupPeriodDays`. | `usage.configure_claude` (dry run by default; applies only after explicit confirmation; keeps a backup) | `usage.doctor`: profile present, `claude doctor` clean, data received recently |
-| **Project** | each project's `.claude/settings.json`, generated by `src/registry/claude_templates.py` | Only what project scope allows: `permissions.deny` `Read(...)` rules for heavy generated paths (`bazel-*`, `node_modules/`, `.venv*/`, Unity `Library/` and `Temp/`), the LSP plugin for the project's language (`enabledPlugins`), a `PreToolUse` hook that cuts test-runner output down to failures, and `claudeMdExcludes` where needed. **No `OTEL_*`**: Claude Code ignores those here. | `tools/sync_claude_files.py --write`, as a job across every project ([§10.3](#103-applying-a-common-optimization-to-every-project)) | `claude-config-present`, extended with the new generated entries |
+| **User** | `~/.claude/settings.json` (applies to every session on this machine) | `env`: `CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_METRICS_EXPORTER=otlp`, `OTEL_LOGS_EXPORTER=otlp`, `OTEL_EXPORTER_OTLP_PROTOCOL=http/json`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:<port>`, `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`, `OTEL_METRICS_INCLUDE_REPOSITORY=true`, `OTEL_LOG_TOOL_DETAILS=1` (decision 3). `hooks`: `SessionStart`, `SessionEnd`, `PreCompact` and `PostCompact` as `http` hooks to the intake. `statusLine` (decision 5, on). `cleanupPeriodDays`, raised (decision 4). | **The little-workshop install** applies it, after showing the difference and asking, with the free port it picked (decision 2). `usage.configure_claude` repairs or updates it later (dry run by default; applies only after explicit confirmation; keeps a backup) | `usage.doctor`: profile present, `claude doctor` clean, data received recently |
+| **Project** | each project's `.claude/settings.json`, generated by `src/registry/claude_templates.py` | Only what project scope allows: `permissions.deny` `Read(...)` rules for heavy generated paths (`bazel-*`, `node_modules/`, `.venv*/`, Unity `Library/` and `Temp/`), the LSP plugin for the project's language (`enabledPlugins`), a `PreToolUse` hook that cuts test-runner output down to failures, and `claudeMdExcludes` where needed. **No `OTEL_*`**: Claude Code ignores those here. | **Project bootstrap** (`workshop_project_bootstrap`) writes them when a project is set up. At any later moment `lws` or the MCP can add them to one project, or to every project as a job (`tools/sync_claude_files.py --write`, [§10.3](#103-applying-a-common-optimization-to-every-project)) | `claude-config-present`, extended with the new generated entries |
 | **Launch** | the environment and flags of each Claude that little-workshop starts (`src/agent/claude_invoke.py`, `session_flow.py`, `doc_update.py`) | The telemetry environment (so runs report even if the user profile is missing), `OTEL_RESOURCE_ATTRIBUTES=lws.project=<id>,lws.job=<job id>,lws.job_type=<type>,lws.run=<run id>`, a budget per job type (`--max-budget-usd`, `--max-turns`), `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` for one-shot calls, and a stable working directory for `agent.query`. Runs started through `systemd-run` pass these with `--setenv`. | Code in the agent pillar | Unit tests; detectors D4 and D5 |
-| **Machine** | binaries on `PATH` | Language servers for the LSP plugins: `pyright-langserver` (little-workshop, little-meals, little-mindcheck), `typescript-language-server` (little-home), `clangd` with a Bazel-generated `compile_commands.json` (little-spectrum), `csharp-ls` (ethereal-lands, decision 8) | Reported with an install hint, in the style of `tools/check_system_deps.sh`; never installed silently | `usage.doctor` |
+| **Machine** | binaries on `PATH` | Language servers for the LSP plugins: `pyright-langserver` (little-workshop, little-meals, little-mindcheck), `typescript-language-server` (little-home), `clangd` with a Bazel-generated `compile_commands.json` (little-spectrum), `csharp-ls` (ethereal-lands, decision 8) | **The little-workshop install** installs them, and the Claude Code LSP plugins that are missing, in the style of `tools/check_system_deps.sh`: each step is shown and asked first, never silent. `usage.doctor` reports anything that is later missing, with an install hint | `usage.doctor` |
 
 The user profile is the only part that edits a file outside every repository, so it is treated as a decision
 that stands in for a human: it always asks first, as Remote Control trust does today. Without the user
@@ -256,8 +288,19 @@ They do not apply to a personal subscription, so they would only be an optional 
 Privacy:
 
 - Prompts and responses are not logged (`OTEL_LOG_USER_PROMPTS` and `OTEL_LOG_ASSISTANT_RESPONSES` stay off).
+  - What turning them on would mean (decision 10): each request's event would also carry the text you typed
+    (`OTEL_LOG_USER_PROMPTS`) and Claude's reply text (`OTEL_LOG_ASSISTANT_RESPONSES`), stored in the pillar's
+    database next to the token counts.
+  - What it would give: repeated wording becomes visible, so a prompt you keep retyping could become a skill or
+    a template, and a long reply could be tied to the tokens it cost.
+  - What it would risk: anything you paste into a prompt is stored in readable form, such as a key, a
+    password, personal text, or the content of little-home and little-mindcheck. It would also be in every
+    backup of that database and in any collector the optional `forward_to` setting copies the stream to. The
+    store stays local and is never committed, but whoever can read your files can read it.
+  - If you choose to turn it on, the usual mitigations are a shorter retention for text than for counts, and
+    leaving selected projects out.
 - `OTEL_LOG_TOOL_DETAILS=1` records commands and file paths. Automation mining needs them (decision 3).
-- Everything stays in the pillar's own database, with a retention setting. It is never committed.
+- Everything stays in the pillar's own database, with a retention setting that never goes below one full month, so week comparisons work ([§9](#9-seeing-the-interpreted-data)). It is never committed.
 - Removing a project purges its rows, like every pillar's cascading delete.
 
 ### 7.3 Attribution to a project
@@ -291,7 +334,7 @@ The `origin` is one of: `interactive` (with the entry point `cli`, `claude-vscod
 | `day_rollups` | day × project × origin × model | the token sums, requests, sessions, weighted cost, hit ratio, startup context p50, long-context share, polling share |
 | `findings` | detector result | detector, project, period, evidence, estimated saving, recommended action, state (open, accepted, dismissed, resolved) |
 | `candidates` | automation candidate | signature, occurrences, sessions, tokens spent, determinism score, proposed form, state |
-| `experiments` | applied optimization | finding or candidate, project, the change (branch or commit), metric values 7 days before and after |
+| `experiments` | applied optimization | finding or candidate, project, the change (branch or commit), metric values 7 days before and after, with the tokens Claude still spends on the replacement |
 
 ### 8.2 Metrics
 
@@ -343,11 +386,29 @@ and a recommended action. Thresholds start from this machine's baseline.
   - long-context share
   - plan pressure
   - the top sessions by weighted tokens
-  - **Findings**, each with its evidence and a button that opens the matching catalog job
-    ([§10](#10-jobs))
-  - **Automation candidates**, each with **Make it a task** and **Dismiss**
-- **Each project's page** gets a "Claude usage, last 7 days" card. **Each agent run** shows its own tokens,
-  turns and estimated cost (from S1).
+  - **Findings**, each with its evidence, a button that opens the matching catalog job
+    ([§10](#10-jobs)) and **before / after** numbers: the tokens a specific task used before the optimization
+    against the tokens it uses after it. The "after" figure includes the tokens Claude still spends to keep track
+    of the new jobs and trigger them, so it shows the net saving and not only the part that moved to code.
+  - **Automation candidates**, each with **Make it a task**, **Dismiss** and **Schedule**, which offers
+    recommended settings (see below)
+- **Scheduling recommendations.** For each automation candidate, even before it is automated, the Dashboard
+  recommends how often to run it, from how often its episodes occurred. Work that does not need to run beside
+  other work is recommended for the middle of the night, one task after another in sequence, so it runs while
+  you sleep and does not compete with your own sessions for the plan's usage
+  ([§12](#12-token-usage-as-an-input)). Accepting a recommendation creates the scheduled task in Orchestration.
+- **Weeks.** A week starts on Monday, because the weekly token allowance resets then. The Dashboard page and
+  each project's "Claude usage" card show one chosen week, and you can go back as far as data is stored. The
+  store keeps at least one full month. A week's graph can **Compare to previous week**, **Compare to next
+  week** and **Compare with last 4 weeks average**, each only when that data exists. The comparisons are lines
+  on the same graph, so differences are visible at a glance. The current week may be incomplete, and it is still
+  shown against the previous week to see how it is going.
+- **Each project's page** gets a "Claude usage" card (the current week, with the week selector above).
+  **Each agent run** shows its own tokens, turns and estimated cost (from S1).
+- **Does little-workshop pay for itself?** One chart compares the tokens spent building little-workshop with
+  the tokens spent on every other project, week by week ([§3](#3-what-the-data-on-this-machine-already-says)).
+  Building it is an investment. It pays off only if work on the other projects gets cheaper, and this chart,
+  with the before / after numbers above, is how that is checked.
 - **MCP tools**, read-only and allowed in every project: `workshop_usage_summary`, `workshop_usage_findings`,
   `workshop_usage_candidates`. A session can then check its own project's numbers before it optimizes anything.
 - **`lws usage summary | findings | candidates --project-id <id>`**.
@@ -443,6 +504,8 @@ Each candidate gets a determinism score from five checks:
 Each candidate's **value** is the weighted tokens its episodes cost per week, times the expected frequency.
 
 ### 11.3 Candidates already visible on this machine
+
+The owner has accepted all of these candidates. They are scheduled in [§15](#15-phases): the `agent.query`, polling and redeploy ones in phase 0, the policies digest and the test-output hook in phase 2, `requirements.sync_markers` and the redeploy trigger in phase 3.
 
 | Pattern (F6, F7) | Class | Proposed form |
 |---|---|---|
@@ -544,33 +607,53 @@ Each phase is shippable on its own. Its requirements get `REQ-nnnnnnnnn` ids whe
 
 | Phase | Content | New pillar? |
 |---|---|---|
-| 0. Quick wins | Store S1 usage on agent runs, queries and doc updates (F5). `agent.query`: stable working directory, `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, minimal launch flags (F4). `workshop_job_wait` (F6). Single-pillar redeploys replaced by `redeploy_pillars` in the skill and `ROUTES` (D10). | no |
-| 1. Collection | The `usage` pillar: intake (OTLP http/json, hooks), store, transcript backfill, attribution, rollups; `usage.configure_claude`; `usage.doctor`; the Dashboard page with plots | yes |
-| 2. Findings | Detectors D1 to D12; the "Optimize Claude usage" job; experiments; `registry.sync_claude_files`; project-scope profile entries in `claude_templates.py` (deny paths, LSP plugin, test-output hook) | – |
-| 3. Automation | `usage.mine_automation`; candidate records on the Dashboard; Orchestration triggers; the first triggers (redeploy changed pillars, sync Claude files) | – |
+| 0. Quick wins | Store S1 usage on agent runs, queries and doc updates (F5). `agent.query`: stable working directory, `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, minimal launch flags (F4). `workshop_job_wait` (F6). Single-pillar redeploys replaced by `redeploy_pillars` in the skill and `ROUTES` (D10). The aim is to learn whether little-workshop saves tokens or costs them: P0 records the token usage that little-workshop's runs already report, fixes `agent.query` and adds the wait-for-job tool. Once data is collected, the number to follow week by week is tokens spent building little-workshop against tokens spent on the other projects ([§9](#9-seeing-the-interpreted-data)). | no |
+| 1. Collection | The `usage` pillar: intake (OTLP http/json, hooks), store, transcript backfill, attribution, rollups; `usage.configure_claude` and the install step that picks the port and applies the user profile; `usage.doctor`; the Dashboard page with plots, week selection and week comparison | yes |
+| 2. Findings | Detectors D1 to D12; the "Optimize Claude usage" job; experiments; `registry.sync_claude_files`; project-scope profile entries in `claude_templates.py` (deny paths, LSP plugin, test-output hook), also written by project bootstrap; the policies-digest skill; before and after numbers on findings | – |
+| 3. Automation | `usage.mine_automation`; candidate records on the Dashboard; Orchestration triggers; the first triggers (redeploy changed pillars, sync Claude files); `requirements.sync_markers`; scheduling recommendations for candidates | – |
 | 4. Token-aware operation | Budgets and models per job type; scheduling around plan pressure; tokens-per-outcome reporting | – |
 
 ## 16. Decisions for the owner
 
-1. **A new pillar `usage`, or an extension of Agentic Development?** Recommended: a new, optional pillar
+Answers from the owner's review of 2026-10-04 are marked **Decided**. Item 10 is new and still open.
+
+1. **A new pillar `usage`, or an extension of Agentic Development?** **Decided: a new, optional pillar**
    ([§5](#5-architecture)).
 2. **A loopback socket proxy for the intake** (`127.0.0.1`, through `systemd-socket-proxyd`). The pillar
    itself keeps to its Unix socket. The proxy is needed because Claude Code exports and posts hooks over HTTP.
-   Which port? 4318 is the standard OTLP/HTTP port.
+   **Decided: find a free port.** The install looks for an unused loopback port instead of assuming 4318 (the
+   standard OTLP/HTTP port, which another tool may already hold), keeps it in little-workshop's configuration
+   and writes it into the user profile ([§6](#6-configuration-dependencies)).
 3. **`OTEL_LOG_TOOL_DETAILS=1`**: commands and file paths are stored locally. Automation mining needs them.
-   Prompts and responses stay off. Recommended: on.
-4. **Transcript history**: import before the 30-day cleanup (recommended), raise `cleanupPeriodDays`, or both.
+   Prompts and responses stay off (see item 10). **Decided: on.**
+4. **Transcript history**: import before the 30-day cleanup, raise `cleanupPeriodDays`, or both.
+   **Decided: both.** This is a personal computer with limited space, so the pillar's own store, not the raw
+   transcripts, becomes the long-term record.
 5. **A generated user statusline.** It is the only source of plan pressure and live cache state, and it
-   replaces most of the footer's keyboard hints. Recommended: offered, off by default.
-6. **The plan-pressure threshold** above which scheduled Claude jobs wait (proposed: 80% of the 5-hour window).
-7. **May triggers start gated jobs?** They would then wait in `pending_confirmation`. Recommended: yes.
+   replaces most of the footer's keyboard hints. **Decided: on**, applied with the user profile.
+   The owner also wants to stop repeating the same instructions in prompts. The statusline does not solve that;
+   the part that can is detecting repeated prompt text, which depends on item 10.
+6. **How much of the 5-hour usage window may be used before little-workshop holds back Claude-based scheduled
+   jobs?** Claude's plan has a 5-hour usage window, and the statusline (S4) shows how full it is. Above the
+   limit you choose, little-workshop does not start the next scheduled job that uses Claude (an agent run, for
+   example) and keeps it in its queue until the window has room again, so those jobs never use up what you need
+   for your own work. Jobs that run only code never wait. Proposed limit: 80% full. At 80%, a scheduled agent
+   run waits, and a policy check still runs.
+7. **May triggers start gated jobs?** They would then wait in `pending_confirmation`. **Decided: yes.**
 8. **Code intelligence for ethereal-lands.** `csharp-ls` would run in WSL against `/mnt/c`, where Claude Code's
-   documentation warns of slow cross-filesystem reads. Try it, or leave that one project out.
+   documentation warns of slow cross-filesystem reads. **Decided: keep it.** More projects will live natively
+   on Windows, and the same plugin and server serve them.
 9. **To verify before building:**
    - whether `/doctor prompt-audit` runs under `claude -p`; otherwise it needs a Remote Control session
-   - whether `enabledPlugins` in project settings is enough on a machine that has not installed the plugin
+   - whether `enabledPlugins` in project settings is enough on a machine that has not installed the plugin. The
+     install installs the plugins that are missing ([§6](#6-configuration-dependencies)), so this only decides
+     whether the install also has to enable them.
    - the exact OTLP JSON payloads, tested against a real export
-   - whether `--strict-mcp-config` and `--disable-slash-commands` keep `agent.query`'s answers unchanged
+   - whether `--strict-mcp-config` and `--disable-slash-commands` keep `agent.query`'s answers unchanged. This
+     is tested and decided during development.
+10. **Logging prompt and response text** (`OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES`). Open: the
+    owner is willing to give up some privacy but wants to understand it first, which
+    [§7.2](#72-sessions-independent-of-little-workshop) now explains. Recommended until decided: off.
 
 ## 17. Sources
 
