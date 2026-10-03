@@ -30,6 +30,7 @@ identical reason.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.resources
 import json
 import os
@@ -48,7 +49,7 @@ from common.job_steps import format_seconds
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.workspace import WORKSPACE_ID, workspace_dir
-from dashboard import client, job_catalog, markdown, prefs
+from dashboard import client, job_catalog, markdown, prefs, statistics
 
 GATE_POINT_VALUES = [
     "commit", "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
@@ -57,6 +58,7 @@ GATE_POINT_VALUES = [
 
 # Documentation review's update job, and the Job statuses that count as "not finished yet".
 DOC_UPDATE_JOB = "agent.update_docs"
+STATISTICS_UPDATE_SECONDS = 600  # how often the running Dashboard counts new jobs, checks and incidents
 ACTIVE_JOB_STATUSES = ("queued", "running", "pending_confirmation")
 
 # Redeploying these restarts a link in the redeploy chain (Orchestration
@@ -493,7 +495,17 @@ def pretty_json(value) -> str:
 
 def build_app(paths: Paths) -> FastAPI:
     # No Swagger/ReDoc pages: `/docs` is the documentation-review page.
-    app = FastAPI(title="little-workshop Dashboard", docs_url=None, redoc_url=None)
+    background: list = []  # loops started with the server, each given the event that ends it
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        stop = threading.Event()
+        for loop in background:
+            threading.Thread(target=loop, args=(stop,), daemon=True).start()
+        yield
+        stop.set()
+
+    app = FastAPI(title="little-workshop Dashboard", docs_url=None, redoc_url=None, lifespan=lifespan)
     install_incident_reporting(app, paths, pillar="dashboard")
     templates = _templates()
     static_dir = importlib.resources.files("dashboard") / "static"
@@ -547,6 +559,41 @@ def build_app(paths: Paths) -> FastAPI:
     def settings(request: Request):
         items = collect_attention(paths)
         return _render(request, "settings.html", items=items, attention_count=len(items), nav_active="settings")
+
+    # -- Statistics: per-day counts of the workshop's operations, kept by the Dashboard ----
+
+    def _update_statistics() -> list[str]:
+        """Count what the pillars hold now; returns the pillars that could not be read."""
+        sources = {
+            "projects": ("registry", lambda: [project["name"] for project in client.list_projects(paths)]),
+            "jobs": ("orchestration", lambda: client.list_jobs(paths, timeout=30.0)),
+            "policy_results": ("policy", lambda: client.policy_check_results(paths, timeout=30.0)),
+            "policies": ("policy", lambda: client.policy_list(paths)),
+            "incidents": ("agent", lambda: client.list_incidents(paths)),
+        }
+        fetched = {name: _try(fetch) for name, (_, fetch) in sources.items()}
+        if fetched["policies"] is None:  # without the policies a result cannot be named
+            fetched["policy_results"] = None
+        statistics.update(paths, **fetched)
+        return sorted({pillar_name(pillar) for name, (pillar, _) in sources.items() if fetched[name] is None})
+
+    @app.get("/statistics", response_class=HTMLResponse)
+    def statistics_page(request: Request):
+        down = _update_statistics()  # every visit counts what is new before plotting
+        error = f"Could not read {', '.join(down)}; what they would add is not counted yet." if down else None
+        return _render(request, "statistics.html", stats=statistics.load(paths), pillar_names=PILLAR_NAMES, error=error, nav_active="statistics")
+
+    # Nobody has to open the page for a day to be counted: the running Dashboard also counts on its own.
+    def _count_statistics_regularly(stop: threading.Event) -> None:
+        while True:
+            try:
+                _update_statistics()
+            except Exception:  # noqa: BLE001 - a failed round must not end the loop; the next one retries
+                pass
+            if stop.wait(STATISTICS_UPDATE_SECONDS):
+                return
+
+    background.append(_count_statistics_regularly)
 
     # -- Incidents: an unhandled exception, awaiting the user's confirmation -----
 
@@ -1374,6 +1421,7 @@ def build_app(paths: Paths) -> FastAPI:
         labels = dict(JOB_CLEANUP_AGES)
         if hours not in labels:
             return _back("/jobs", "Choose how old the jobs must be before deleting them.")
+        _update_statistics()  # count the jobs about to go, so the Statistics page keeps them
         try:
             result = client.job_cleanup(paths, hours)
         except client.PillarUnavailable as exc:

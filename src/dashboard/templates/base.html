@@ -16,16 +16,18 @@
 {%- elif name == 'bug' %}<rect x="8" y="6" width="8" height="12" rx="4"></rect><path d="M12 2v4M8 9H4M8 13H3M8 17H4M16 9h4M16 13h5M16 17h4M9 6l-2-2M15 6l2-2"></path>
 {%- elif name == 'data' %}<ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path>
 {%- elif name == 'gear' %}<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.35a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.64 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.65a1.7 1.7 0 0 0 1.04-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.65a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.35 9a1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.96Z"></path>
+{%- elif name == 'review' %}<path d="M4 5h16v11H9l-5 4Z"></path><path d="M8 9h8M8 12h5"></path>
+{%- elif name == 'chart' %}<path d="M4 4v16h16"></path><path d="M8 16v-4M12 16V8M16 16v-6"></path>
 {%- elif name == 'back' %}<path d="M15 6l-6 6 6 6"></path>
 {%- endif %}</svg>
 {%- endmacro %}
 {# Each group is (key, label, landing href, icon, [(page key, href, label, icon)]). A one-page group is a plain link. #}
 {% set groups = [
   ('dashboard', 'Dashboard', '/', 'dashboard', [('dashboard', '/', 'Dashboard', 'dashboard')]),
-  ('report', 'Report', '/report', 'report', [('report', '/report', 'Report', 'report')]),
-  ('actions', 'Actions', '/tasks', 'tasks', [('tasks', '/tasks', 'Task list', 'tasks'), ('new-task', '/tasks/new', 'New task', 'plus'), ('jobs', '/jobs', 'Jobs', 'jobs'), ('new-job', '/jobs/new', 'New job', 'plus'), ('docs', '/docs', 'Docs', 'report')]),
+  ('documentation', 'Documentation', '/docs', 'report', [('docs', '/docs', 'Review', 'review'), ('report', '/report', 'Report', 'report')]),
+  ('actions', 'Actions', '/tasks', 'tasks', [('tasks', '/tasks', 'Task list', 'tasks'), ('new-task', '/tasks/new', 'New task', 'plus'), ('jobs', '/jobs', 'Jobs', 'jobs'), ('new-job', '/jobs/new', 'New job', 'plus')]),
   ('policies', 'Policies', '/policies', 'policies', [('policies', '/policies', 'Policies', 'policies'), ('new-policy', '/policies/new', 'New policy', 'plus')]),
-  ('system', 'System', '/pillars', 'system', [('pillars', '/pillars', 'Pillars', 'pillars'), ('incidents', '/incidents', 'Incidents', 'bug'), ('settings', '/settings', 'Settings', 'gear')]),
+  ('system', 'System', '/pillars', 'system', [('pillars', '/pillars', 'Pillars', 'pillars'), ('incidents', '/incidents', 'Incidents', 'bug'), ('statistics', '/statistics', 'Statistics', 'chart'), ('settings', '/settings', 'Settings', 'gear')]),
 ] %}
 {% set ns = namespace(active=None) %}
 {% for g in groups %}{% for page in g[4] %}{% if page[0] == nav_active %}{% set ns.active = g %}{% endif %}{% endfor %}{% endfor %}
