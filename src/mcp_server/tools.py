@@ -23,8 +23,10 @@ other pillars to call, not for a human or agent session.
 from __future__ import annotations
 
 import dataclasses
+import threading
 from typing import Any, Callable
 
+from common import redeploy_plan
 from common.paths import Paths
 from mcp_server import client
 
@@ -383,6 +385,32 @@ def _deployment_redeploy_pillar(paths: Paths, args: JSONDict) -> Any:
         paths, type="deployment.redeploy_pillar", target_pillar="deployment", project_id=args["pillar"],
         params=params, queue_key=args["pillar"], depends_on=[], created_by="mcp",
     )
+
+
+def _deployment_redeploy_pillars(paths: Paths, args: JSONDict) -> Any:
+    """Several pillars in dependency order: the plan (batches, and each Job's id) comes back at once; the
+    Jobs are created in the background, because the first batch runs inside its creation call."""
+    status = client.core_status(paths).get("pillars", {})
+    live = [name for name, info in status.items() if info.get("status") != "disabled"]
+    wanted = args.get("pillars") or live
+    unknown = [p for p in wanted if p not in status]
+    if unknown:
+        return {"success": False, "message": f"not pillars of this installation: {', '.join(unknown)}"}
+
+    def create(template: dict) -> None:
+        client.create_job(paths, timeout=330.0, **template)
+
+    plan_holder: list = []
+
+    def submit() -> None:
+        plan_holder.append(redeploy_plan.submit_redeploy_batches(
+            create, wanted, args["commit"], created_by="mcp", confirm_timeout_seconds=args.get("confirm_timeout_seconds"),
+        ))
+
+    # The plan is decided before anything runs, so it can be returned while the first batch is still going.
+    plan = [[{"pillar": p} for p in batch] for batch in redeploy_plan.redeploy_batches(wanted)]
+    threading.Thread(target=submit, daemon=True).start()
+    return {"commit": args["commit"], "batches": plan, "note": "batches run one after another; each starts when the one before has succeeded. Follow them with workshop_job_list."}
 
 
 def _deployment_status(paths: Paths, args: JSONDict) -> Any:
@@ -965,6 +993,15 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"pillar": _prop("string", "The pillar tag to redeploy, e.g. deployment."), "commit": _prop("string", "Commit/ref to deploy."),
                        "confirm_timeout_seconds": _prop("integer", "Override the default confirm-gate timeout.")}, ["pillar", "commit"]),
              _deployment_redeploy_pillar),
+    ToolSpec("workshop_deployment_redeploy_pillars", "Redeploy several of little-workshop's own pillars (default: every "
+             "enabled one) to a commit, in dependency order: the pillars are split into batches (for all of them: "
+             "orchestration; then build, agent, dashboard; then policy, registry, requirements, version; then "
+             "deployment), the redeploys of a batch run side by side and a batch starts once the one before it "
+             "has succeeded. Two pillars with nothing to wait for between them are one batch.",
+             _schema({"commit": _prop("string", "Commit/ref to deploy."),
+                      "pillars": _prop("array", "Pillar tags to redeploy; omit for every enabled pillar.", items={"type": "string"}),
+                      "confirm_timeout_seconds": _prop("integer", "Override the default confirm-gate timeout.")}, ["commit"]),
+             _deployment_redeploy_pillars),
     ToolSpec("workshop_deployment_status", "Get a project's current deployment status.",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _deployment_status),
     ToolSpec("workshop_deployment_history", "List a project's past deployments.",

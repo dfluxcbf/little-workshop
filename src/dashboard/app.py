@@ -43,6 +43,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from common import redeploy_plan
 from common.job_steps import format_seconds
 from common.paths import Paths
 from common.incident import install_incident_reporting
@@ -124,6 +125,85 @@ def _task_rows_without_a_run(jobs: list[dict], runs: list[dict]) -> list[dict]:
             "updated_at": job.get("updated_at"), "error": job.get("error"),
         })
     return rows
+
+
+# The colour class of a job's state: the same words the pills use.
+_JOB_STATE_CLASS = {
+    "succeeded": "ok", "failed": "fail", "running": "run", "pending_confirmation": "warn",
+    "queued": "idle", "cancelled": "idle", "stopped": "idle",
+}
+
+
+def _job_dependencies(paths: Paths, jobs: list[dict], known: list[dict]) -> dict[str, list[dict]]:
+    """What each job waits on, in words: {job id: [{label, state, state_class, href}]}. A dependency that is
+    a task links to the task page, any other job to its job page; `known` is every job still in history, and
+    one that has been deleted from it is shown as such, without a link."""
+    by_id = {j["id"]: j for j in known}
+    wanted = {d for j in jobs for d in j.get("depends_on") or []}
+    runs: dict[str, dict] = {}
+    for project in {by_id[d].get("project_id") for d in wanted if d in by_id and by_id[d].get("type") == "agent.run_task"} - {None}:
+        for run in _try(client.agent_runs, paths, project, default=[]):
+            if run.get("job_id"):
+                runs[run["job_id"]] = run
+    out: dict[str, list[dict]] = {}
+    for job in jobs:
+        deps = []
+        for dep_id in job.get("depends_on") or []:
+            dep = by_id.get(dep_id)
+            if dep is None:
+                deps.append({"label": f"A job no longer in the history ({dep_id[:8]})", "state": "gone", "state_class": "gone", "href": None})
+                continue
+            run = runs.get(dep_id)
+            what = f"Task: {run['title']}" if run else dep["type"]
+            where = f" · {dep['project_id']}" if dep.get("project_id") else ""
+            deps.append({
+                "label": f"{what}{where}", "state": dep["status"].replace("_", " "),
+                "state_class": _JOB_STATE_CLASS.get(dep["status"], "idle"),
+                "href": f"/tasks/{dep['project_id']}/{run['id']}" if run else f"/jobs/{dep_id}",
+            })
+        out[job["id"]] = deps
+    return out
+
+
+_START_BRANCH_PREFIX = {"version.feature_start": "feature", "version.improvement_start": "improvement", "version.hotfix_start": "hotfix"}
+_VERSION_STEP_KEYS = ("finalize_version", "set_version", "bump_version", "next_patch")
+
+
+def _arrow(text: str) -> str:
+    return text.replace("->", "→")
+
+
+def _job_subjects(job: dict, steps: list[dict], policies: dict[str, dict]) -> list[dict]:
+    """What a job is about, so its card says more than its type: the policy a policy job runs, and for a
+    version job the branch and the version number (with the transition, when it changes).
+    [{"kind": "policy", "topic", "text"} | {"kind": "branch" | "version", "text"}]."""
+    params, result, kind = job.get("params") or {}, job.get("result") or {}, job.get("type") or ""
+    details = {s["key"]: s.get("detail") for s in steps if s.get("state") == "succeeded" and s.get("detail")}
+    subjects: list[dict] = []
+    if kind.startswith("policy."):
+        policy = policies.get(params.get("policy_id") or "")
+        topic = (policy or {}).get("topic") or params.get("topic")
+        text = (policy or {}).get("ears_text") or params.get("ears_text")
+        if topic or text:
+            subjects.append({"kind": "policy", "topic": topic or "", "text": text or ""})
+    elif kind.startswith("version."):
+        branch = result.get("branch") or result.get("merged_branch")
+        if not branch and kind in _START_BRANCH_PREFIX and params.get("name"):
+            branch = f"{_START_BRANCH_PREFIX[kind]}/{params['name']}"
+        if not branch and result.get("hotfix"):
+            branch = f"hotfix/{result['hotfix']}"
+        if branch and kind.endswith("_finish") and details.get("check_branch", "").startswith(branch + " ->"):
+            branch = details["check_branch"]
+        elif not branch and details.get("check_branch"):
+            branch = details["check_branch"]
+        if branch:
+            subjects.append({"kind": "branch", "text": _arrow(branch)})
+        versions = [_arrow(details[k]) for k in _VERSION_STEP_KEYS if k in details and ("->" in details[k] or " at " in details[k])]
+        if not versions:
+            known = [result[k] for k in ("version", "new_version", "stable_version", "production_version", "next_version") if result.get(k)]
+            versions = list(dict.fromkeys(known))
+        subjects += [{"kind": "version", "text": v} for v in versions]
+    return subjects
 
 
 def _try(fn, *args, default=None):
@@ -1213,22 +1293,20 @@ def build_app(paths: Paths) -> FastAPI:
         if not chosen:
             return _back("/pillars", "Select at least one pillar to redeploy.")
         commit = commit.strip() or "HEAD"
-        # Pillars whose restart interrupts the redeploy machinery itself go last.
-        chosen.sort(key=lambda p: (p in SELF_AFFECTING_PILLARS, p))
+        batches = redeploy_plan.redeploy_batches(chosen)
 
-        def submit_all() -> None:
-            for name in chosen:
-                try:
-                    client.create_job(
-                        paths, timeout=320.0, type="deployment.redeploy_pillar", target_pillar="deployment",
-                        project_id=name, params={"pillar": name, "commit": commit}, queue_key=name,
-                        depends_on=[], created_by="dashboard",
-                    )
-                except client.PillarUnavailable:
-                    pass
+        def create(template: dict) -> None:
+            try:
+                client.create_job(paths, timeout=320.0, **template)
+            except client.PillarUnavailable:
+                pass
 
-        threading.Thread(target=submit_all, daemon=True).start()
-        return _back("/pillars", f"Redeploy of {', '.join(chosen)} ({commit}) started — progress is on the Jobs page.")
+        # The first batch runs inside its creation call, so the plan is submitted from a thread.
+        threading.Thread(
+            target=redeploy_plan.submit_redeploy_batches, args=(create, chosen, commit), kwargs={"created_by": "dashboard"}, daemon=True,
+        ).start()
+        steps = " → ".join(", ".join(batch) for batch in batches)
+        return _back("/pillars", f"Redeploy of {steps} ({commit}) started — each batch starts when the one before has succeeded; progress is on the Jobs page.")
 
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs(request: Request, status: str | None = None, q: str | None = None, limit: int = JOBS_PAGE_SIZE):
@@ -1252,8 +1330,11 @@ def build_app(paths: Paths) -> FastAPI:
         cleanup_options = [{"hours": hours, "label": label, "count": prunable.get(str(hours), 0)} for hours, label in JOB_CLEANUP_AGES]
         shown = matching[:limit]
         job_steps = _try(lambda: client.jobs_steps(paths, [j["id"] for j in shown]), default={}) if shown else {}
+        dependencies = _job_dependencies(paths, shown, everything)
+        policies = {p["id"]: p for p in _try(client.policy_list, paths, default=[])} if any((j.get("type") or "").startswith("policy.") for j in shown) else {}
+        subjects = {j["id"]: _job_subjects(j, job_steps.get(j["id"], []), policies) for j in shown}
         return _render(
-            request, "jobs.html", job_steps_of=job_steps, cleanup_options=cleanup_options, jobs=shown, total=len(matching), limit=limit, next_limit=limit + JOBS_PAGE_SIZE,
+            request, "jobs.html", job_steps_of=job_steps, dependencies=dependencies, subjects=subjects, cleanup_options=cleanup_options, jobs=shown, total=len(matching), limit=limit, next_limit=limit + JOBS_PAGE_SIZE,
             status=status, q=q or "", all_count=len(everything),
             counts=[(name, JOB_STATUS_LABELS.get(name, name), counts[name]) for name in [*JOB_STATUS_ORDER, *[k for k in counts if k not in JOB_STATUS_ORDER]] if counts[name]],
             active=sum(counts.get(name, 0) for name in JOB_ACTIVE_STATUSES), error=error, nav_active="jobs")
@@ -1271,7 +1352,11 @@ def build_app(paths: Paths) -> FastAPI:
                 "jobs": [], "total": 0, "counts": [], "status": None, "q": "", "all_count": 0, "cleanup_options": [], "active": 0,
                 "next_limit": JOBS_PAGE_SIZE, "error": f"No job {job_id}.", "message": None, "nav_active": "jobs", "attention_count": 0,
             }, status_code=404)
-        return _render(request, "job_detail.html", job=job, error=error, active=bool(job) and job["status"] in JOB_ACTIVE_STATUSES, nav_active="jobs")
+        dependencies = _job_dependencies(paths, [job], _try(client.list_jobs, paths, default=[])) if job else {}
+        policies = {p["id"]: p for p in _try(client.policy_list, paths, default=[])} if job and (job.get("type") or "").startswith("policy.") else {}
+        return _render(
+            request, "job_detail.html", job=job, error=error, subjects=_job_subjects(job, job.get("steps") or [], policies) if job else [], dependencies=dependencies.get(job["id"], []) if job else [],
+            active=bool(job) and job["status"] in JOB_ACTIVE_STATUSES, nav_active="jobs")
 
     @app.post("/jobs/{job_id}/steps/{key}/answer")
     def job_step_answer(job_id: str, key: str, choice: str = Form("")):

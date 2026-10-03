@@ -586,6 +586,35 @@ def test_a_version_finish_waits_for_the_job_when_it_may_ask(paths, monkeypatch):
     assert result == {"waited": True} and seen == [(job, 120.0)]
 
 
+# --- REQ-000000314: Pillars are redeployed in batches ordered by their dependencies ---
+
+def test_redeploy_pillars_returns_the_plan_and_creates_the_jobs_in_batches(paths, monkeypatch):
+    import threading
+
+    created, done = [], threading.Event()
+
+    def create_job(p, **fields):
+        created.append(fields)
+        if len(created) == 3:
+            done.set()
+        return {"id": fields["id"]}
+
+    monkeypatch.setattr(tools_mod.client, "core_status", lambda p: {"pillars": {n: {"status": "healthy"} for n in ("orchestration", "version", "policy")} | {"mcp": {"status": "disabled"}}})
+    monkeypatch.setattr(tools_mod.client, "create_job", create_job)
+    result = tools_mod.TOOLS_BY_NAME["workshop_deployment_redeploy_pillars"].handler(paths, {"commit": "abc"})
+    assert result["batches"] == [[{"pillar": "orchestration"}], [{"pillar": "policy"}, {"pillar": "version"}]]
+    assert done.wait(5)
+    by_pillar = {f["project_id"]: f for f in created}
+    assert by_pillar["orchestration"]["depends_on"] == [] and by_pillar["policy"]["depends_on"] == [by_pillar["orchestration"]["id"]]
+    assert {f["created_by"] for f in created} == {"mcp"}
+
+
+def test_redeploy_pillars_names_the_pillars_it_does_not_know(paths, monkeypatch):
+    monkeypatch.setattr(tools_mod.client, "core_status", lambda p: {"pillars": {"policy": {"status": "healthy"}}})
+    result = tools_mod.TOOLS_BY_NAME["workshop_deployment_redeploy_pillars"].handler(paths, {"commit": "abc", "pillars": ["policy", "ghost"]})
+    assert result["success"] is False and "ghost" in result["message"]
+
+
 def test_schedule_add_recurring_builds_the_right_payload(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "create_scheduled_task", result={"id": "s1"})
     tools_mod.TOOLS_BY_NAME["workshop_schedule_add"].handler(paths, {

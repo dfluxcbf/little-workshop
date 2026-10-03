@@ -1448,6 +1448,36 @@ def cmd_deployment_redeploy_pillar(args: argparse.Namespace) -> int:
     return 0 if result.get("status") in ("succeeded", "running") else 1
 
 
+def cmd_deployment_redeploy_pillars(args: argparse.Namespace) -> int:
+    """Several pillars in dependency order (common/redeploy_plan.py): batches, each starting once the one
+    before has succeeded. Without --pillar, every enabled pillar."""
+    from common import redeploy_plan
+
+    paths = Paths.from_env()
+    status = client.core_status(paths).get("pillars", {})
+    wanted = args.pillar or [name for name, info in status.items() if info.get("status") != "disabled"]
+    unknown = [p for p in wanted if p not in status]
+    if unknown:
+        print(f"error: not pillars of this installation: {', '.join(unknown)}", file=sys.stderr)
+        return 1
+    batches = redeploy_plan.redeploy_batches(wanted)
+    for number, batch in enumerate(batches, 1):
+        print(f"batch {number}/{len(batches)}: {', '.join(batch)}", file=sys.stderr)
+
+    def create(template: dict) -> None:
+        client.post_job(paths, timeout=330.0, **template)
+
+    try:
+        plan = redeploy_plan.submit_redeploy_batches(
+            create, wanted, args.commit, created_by="lws", confirm_timeout_seconds=args.confirm_timeout,
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print({"commit": args.commit, "batches": plan})
+    return 0
+
+
 def cmd_deployment_redeploy_pillar_worker(args: argparse.Namespace) -> int:
     """The self-redeploy escape hatch's worker: runs the redeploy directly
     against Deployment & Servers' own database, in its own independent
@@ -2485,6 +2515,14 @@ def build_parser() -> argparse.ArgumentParser:
     d_redeploy.add_argument("--commit", default="HEAD")
     d_redeploy.add_argument("--confirm-timeout", type=int, default=None)
     d_redeploy.set_defaults(func=cmd_deployment_redeploy_pillar)
+
+    d_redeploy_many = deployment_sub.add_parser(
+        "redeploy-pillars", help="Redeploy several of little-workshop's own pillars (default: all) in dependency order, in batches"
+    )
+    d_redeploy_many.add_argument("--pillar", action="append", default=None, help="A pillar to redeploy; repeat for several")
+    d_redeploy_many.add_argument("--commit", default="HEAD")
+    d_redeploy_many.add_argument("--confirm-timeout", type=int, default=None)
+    d_redeploy_many.set_defaults(func=cmd_deployment_redeploy_pillars)
 
     d_redeploy_worker = deployment_sub.add_parser(
         "redeploy-pillar-worker", help="(internal) direct self-redeploy execution, dispatched to escape a doomed cgroup"

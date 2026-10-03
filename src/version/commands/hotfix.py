@@ -27,10 +27,11 @@ def _hotfix_finish_post_prod_merge(
     repo_root: Path, hotfix_branch: str, prod: str, integ: str, new_ver: GitflowVersion
 ) -> CommandResult:
     with step("bump_version") as handle:
+        old_ver = read_version(repo_root)
         write_version(repo_root, new_ver)
         hook_errors = run_version_hooks(repo_root, str(new_ver))
         commit_if_dirty(repo_root, no_requirement(f"chore: bump version to {new_ver}"))
-        handle.detail = f"-> {new_ver}"
+        handle.detail = f"{old_ver} -> {new_ver}"
 
     tag = new_ver.production_tag()
     with step("tag") as handle:

@@ -91,9 +91,10 @@ def cmd_release_candidate_cut(repo_root: Path, number: int | None = None, force:
     rc_ver = GitflowVersion(base_ver.major, base_ver.minor, base_ver.patch, "rc", number)
 
     with step("set_version") as handle:
+        old_ver = read_version(repo_root)
         vfile = write_version(repo_root, rc_ver)
         commit_file(repo_root, vfile, no_requirement(f"chore: release candidate {rc_ver}"))
-        handle.detail = f"-> {rc_ver}"
+        handle.detail = f"{old_ver} -> {rc_ver}"
 
     tag = rc_ver.rc_tag()
     with step("tag") as handle:

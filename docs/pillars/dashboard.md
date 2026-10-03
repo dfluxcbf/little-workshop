@@ -440,3 +440,21 @@ list. A task that failed more than a week ago (`TASK_ATTENTION_DAYS`, measured f
 update) is listed under Done by itself, with no job: the grouping is computed on every page load.
 A failed job that never became a run has no button, and moves by age only. `awaiting_finish` tasks
 are not affected: they still wait for Finish or Skip.
+
+## What a job waits on, in words (2026-10-03)
+
+REQ-000000312.
+
+A job's "Waits on" (the Jobs-page card and the job page) lists each dependency by what it is, not by
+id: the job type and project (`policy.check_project · little-workshop`), or `Task: <title> · <project>`
+for an `agent.run_task` job that has a run. Each is a link, to the task page or the job page, and
+carries the state word and colour of that job (green succeeded, red failed, blue running, yellow
+awaiting confirmation, grey queued, cancelled or stopped). A dependency already deleted from the job
+history is named as such, without a link.
+
+A job's card (and page) also says what it is about (2026-10-03): a policy job shows the policy it runs
+(its topic and EARS text, read from the Policy pillar by the job's `policy_id`, or from the job's own
+`topic`/`ears_text` when it authors one); a version job shows its branch (`improvement/x → dev` once
+the finish has checked it, or the branch a start creates) and the version number, as a transition
+(`0.2.32 → 0.2.33`) when it changes, taken from the version steps' details. The state word of a
+dependency is only a tooltip: its colour says it.

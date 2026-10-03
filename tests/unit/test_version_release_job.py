@@ -340,19 +340,22 @@ def test_an_externally_managed_app_is_left_alone(repo, monkeypatch):
     assert relaunch(services, "p", repo, "dev", "r1")["action"] == "none" and services.created == []
 
 
-def test_little_workshop_itself_redeploys_every_enabled_pillar_one_after_another(repo, monkeypatch):
+def test_little_workshop_itself_redeploys_every_enabled_pillar_in_dependency_order(repo, monkeypatch):
     monkeypatch.setenv("LITTLE_WORKSHOP_REPO_DIR", str(repo))
     services = FakeServices(pillars={
         "orchestration": {"status": "healthy"}, "deployment": {"status": "healthy"}, "agent": {"status": "healthy"},
         "version": {"status": "healthy"}, "mcp": {"status": "disabled"},
     })
     result = relaunch(services, "little-workshop", repo, "dev", "r1")
-    assert result["pillars"] == ["agent", "version", "deployment", "orchestration"]
-    jobs = services.of_type("deployment.redeploy_pillar")
-    assert [j["params"]["pillar"] for j in jobs] == result["pillars"]
-    assert jobs[0]["depends_on"] == ["r1"]
-    assert [j["depends_on"] for j in jobs[1:]] == [[f"job-{n}"] for n in range(1, 4)]
-    assert {j["params"]["commit"] for j in jobs} == {_git(["rev-parse", "dev"], repo).strip()}
+    assert result["batches"] == [["orchestration"], ["agent"], ["version"], ["deployment"]]
+    assert result["pillars"] == ["orchestration", "agent", "version", "deployment"]
+    jobs = {j["params"]["pillar"]: j for j in services.of_type("deployment.redeploy_pillar")}
+    assert set(jobs) == {"orchestration", "agent", "version", "deployment"}
+    assert jobs["orchestration"]["depends_on"] == ["r1"]  # nothing starts before the release job is done
+    for earlier, later in (("orchestration", "agent"), ("agent", "version"), ("version", "deployment")):
+        assert jobs[later]["depends_on"] == [jobs[earlier]["id"]]
+    assert result["job_ids"] == [jobs[p]["id"] for p in result["pillars"]]
+    assert {j["params"]["commit"] for j in jobs.values()} == {_git(["rev-parse", "dev"], repo).strip()}
 
 
 # -- the Pillar Interface ------------------------------------------------------------

@@ -115,3 +115,28 @@ healthy, currently-running process down.
   own* new socket to confirm it came back healthy, and resolves
   Orchestration's socket to report completion back
   (`common.pillar_socket`).
+
+## Redeploying several pillars: batches (2026-10-03)
+
+REQ-000000314.
+
+Redeploying more than one of little-workshop's own pillars goes through `common/redeploy_plan.py`:
+`REDEPLOY_AFTER` says, per pillar, which pillars must be redeployed before it when both are chosen,
+and `redeploy_batches` turns the chosen pillars into batches. A batch's redeploys run side by side
+(separate `queue_key`s); a batch starts when every redeploy of the previous one has succeeded, which is
+plain Orchestration `depends_on` between `deployment.redeploy_pillar` Jobs (`submit_redeploy_batches`
+pre-assigns the Job ids so all Jobs are created at once; a failed batch fails the later ones).
+Choosing pillars with no rule between them, such as policy and version, is one batch.
+
+The rules reproduce the order proven by hand: **orchestration**; then **build, agent, dashboard**;
+then **policy, registry, requirements, version** (and the MCP server); then **deployment** (it performs the
+redeploys); **core**, if named, last. Orchestration is first because every pillar settles its Jobs through
+it and the redeploy Jobs are dispatched by it. Why Build, Agent and Dashboard precede the four after them
+is not visible in the code: the rule records the observed order, and a change is one line in
+`REDEPLOY_AFTER`. A pillar the table does not know goes with the third group.
+
+Users of the plan: the Dashboard's Pillars page, the Release job's relaunch of little-workshop itself
+(every batch waits for the release Job), `lws deployment redeploy-pillars [--pillar ...] --commit`, and the
+`workshop_deployment_redeploy_pillars` MCP tool (default: every enabled pillar). Redeploying one pillar is
+unchanged. `lws` is shared by all pillars, so refreshing it is serialized (`_CLI_REFRESH_LOCK`): of two
+pillars redeployed at once, the second finds it already current.

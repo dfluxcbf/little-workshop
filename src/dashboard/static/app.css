@@ -1188,3 +1188,24 @@ details.report-item > .report-approve { margin: 0; padding: 0 12px 12px; }
 .step-ask { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--warn); border-radius: var(--radius-sm); background: var(--warn-soft); }
 .step-ask p { margin: 0 0 8px; overflow-wrap: anywhere; }
 .step-ask .decision-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* What a job waits on (_job_deps.html): the label takes the colour of that job's state. */
+.deps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.dep { --dep: var(--ink-faint); --dep-soft: var(--surface-alt); display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; max-width: 100%;
+  padding: 4px 10px; border-radius: 999px; font-size: 12.5px; color: var(--dep); background: var(--dep-soft); border: 1px solid transparent; text-decoration: none; overflow-wrap: anywhere; }
+a.dep:hover { border-color: var(--dep); }
+.dep.ok { --dep: var(--ok); --dep-soft: var(--ok-soft); }
+.dep.fail { --dep: var(--fail); --dep-soft: var(--fail-soft); }
+.dep.warn { --dep: var(--warn); --dep-soft: var(--warn-soft); }
+.dep.run { --dep: var(--cyan); --dep-soft: var(--cyan-soft); }
+.dep.gone { font-style: italic; }
+.job-body dl.kv { align-items: start; }
+.job-body dl.kv dt { padding-top: 3px; }
+/* What a job is about: the policy it runs, the branch and the version (_job_subject.html). */
+.job-subject { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 12.5px; min-width: 0; overflow-wrap: anywhere; }
+.job-subject.policy { flex-direction: column; align-items: flex-start; gap: 2px; }
+.job-subject.policy b { font-size: 13px; }
+.job-subject-text { color: var(--ink-faint); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.jobcard[open] .job-subject-text { -webkit-line-clamp: unset; }
+.job-subject-k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); }
+.job-subjects { display: grid; gap: 6px; margin-top: 8px; }

@@ -1,0 +1,9 @@
+{% macro job_subject(subjects) -%}
+{% for s in subjects %}
+{% if s.kind == "policy" %}
+<span class="job-subject policy">{% if s.topic %}<b>{{ s.topic }}</b>{% endif %}{% if s.text %}<span class="job-subject-text">{{ s.text }}</span>{% endif %}</span>
+{% else %}
+<span class="job-subject {{ s.kind }}"><span class="job-subject-k">{{ "Branch" if s.kind == "branch" else "Version" }}</span><code>{{ s.text }}</code></span>
+{% endif %}
+{% endfor %}
+{%- endmacro %}

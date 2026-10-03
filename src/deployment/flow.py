@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -135,6 +136,9 @@ def _version_key(pip_version: str) -> tuple[int, ...] | None:
     major, minor, patch, dev, rc = match.groups()
     stage, n = (0, int(dev)) if dev else (1, int(rc)) if rc else (2, 0)
     return (int(major), int(minor), int(patch), stage, n)
+
+
+_CLI_REFRESH_LOCK = threading.Lock()
 
 
 @dataclass
@@ -520,6 +524,12 @@ class DeploymentFlow:
         return UpResult(branch=commit, version=version, commit=resolved_commit, how=how, exposure=None, cli_note=cli_note)
 
     def _refresh_cli(self, worktree: Path, version: str) -> str | None:
+        # Pillars of one batch are redeployed side by side; `lws` is shared, so one upgrades it at a time
+        # and the next finds it already current.
+        with _CLI_REFRESH_LOCK:
+            return self._refresh_cli_unlocked(worktree, version)
+
+    def _refresh_cli_unlocked(self, worktree: Path, version: str) -> str | None:
         """Bring the installed `lws` to the commit being deployed. The
         pre-commit hook, the MCP server and the self-redeploy workers all
         run `lws`, which nothing else ever updated: a fix to any of them sat

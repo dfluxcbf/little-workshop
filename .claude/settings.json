@@ -183,6 +183,7 @@
       "mcp__little-workshop__workshop_policy_activate",
       "mcp__little-workshop__workshop_policy_configure",
       "mcp__little-workshop__workshop_deployment_redeploy_pillar",
+      "mcp__little-workshop__workshop_deployment_redeploy_pillars",
       "Bash(lws policy author *)",
       "Bash(lws policy draft import *)",
       "Bash(lws policy activate *)",
@@ -190,7 +191,8 @@
       "Bash(lws policy remove *)",
       "Bash(lws policy check-all *)",
       "Bash(lws policy catalog run *)",
-      "Bash(lws deployment redeploy-pillar *)"
+      "Bash(lws deployment redeploy-pillar *)",
+      "Bash(lws deployment redeploy-pillars *)"
     ],
     "ask": [
       "mcp__little-workshop__workshop_policy_confirm",
