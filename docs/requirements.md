@@ -715,3 +715,9 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000318 | **The job page stops a running job.** While a Job is running or queued, the Dashboard job page shall offer a button that, once the user confirms, asks Orchestration to stop the Job (a queued Job is cancelled) and returns to the job page; when the Job cannot be stopped, the page shall show the reason Orchestration gave, and the page shall offer no such button for a Job in any other state. | draft |
+
+## Remote Control update-doc sessions start on the branch's tip (2026-10-03)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000319 | **A Remote Control update-doc session reaches the branch's tip with a command the project allows.** When an update-doc Job starts a Remote Control session, the Agentic Development pillar shall tell the session to move its worktree to the branch's latest commit with `git switch --detach <commit>`, a command that none of the deny rules little-workshop generates for a project refuses, and shall publish the commits the session makes on that detached worktree to the branch. | draft |

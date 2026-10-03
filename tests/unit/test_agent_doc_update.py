@@ -144,7 +144,7 @@ def test_a_signalled_job_commits_pushes_and_marks_each_comment_done(paths, repo,
 
 class FakeRemote(FakeSession):
     """Plays the interactive Claude: creates its own worktree the way `--worktree` does
-    (on the tip it was told to reset to), edits, commits and writes the result file."""
+    and runs the prompt's first command to reach the branch's tip), edits, commits and writes the result file."""
 
     def run(self, argv, timeout=None, cwd=None):
         if argv[0] != "systemd-run" or "dtach" not in argv:
@@ -154,9 +154,11 @@ class FakeRemote(FakeSession):
         name = args[args.index("--worktree") + 1]
         job_dir = Path(args[args.index("--add-dir") + 1])
         prompt = Path(args[-1].split("Follow the instructions in ", 1)[1]).read_text()
-        base = prompt.split("git reset --hard ", 1)[1].split("`", 1)[0]
+        command = prompt.split("Before anything else, run `", 1)[1].split("`", 1)[0]
+        self.first_command = command
         worktree = Path(cwd) / ".claude" / "worktrees" / name
-        _git(["worktree", "add", "-b", f"worktree-{name}", str(worktree), base], Path(cwd))
+        _git(["worktree", "add", "-b", f"worktree-{name}", str(worktree), "HEAD"], Path(cwd))
+        _git(command.split()[1:], worktree)
         job = json.loads((job_dir / "update-doc-job.json").read_text())
         (worktree / "README.md").write_text("# Title\n\nNew sentence,\nover two lines.\n\nKeep me.\n", encoding="utf-8")
         _git(["commit", "-am", "docs"], worktree)
@@ -196,6 +198,28 @@ def test_a_remote_control_job_runs_an_interactive_session_in_a_worktree_claude_c
     assert "worktree-lws-docs-job-1" not in _git(["branch", "--list"], repo)
     assert ".claude/worktrees/" in (repo / ".git" / "info" / "exclude").read_text()
     assert db.get_doc_update(conn, "job-1")["unit"].endswith(".scope")
+
+
+# --- REQ-000000319: A Remote Control update-doc session reaches the branch's tip with a command the project allows ---
+
+def test_a_remote_control_session_is_told_to_reach_the_tip_with_a_command_the_guard_does_not_deny(paths, repo, monkeypatch):
+    from fnmatch import fnmatch
+
+    from registry.claude_templates import DENY_REROUTED
+
+    monkeypatch.setattr(doc_update, "is_trusted", lambda project_dir: True)
+    conn = db.connect(paths.pillar_db_path("agent"))
+    _comments(repo)
+    completed = []
+    runner = FakeRemote()
+    flow = _flow(paths, runner, completed)
+    tip = _git(["rev-parse", "dev"], repo)
+    flow.launch(conn, "job-1", "proj", repo, "dev", flow.claim(conn, "job-1", "proj", repo, "dev", remote_control=True), remote_control=True)
+
+    assert runner.first_command == f"git switch --detach {tip}"
+    assert not any(fnmatch(runner.first_command, pattern) for pattern, _ in DENY_REROUTED)
+    # The commit made on the detached worktree is still published to the branch.
+    assert completed[-1][1] and completed[-1][2]["pushed"] and completed[-1][2]["local_branch_updated"]
 
 
 def test_a_remote_session_that_ignored_the_reset_is_not_published(paths, repo, monkeypatch):
