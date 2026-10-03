@@ -1415,6 +1415,18 @@ def build_app(paths: Paths) -> FastAPI:
             return _back(to, f"Could not send the answer: {exc}")
         return _back(to, "Answer sent: the job carries on.")
 
+    @app.post("/jobs/{job_id}/stop")
+    def job_stop(job_id: str):
+        """Stop a running Job, or cancel one still queued, from its own page; a refusal is shown with its reason."""
+        to = f"/jobs/{job_id}"
+        try:
+            result = client.stop_job(paths, job_id)
+        except client.PillarUnavailable as exc:
+            return _back(to, f"Could not stop the job: {exc}")
+        if not result.get("stopped"):
+            return _back(to, f"Could not stop the job: {result.get('reason') or 'it is no longer running'}")
+        return _back(to, "Job stopped.")
+
     @app.post("/jobs/cleanup")
     def jobs_cleanup(hours: int | None = Form(None)):
         """Delete finished jobs older than one of the offered ages. Anything else is refused."""

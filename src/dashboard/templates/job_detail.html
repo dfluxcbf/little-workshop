@@ -24,6 +24,11 @@
     </div>
     <div class="job-subjects">{{ job_subject(subjects) }}</div>
     {% if job.error %}<p class="job-error">{{ job.error }}</p>{% endif %}
+    {% if job.status in ("running", "queued") %}
+    <form method="post" action="/jobs/{{ job.id }}/stop" class="job-stop" onsubmit="return confirm('{{ "Stop this running job?" if job.status == "running" else "Cancel this queued job?" }}')">
+      <button type="submit" class="btn danger">{{ "Stop job" if job.status == "running" else "Cancel job" }}</button>
+    </form>
+    {% endif %}
   </section>
 
   <section class="dcard">

@@ -2892,6 +2892,42 @@ def test_a_job_card_lists_the_actions_of_the_job(test_client, monkeypatch):
     assert "Actions" in text and "Check the branch" in text and 'class="step s-attention"' in text and "Commit them" in text
 
 
+# --- REQ-000000318: The job page stops a running job ---
+
+@pytest.mark.parametrize("status,label", [("running", "Stop job"), ("queued", "Cancel job")])
+def test_the_job_page_offers_a_stop_button_while_the_job_runs_or_waits_in_the_queue(test_client, monkeypatch, status, label):
+    job = _job(1, status=status, result=None)
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: job)
+    text = test_client.get(f"/jobs/{job['id']}").text
+    assert f'action="/jobs/{job["id"]}/stop"' in text and label in text
+
+
+@pytest.mark.parametrize("status", ["succeeded", "failed", "stopped", "cancelled", "pending_confirmation"])
+def test_the_job_page_offers_no_stop_button_for_a_job_that_is_not_running_or_queued(test_client, monkeypatch, status):
+    job = _job(1, status=status)
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: job)
+    assert "/stop" not in test_client.get(f"/jobs/{job['id']}").text
+
+
+def test_stopping_calls_orchestration_and_returns_to_the_job_page(test_client, monkeypatch):
+    seen = []
+    monkeypatch.setattr(client, "stop_job", lambda paths, job_id: (seen.append(job_id), {"stopped": True, "reason": None})[1])
+    response = test_client.post("/jobs/j1/stop", follow_redirects=False)
+    assert seen == ["j1"] and response.status_code == 303
+    assert response.headers["location"].startswith("/jobs/j1?") and "Job stopped." in unquote(response.headers["location"])
+
+
+def test_a_refused_stop_is_reported_on_the_job_page_with_its_reason(test_client, monkeypatch):
+    monkeypatch.setattr(client, "stop_job", lambda paths, job_id: {"stopped": False, "reason": "'version.release' is declared unstoppable"})
+    refused = unquote(test_client.post("/jobs/j1/stop", follow_redirects=False).headers["location"])
+    assert refused.startswith("/jobs/j1?") and "Could not stop the job" in refused and "declared unstoppable" in refused
+
+    def down(paths, job_id):
+        raise client.PillarUnavailable("orchestration is not running")
+    monkeypatch.setattr(client, "stop_job", down)
+    assert "orchestration is not running" in unquote(test_client.post("/jobs/j1/stop", follow_redirects=False).headers["location"])
+
+
 # --- REQ-000000313: A failed task leaves the attention list when moved to done, or after a week ---
 
 def _failed(run_id, *, hours_ago=2, **extra):
