@@ -15,6 +15,8 @@ not something to paper over with a local read.
 
 from __future__ import annotations
 
+import time
+
 import httpx
 
 from common.paths import Paths
@@ -89,6 +91,31 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(_failure("orchestration", exc, timeout)) from exc
+
+
+_TERMINAL = ("succeeded", "failed", "cancelled", "stopped")
+
+
+def await_job(paths: Paths, job: dict, *, timeout: float = 120.0, poll_seconds: float = 2.0) -> dict:
+    """A Job that can stop and ask the user (a step with `needs_attention`) and is still running is
+    waited for, up to `timeout` seconds, until it ends or a step waits for an answer; the caller gets
+    that Job, with its checklist, to relay the question. Any other Job comes back as it is."""
+    if job.get("status") != "running" or not any(s.get("needs_attention") for s in job.get("steps") or []):
+        return job
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(poll_seconds)
+        try:
+            job = job_status(paths, job["id"])
+        except PillarUnavailable:
+            continue
+        if job.get("status") in _TERMINAL or any(s["state"] == "attention" for s in job.get("steps") or []):
+            break
+    return job
+
+
+def answer_step(paths: Paths, job_id: str, key: str, choice: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/steps/{key}/answer", json={"choice": choice}, timeout=timeout)
 
 
 def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0):

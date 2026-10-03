@@ -543,7 +543,8 @@ def test_status_chips_carry_counts_and_the_active_one_is_marked(test_client, mon
 def test_the_status_filter_is_applied_locally_so_counts_stay_whole(test_client, monkeypatch):
     calls = _stub_jobs(monkeypatch, [_job(1), _job(2, status="failed")])
     test_client.get("/jobs", params={"status": "failed"})
-    assert [c for c in calls if c != "pending_confirmation"] == [None]  # the banner's own confirmation read is separate
+    # the banner's own reads (jobs awaiting confirmation, jobs with a question for the user) are separate
+    assert [c for c in calls if c not in ("pending_confirmation", "running")] == [None]
 
 
 def test_jobs_search_matches_type_project_pillar_creator_and_id(test_client, monkeypatch):
@@ -2085,10 +2086,16 @@ def _tasks_section(text: str, key: str) -> str:
     return text[start:end if end != -1 else len(text)]
 
 
+def _hours_ago(hours):
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+
 def test_tasks_list_groups_tasks_into_queued_running_attention_and_done(test_client, monkeypatch):
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "w", "status": "active"}])
     monkeypatch.setattr(client, "agent_runs", lambda paths, project: [
-        {"id": f"r-{status}", "job_id": f"j-{status}", "project_id": "w", "title": f"run {status}", "status": status, "created_at": "2026-09-22T10:00:00"}
+        {"id": f"r-{status}", "job_id": f"j-{status}", "project_id": "w", "title": f"run {status}", "status": status, "created_at": _hours_ago(2)}
         for status in ("running", "awaiting_finish", "failed", "finished", "skipped")
     ])
     monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [
@@ -2097,7 +2104,8 @@ def test_tasks_list_groups_tasks_into_queued_running_attention_and_done(test_cli
         {"id": "j-q", "type": "agent.run_task", "status": "queued", "project_id": "w", "params": {"title": "not started"}},
         # dispatched, but the agent is still busy with another task: no run yet
         {"id": "j-lock", "type": "agent.run_task", "status": "running", "project_id": "w", "params": {"title": "behind another task"}},
-        {"id": "j-bad", "type": "agent.run_task", "status": "failed", "project_id": "w", "error": "unknown project", "params": {"title": "never started"}},
+        {"id": "j-bad", "type": "agent.run_task", "status": "failed", "project_id": "w", "error": "unknown project", "params": {"title": "never started"},
+         "created_at": _hours_ago(2), "updated_at": _hours_ago(2)},
         {"id": "j-cancel", "type": "agent.run_task", "status": "cancelled", "project_id": "w", "params": {"title": "called off"}},
         {"id": "j-ok", "type": "agent.run_task", "status": "succeeded", "project_id": "w", "params": {"title": "ghost"}},
     ])
@@ -2786,3 +2794,152 @@ def test_report_tests_follow_a_newer_whole_run_of_the_aggregate_suite(test_clien
     text = test_client.get("/report", params={"project": "little-widget"}).text
     assert re.search(r'report-test-name">t::b</span>\s*<span class="pill fail">failed', text)
     assert re.search(r'report-test-name">t::a</span>\s*<span class="pill ok">passed', text)
+
+
+# --- REQ-000000312: The CLI and the Dashboard show what a job is doing ---
+
+def _checked_job(**overrides):
+    steps = [
+        {"key": "a", "title": "Check the branch", "position": 0, "state": "succeeded", "detail": "on dev", "prompt": None, "needs_attention": False,
+         "runtime_seconds": 1.5, "expected_seconds": 2.0, "attention_since": None, "attention_expires_at": None},
+        {"key": "b", "title": "Check for uncommitted changes", "position": 1, "state": "attention", "detail": None, "needs_attention": True,
+         "prompt": {"question": "3 uncommitted changes?", "options": [{"id": "commit", "label": "Commit them"}, {"id": "stop", "label": "Stop"}]},
+         "runtime_seconds": 0.5, "expected_seconds": None, "attention_since": "2026-09-21T10:00:00+00:00", "attention_expires_at": "2026-09-21T22:00:00+00:00"},
+        {"key": "c", "title": "Merge", "position": 2, "state": "pending", "detail": None, "prompt": None, "needs_attention": False,
+         "runtime_seconds": None, "expected_seconds": None, "attention_since": None, "attention_expires_at": None},
+        {"key": "d", "title": "Tag", "position": 3, "state": "failed", "detail": "tag exists", "prompt": None, "needs_attention": False,
+         "runtime_seconds": 0.2, "expected_seconds": None, "attention_since": None, "attention_expires_at": None},
+        {"key": "e", "title": "Rebase", "position": 4, "state": "running", "detail": None, "prompt": None, "needs_attention": False,
+         "runtime_seconds": 7.0, "expected_seconds": 9.0, "attention_since": None, "attention_expires_at": None},
+    ]
+    return _job(1, type="version.feature_finish", status="running", steps=steps, **overrides)
+
+
+def test_the_job_page_shows_each_action_with_its_state_runtime_and_expected_runtime(test_client, monkeypatch):
+    job = _checked_job()
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: job)
+    text = test_client.get(f"/jobs/{job['id']}").text
+    for state in ("pending", "running", "succeeded", "failed", "attention"):
+        assert f'class="step s-{state}"' in text
+    assert "Check the branch" in text and "on dev" in text and "tag exists" in text
+    assert "expected 2.0s" in text and 'class="step-rt">1.5s' in text
+    assert 'data-ticks="1"' in text and "1 of 5 done" in text
+
+
+def test_a_waiting_action_shows_its_question_and_one_button_per_option(test_client, monkeypatch):
+    job = _checked_job()
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: job)
+    text = test_client.get(f"/jobs/{job['id']}").text
+    assert "3 uncommitted changes?" in text
+    assert f'action="/jobs/{job["id"]}/steps/b/answer"' in text
+    assert 'name="choice" value="commit"' in text and "Commit them" in text and 'value="stop"' in text
+
+
+def test_answering_sends_the_choice_and_returns_to_the_job(test_client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(client, "answer_step", lambda paths, job_id, key, choice: sent.append((job_id, key, choice)))
+    response = test_client.post("/jobs/j1/steps/b/answer", data={"choice": "commit"}, follow_redirects=False)
+    assert sent == [("j1", "b", "commit")] and response.headers["location"].startswith("/jobs/j1")
+
+
+def test_a_refused_answer_is_reported_on_the_job_page(test_client, monkeypatch):
+    def refuse(paths, job_id, key, choice):
+        raise client.PillarUnavailable("orchestration daemon unreachable or refused the request")
+
+    monkeypatch.setattr(client, "answer_step", refuse)
+    response = test_client.post("/jobs/j1/steps/b/answer", data={"choice": "x"}, follow_redirects=False)
+    assert "Could%20not%20send" in response.headers["location"] or "Could+not+send" in response.headers["location"]
+
+
+def test_an_unknown_job_page_is_a_404_and_a_down_daemon_is_explained(test_client, monkeypatch):
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: None)
+    assert test_client.get("/jobs/nope").status_code == 404
+
+    def down(paths, job_id):
+        raise client.PillarUnavailable("orchestration daemon unreachable")
+
+    monkeypatch.setattr(client, "get_job", down)
+    assert "unreachable" in test_client.get("/jobs/nope").text
+
+
+def test_a_job_card_shows_its_progress_and_flags_a_question(test_client, monkeypatch):
+    _stub_jobs(monkeypatch, [_job(1, status="running", progress={"total": 9, "done": 3, "current": "Merge", "attention": True}),
+                             _job(2, progress={"total": 1, "done": 1, "current": None, "attention": False})])
+    text = test_client.get("/jobs").text
+    assert "3/9 actions" in text and "needs your answer" in text and "Open the job page" in text
+    assert text.count("/jobs/00000002") >= 1 and "1/1 actions" not in text
+
+
+def test_the_attention_list_names_a_running_job_with_a_question(monkeypatch):
+    from dashboard import app as dashboard_app
+
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [
+        _job(1, status="running", progress={"total": 4, "done": 1, "current": "Resolve conflicts", "attention": True})] if status == "running" else [])
+    monkeypatch.setattr(dashboard_app, "_try", lambda fn, *a, default=None: fn(*a) if a else fn())
+
+
+def test_a_job_card_lists_the_actions_of_the_job(test_client, monkeypatch):
+    job = _checked_job()
+    _stub_jobs(monkeypatch, [job])
+    asked = []
+    monkeypatch.setattr(client, "jobs_steps", lambda paths, ids: asked.append(ids) or {job["id"]: job["steps"]})
+    text = test_client.get("/jobs").text
+    assert asked == [[job["id"]]]
+    assert "Actions" in text and "Check the branch" in text and 'class="step s-attention"' in text and "Commit them" in text
+
+
+# --- REQ-000000313: A failed task leaves the attention list when moved to done, or after a week ---
+
+def _failed(run_id, *, hours_ago=2, **extra):
+    return {"id": run_id, "job_id": f"j-{run_id}", "project_id": "w", "title": f"task {run_id}", "status": "failed",
+            "created_at": _hours_ago(hours_ago), "updated_at": _hours_ago(hours_ago), **extra}
+
+
+def _tasks_page(test_client, monkeypatch, runs):
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "w", "status": "active"}])
+    monkeypatch.setattr(client, "agent_runs", lambda paths, project: runs)
+    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    text = test_client.get("/tasks").text
+    return _tasks_section(text, "attention"), _tasks_section(text, "done")
+
+
+def test_a_failed_task_stays_in_attention_with_move_to_done_and_retry_buttons(test_client, monkeypatch):
+    attention, done = _tasks_page(test_client, monkeypatch, [_failed("a")])
+    assert "task a" in attention and "task a" not in done
+    assert 'action="/tasks/w/a/dismiss"' in attention and "Move to done" in attention
+    assert 'href="/tasks/w/a/retry"' in attention
+
+
+def test_a_dismissed_failed_task_is_in_done_and_a_stale_one_moves_there_by_itself(test_client, monkeypatch):
+    runs = [_failed("a", dismissed_at=_hours_ago(1)), _failed("old", hours_ago=24 * 7 + 1), _failed("fresh", hours_ago=24 * 6)]
+    attention, done = _tasks_page(test_client, monkeypatch, runs)
+    assert "task a" in done and "task old" in done and "task fresh" in attention
+    assert "task a" not in attention and "task old" not in attention
+
+
+def test_only_failed_tasks_are_ever_moved_by_age(test_client, monkeypatch):
+    waiting = {**_failed("w1", hours_ago=24 * 30), "status": "awaiting_finish"}
+    attention, done = _tasks_page(test_client, monkeypatch, [waiting])
+    assert "task w1" in attention and "Move to done" not in attention
+
+
+def test_the_task_page_offers_move_to_done_next_to_retry(test_client, monkeypatch):
+    run = _failed("a")
+    monkeypatch.setattr(client, "agent_run", lambda paths, project, run_id: run)
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: {"params": {}, "created_by": "dashboard"})
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
+    text = test_client.get("/tasks/w/a").text
+    assert "Move to done" in text and "/tasks/w/a/retry" in text
+    run["dismissed_at"] = _hours_ago(1)
+    text = test_client.get("/tasks/w/a").text
+    assert "Move to done" not in text and "/tasks/w/a/retry" in text  # done, but still retryable
+
+
+def test_moving_a_task_to_done_runs_the_dismiss_job(test_client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **fields: sent.append(fields) or {"status": "succeeded"})
+    response = test_client.post("/tasks/w/a/dismiss", follow_redirects=False)
+    assert sent[0]["type"] == "agent.dismiss_task" and sent[0]["params"] == {"run_id": "a"} and sent[0]["project_id"] == "w"
+    assert response.headers["location"].startswith("/tasks")
+    monkeypatch.setattr(client, "create_job", lambda paths, **fields: {"status": "failed", "error": "did not fail"})
+    assert "did%20not%20fail" in test_client.post("/tasks/w/a/dismiss", follow_redirects=False).headers["location"].replace("+", "%20")

@@ -6,6 +6,8 @@ today (docs/architecture.md's CLI section).
 
 from __future__ import annotations
 
+import os
+
 import httpx
 
 from common.manifest import load_manifest
@@ -46,6 +48,16 @@ def _core_status_fallback(paths: Paths) -> dict:
 
 
 def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
+    """Create a Job and return it once dispatched. The Job's checklist is shown on stderr while it runs
+    (`cli.progress`); `LWS_NO_PROGRESS=1` turns that off."""
+    if os.environ.get("LWS_NO_PROGRESS"):
+        return post_job(paths, timeout=timeout, **fields)
+    from cli import progress
+
+    return progress.create_and_follow(paths, timeout=timeout, **fields)
+
+
+def post_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
     try:
         with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
             response = client.post("/v1/jobs", json=fields)
@@ -217,6 +229,29 @@ def set_queue_capacity(paths: Paths, queue_key: str, capacity: int, *, timeout: 
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — setting queue capacity needs the daemon") from exc
+
+
+def get_job(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
+    """The Job with its checklist, from the daemon only (no fallback to the database file)."""
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.get(f"/v1/jobs/{job_id}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable(f"could not read job {job_id} from the Orchestration daemon: {exc}") from exc
+
+
+def answer_step(paths: Paths, job_id: str, key: str, choice: str, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post(f"/v1/jobs/{job_id}/steps/{key}/answer", json={"choice": choice})
+        if response.status_code in (404, 409, 422):
+            raise DaemonUnavailable(f"answer refused: {response.json().get('detail', response.text)}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable(f"could not send the answer to the Orchestration daemon: {exc}") from exc
 
 
 def job_status(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:

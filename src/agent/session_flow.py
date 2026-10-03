@@ -30,6 +30,7 @@ from pathlib import Path
 
 from agent.claude_invoke import model_args
 from common import playwright
+from common.job_steps import step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.systemd import user_path_env
@@ -85,42 +86,46 @@ class SessionFlow:
         return self.runner.run(["pgrep", "-f", _match(self.paths, project_id)]).ok
 
     def start(self, project_id: str, project_dir: Path) -> str:
-        if not self.runner.run(["which", "dtach"]).ok:
-            raise SessionError("dtach is not installed (sudo apt install -y dtach)")
-        if self.is_running(project_id):
-            raise SessionError(f"a session is already running for {project_id!r}; stop it first")
-        if not is_trusted(project_dir):
-            raise SessionError(
-                f"{project_dir} is not trusted by Claude Code yet — a detached session would just hang "
-                "at the trust prompt. Run `claude` in that directory once and accept the trust prompt, "
-                "then retry."
-            )
+        with step("check_session") as handle:
+            if not self.runner.run(["which", "dtach"]).ok:
+                raise SessionError("dtach is not installed (sudo apt install -y dtach)")
+            if self.is_running(project_id):
+                raise SessionError(f"a session is already running for {project_id!r}; stop it first")
+            if not is_trusted(project_dir):
+                raise SessionError(
+                    f"{project_dir} is not trusted by Claude Code yet — a detached session would just hang "
+                    "at the trust prompt. Run `claude` in that directory once and accept the trust prompt, "
+                    "then retry."
+                )
+            handle.detail = f"{project_dir} is trusted"
 
-        socket = self.paths.session_socket_path(project_id)
-        socket.parent.mkdir(parents=True, exist_ok=True)
-        if socket.exists():
-            # is_running() (a pgrep on this same path) just came back
-            # negative, so nothing holds this socket — a leftover from a
-            # session that died without cleaning up (e.g. its cgroup was
-            # killed directly). `dtach -n` refuses to bind an existing
-            # path even when nothing is listening on it.
-            socket.unlink()
+        with step("launch_session") as handle:
+            socket = self.paths.session_socket_path(project_id)
+            socket.parent.mkdir(parents=True, exist_ok=True)
+            if socket.exists():
+                # is_running() (a pgrep on this same path) just came back
+                # negative, so nothing holds this socket — a leftover from a
+                # session that died without cleaning up (e.g. its cgroup was
+                # killed directly). `dtach -n` refuses to bind an existing
+                # path even when nothing is listening on it.
+                socket.unlink()
 
-        name = session_name(project_id)
-        argv = ["dtach", "-n", str(socket), "claude", "--remote-control", name, *model_args()]
-        if self.playwright_mcp:
-            # Last, since `--mcp-config` takes every value after it.
-            argv += playwright.mcp_claude_args(
-                self.runner, self.paths.sessions_dir / "playwright-mcp" / project_id.replace("/", "-"),
-            )
-        unit = _unit_name(project_id)
-        result = self.runner.run([
-            "systemd-run", "--user", "--collect", "--scope", f"--unit={unit}",
-            f"--setenv=PATH={user_path_env()}", *argv,
-        ], cwd=project_dir)
-        if not result.ok:
-            raise SessionError(f"could not start a session for {project_id!r}: {(result.stderr or result.stdout).strip()}")
-        return name
+            name = session_name(project_id)
+            argv = ["dtach", "-n", str(socket), "claude", "--remote-control", name, *model_args()]
+            if self.playwright_mcp:
+                # Last, since `--mcp-config` takes every value after it.
+                argv += playwright.mcp_claude_args(
+                    self.runner, self.paths.sessions_dir / "playwright-mcp" / project_id.replace("/", "-"),
+                )
+            unit = _unit_name(project_id)
+            result = self.runner.run([
+                "systemd-run", "--user", "--collect", "--scope", f"--unit={unit}",
+                f"--setenv=PATH={user_path_env()}", *argv,
+            ], cwd=project_dir)
+            if not result.ok:
+                raise SessionError(f"could not start a session for {project_id!r}: {(result.stderr or result.stdout).strip()}")
+            handle.detail = name
+            return name
 
     def stop(self, project_id: str) -> bool:
         if not self.is_running(project_id):

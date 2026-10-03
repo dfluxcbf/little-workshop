@@ -11,6 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from orchestration import steps
 from orchestration.models import (
     Job,
     JobStatus,
@@ -49,6 +50,34 @@ CREATE TABLE IF NOT EXISTS job_runs (
     finished_at TEXT,
     FOREIGN KEY (job_id) REFERENCES jobs (id)
 );
+
+CREATE TABLE IF NOT EXISTS job_steps (
+    job_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    needs_attention INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'pending',
+    started_at TEXT,
+    finished_at TEXT,
+    waited_seconds REAL NOT NULL DEFAULT 0,
+    attention_since TEXT,
+    detail TEXT,
+    prompt TEXT,
+    answer TEXT,
+    PRIMARY KEY (job_id, key)
+);
+
+-- Runtimes of steps that finished OK, for each step's expected runtime; kept
+-- apart from job_steps so deleting old jobs does not forget them.
+CREATE TABLE IF NOT EXISTS step_durations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_type TEXT NOT NULL,
+    step_key TEXT NOT NULL,
+    seconds REAL NOT NULL,
+    finished_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS step_durations_by_step ON step_durations (job_type, step_key, id);
 
 CREATE TABLE IF NOT EXISTS pipelines (
     name TEXT NOT NULL,
@@ -161,6 +190,7 @@ def insert_job(conn: sqlite3.Connection, job: Job) -> None:
         row,
     )
     conn.commit()
+    steps.init_steps(conn, job)
 
 
 def update_job(conn: sqlite3.Connection, job: Job) -> None:
@@ -175,6 +205,7 @@ def update_job(conn: sqlite3.Connection, job: Job) -> None:
         row,
     )
     conn.commit()
+    steps.on_job_updated(conn, job)
 
 
 def get_job(conn: sqlite3.Connection, job_id: str) -> Job | None:
@@ -442,6 +473,7 @@ def count_prunable_jobs(conn: sqlite3.Connection, before: datetime) -> int:
 
 def prune_finished_jobs(conn: sqlite3.Connection, before: datetime) -> dict:
     to_delete, runs_to_delete, kept = _plan_cleanup(conn, before)
+    steps.delete_steps(conn, list(to_delete))
     conn.executemany("DELETE FROM job_runs WHERE job_id = ?", [(i,) for i in to_delete])
     conn.executemany("DELETE FROM jobs WHERE id = ?", [(i,) for i in to_delete])
     conn.executemany("DELETE FROM pipeline_runs WHERE id = ?", [(i,) for i in runs_to_delete])

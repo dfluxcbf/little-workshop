@@ -110,6 +110,7 @@ def test_run_sandboxed_uses_a_custom_test_command(monkeypatch, paths, tmp_path):
 
 
 # -- UI tests (pytest-playwright under tests/ui/) -------------------------
+# --- REQ-000000255: UI tests run against the branch's own app ----------------
 
 MANIFEST = """[server]
 name = "widget"
@@ -220,3 +221,37 @@ def test_ui_app_that_never_starts_fails_the_run_and_is_still_stopped(monkeypatch
         testrun.run_sandboxed(paths, "little-widget", "HEAD", runner=runner)
     assert runner.calls[-1][0] == "pkill"
     assert not any(any(a.startswith("--junit-xml=") for a in c) for c in runner.calls)
+
+
+def test_ui_app_that_never_starts_names_its_command_and_the_tail_of_its_output(monkeypatch, paths, tmp_path):
+    worktree_dir = _ui_worktree(monkeypatch, paths, tmp_path, listening=False)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    (worktree_dir / testrun.UI_APP_LOG).write_text("".join(f"line {i}\n" for i in range(1, 21)) + "OSError: port in use\n")
+
+    with pytest.raises(testrun.TestRunError) as excinfo:
+        testrun.run_sandboxed(paths, "little-widget", "HEAD", runner=UiRunner())
+
+    message = str(excinfo.value)
+    assert "`python3 -m widget --port 45678`" in message
+    assert "OSError: port in use" in message
+    assert "line 7\n" in message and "line 6\n" not in message  # the last 15 lines only
+
+
+def test_ui_app_is_stopped_when_the_test_command_fails(monkeypatch, paths, tmp_path):
+    _ui_worktree(monkeypatch, paths, tmp_path)
+    runner = UiRunner(write_report=False, returncode=2)
+
+    with pytest.raises(testrun.TestRunError, match="no JUnit report"):
+        testrun.run_sandboxed(paths, "little-widget", "HEAD", runner=runner)
+
+    assert ["pkill", "-f", "python3 -m widget --port 45678"] in runner.calls
+    assert runner.calls.index(["pkill", "-f", "python3 -m widget --port 45678"]) > runner.calls.index(_pytest_call(runner))
+
+
+def test_free_port_is_one_nothing_listens_on():
+    import socket
+
+    port = testrun._free_port()
+    assert 0 < port < 65536
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", port))  # still free: raises if something had taken it

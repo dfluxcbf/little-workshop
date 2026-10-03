@@ -26,6 +26,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from common.job_steps import step
 from common.paths import Paths
 from common.projectfiles import ProjectFilesClient
 from registry import db, gitops
@@ -37,25 +38,28 @@ class ProjectImportError(Exception):
 
 
 def import_project(conn: sqlite3.Connection, paths: Paths, params: ImportParams) -> ImportResult:
-    if db.get_project(conn, params.name) is not None:
-        raise ProjectImportError(f"project {params.name!r} is already registered")
+    with step("check_path") as handle:
+        if db.get_project(conn, params.name) is not None:
+            raise ProjectImportError(f"project {params.name!r} is already registered")
 
-    path = Path(params.path)
-    if not path.is_dir():
-        raise ProjectImportError(f"{path} does not exist or is not a directory")
-    if not (path / ".git").exists():
-        raise ProjectImportError(f"{path} is not a git repository (no .git)")
+        path = Path(params.path)
+        if not path.is_dir():
+            raise ProjectImportError(f"{path} does not exist or is not a directory")
+        if not (path / ".git").exists():
+            raise ProjectImportError(f"{path} is not a git repository (no .git)")
+        handle.detail = str(path)
 
-    repo_url = gitops.remote_url(path)
+    with step("register"):
+        repo_url = gitops.remote_url(path)
 
-    project = Project(name=params.name, path=str(path), repo_url=repo_url)
-    db.insert_project(conn, project)
+        project = Project(name=params.name, path=str(path), repo_url=repo_url)
+        db.insert_project(conn, project)
 
-    files = ProjectFilesClient(paths, caller_pillar="registry")
-    files.write(
-        params.name,
-        "info.registry.json",
-        json.dumps({"name": params.name, "path": str(path), "repo_url": repo_url}),
-    )
+        files = ProjectFilesClient(paths, caller_pillar="registry")
+        files.write(
+            params.name,
+            "info.registry.json",
+            json.dumps({"name": params.name, "path": str(path), "repo_url": repo_url}),
+        )
 
     return ImportResult(name=params.name, path=str(path), repo_url=repo_url)

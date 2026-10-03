@@ -17,6 +17,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from common.job_steps import StepReporter, reporting
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.projectfiles import ProjectFilesClient
@@ -103,7 +104,7 @@ def build_app(
         if not request.project_id:
             return {"outcome": "failed", "error": "missing project_id"}
         branch = request.params.get("branch", "dev")
-        with lock:
+        with lock, reporting(StepReporter(paths, request.job_id)):
             try:
                 manifest = _load_manifest(paths, request.project_id)
                 project_dir = resolve(paths, request.project_id)
@@ -189,7 +190,7 @@ def build_app(
             return {"outcome": "failed", "error": "missing params.pillar"}
         commit = request.params.get("commit", "HEAD")
         confirm_timeout = request.params.get("confirm_timeout_seconds")
-        with lock:
+        with lock, reporting(StepReporter(paths, request.job_id)):
             try:
                 result = flow.redeploy_pillar(conn, pillar, workshop_repo_dir(), commit, confirm_timeout_seconds=confirm_timeout)
             except SelfRedeployRequiresDispatch:

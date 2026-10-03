@@ -187,6 +187,40 @@ missed `once` task's `missed_run_at` stays pending indefinitely until a
 human actually answers it — there is no automatic path that ever clears
 it on its own. Either answer spends it, and it is deleted.
 
+## Job steps: what a job does, and where it is (2026-10-03)
+
+REQ-000000310, REQ-000000311.
+
+Every Job carries a checklist. A Job type's steps are declared in
+`src/common/step_specs/<pillar>.py` (`STEPS`: job type -> ordered `StepSpec`s: `key`,
+user-facing `title`, `needs_attention`); a type nobody declared has one step, "Run <type>", which
+Orchestration itself runs and finishes with the Job. Steps are stored in `job_steps` (inserted with
+the Job; a Job that predates them gets its steps on first read) and returned with the Job
+(`GET /v1/jobs/{id}`, and the answer of `POST /v1/jobs`); `GET /v1/jobs` returns only a `progress`
+summary (`total`, `done`, `current`, `attention`).
+
+- **States**: `pending`, `running`, `succeeded`, `failed`, `attention` (waiting for the user).
+  A step reports its own state through `POST /v1/jobs/{id}/steps/{key}` (`state`, `detail`, and a
+  `prompt` for `attention`); the pillar side is `common/job_steps.py` (`step()`, `done()`, `ask()`,
+  a `StepReporter` installed with `reporting()`), which does nothing without a reporter, so a
+  handler called directly (unit tests) runs unchanged. Reports are best effort. When a Job ends,
+  Orchestration settles what is left (`steps.on_job_updated`, called from `db.update_job`): the step
+  in progress fails with a failed Job, and on success steps never reported count as done ("not needed
+  this time").
+- **Runtime and expected runtime**: each step returns `runtime_seconds` (never counting the time it
+  waited for the user) and `expected_seconds`, the average of the last 50 successful runs of that
+  (job type, step), kept in `step_durations` (not removed with old jobs).
+- **Asking the user**: a step that needs a decision puts itself in `attention` with
+  `{question, options: [{id, label}]}` and waits (`ask`). With no option available the step and the
+  Job fail at once. The answer is `POST /v1/jobs/{id}/steps/{key}/answer {choice}` (`lws job
+  answer`, the Dashboard buttons, the `workshop_job_answer` MCP tool); the step then runs on. After
+  `ATTENTION_TIMEOUT_SECONDS` (12 hours) without an answer the step and the Job fail
+  (`dispatch.expire_attention_steps`, on the scheduler tick, and the waiting pillar's own deadline).
+  A Job waiting for the user is exempt from the six-hour stuck-Job sweep.
+- **Choosing the id**: `POST /v1/jobs` accepts an optional `id`, so a caller can follow the steps
+  while the creation call (which lasts as long as the Job, for most types) is still running.
+
+
 ## Interfacing
 
 Orchestration is the one pillar every mutating caller goes through — it

@@ -1165,3 +1165,26 @@ details.report-item > .report-approve { margin: 0; padding: 0 12px 12px; }
 .kind-jobs { color: var(--ink); }
 .gate-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .gate-actions form { margin: 0; }
+
+/* A job's checklist (job_detail.html): one icon per action state. */
+.job-progress { font-size: 12.5px; color: var(--ink-faint); overflow-wrap: anywhere; }
+.job-progress.asks { color: var(--warn); }
+.steps { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; }
+.step { display: grid; grid-template-columns: 22px 1fr; gap: 10px; padding: 8px 2px; border-bottom: 1px solid var(--border-soft); }
+.step:last-child { border-bottom: 0; }
+.step-icon { --step-color: var(--ink-faint); width: 18px; height: 18px; margin-top: 2px; border-radius: 50%; box-sizing: border-box; border: 2px solid var(--step-color); display: inline-block; position: relative; }
+.step.s-pending .step-icon { background: transparent; }
+.step.s-succeeded .step-icon { --step-color: var(--ok); background: var(--step-color); }
+.step.s-failed .step-icon { --step-color: var(--fail); background: var(--step-color); }
+.step.s-running .step-icon { --step-color: oklch(68% 0.17 250); background: var(--step-color); animation: pulse 1.4s ease-in-out infinite; }
+.step.s-attention .step-icon { --step-color: var(--warn); background: var(--step-color); }
+.step-main { min-width: 0; }
+.step-title { font-size: 14px; overflow-wrap: anywhere; }
+.step.s-pending .step-title { color: var(--ink-faint); }
+.step-detail { font-size: 12.5px; color: var(--ink-faint); overflow-wrap: anywhere; }
+.step.s-failed .step-detail { color: var(--fail); }
+.step-times { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.step-times b { color: var(--ink); font-weight: 600; }
+.step-ask { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--warn); border-radius: var(--radius-sm); background: var(--warn-soft); }
+.step-ask p { margin: 0 0 8px; overflow-wrap: anywhere; }
+.step-ask .decision-actions { display: flex; flex-wrap: wrap; gap: 8px; }

@@ -12,6 +12,7 @@ import pytest
 
 from agent import session_flow as session_flow_module
 from agent.session_flow import SessionError, SessionFlow, claude_config_path, is_trusted, session_name
+from common import playwright
 from common.paths import Paths
 from common.shell import CommandResult
 
@@ -155,6 +156,9 @@ def test_stop_stops_the_scope_and_pkills_when_running(paths):
     assert any(c[0] == "pkill" and "claude --remote-control lws-little-widget-session" in c[-1] for c in argvs)
 
 
+# --- REQ-000000253: Ad-hoc sessions get the Playwright MCP server -------------
+
+
 class NpxRunner(FakeRunner):
     def __init__(self, *, npx: bool, **kw):
         super().__init__(**kw)
@@ -168,8 +172,6 @@ class NpxRunner(FakeRunner):
 
 
 def test_start_attaches_the_playwright_mcp_server(paths, tmp_path, monkeypatch):
-    import json
-
     monkeypatch.setattr(session_flow_module, "is_trusted", lambda project_dir: True)
     runner = NpxRunner(npx=True)
     SessionFlow(paths, runner=runner).start("dfluxcbf/little-widget", tmp_path)
@@ -178,6 +180,10 @@ def test_start_attaches_the_playwright_mcp_server(paths, tmp_path, monkeypatch):
     server = json.loads(launch[-1])["mcpServers"]["playwright"]
     out_dir = server["args"][server["args"].index("--output-dir") + 1]
     assert out_dir == str(paths.sessions_dir / "playwright-mcp" / "dfluxcbf-little-widget")
+    # the same server an agent run gets (common/playwright.py): pinned, headless, an in-memory profile
+    assert server["command"] == "npx"
+    assert server["args"][:2] == ["-y", playwright.MCP_PACKAGE]
+    assert "--headless" in server["args"] and "--isolated" in server["args"]
 
 
 def test_start_without_npx_or_when_disabled_has_no_playwright(paths, tmp_path, monkeypatch):

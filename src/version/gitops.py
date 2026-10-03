@@ -79,6 +79,13 @@ def has_commits(repo_root: Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def dirty_paths(repo_root: Path) -> list[str]:
+    """The uncommitted paths outside `.lvx/` (see `is_dirty`)."""
+    result = run(["git", "status", "--porcelain"], repo_root)
+    paths = [line[3:].strip().split(" -> ")[-1] for line in result.stdout.splitlines()]
+    return [path for path in paths if not path.startswith(".lvx/")]
+
+
 def is_dirty(repo_root: Path) -> bool:
     """Uncommitted changes outside `.lvx/` (tool-managed metadata) block
     operations; changes inside it never do."""
@@ -219,6 +226,9 @@ _CONFLICT_CODES = ("UU", "AA", "DD", "AU", "UA", "DU", "UD")
 def _conflicted_paths(repo_root: Path) -> list[str]:
     status = run(["git", "status", "--porcelain"], repo_root, check=False)
     return [line[3:] for line in status.stdout.splitlines() if line[:2] in _CONFLICT_CODES]
+
+
+conflicted_paths = _conflicted_paths
 
 
 def _version_at(repo_root: Path, rev: str) -> str | None:

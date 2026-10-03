@@ -14,6 +14,7 @@ from typing import Any, Callable
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from common.job_steps import StepAborted, StepFailed, StepReporter, reporting
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from version.commands.config import cmd_config_add_hook, cmd_config_list, cmd_config_remove_hook
@@ -38,6 +39,16 @@ from version.common import CommandResult
 from version.gitops import GitError
 from version.resolve import ProjectResolutionError, resolve_project_path
 from version.stabilize import stabilize
+
+
+# Jobs that may stop and ask the user (uncommitted changes, merge conflicts) run in the background
+# and report back by job id, as `version.release` does: a question can wait for hours, far longer
+# than a dispatch call lasts. Everything else answers within the call.
+ASKING_JOB_TYPES = frozenset({
+    "version.feature_start", "version.improvement_start", "version.hotfix_start",
+    "version.feature_finish", "version.improvement_finish", "version.hotfix_finish",
+    "version.release_start", "version.release_candidate_cut", "version.release_finish",
+})
 
 
 class JobRequest(BaseModel):
@@ -164,12 +175,67 @@ STATUS_HANDLERS: dict[str, Callable[[Path], CommandResult]] = {
 }
 
 
+# How long an asking Job is waited for inside the dispatch call before it carries on in the background.
+SYNC_GRACE_SECONDS = 12.0
+
+
+def _asking_outcome(reporter: StepReporter, handler: JobHandler, repo_root: Path, request: JobRequest) -> dict | None:
+    """Run `handler` with steps reported; the outcome as a dispatch answer, or None when the Job was
+    settled by someone else (stopped, or its wait ran out) while a step waited."""
+    try:
+        with reporting(reporter):
+            result = handler(repo_root, request.params)
+    except StepAborted:
+        return None
+    except (StepFailed, GitError, FileNotFoundError, KeyError) as exc:
+        return {"outcome": "failed", "error": str(exc)}
+    except Exception as exc:  # never leave the Job running forever
+        return {"outcome": "failed", "error": f"{type(exc).__name__}: {exc}"}
+    if result.success:
+        return {"outcome": "succeeded", "result": result.data, "message": result.message}
+    return {"outcome": "failed", "error": result.message}
+
+
+def _run_asking_job(services, reporter: StepReporter, handler: JobHandler, repo_root: Path, request: JobRequest) -> dict:
+    """The answer to the dispatch call: the Job's own outcome when it finishes within `SYNC_GRACE_SECONDS`
+    (almost always, unless it stops to ask the user), otherwise `accepted`, and the Job reports back through
+    Orchestration's completion callback when it ends."""
+    lock = threading.Lock()
+    state: dict = {"detached": False, "outcome": None, "finished": False}
+    finished = threading.Event()
+
+    def work() -> None:
+        outcome = _asking_outcome(reporter, handler, repo_root, request)
+        with lock:
+            state["outcome"], state["finished"] = outcome, True
+            detached = state["detached"]
+        finished.set()
+        if detached and outcome is not None:
+            ok = outcome["outcome"] == "succeeded"
+            services.complete(
+                request.job_id, succeeded=ok,
+                result={**(outcome.get("result") or {}), "message": outcome.get("message")} if ok else None,
+                error=None if ok else outcome["error"],
+            )
+
+    threading.Thread(target=work, daemon=True).start()
+    finished.wait(SYNC_GRACE_SECONDS)
+    with lock:
+        if state["finished"]:
+            return state["outcome"] or {"outcome": "failed", "error": "the job was settled while it waited"}
+        state["detached"] = True
+    return {"outcome": "accepted", "result": {"dispatched": True}}
+
+
 def build_app(
     paths: Paths, resolve: Callable[[Paths, str | None], Path] = resolve_project_path, release_services=None,
 ) -> FastAPI:
     app = FastAPI(title="little-workshop Version Control & Release")
     install_incident_reporting(app, paths, pillar="version")
     release_services = release_services or PillarReleaseServices(paths)
+
+    def reporter_for(job_id: str) -> StepReporter:
+        return StepReporter(paths, job_id)
 
     @app.get("/v1/health")
     def health() -> dict:
@@ -188,7 +254,10 @@ def build_app(
 
         def worker() -> None:
             try:
-                result = run_release(repo_root, request.project_id, request.params, release_services, job_id=request.job_id)
+                with reporting(reporter_for(request.job_id)):
+                    result = run_release(repo_root, request.project_id, request.params, release_services, job_id=request.job_id)
+            except StepFailed as exc:
+                release_services.complete(request.job_id, succeeded=False, result=None, error=str(exc))
             except ReleaseRefused as exc:
                 release_services.complete(request.job_id, succeeded=False, result={"checks": exc.checks} if exc.checks else None, error=str(exc))
             except (ReleaseFailed, ServiceUnavailable, GitError, FileNotFoundError, KeyError) as exc:
@@ -213,8 +282,12 @@ def build_app(
         except ProjectResolutionError as exc:
             return {"outcome": "failed", "error": str(exc)}
 
+        if job_type in ASKING_JOB_TYPES:
+            return _run_asking_job(release_services, reporter_for(request.job_id), handler, repo_root, request)
+
         try:
-            result = handler(repo_root, request.params)
+            with reporting(reporter_for(request.job_id)):
+                result = handler(repo_root, request.params)
         except (GitError, FileNotFoundError, KeyError) as exc:
             return {"outcome": "failed", "error": str(exc)}
 

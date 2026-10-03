@@ -101,6 +101,16 @@ def get_job(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict | None:
     return _get_optional(paths, "orchestration", f"/v1/jobs/{job_id}")
 
 
+def jobs_steps(paths: Paths, job_ids: list[str], *, timeout: float = 10.0) -> dict[str, list[dict]]:
+    """{job id: checklist} for the given Jobs."""
+    return _get(paths, "orchestration", "/v1/jobs/steps", params={"ids": ",".join(job_ids)}, timeout=timeout)
+
+
+def answer_step(paths: Paths, job_id: str, key: str, choice: str) -> dict:
+    """The user's answer to a Job step waiting for their attention."""
+    return _send(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/steps/{key}/answer", json={"choice": choice})
+
+
 def job_cleanup_preview(paths: Paths, hours: list[int], *, timeout: float = 10.0) -> dict[str, int]:
     """{"168": how many finished jobs are older than 168 hours, ...} — nothing is deleted."""
     body = _get(paths, "orchestration", "/v1/job-cleanup", params={"hours": ",".join(str(h) for h in hours)}, timeout=timeout)

@@ -13,7 +13,9 @@ from typing import Callable
 
 import httpx
 
+from common.job_steps import ATTENTION_TIMEOUT_SECONDS
 from common.uds_client import client_for_socket
+from orchestration import steps
 from orchestration.db import get_job, insert_job_run, list_jobs, update_job
 from orchestration.models import Job, JobStatus
 from orchestration.queue import cascade_dependency_failures, is_ready, ready_jobs
@@ -357,6 +359,8 @@ def expire_stuck_jobs(
         stale = [
             job for job in list_jobs(conn, status=JobStatus.RUNNING)
             if now - (job.updated_at if job.updated_at.tzinfo else job.updated_at.replace(tzinfo=timezone.utc)) >= running_timeout_for(job.type, max_age)
+            # A Job waiting for the user is not stuck: its step has its own, longer limit (expire_attention_steps).
+            and not steps.has_attention(conn, job.id)
         ]
     expired: list[Job] = []
     for job in stale:
@@ -376,6 +380,36 @@ def expire_stuck_jobs(
             cascade_dependency_failures(conn)
         dispatch_ready_jobs(conn, socket_lookup, lock=lock)
     return expired
+
+
+def expire_attention_steps(
+    conn: sqlite3.Connection, socket_lookup: SocketLookup, *, now: datetime | None = None, lock: threading.Lock | None = None,
+) -> list[Job]:
+    """Fail every step that has waited for the user longer than `ATTENTION_TIMEOUT_SECONDS`, and
+    its Job with it; then fail what depended on the Job and pump the queue its queue_key held.
+    `lock`, when given, must not be held by the caller."""
+    guard = lock if lock is not None else nullcontext()
+    now = now or datetime.now(timezone.utc)
+    failed: list[Job] = []
+    with guard:
+        expired = steps.expired_attention(conn, now)
+    for job_id, key in expired:
+        with guard:
+            job = get_job(conn, job_id)
+            if job is None or job.status != JobStatus.RUNNING:
+                continue
+            hours = ATTENTION_TIMEOUT_SECONDS / 3600
+            steps.fail_step(conn, job, key, f"no answer within {hours:g} hours", now=now)
+            job.status = JobStatus.FAILED
+            job.error = f"step {key!r} waited more than {hours:g} hours for an answer"
+            update_job(conn, job)
+            insert_job_run(conn, job.id, outcome="failed", detail=job.error, started_at=now, finished_at=now)
+            failed.append(job)
+    if failed:
+        with guard:
+            cascade_dependency_failures(conn)
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)
+    return failed
 
 
 def complete_job(conn: sqlite3.Connection, job: Job, *, succeeded: bool, result: dict | None, error: str | None) -> Job:

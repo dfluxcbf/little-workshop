@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from common import systemd
+from common.job_steps import done, step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from core.health import HealthResult, probe_health
@@ -265,37 +266,52 @@ class DeploymentFlow:
         version and launch the new one once that succeeds. A bad
         build/install must never take a running server down."""
         worktree = self.paths.worktree_path(f"deploy-{project_id}")
-        gitutil.add_worktree(project_dir, commitish, worktree)
         try:
-            version = (worktree / "VERSION").read_text(encoding="utf-8").strip() if (worktree / "VERSION").exists() else "?"
-            commit = gitutil.current_commit(worktree)
-            self.install(manifest, cwd=worktree)
-            self.down(project_id, manifest, tailscale_off=False)
+            with step("install") as handle:
+                gitutil.add_worktree(project_dir, commitish, worktree)
+                version = (worktree / "VERSION").read_text(encoding="utf-8").strip() if (worktree / "VERSION").exists() else "?"
+                commit = gitutil.current_commit(worktree)
+                self.install(manifest, cwd=worktree)
+                handle.detail = f"version {version} at {commit[:12]}"
+            with step("stop_old"):
+                self.down(project_id, manifest, tailscale_off=False)
             # Not cwd=worktree: the worktree is removed right after this call
             # returns, but the launched process's working directory has to
             # keep existing for as long as the unit does (Restart=on-failure
             # cds into it again on every restart).
-            how = self.launch(project_id, manifest, cwd=self.paths.state_home)
+            with step("launch") as handle:
+                how = self.launch(project_id, manifest, cwd=self.paths.state_home)
+                handle.detail = how
         finally:
             gitutil.remove_worktree(project_dir, worktree)
         return version, commit, how
 
     def up(self, conn: sqlite3.Connection, project_id: str, manifest: ServerManifest, project_dir: Path, branch: str) -> UpResult:
-        self._refuse_external(manifest, "deploy")
-        gitutil.run(["git", "fetch", "origin", "--prune"], project_dir)
-        location = gitutil.branch_location(project_dir, branch)
-        if location is None:
-            raise DeploymentError(f"branch '{branch}' does not exist in {project_dir} or on origin; nothing was stopped")
+        with step("check_managed") as handle:
+            self._refuse_external(manifest, "deploy")
+            handle.detail = manifest.name
+        with step("fetch_branch") as handle:
+            gitutil.run(["git", "fetch", "origin", "--prune"], project_dir)
+            location = gitutil.branch_location(project_dir, branch)
+            if location is None:
+                raise DeploymentError(f"branch '{branch}' does not exist in {project_dir} or on origin; nothing was stopped")
+            commitish = gitutil.deploy_commitish(project_dir, branch)
+            handle.detail = f"{branch} ({location})" if isinstance(location, str) else branch
 
-        commitish = gitutil.deploy_commitish(project_dir, branch)
         version, commit, how = self._deploy(project_id, manifest, project_dir, commitish)
-        exposure = self.expose(manifest)
+        with step("expose") as handle:
+            exposure = self.expose(manifest)
+            handle.detail = exposure or "not exposed through Tailscale"
         db.save_server_state(conn, project_id, branch, version, commit)
         db.record_deployment(conn, project_id, branch, commit, version, "succeeded", how)
 
         confirm_message = None
         if manifest.confirm_timeout_seconds:
-            confirm_message = self.arm_confirm_gate(conn, project_id, branch, commit, version, manifest.confirm_timeout_seconds)
+            with step("confirm_gate") as handle:
+                confirm_message = self.arm_confirm_gate(conn, project_id, branch, commit, version, manifest.confirm_timeout_seconds)
+                handle.detail = confirm_message
+        else:
+            done("confirm_gate", "not confirm-gated")
 
         return UpResult(branch=branch, version=version, commit=commit, how=how, exposure=exposure, confirm_message=confirm_message)
 
@@ -449,38 +465,50 @@ class DeploymentFlow:
         worker, or the target isn't self-referential) use this directly;
         `redeploy_pillar`/`rollback_pillar_if_unconfirmed` are the checked
         entry points."""
-        resolved = gitutil.run(["git", "rev-parse", commit], workshop_repo_dir)
-        resolved_commit = resolved.stdout.strip() or commit
-
         worktree = self.paths.worktree_path(f"redeploy-{pillar}-{uuid.uuid4().hex[:8]}")
-        gitutil.add_worktree(workshop_repo_dir, resolved_commit, worktree)
         try:
-            check = self.runner.run(
-                ["python3", "-c", f"import sys; sys.path.insert(0, 'src'); import {pillar}"],
-                cwd=worktree, timeout=30,
-            )
-            if not check.ok:
-                raise DeploymentError(
-                    f"{pillar}: commit {resolved_commit[:12]} does not even import cleanly "
-                    f"({(check.stderr or check.stdout).strip()[:2000]}); the running version was left untouched"
+            with step("smoke_check") as handle:
+                resolved = gitutil.run(["git", "rev-parse", commit], workshop_repo_dir)
+                resolved_commit = resolved.stdout.strip() or commit
+                gitutil.add_worktree(workshop_repo_dir, resolved_commit, worktree)
+                check = self.runner.run(
+                    ["python3", "-c", f"import sys; sys.path.insert(0, 'src'); import {pillar}"],
+                    cwd=worktree, timeout=30,
                 )
-            version_file = worktree / "VERSION"
-            version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "?"
+                if not check.ok:
+                    raise DeploymentError(
+                        f"{pillar}: commit {resolved_commit[:12]} does not even import cleanly "
+                        f"({(check.stderr or check.stdout).strip()[:2000]}); the running version was left untouched"
+                    )
+                version_file = worktree / "VERSION"
+                version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "?"
+                handle.detail = f"version {version} at {resolved_commit[:12]}"
 
-            install_dir = self._pillar_install_dir(pillar, resolved_commit)
-            if install_dir.exists():
-                shutil.rmtree(install_dir)
-            shutil.copytree(worktree / "src", install_dir / "src")
+            with step("install") as handle:
+                install_dir = self._pillar_install_dir(pillar, resolved_commit)
+                if install_dir.exists():
+                    shutil.rmtree(install_dir)
+                shutil.copytree(worktree / "src", install_dir / "src")
+                handle.detail = str(install_dir)
             # A rollback puts one pillar back on an older commit; `lws` is
             # shared by all of them and stays where it is.
-            cli_note = self._refresh_cli(worktree, version) if refresh_cli else None
+            if refresh_cli:
+                with step("refresh_cli") as handle:
+                    cli_note = self._refresh_cli(worktree, version)
+                    handle.detail = cli_note or "lws already up to date"
+            else:
+                cli_note = None
+                done("refresh_cli", "skipped for a rollback")
         finally:
             gitutil.remove_worktree(workshop_repo_dir, worktree)
 
         previous = db.get_pillar_deployment(conn, pillar)
 
-        self._stop_pillar(pillar)
-        how = self._launch_pillar(pillar, install_dir)
+        with step("stop_old"):
+            self._stop_pillar(pillar)
+        with step("launch") as handle:
+            how = self._launch_pillar(pillar, install_dir)
+            handle.detail = how
 
         db.save_pillar_deployment(conn, pillar, str(install_dir), resolved_commit)
         db.save_server_state(conn, pillar, commit, version, resolved_commit)
@@ -542,7 +570,11 @@ class DeploymentFlow:
         if gate_timeout is None and pillar in SELF_REDEPLOY_GATED_BY_DEFAULT:
             gate_timeout = DEFAULT_SELF_REDEPLOY_CONFIRM_SECONDS
         if gate_timeout:
-            result.confirm_message = self.arm_confirm_gate(conn, pillar, commit, result.commit, result.version, gate_timeout)
+            with step("confirm_gate") as handle:
+                result.confirm_message = self.arm_confirm_gate(conn, pillar, commit, result.commit, result.version, gate_timeout)
+                handle.detail = result.confirm_message
+        else:
+            done("confirm_gate", "not confirm-gated")
         return result
 
     def rollback_pillar_if_unconfirmed(

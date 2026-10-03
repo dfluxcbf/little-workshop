@@ -47,6 +47,14 @@ and `little-versions`' own MCP surfaces.
   scope (never local/project) is required since this server proxies the
   same daemon regardless of which project's session attaches it.
 
+## Job checklists (2026-10-03)
+
+`workshop_job_status` returns the Job's `steps`; `workshop_job_answer` relays the user's choice for
+a step in state `attention` (always a prompt, since it stands in for a human decision). A version
+job that can ask is waited for up to 120 seconds, until it ends or a step asks, and comes back with
+its checklist so the question can be relayed.
+
+
 ## Interfacing
 
 - **Calls**: Registry & Portfolio, Version Control & Release, Deployment

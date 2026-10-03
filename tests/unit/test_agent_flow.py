@@ -868,6 +868,9 @@ def test_run_ci_check_passes_through_test_command_and_timeout(paths, conn, monke
     assert captured["timeout"] == 42.0
 
 
+# --- REQ-000000252: Agent runs get the Playwright MCP server ------------------
+
+
 class NpxClaudeRunner(WritingClaudeRunner):
     """`npx` present or absent on the host, independent of the machine the tests run on."""
 
@@ -934,6 +937,57 @@ def test_run_task_params_can_turn_playwright_off(paths, conn, tmp_path, monkeypa
 
     assert "--mcp-config" not in _claude_call(runner)
     assert ["which", "npx"] not in runner.calls
+
+
+def test_run_task_server_is_pinned_in_memory_and_uses_the_hosts_chromium(paths, conn, tmp_path, monkeypatch):
+    from common import playwright
+
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    chromium = tmp_path / "browsers" / "chromium-1234" / "chrome-linux64" / "chrome"
+    monkeypatch.setattr(playwright, "installed_chromium", lambda root=None: chromium)
+    runner = NpxClaudeRunner(npx=True)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
+
+    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    args = json.loads(_claude_call(runner)[-1])["mcpServers"]["playwright"]["args"]
+    assert args[:2] == ["-y", playwright.MCP_PACKAGE]
+    assert "--isolated" in args  # an in-memory profile, nothing kept between runs
+    assert args[args.index("--executable-path") + 1] == str(chromium)
+
+
+# --- REQ-000000254: the agent is told to verify UI/UX in a browser and cover it with Playwright tests ---
+
+
+def _run_task_prompt(paths, conn, tmp_path, monkeypatch, *, npx: bool) -> str:
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = NpxClaudeRunner(npx=npx)
+    AgentFlow(paths=paths, runner=runner, remote_control=False).run_task(
+        conn, "little-meals", repo, None, {"title": "restyle the menu", "branching": {"mode": "new"}},
+    )
+    return _claude_call(runner)[2]
+
+
+def test_prompt_with_the_server_asks_for_a_browser_check_on_phone_and_desktop_and_ui_tests(paths, conn, tmp_path, monkeypatch):
+    prompt = _run_task_prompt(paths, conn, tmp_path, monkeypatch, npx=True)
+
+    assert "browser_navigate" in prompt
+    assert "phone viewport" in prompt and "412×915" in prompt and "desktop" in prompt
+    assert "pytest-playwright tests under `tests/ui/`" in prompt
+    assert 'relative URLs (`page.goto("/")`)' in prompt
+
+
+def test_prompt_without_the_server_still_asks_for_ui_tests_and_says_the_ui_went_unchecked(paths, conn, tmp_path, monkeypatch):
+    prompt = _run_task_prompt(paths, conn, tmp_path, monkeypatch, npx=False)
+
+    assert "browser_navigate" not in prompt
+    assert "pytest-playwright tests under `tests/ui/`" in prompt
+    assert 'relative URLs (`page.goto("/")`)' in prompt
+    assert "Say in the report that the UI was not checked in a browser." in prompt
 
 
 # --- the temporary copy of shared_project_standards -----------------------------

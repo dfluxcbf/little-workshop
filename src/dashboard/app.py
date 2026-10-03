@@ -36,13 +36,14 @@ import os
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from common.job_steps import format_seconds
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.workspace import WORKSPACE_ID, workspace_dir
@@ -82,8 +83,25 @@ _TASK_GROUP_OF_STATUS = {
 }
 
 
-def _task_group(status: str) -> str:
-    return _TASK_GROUP_OF_STATUS.get(status, "attention")
+# A failed or stopped task asks for attention until the user moves it to the done list, or this long
+# after it failed, whichever comes first. It keeps its status, so it can be retried from the done list too.
+TASK_ATTENTION_DAYS = 7
+_DISMISSABLE_STATUSES = ("failed", "stopped")
+
+
+def _task_group(row: dict | str, now: datetime | None = None) -> str:
+    status = row if isinstance(row, str) else row["status"]
+    group = _TASK_GROUP_OF_STATUS.get(status, "attention")
+    if group != "attention" or isinstance(row, str) or status not in _DISMISSABLE_STATUSES:
+        return group
+    if row.get("dismissed_at"):
+        return "done"
+    since = _parse_time(row.get("updated_at") or row.get("created_at"))
+    if since is not None and since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)  # a pillar's own timestamps are UTC
+    if since is not None and (now or datetime.now(timezone.utc)) - since >= timedelta(days=TASK_ATTENTION_DAYS):
+        return "done"
+    return group
 
 
 def _task_rows_without_a_run(jobs: list[dict], runs: list[dict]) -> list[dict]:
@@ -103,7 +121,7 @@ def _task_rows_without_a_run(jobs: list[dict], runs: list[dict]) -> list[dict]:
         rows.append({
             "id": job["id"], "project_id": job.get("project_id"), "status": status, "job_only": True,
             "title": (job.get("params") or {}).get("title") or job["id"][:8], "created_at": job.get("created_at"),
-            "error": job.get("error"),
+            "updated_at": job.get("updated_at"), "error": job.get("error"),
         })
     return rows
 
@@ -323,6 +341,13 @@ def collect_attention(paths: Paths) -> list[dict]:
             "kind": "confirmation", "tag": "Jobs", "job_id": job.get("id"), "project": job.get("project_id") or "", "title": f"{job['type']} awaits confirmation",
             "detail": "", "href": "/jobs?status=pending_confirmation", "since": job.get("created_at"),
         })
+    for job in _try(lambda: client.list_jobs(paths, status="running"), default=[]):
+        if (job.get("progress") or {}).get("attention"):
+            items.append({
+                "kind": "job_question", "tag": "Jobs", "job_id": job.get("id"), "project": job.get("project_id") or "",
+                "title": f"{job['type']} needs your answer", "detail": (job["progress"].get("current") or "")[:240],
+                "href": f"/jobs/{job['id']}", "since": job.get("updated_at"),
+            })
     for incident in _try(lambda: client.list_incidents(paths, status="open"), default=[]):
         items.append({
             "kind": "incident", "tag": "Incidents", "project": incident["project_id"],
@@ -396,6 +421,7 @@ def build_app(paths: Paths) -> FastAPI:
     templates.env.filters["pretty"] = pretty_json
     templates.env.globals["pillar_name"] = pillar_name
     templates.env.globals["job_duration"] = job_duration
+    templates.env.filters["secs"] = format_seconds
     # Cache-buster for every `/static/...?v=` URL: the newest static file, so a change to
     # any of them (review.js too, not only app.css) is fetched anew rather than served
     # from the browser's or the service worker's cache.
@@ -912,7 +938,7 @@ def build_app(paths: Paths) -> FastAPI:
             rows += _try(client.agent_runs, paths, name, default=[])
         rows += _task_rows_without_a_run(_try(client.list_jobs, paths, default=[]), rows)
         rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
-        task_sections = {key: [r for r in rows if _task_group(r["status"]) == key] for key, _ in TASK_GROUPS}
+        task_sections = {key: [r for r in rows if _task_group(r) == key] for key, _ in TASK_GROUPS}
         return _render(request, "tasks.html", runs=rows, task_sections=task_sections, task_groups=TASK_GROUPS, error=error, nav_active="tasks")
 
     @app.get("/tasks/new", response_class=HTMLResponse)
@@ -997,7 +1023,8 @@ def build_app(paths: Paths) -> FastAPI:
         job = _try(client.get_job, paths, run["job_id"]) if run.get("job_id") else None
         description = run.get("description") or str(((job or {}).get("params") or {}).get("description") or "")  # older runs: the Job has it
         can_retry = run.get("status") == "failed" and not _is_recurring_task(project, run.get("title"), job)
-        return _render(request, "task_detail.html", run=run, description=description, can_retry=can_retry, nav_active="tasks")
+        can_dismiss = _task_group(run) == "attention" and run.get("status") in _DISMISSABLE_STATUSES
+        return _render(request, "task_detail.html", run=run, description=description, can_retry=can_retry, can_dismiss=can_dismiss, nav_active="tasks")
 
     def _retryable_run(project: str, run_id: str):
         run = _try(client.agent_run, paths, project, run_id)
@@ -1049,13 +1076,15 @@ def build_app(paths: Paths) -> FastAPI:
 
     @app.post("/tasks/{project}/{run_id}/{action}")
     def task_settle(project: str, run_id: str, action: str):
-        if action not in ("finish", "skip"):
+        if action not in ("finish", "skip", "dismiss"):
             return _back("/tasks", "Unknown action.")
         result = _try(lambda: client.create_job(
             paths, type=f"agent.{action}_task", target_pillar="agent", project_id=project, params={"run_id": run_id},
             queue_key=project, depends_on=[], created_by="dashboard",
         ))
         ok = result is not None and result.get("status") == "succeeded"
+        if action == "dismiss":
+            return _back("/tasks", "Moved to the done list." if ok else f"Could not move it: {(result or {}).get('error', 'orchestration unreachable')}")
         return _back(f"/tasks/{project}/{run_id}", f"Task {action}ed." if ok else f"Could not {action}: {(result or {}).get('error', 'orchestration unreachable')}")
 
     # ---- Pillars: the system's own components ---------------------------
@@ -1221,11 +1250,38 @@ def build_app(paths: Paths) -> FastAPI:
         limit = max(JOBS_PAGE_SIZE, min(limit, 1000))
         prunable = _try(lambda: client.job_cleanup_preview(paths, [hours for hours, _ in JOB_CLEANUP_AGES]), default={}) if everything else {}
         cleanup_options = [{"hours": hours, "label": label, "count": prunable.get(str(hours), 0)} for hours, label in JOB_CLEANUP_AGES]
+        shown = matching[:limit]
+        job_steps = _try(lambda: client.jobs_steps(paths, [j["id"] for j in shown]), default={}) if shown else {}
         return _render(
-            request, "jobs.html", cleanup_options=cleanup_options, jobs=matching[:limit], total=len(matching), limit=limit, next_limit=limit + JOBS_PAGE_SIZE,
+            request, "jobs.html", job_steps_of=job_steps, cleanup_options=cleanup_options, jobs=shown, total=len(matching), limit=limit, next_limit=limit + JOBS_PAGE_SIZE,
             status=status, q=q or "", all_count=len(everything),
             counts=[(name, JOB_STATUS_LABELS.get(name, name), counts[name]) for name in [*JOB_STATUS_ORDER, *[k for k in counts if k not in JOB_STATUS_ORDER]] if counts[name]],
             active=sum(counts.get(name, 0) for name in JOB_ACTIVE_STATUSES), error=error, nav_active="jobs")
+
+    @app.get("/jobs/{job_id}", response_class=HTMLResponse)
+    def job_detail(request: Request, job_id: str):
+        """One job and its checklist: what it does, where it is, how long each action took and is expected to take,
+        and the question of any action waiting for the user. Refreshes itself while the job is active."""
+        try:
+            job, error = client.get_job(paths, job_id), None
+        except client.PillarUnavailable as exc:
+            job, error = None, str(exc)
+        if job is None and error is None:
+            return templates.TemplateResponse(request, "jobs.html", {
+                "jobs": [], "total": 0, "counts": [], "status": None, "q": "", "all_count": 0, "cleanup_options": [], "active": 0,
+                "next_limit": JOBS_PAGE_SIZE, "error": f"No job {job_id}.", "message": None, "nav_active": "jobs", "attention_count": 0,
+            }, status_code=404)
+        return _render(request, "job_detail.html", job=job, error=error, active=bool(job) and job["status"] in JOB_ACTIVE_STATUSES, nav_active="jobs")
+
+    @app.post("/jobs/{job_id}/steps/{key}/answer")
+    def job_step_answer(job_id: str, key: str, choice: str = Form("")):
+        """The user's answer to an action waiting for them; the job carries on with it."""
+        to = f"/jobs/{job_id}"
+        try:
+            client.answer_step(paths, job_id, key, choice)
+        except client.PillarUnavailable as exc:
+            return _back(to, f"Could not send the answer: {exc}")
+        return _back(to, "Answer sent: the job carries on.")
 
     @app.post("/jobs/cleanup")
     def jobs_cleanup(hours: int | None = Form(None)):

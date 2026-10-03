@@ -199,6 +199,20 @@ repository in a half-finished state.
   `.lvx/config.json`. The pillar's own commits still skip both hooks.
   REQ-000000306.
 
+## Steps and questions (2026-10-03)
+
+The feature/improvement/hotfix/release start and finish jobs, the release-candidate cut and the
+Release job report their actions as Job steps (`common/step_specs/version.py`; keys match
+`step()` calls in `version/commands/` and `release_job.py`; the Release job nests the start and
+finish steps under `start_`/`finish_` prefixes). Two actions may ask the user, when run as a Job:
+uncommitted changes (commit and continue, continue without, stop) and merge or rebase conflicts the
+code cannot settle itself (continue once resolved and staged, or abort and fail the job);
+version-number-only rebase conflicts are still resolved automatically. Run directly, without a user to
+ask, a dirty tree raises and a conflict returns the `--continue`/`--abort` message as before.
+These jobs run on a background thread and answer the dispatch call at once only when they finish within
+`SYNC_GRACE_SECONDS`; otherwise `accepted`, completing through Orchestration's callback.
+
+
 ## Interfacing
 
 - **Calls**: Registry & Portfolio — every job resolves its `project_id`

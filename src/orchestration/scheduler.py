@@ -17,7 +17,7 @@ from contextlib import nullcontext
 from datetime import datetime
 
 from orchestration import db
-from orchestration.dispatch import SocketLookup, dispatch_ready_jobs, expire_stuck_jobs
+from orchestration.dispatch import SocketLookup, dispatch_ready_jobs, expire_attention_steps, expire_stuck_jobs
 from orchestration.models import Job, ScheduledTask, ScheduledTaskState, ScheduleKind
 from orchestration.schedule import next_occurrence_after
 
@@ -210,6 +210,7 @@ class SchedulerThread:
         """The running-Job timeout (dispatch.RUNNING_JOB_TIMEOUT) — at start, then every tick."""
         try:
             expire_stuck_jobs(self._conn, self._socket_lookup, lock=self._lock)
+            expire_attention_steps(self._conn, self._socket_lookup, lock=self._lock)
         except Exception:  # never let the sweep take the tick loop down with it
             logger.exception("expiring stuck jobs failed")
 

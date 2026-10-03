@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 import subprocess
+import functools
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,6 +22,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from common.job_steps import StepReporter, done, reporting, step
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.pillar_socket import resolve_pillar_socket
@@ -143,10 +145,26 @@ def _validate_gate_points_against_target(gate_points: list[GatePoint], target_pi
     return None
 
 
+class _Refused(Exception):
+    """A job step that cannot go on; the route answers it as a failed outcome with this message."""
+
+
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     app = FastAPI(title="little-workshop Policy & Compliance")
     install_incident_reporting(app, paths, pillar="policy")
     lock = threading.Lock()
+
+    def _reported(route):
+        """Run a job route with its steps reported to Orchestration; a `_Refused` raised inside a
+        step fails that step and is answered as the job's failed outcome."""
+        @functools.wraps(route)
+        def wrapper(request: JobRequest) -> dict:
+            try:
+                with reporting(StepReporter(paths, request.job_id)):
+                    return route(request)
+            except _Refused as exc:
+                return {"outcome": "failed", "error": str(exc)}
+        return wrapper
 
     def query_fn(prompt: str) -> str:
         return agent_client.query(paths, prompt)
@@ -187,71 +205,81 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     # -- authoring pipeline: Gates 1-3 + script drafting (never saves) -------
 
     @app.post("/v1/jobs/policy.author")
+    @_reported
     def job_author(request: JobRequest) -> dict:
-        error = _require(request.params, "ears_text", "topic", "target_pillar", "created_by")
-        if error:
-            return {"outcome": "failed", "error": error}
-        scope_level, scope_target, scope_error = _parse_scope(request.params)
-        if scope_error:
-            return {"outcome": "failed", "error": scope_error}
-        target_pillar = request.params["target_pillar"]
-        try:
-            created_by = CreatedBy(request.params["created_by"])
-        except ValueError:
-            return {"outcome": "failed", "error": "invalid 'created_by' (user|framework)"}
+        with step("validate_request") as handle:
+            error = _require(request.params, "ears_text", "topic", "target_pillar", "created_by")
+            if error:
+                raise _Refused(error)
+            scope_level, scope_target, scope_error = _parse_scope(request.params)
+            if scope_error:
+                raise _Refused(scope_error)
+            target_pillar = request.params["target_pillar"]
+            try:
+                created_by = CreatedBy(request.params["created_by"])
+            except ValueError:
+                raise _Refused("invalid 'created_by' (user|framework)")
 
-        if target_pillar == PILLAR_ITSELF and created_by != CreatedBy.FRAMEWORK:
-            return {"outcome": "failed", "error": "a user policy may never target Policy & Compliance itself"}
+            if target_pillar == PILLAR_ITSELF and created_by != CreatedBy.FRAMEWORK:
+                raise _Refused("a user policy may never target Policy & Compliance itself")
+            handle.detail = f"topic {request.params['topic']!r} for {target_pillar}"
 
         exclude_id = request.params.get("policy_id")  # editing: exclude the policy's own prior version
 
-        try:
-            gate1 = gates.gate1_ears_check(query_fn, request.params["ears_text"])
-            gate2 = gates.gate2_enforceability_check(query_fn, gate1.ears_text)
-        except AgentClientError as exc:
-            return {"outcome": "failed", "error": f"authoring pipeline could not reach Agentic Development: {exc}"}
+        with step("check_ears") as handle:
+            try:
+                gate1 = gates.gate1_ears_check(query_fn, request.params["ears_text"])
+            except AgentClientError as exc:
+                raise _Refused(f"authoring pipeline could not reach Agentic Development: {exc}")
+            handle.detail = "refined" if gate1.refined else "already well formed"
 
-        if not gate2.enforceable:
-            return {"outcome": "failed", "error": f"Gate 2 rejected: not mechanically enforceable — {gate2.reason}"}
+        with step("check_enforceable") as handle:
+            try:
+                gate2 = gates.gate2_enforceability_check(query_fn, gate1.ears_text)
+            except AgentClientError as exc:
+                raise _Refused(f"authoring pipeline could not reach Agentic Development: {exc}")
+            if not gate2.enforceable:
+                raise _Refused(f"Gate 2 rejected: not mechanically enforceable — {gate2.reason}")
+            handle.detail = "mechanically enforceable"
 
         topic = request.params["topic"]
-        with lock:
-            structural = db.find_by_scope(conn, topic=topic, scope_level=scope_level, scope_target=scope_target, exclude_id=exclude_id)
-            if structural is not None:
-                return {"outcome": "failed", "error": f"Gate 3a rejected: a policy already exists at this exact scope+topic (id={structural.id})"}
-            ownership = db.find_topic_owner_conflict(conn, topic=topic, target_pillar=target_pillar, exclude_id=exclude_id)
-            if ownership is not None:
-                return {
-                    "outcome": "failed",
-                    "error": f"Gate 3a rejected: topic {topic!r} already targets {ownership.target_pillar!r} (policy id={ownership.id})",
-                }
-            existing = [p for p in db.list_policies(conn) if p.id != exclude_id]
+        with step("check_unique") as handle:
+            with lock:
+                structural = db.find_by_scope(conn, topic=topic, scope_level=scope_level, scope_target=scope_target, exclude_id=exclude_id)
+                if structural is not None:
+                    raise _Refused(f"Gate 3a rejected: a policy already exists at this exact scope+topic (id={structural.id})")
+                ownership = db.find_topic_owner_conflict(conn, topic=topic, target_pillar=target_pillar, exclude_id=exclude_id)
+                if ownership is not None:
+                    raise _Refused(f"Gate 3a rejected: topic {topic!r} already targets {ownership.target_pillar!r} (policy id={ownership.id})")
+                existing = [p for p in db.list_policies(conn) if p.id != exclude_id]
+            handle.detail = f"{len(existing)} existing policies compared"
 
-        try:
-            gate3b = gates.gate3b_conflict_check(query_fn, gate1.ears_text, existing)
-        except AgentClientError as exc:
-            return {"outcome": "failed", "error": f"authoring pipeline could not reach Agentic Development: {exc}"}
-        if gate3b.conflicts:
-            return {
-                "outcome": "failed",
-                "error": f"Gate 3b rejected: conflicts with existing topic {gate3b.conflicting_topic!r} — {gate3b.detail}",
-            }
+        with step("check_conflicts") as handle:
+            try:
+                gate3b = gates.gate3b_conflict_check(query_fn, gate1.ears_text, existing)
+            except AgentClientError as exc:
+                raise _Refused(f"authoring pipeline could not reach Agentic Development: {exc}")
+            if gate3b.conflicts:
+                raise _Refused(f"Gate 3b rejected: conflicts with existing topic {gate3b.conflicting_topic!r} — {gate3b.detail}")
+            handle.detail = "no conflicts"
 
-        gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
-        if gate_points_error:
-            return {"outcome": "failed", "error": gate_points_error}
-        gate_points_target_error = _validate_gate_points_against_target(gate_points, target_pillar)
-        if gate_points_target_error:
-            return {"outcome": "failed", "error": gate_points_target_error}
+        with step("generate_script") as handle:
+            gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
+            if gate_points_error:
+                raise _Refused(gate_points_error)
+            gate_points_target_error = _validate_gate_points_against_target(gate_points, target_pillar)
+            if gate_points_target_error:
+                raise _Refused(gate_points_target_error)
 
-        project_bound = target_pillar != PILLAR_ITSELF
-        try:
-            test_script = gates.generate_test_script(
-                query_fn, gate1.ears_text, project_bound=project_bound,
-                judges_commits=GatePoint.COMMIT in gate_points,
-            )
-        except AgentClientError as exc:
-            return {"outcome": "failed", "error": f"authoring pipeline could not reach Agentic Development: {exc}"}
+            project_bound = target_pillar != PILLAR_ITSELF
+            try:
+                test_script = gates.generate_test_script(
+                    query_fn, gate1.ears_text, project_bound=project_bound,
+                    judges_commits=GatePoint.COMMIT in gate_points,
+                )
+            except AgentClientError as exc:
+                raise _Refused(f"authoring pipeline could not reach Agentic Development: {exc}")
+            handle.detail = f"{len(test_script.splitlines())} line check script"
 
         result = {
             "ears_text": gate1.ears_text, "ears_refined": gate1.refined, "test_script": test_script,
@@ -260,16 +288,20 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             "gate_points": [g.value for g in gate_points],
         }
         if request.params.get("save_draft"):
-            # Kept for a human to review and approve in the Dashboard; still nothing enforced.
-            draft, _ = _draft_from_params({**result, "source": request.params.get("source", "")})
-            with lock:
-                existing_draft = db.find_open_draft_by_topic(conn, topic)
-                if existing_draft is not None:
-                    draft.id = existing_draft.id
-                    db.replace_draft_content(conn, draft)
-                else:
-                    db.insert_draft(conn, draft)
-            result["draft_id"] = draft.id
+            with step("save_draft") as handle:
+                # Kept for a human to review and approve in the Dashboard; still nothing enforced.
+                draft, _ = _draft_from_params({**result, "source": request.params.get("source", "")})
+                with lock:
+                    existing_draft = db.find_open_draft_by_topic(conn, topic)
+                    if existing_draft is not None:
+                        draft.id = existing_draft.id
+                        db.replace_draft_content(conn, draft)
+                    else:
+                        db.insert_draft(conn, draft)
+                result["draft_id"] = draft.id
+                handle.detail = f"draft {draft.id}"
+        else:
+            done("save_draft", "no draft requested")
         return {"outcome": "succeeded", "result": result}
 
     # -- Gate 4: the only path that ever saves a policy row -----------------
@@ -348,13 +380,21 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         return {"outcome": "succeeded", "result": policy.model_dump(mode="json")}
 
     @app.post("/v1/jobs/policy.activate")
+    @_reported
     def job_activate(request: JobRequest) -> dict:
-        error = _require(request.params, "ears_text", "test_script", "topic", "target_pillar", "created_by")
-        if error:
-            return {"outcome": "failed", "error": error}
-        if not request.params.get("approved"):
-            return {"outcome": "failed", "error": "Gate 4 requires explicit human approval ('approved': true) — nothing is saved otherwise"}
-        return _save_policy(request.params)
+        with step("check_approval") as handle:
+            error = _require(request.params, "ears_text", "test_script", "topic", "target_pillar", "created_by")
+            if error:
+                raise _Refused(error)
+            if not request.params.get("approved"):
+                raise _Refused("Gate 4 requires explicit human approval ('approved': true) — nothing is saved otherwise")
+            handle.detail = "approved"
+        with step("save_policy") as handle:
+            outcome = _save_policy(request.params)
+            if outcome["outcome"] != "succeeded":
+                raise _Refused(outcome["error"])
+            handle.detail = f"policy {outcome['result']['id']}"
+        return outcome
 
     @app.post("/v1/jobs/policy.remove")
     def job_remove(request: JobRequest) -> dict:
@@ -393,34 +433,37 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         ), None
 
     @app.post("/v1/jobs/policy.draft_import")
+    @_reported
     def job_draft_import(request: JobRequest) -> dict:
         """Bring drafts (Gates 1-3 output, e.g. `docs/pending_policy_drafts/*.json`) into
         the app for review. Idempotent: a topic that already has a pending draft is
         refreshed in place; a topic that already has a real policy is skipped."""
-        raw = request.params.get("drafts")
-        if not isinstance(raw, list) or not raw:
-            return {"outcome": "failed", "error": "'drafts' must be a non-empty list"}
         created: list[str] = []
         updated: list[str] = []
         skipped: list[dict] = []
-        for entry in raw:
-            if not isinstance(entry, dict):
-                return {"outcome": "failed", "error": f"invalid draft entry: {entry!r}"}
-            draft, error = _draft_from_params(entry)
-            if error:
-                return {"outcome": "failed", "error": f"{entry.get('topic', '?')}: {error}"}
-            with lock:
-                if any(p.topic == draft.topic for p in db.list_policies(conn)):
-                    skipped.append({"topic": draft.topic, "reason": "a policy already exists for this topic"})
-                    continue
-                open_draft = db.find_open_draft_by_topic(conn, draft.topic)
-                if open_draft is not None:
-                    draft.id = open_draft.id
-                    db.replace_draft_content(conn, draft)
-                    updated.append(draft.topic)
-                else:
-                    db.insert_draft(conn, draft)
-                    created.append(draft.topic)
+        with step("import_drafts") as handle:
+            raw = request.params.get("drafts")
+            if not isinstance(raw, list) or not raw:
+                raise _Refused("'drafts' must be a non-empty list")
+            for entry in raw:
+                if not isinstance(entry, dict):
+                    raise _Refused(f"invalid draft entry: {entry!r}")
+                draft, error = _draft_from_params(entry)
+                if error:
+                    raise _Refused(f"{entry.get('topic', '?')}: {error}")
+                with lock:
+                    if any(p.topic == draft.topic for p in db.list_policies(conn)):
+                        skipped.append({"topic": draft.topic, "reason": "a policy already exists for this topic"})
+                        continue
+                    open_draft = db.find_open_draft_by_topic(conn, draft.topic)
+                    if open_draft is not None:
+                        draft.id = open_draft.id
+                        db.replace_draft_content(conn, draft)
+                        updated.append(draft.topic)
+                    else:
+                        db.insert_draft(conn, draft)
+                        created.append(draft.topic)
+            handle.detail = f"{len(created)} created, {len(updated)} refreshed, {len(skipped)} skipped"
         return {"outcome": "succeeded", "result": {"created": created, "updated": updated, "skipped": skipped}}
 
     @app.post("/v1/jobs/policy.approve_draft")
@@ -631,63 +674,78 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             pass
 
     @app.post("/v1/jobs/policy.check_project")
+    @_reported
     def job_check_project(request: JobRequest) -> dict:
-        error = _require(request.params, "policy_id") or (None if request.project_id else "missing project_id")
-        if error:
-            return {"outcome": "failed", "error": error}
-        policy_id = request.params["policy_id"]
-        project_id = request.project_id
-        force = bool(request.params.get("force"))
-        with lock:
-            policy = db.get_policy(conn, policy_id)
-        if policy is None:
-            return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
-
-        current_state = _current_check_state(policy, project_id)
-        if current_state and not force:
+        with step("find_policy") as handle:
+            error = _require(request.params, "policy_id") or (None if request.project_id else "missing project_id")
+            if error:
+                raise _Refused(error)
+            policy_id = request.params["policy_id"]
+            project_id = request.project_id
+            force = bool(request.params.get("force"))
             with lock:
-                previous = db.latest_check_result(conn, policy_id=policy_id, project_id=project_id)
-            if previous is not None and previous.checked_state == current_state:
-                # Nothing has changed since the last verdict (same HEAD
-                # commit, same policy edit) — reuse it instead of paying for
-                # another Docker sandbox run. Recorded as a fresh row (its own
-                # id/checked_at/job_id) so history and job linkage stay
-                # accurate, but the sandbox itself never runs. Cheap and
-                # synchronous — no thread needed, nothing here can block.
-                result = PolicyCheckResult(
-                    id=db.new_id(), policy_id=policy_id, project_id=project_id,
-                    outcome=previous.outcome, detail=previous.detail, job_id=request.job_id,
-                    checked_state=current_state,
-                )
-                with lock:
-                    db.insert_check_result(conn, result)
-                return {"outcome": "succeeded", "result": result.model_dump(mode="json"), "skipped": "unchanged"}
+                policy = db.get_policy(conn, policy_id)
+            if policy is None:
+                raise _Refused(f"policy {policy_id!r} not found")
+            handle.detail = f"{policy.topic} on {project_id}"
 
-        try:
-            mounts = _mounts_for_policy(policy, project_id)
-        except ProjectResolutionError as exc:
-            return {"outcome": "failed", "error": str(exc)}
+        with step("check_changes") as handle:
+            current_state = _current_check_state(policy, project_id)
+            reused = None
+            if current_state and not force:
+                with lock:
+                    previous = db.latest_check_result(conn, policy_id=policy_id, project_id=project_id)
+                if previous is not None and previous.checked_state == current_state:
+                    # Nothing has changed since the last verdict (same HEAD
+                    # commit, same policy edit) — reuse it instead of paying for
+                    # another Docker sandbox run. Recorded as a fresh row (its own
+                    # id/checked_at/job_id) so history and job linkage stay
+                    # accurate, but the sandbox itself never runs. Cheap and
+                    # synchronous — no thread needed, nothing here can block.
+                    reused = PolicyCheckResult(
+                        id=db.new_id(), policy_id=policy_id, project_id=project_id,
+                        outcome=previous.outcome, detail=previous.detail, job_id=request.job_id,
+                        checked_state=current_state,
+                    )
+                    with lock:
+                        db.insert_check_result(conn, reused)
+            handle.detail = "unchanged since the last check: verdict reused" if reused else "changed (or forced): the check must run"
+        if reused is not None:
+            # The sandbox step never runs; the rest of the checklist is not needed this time.
+            return {"outcome": "succeeded", "result": reused.model_dump(mode="json"), "skipped": "unchanged"}
+
+        with step("prepare_sandbox") as handle:
+            try:
+                mounts = _mounts_for_policy(policy, project_id)
+            except ProjectResolutionError as exc:
+                raise _Refused(str(exc))
+            handle.detail = f"{len(mounts)} mount(s)"
 
         def worker() -> None:
-            try:
-                sandbox_result = sandbox.run_policy_check(policy.test_script, mounts)
-            except SandboxUnavailable as exc:
-                # No verdict at all — a framework-level fault, never
-                # pending_confirmation: nothing was determined to be a
-                # violation, only that the check itself is broken.
-                _complete_orchestration_job(
-                    request.job_id, succeeded=False, result=None,
-                    error=f"policy check did not complete: {exc}",
-                )
-                return
+            with reporting(StepReporter(paths, request.job_id)):
+                try:
+                    with step("run_check") as handle:
+                        sandbox_result = sandbox.run_policy_check(policy.test_script, mounts)
+                        handle.detail = sandbox_result.outcome.value if hasattr(sandbox_result.outcome, "value") else str(sandbox_result.outcome)
+                except SandboxUnavailable as exc:
+                    # No verdict at all — a framework-level fault, never
+                    # pending_confirmation: nothing was determined to be a
+                    # violation, only that the check itself is broken.
+                    _complete_orchestration_job(
+                        request.job_id, succeeded=False, result=None,
+                        error=f"policy check did not complete: {exc}",
+                    )
+                    return
 
-            result = PolicyCheckResult(
-                id=db.new_id(), policy_id=policy_id, project_id=project_id,
-                outcome=sandbox_result.outcome, detail=sandbox_result.detail, job_id=request.job_id,
-                checked_state=current_state,
-            )
-            with lock:
-                db.insert_check_result(conn, result)
+                with step("record_result") as handle:
+                    result = PolicyCheckResult(
+                        id=db.new_id(), policy_id=policy_id, project_id=project_id,
+                        outcome=sandbox_result.outcome, detail=sandbox_result.detail, job_id=request.job_id,
+                        checked_state=current_state,
+                    )
+                    with lock:
+                        db.insert_check_result(conn, result)
+                    handle.detail = f"result {result.id}"
             # Always "succeeded" at the Job level — a determined pass/fail/
             # not_applicable verdict is success for the check itself; only an
             # unreachable dependency or the sandbox's own 30-minute ceiling is
@@ -698,32 +756,36 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         return {"outcome": "accepted", "result": {"dispatched": True}}
 
     @app.post("/v1/jobs/policy.check_all")
+    @_reported
     def job_check_all(request: JobRequest) -> dict:
-        policy_id = request.params.get("policy_id")
-        if not policy_id:
-            return {"outcome": "failed", "error": "missing 'policy_id'"}
-        with lock:
-            policy = db.get_policy(conn, policy_id)
-        if policy is None:
-            return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
-
-        project_ids = [sel.project_id for sel in policy.projects]
+        with step("find_policy") as handle:
+            policy_id = request.params.get("policy_id")
+            if not policy_id:
+                raise _Refused("missing 'policy_id'")
+            with lock:
+                policy = db.get_policy(conn, policy_id)
+            if policy is None:
+                raise _Refused(f"policy {policy_id!r} not found")
+            project_ids = [sel.project_id for sel in policy.projects]
+            handle.detail = f"{policy.topic}: {len(project_ids)} project(s)"
 
         dispatched = []
-        socket_path = resolve_pillar_socket(paths, "orchestration", timeout=5.0)
-        if socket_path is not None:
-            for project_id in project_ids:
-                try:
-                    with client_for_socket(socket_path, timeout=10.0) as client:
-                        response = client.post("/v1/jobs", json={
-                            "type": "policy.check_project", "target_pillar": PILLAR_ITSELF, "project_id": project_id,
-                            "params": {"policy_id": policy_id}, "queue_key": None, "depends_on": [],
-                            "created_by": "policy.check_all",
-                        })
-                    if response.status_code == 200:
-                        dispatched.append(response.json()["id"])
-                except Exception:  # noqa: BLE001 — best-effort fan-out, never let one bad socket abort the rest
-                    continue
+        with step("dispatch_checks") as handle:
+            socket_path = resolve_pillar_socket(paths, "orchestration", timeout=5.0)
+            if socket_path is not None:
+                for project_id in project_ids:
+                    try:
+                        with client_for_socket(socket_path, timeout=10.0) as client:
+                            response = client.post("/v1/jobs", json={
+                                "type": "policy.check_project", "target_pillar": PILLAR_ITSELF, "project_id": project_id,
+                                "params": {"policy_id": policy_id}, "queue_key": None, "depends_on": [],
+                                "created_by": "policy.check_all",
+                            })
+                        if response.status_code == 200:
+                            dispatched.append(response.json()["id"])
+                    except Exception:  # noqa: BLE001 — best-effort fan-out, never let one bad socket abort the rest
+                        continue
+            handle.detail = f"{len(dispatched)} of {len(project_ids)} check job(s) started"
         return {"outcome": "succeeded", "result": {"dispatched_job_ids": dispatched, "project_ids": project_ids}}
 
     # -- reads ----------------------------------------------------------------

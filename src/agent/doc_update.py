@@ -45,6 +45,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
+from common.job_steps import FAILED, RUNNING, SUCCEEDED, current_reporter, step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.systemd import user_path_env
@@ -62,6 +63,13 @@ ACTIONS = ("edited", "removed", "unchanged")
 
 class DocUpdateError(RuntimeError):
     pass
+
+
+def _report(key: str, state: str, detail: str | None = None) -> None:
+    """Report a step by hand, for the ones that begin and end in different calls (the wait for Claude)."""
+    reporter = current_reporter()
+    if reporter is not None:
+        reporter.report(key, state, detail=detail)
 
 
 def unit_name(job_id: str) -> str:
@@ -165,16 +173,18 @@ class DocUpdateFlow:
     def claim(self, conn: sqlite3.Connection, job_id: str, project_id: str, project_dir: Path, branch: str, remote_control: bool) -> list[dict]:
         """Synchronous part of starting: refuse a second job for the same
         project and branch, and snapshot the comments. Raises DocUpdateError."""
-        if not branch:
-            raise DocUpdateError("missing params.branch")
-        active = [u for u in self._db(conn, db.list_doc_updates, project_id=project_id, active_only=True) if u["branch"] == branch]
-        if active:
-            raise DocUpdateError(f"an update-doc job is already running for {project_id} on {branch}")
-        comments = review_store.claim_for_job(project_dir, branch, job_id)
-        if not comments:
-            raise DocUpdateError(f"no open comments to address on {branch}")
-        self._db(conn, db.create_doc_update, job_id, project_id=project_id, branch=branch,
-                 remote_control=remote_control, comment_ids=[c["id"] for c in comments])
+        with step("claim_comments") as handle:
+            if not branch:
+                raise DocUpdateError("missing params.branch")
+            active = [u for u in self._db(conn, db.list_doc_updates, project_id=project_id, active_only=True) if u["branch"] == branch]
+            if active:
+                raise DocUpdateError(f"an update-doc job is already running for {project_id} on {branch}")
+            comments = review_store.claim_for_job(project_dir, branch, job_id)
+            if not comments:
+                raise DocUpdateError(f"no open comments to address on {branch}")
+            self._db(conn, db.create_doc_update, job_id, project_id=project_id, branch=branch,
+                     remote_control=remote_control, comment_ids=[c["id"] for c in comments])
+            handle.detail = f"{len(comments)} comment(s) on {branch}"
         return comments
 
     def launch(self, conn: sqlite3.Connection, job_id: str, project_id: str, project_dir: Path, branch: str, comments: list[dict], remote_control: bool) -> None:
@@ -186,34 +196,37 @@ class DocUpdateFlow:
         except RuntimeError:
             pass  # offline: work from what is here
         try:
-            ref = f"refs/heads/{branch}" if gitutil.branch_exists(project_dir, f"refs/heads/{branch}") else f"refs/remotes/origin/{branch}"
-            if not gitutil.branch_exists(project_dir, ref):
-                raise DocUpdateError(f"branch {branch!r} does not exist")
-            base_sha = gitutil.run(["git", "rev-parse", ref], project_dir, check=True).stdout.strip()
-            payload = _job_payload(branch, comments, project_dir, base_sha, review_store.certified_sections(project_dir, branch))
-            unit = unit_name(job_id)
-            name = session_name(project_id, branch) if remote_control else None
-            if remote_control:
-                worktree = self._start_remote_session(job_id, project_id, project_dir, base_sha, unit, name, payload)
-                unit += ".scope"
-            else:
-                worktree_id, worktree = provision_worktree(self.paths, project_id, base_sha)
-                (worktree / ".review").mkdir(exist_ok=True)
-                (worktree / JOB_FILE).write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-                setup = f"You are working in a throwaway git worktree of that branch: `{worktree}` (the current directory). It is checked out detached at the branch's latest commit."
-                (worktree / ".review" / "prompt.md").write_text(self._prompt(project_id, branch, payload, setup, JOB_FILE), encoding="utf-8")
-                self._start_headless_session(worktree, unit)
-            with self._db_lock:
-                if db.get_doc_update(conn, job_id)["status"] != db.DOC_UPDATE_STARTING:
-                    stopped = True  # the user stopped the job while it was starting
+            with step("start_session") as handle:
+                ref = f"refs/heads/{branch}" if gitutil.branch_exists(project_dir, f"refs/heads/{branch}") else f"refs/remotes/origin/{branch}"
+                if not gitutil.branch_exists(project_dir, ref):
+                    raise DocUpdateError(f"branch {branch!r} does not exist")
+                base_sha = gitutil.run(["git", "rev-parse", ref], project_dir, check=True).stdout.strip()
+                payload = _job_payload(branch, comments, project_dir, base_sha, review_store.certified_sections(project_dir, branch))
+                unit = unit_name(job_id)
+                name = session_name(project_id, branch) if remote_control else None
+                if remote_control:
+                    worktree = self._start_remote_session(job_id, project_id, project_dir, base_sha, unit, name, payload)
+                    unit += ".scope"
                 else:
-                    stopped = False
-                    db.update_doc_update(conn, job_id, status=db.DOC_UPDATE_RUNNING, unit=unit, session_name=name,
-                                         worktree_id=worktree_id, worktree_path=str(worktree), base_sha=base_sha)
-            if stopped:
-                self._stop_session(unit)
-                self._discard_worktree(project_dir, project_id, worktree_id, worktree)
-                return
+                    worktree_id, worktree = provision_worktree(self.paths, project_id, base_sha)
+                    (worktree / ".review").mkdir(exist_ok=True)
+                    (worktree / JOB_FILE).write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                    setup = f"You are working in a throwaway git worktree of that branch: `{worktree}` (the current directory). It is checked out detached at the branch's latest commit."
+                    (worktree / ".review" / "prompt.md").write_text(self._prompt(project_id, branch, payload, setup, JOB_FILE), encoding="utf-8")
+                    self._start_headless_session(worktree, unit)
+                with self._db_lock:
+                    if db.get_doc_update(conn, job_id)["status"] != db.DOC_UPDATE_STARTING:
+                        stopped = True  # the user stopped the job while it was starting
+                    else:
+                        stopped = False
+                        db.update_doc_update(conn, job_id, status=db.DOC_UPDATE_RUNNING, unit=unit, session_name=name,
+                                             worktree_id=worktree_id, worktree_path=str(worktree), base_sha=base_sha)
+                if stopped:
+                    self._stop_session(unit)
+                    self._discard_worktree(project_dir, project_id, worktree_id, worktree)
+                    handle.detail = "stopped by the user while starting"
+                    return
+                handle.detail = f"session {unit}"
         except (DocUpdateError, WorktreeUnavailable, RuntimeError, OSError) as exc:
             review_store.release_job(project_dir, job_id)
             self._discard_worktree(project_dir, project_id, worktree_id, worktree)
@@ -305,6 +318,7 @@ class DocUpdateFlow:
         return False
 
     def watch(self, conn: sqlite3.Connection, job_id: str, project_dir: Path) -> None:
+        _report("wait_session", RUNNING)
         while not self.check(conn, job_id, project_dir):
             self.sleep(self.poll_seconds)
 
@@ -390,6 +404,8 @@ class DocUpdateFlow:
         if update is None or update["status"] != db.DOC_UPDATE_RUNNING:
             return
         worktree = Path(update["worktree_path"])
+        _report("wait_session", SUCCEEDED, "the session signalled it was done" if signalled else "the session went idle")
+        _report("finalize", RUNNING)
         self._stop_session(update["unit"])
         try:
             result = json.loads((worktree / RESULT_FILE).read_text(encoding="utf-8")) if (worktree / RESULT_FILE).exists() else None
@@ -403,6 +419,7 @@ class DocUpdateFlow:
             review_store.release_job(project_dir, job_id)
             self._discard_worktree(project_dir, update["project_id"], update["worktree_id"], worktree)
             self._db(conn, db.update_doc_update, job_id, status=db.DOC_UPDATE_FAILED, error=str(exc))
+            _report("finalize", FAILED, f"could not commit the changes: {exc}")
             self.on_complete(job_id, False, None, f"could not commit the changes: {exc}")
             return
         done = review_store.release_job(project_dir, job_id, outcomes)
@@ -412,6 +429,7 @@ class DocUpdateFlow:
             "done": done, "still_open": len(update["comment_ids"]) - done, **published,
         }
         self._db(conn, db.update_doc_update, job_id, status=db.DOC_UPDATE_DONE, result=summary)
+        _report("finalize", SUCCEEDED, f"{done} of {len(update['comment_ids'])} comment(s) done")
         self.on_complete(job_id, True, summary, None)
 
     def stop(self, conn: sqlite3.Connection, job_id: str, project_dir: Path | None) -> bool:
