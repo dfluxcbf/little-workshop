@@ -12,3 +12,4 @@ MODULE.bazel.lock
 htmlcov/
 .claude/settings.local.json
 .claude/worktrees/
+.review/
