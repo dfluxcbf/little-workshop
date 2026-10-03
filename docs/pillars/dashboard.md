@@ -74,14 +74,14 @@ are the current state of every pillar.
   are not built.
 - **Workbench additions (2026-09-21, Control merged into Dashboard 2026-09-22,
   toolbar/task/job/policy workflow overhauled 2026-09-23)**:
-  - **Navigation** is grouped. The bottom toolbar has Dashboard (standalone), Actions, Policies and
-    System; a group button reveals its pages (Actions: Task list, New task, Jobs, New job, Docs;
-    Policies: Policies, New policy; System: Pillars, Incidents, Settings) with Back returning to
-    the main row, and the group of the current page stays open. On a wide screen the top bar holds
-    the four groups and a sub-navigation row lists the active group's pages. Report and New project
-    are reachable only as contextual links (Dashboard's own "New project" link beside "Arrange
-    cards"; each project card's "Report →" link in its Work section) — not toolbar entries, since
-    both are reached from a project's own context rather than picked cold.
+  - **Navigation** is grouped (regrouped 2026-10-03). The bottom toolbar has Dashboard (standalone),
+    Documentation, Actions, Policies and System; a group button reveals its pages (Documentation:
+    Review, Report; Actions: Task list, New task, Jobs, New job; Policies: Policies, New policy;
+    System: Pillars, Incidents, Statistics, Settings) with Back returning to the main row, and the
+    group of the current page stays open. On a wide screen the top bar holds the groups and a
+    sub-navigation row lists the active group's pages. Review is the documentation review (`/docs`).
+    New project is reachable only as a contextual link (Dashboard's own "New project" link beside
+    "Arrange cards"), since it is reached from the Dashboard rather than picked cold.
   - **Arrange cards** (`/?arrange=1`, `POST /order/dashboard/{project}/{up|down}`): the Dashboard
     keeps its own order of project cards; a project the user has never placed goes after the
     placed ones.
@@ -388,10 +388,14 @@ card in the attention list.
 
 ## Data model
 
-No database. The one thing the Dashboard stores is the user's own display preference — the order of
-the project cards on the Dashboard — in `<state>/dashboard/prefs.json`
-(`dashboard/prefs.py`). A missing or damaged file means the default order. Everything else on a
-page is a live read of the pillar that owns it.
+No domain data. The Dashboard stores two things of its own, both under `<state>/dashboard/`:
+
+- `prefs.json` (`dashboard/prefs.py`): the user's display preference, the order of the project
+  cards on the Dashboard. A missing or damaged file means the default order.
+- `statistics.db` (`dashboard/statistics.py`, SQLite): the per-day counts behind the Statistics
+  page, described under "Statistics" below.
+
+Everything else on a page is a live read of the pillar that owns it.
 
 ## Left open
 
@@ -458,3 +462,57 @@ A job's card (and page) also says what it is about (2026-10-03): a policy job sh
 the finish has checked it, or the branch a start creates) and the version number, as a transition
 (`0.2.32 → 0.2.33`) when it changes, taken from the version steps' details. The state word of a
 dependency is only a tooltip: its colour says it.
+
+## Statistics (2026-10-03)
+
+`/statistics` (System → Statistics) plots little-workshop's operations per day. The counts are kept
+apart from the pillars, in `<state>/dashboard/statistics.db`, because Orchestration's job cleanup
+deletes old Jobs and the plots must outlive them.
+
+- **Updating** is automatic, never asked for: on every visit of the page, every ten minutes while
+  the Dashboard runs (a background thread started with the app, `STATISTICS_UPDATE_SECONDS`), and
+  before old jobs are deleted. Each time the Dashboard reads every Job (Orchestration), policy
+  check result and policy (Policy & Compliance) and incident (Agentic Development) the pillars hold, and adds each one it
+  has not counted to its day. A `seen` table remembers what was counted, so updating twice counts
+  nothing twice; an id the pillar no longer holds is forgotten, its counts stay. A Job is counted
+  as triggered when first seen and as succeeded or failed once it has ended (a cancelled Job is
+  only triggered). An unreachable pillar's numbers are left as they were and the page says so.
+  Deleting old jobs on the Jobs page (`POST /jobs/cleanup`) updates the statistics first, so a
+  job is counted before it goes and the deletion never changes a plot. The file is never rebuilt
+  in normal use; only a change of how something is classified (in `dashboard/statistics.py`)
+  leaves older days under the old classification.
+- **Days, projects and pillars**: a day is the local date of the Job's creation, the check or the
+  incident. Every row carries two separate columns the page filters by: `project`, the project it
+  is about, and `pillar`, the pillar that did it (a Job's target pillar; Policy & Compliance for a
+  policy check; the pillar an incident was raised in, `unknown` when that is not a pillar). Only a
+  project registered in Registry & Portfolio when the row is counted is a project; anything else a
+  Job names there (a pillar on a pillar redeploy, the workspace session, a mistyped id) and no
+  project at all are stored as an empty `project`. While the registry cannot be read nothing is
+  counted, and the next update catches up.
+- **What is stored**, one row per day, project and pillar:
+  - `job_days` (per job type): `triggered`, `succeeded`, `failed`, and
+    `duration_seconds` with `duration_count` for the finished runs (creation to end, waiting in
+    the queue included). All three counts are kept so a divergence can be looked into.
+  - `policy_days` (per policy topic): `passed`, `failed`, `not_applicable`.
+  - `incident_days`: `incidents`.
+  - `test_days`: `succeeded`, `failed` test executions. An execution is one
+    `requirements.run_tests` or `requirements.import_junit` Job; it failed when the Job failed or
+    any of its tests has the verdict failed or error.
+  A store written before project and pillar were separate columns (2026-10-03) is dropped when
+  first opened and recounted from what the pillars hold.
+- **The page** embeds the rows and draws everything in the browser (`static/statistics.js`, inline
+  SVG, no library):
+  - One **project or pillar** choice for all plots, at the top, as two separate lists of which
+    one applies at a time: a project shows everything about that project whichever pillar did it,
+    a pillar shows everything that pillar did whichever project it was for. Picking in one list
+    sets the other back to all.
+  - One **time period** for all plots, picked as two days on a month calendar (or Last 7 days, Last
+    30 days, Everything). A calendar day is brighter the more jobs it had, relative to the other
+    days of the month shown.
+  - **Jobs triggered** (bars), **Job success ratio** (succeeded / (succeeded + failed)), **Policy
+    fail ratio** (failed / (passed + failed); not applicable checks are left out), **Job duration**
+    (average per day), **Incidents** (bars) and **Test success ratio**. The job and policy plots
+    have chips to select or deselect jobs or policies. A plot shows the sum over what is selected.
+  - Hovering or tapping a day shows its exact numbers (for a ratio, both counts); a day with
+    nothing to measure is a gap in a line, not a zero. Each plot has a table view.
+

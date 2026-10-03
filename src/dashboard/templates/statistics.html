@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Statistics — little-workshop{% endblock %}
+{% macro plot(id, title, about) -%}
+<section class="card stats-plot" data-plot="{{ id }}">
+  <h2>{{ title }}</h2>
+  <p class="muted">{{ about }}</p>
+  <div class="stats-controls"></div>
+  <div class="stats-chart"></div>
+  <details class="stats-table">
+    <summary>Table</summary>
+    <table><thead><tr><th>Day</th><th>Value</th><th>Detail</th></tr></thead><tbody></tbody></table>
+  </details>
+</section>
+{%- endmacro %}
+{% block content %}
+<p class="muted stats-head">Counted automatically: on every visit of this page, every ten minutes, and before old jobs are deleted.
+  Counts are per day and kept by the Dashboard, so they stay after the jobs are gone.</p>
+
+<section class="card stats-scope">
+  <h2>Project or pillar</h2>
+  <p class="muted">Applies to every plot. Pick a project to see everything about it, or a pillar to see everything that pillar did; picking one sets the other back to all.</p>
+  <div class="stats-scope-selects">
+    <label>Project <select id="stats-project"></select></label>
+    <label>Pillar <select id="stats-pillar"></select></label>
+  </div>
+</section>
+
+<section class="card stats-period">
+  <h2>Time period</h2>
+  <p class="muted">Pick the first and the last day. A day is brighter the more jobs it had, compared with the other days of the month shown.</p>
+  <div id="stats-calendar" class="stats-cal"></div>
+  <p id="stats-period-label" class="stats-period-label"></p>
+  <div class="stats-quick">
+    <button type="button" data-period="7">Last 7 days</button>
+    <button type="button" data-period="30">Last 30 days</button>
+    <button type="button" data-period="all">Everything</button>
+  </div>
+</section>
+
+{{ plot('job-count', 'Jobs triggered', 'How many times the chosen jobs were triggered each day.') }}
+{{ plot('job-success', 'Job success ratio', 'Of the chosen jobs that succeeded or failed each day, the share that succeeded.') }}
+{{ plot('policy-fail', 'Policy fail ratio', 'Of the chosen policies\' checks that passed or failed each day, the share that failed.') }}
+{{ plot('job-duration', 'Job duration', 'Average time from a job\'s creation to its end each day, waiting in the queue included.') }}
+{{ plot('incidents', 'Incidents', 'Incidents raised each day.') }}
+{{ plot('test-success', 'Test success ratio', 'Of the test executions each day (one job running many tests), the share in which no test failed.') }}
+
+<script type="application/json" id="stats-data">{{ stats | tojson }}</script>
+<script type="application/json" id="stats-pillars">{{ pillar_names | tojson }}</script>
+<script src="/static/statistics.js?v={{ static_v }}"></script>
+{% endblock %}

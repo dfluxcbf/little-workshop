@@ -1,9 +1,9 @@
 """The user's own display preferences (the order of project cards on each page).
 
-Kept in one small JSON file under the workshop's state directory. It is the
-only thing the Dashboard stores: everything else on a page is read live from
-the pillar that owns it, and a missing or unreadable file just means the
-default order."""
+Kept in one small JSON file under the workshop's state directory. Besides the
+per-day counts of `dashboard.statistics` it is the only thing the Dashboard
+stores: everything else on a page is read live from the pillar that owns it,
+and a missing or unreadable file just means the default order."""
 
 from __future__ import annotations
 

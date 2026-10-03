@@ -1209,3 +1209,56 @@ a.dep:hover { border-color: var(--dep); }
 .jobcard[open] .job-subject-text { -webkit-line-clamp: unset; }
 .job-subject-k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); }
 .job-subjects { display: grid; gap: 6px; margin-top: 8px; }
+
+/* --- statistics -------------------------------------------------------------------- */
+
+.stats-head { margin: 0 0 12px; }
+.stats-plot h2, .stats-period h2, .stats-scope h2 { margin: 0 0 2px; font-size: 16px; }
+.stats-plot > p, .stats-period > p.muted, .stats-scope > p.muted { margin: 0 0 10px; font-size: 13px; }
+.stats-controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+.stats-items { flex: 1 1 260px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; }
+.stats-items summary { cursor: pointer; color: var(--ink-soft); font-size: 14px; font-weight: 600; }
+.stats-items-bar { display: flex; gap: 8px; margin: 10px 0; }
+.stats-items-bar button, .stats-quick button { padding: 6px 12px; font-size: 13px; }
+.stats-chart { position: relative; min-height: 60px; }
+.stats-chart svg { display: block; touch-action: pan-y; }
+.stats-empty { margin: 18px 0; }
+.stats-grid { stroke: var(--border-soft); stroke-width: 1; }
+.stats-axis { fill: var(--ink-faint); font-size: 11px; font-family: var(--font-sans); }
+.stats-bar { fill: var(--cyan); }
+.stats-line { fill: none; stroke: var(--cyan); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.stats-dot { fill: var(--cyan); stroke: var(--surface); stroke-width: 2; }
+.stats-cursor { stroke: var(--ink-faint); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+.stats-tip {
+  position: absolute; top: 0; z-index: 2; display: flex; flex-direction: column; gap: 2px; max-width: 260px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised);
+  color: var(--ink-soft); font-size: 12px; pointer-events: none; overflow-wrap: anywhere;
+}
+.stats-tip[hidden] { display: none; }
+.stats-tip strong { color: var(--ink); font-size: 15px; }
+.stats-tip-day { color: var(--ink-faint); }
+.stats-table { margin-top: 8px; font-size: 13px; }
+.stats-table summary { cursor: pointer; color: var(--ink-faint); }
+.stats-table table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.stats-table th, .stats-table td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+.stats-table th { color: var(--ink-faint); font-weight: 600; }
+.stats-cal { max-width: 340px; }
+.stats-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.stats-cal-head button { padding: 4px 12px; font-size: 16px; }
+.stats-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.stats-cal-dow { text-align: center; color: var(--ink-faint); font-size: 11px; }
+.stats-cal-day {
+  --heat: 0;
+  aspect-ratio: 1; padding: 0; display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--border-soft); font-size: 13px; font-weight: 600;
+  /* One hue, brighter with more jobs; the number turns dark once the cell is bright. */
+  background: oklch(calc(21% + 57% * var(--heat)) calc(0.02 + 0.13 * var(--heat)) 200);
+  color: oklch(calc(74% - 60% * round(var(--heat), 1)) 0.02 260);
+}
+.stats-cal-day.in-period { border-color: var(--cyan-deep); }
+.stats-cal-day.period-end { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.stats-cal-day.is-today { text-decoration: underline; }
+.stats-period-label { margin: 10px 0 8px; font-weight: 600; }
+.stats-quick { display: flex; flex-wrap: wrap; gap: 8px; }
+.stats-scope-selects { display: flex; flex-wrap: wrap; gap: 10px; }
+.stats-scope-selects label { flex: 1 1 200px; margin: 0; }
+.stats-scope-selects select { margin-top: 6px; }

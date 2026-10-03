@@ -1670,18 +1670,18 @@ def test_bottom_toolbar_groups_related_pages_under_one_button(test_client, monke
     actions_row = re.search(r'data-view="actions">(.*?)</div>', bar, re.S).group(1)
     for href, label in (("/tasks", "Task list"), ("/tasks/new", "New task"), ("/jobs", "Jobs"), ("/jobs/new", "New job")):
         assert f'href="{href}"' in actions_row and f"<span>{label}</span>" in actions_row
+    assert 'href="/docs"' not in actions_row
     assert "/tasks/queue" not in actions_row and "/tasks/schedule" not in actions_row
     assert "/jobs/schedule" not in actions_row and "Schedule job" not in actions_row  # merged into New job
     policies_row = re.search(r'data-view="policies">(.*?)</div>', bar, re.S).group(1)
     for href, label in (("/policies", "Policies"), ("/policies/new", "New policy")):
         assert f'href="{href}"' in policies_row and f"<span>{label}</span>" in policies_row
     system_row = re.search(r'data-view="system">(.*?)</div>', bar, re.S).group(1)
-    for href, label in (("/pillars", "Pillars"), ("/incidents", "Incidents"), ("/settings", "Settings")):
+    for href, label in (("/pillars", "Pillars"), ("/incidents", "Incidents"), ("/statistics", "Statistics"), ("/settings", "Settings")):
         assert f'href="{href}"' in system_row and f"<span>{label}</span>" in system_row
     main_row = re.search(r'data-view="main"(.*?)</div>', bar, re.S).group(1)
     assert 'href="/"' in main_row
-    # Report (requirements and test results, where drafts are approved) is its own one-tap tab
-    assert 'href="/report"' in main_row and bar.count('data-open="report"') == 0
+    assert 'href="/report"' not in main_row and bar.count('data-open="documentation"') == 1
     assert "/projects/new" not in bar
 
 
