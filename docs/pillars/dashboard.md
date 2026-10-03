@@ -365,6 +365,10 @@ refreshes itself while the job is active. Each Jobs-page card shows `done/total 
 current action, flags a question, and links to the page; a running job with a question is also a
 card in the attention list.
 
+While the job is running or queued the page has a Stop job (queued: Cancel job) button, REQ-000000318:
+`POST /jobs/{id}/stop` asks Orchestration to stop it and returns to the page, which shows the reason
+when the job cannot be stopped (a declared-unstoppable type, an unreachable pillar).
+
 
 ## Interfacing
 
