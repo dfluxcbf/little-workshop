@@ -108,7 +108,7 @@ MCP_ASK = (
     "workshop_version_init", "workshop_version_config_add_hook", "workshop_version_config_remove_hook",
     "workshop_deployment_set_manifest", "workshop_deployment_seed_confirmation",
     "workshop_requirements_publish", "workshop_requirements_delete", "workshop_requirements_suite_delete",
-    "workshop_job_stop", "workshop_schedule_add", "workshop_schedule_remove", "workshop_schedule_trigger",
+    "workshop_job_stop", "workshop_job_answer", "workshop_schedule_add", "workshop_schedule_remove", "workshop_schedule_trigger",
     "workshop_schedule_cancel", "workshop_schedule_postpone", "workshop_schedule_queue_set",
 )
 
@@ -138,7 +138,7 @@ MCP_NAMED_PROJECT = (
 
 # No project argument: a read by id or of the whole system, pre-allowed as it stands.
 LWS_READ_ONLY_ANY = (
-    "core status", "project list", "job list", "job status", "job queue show",
+    "core status", "project list", "job list", "job status", "job watch", "job queue show",
     "schedule list", "schedule status", "schedule queue get",
     "policy list", "policy status", "policy catalog list", "policy draft list",
     "requirements status", "requirements suite status", "build run-status", "agent session-list",
@@ -179,7 +179,7 @@ LWS_GATED = (
 
 # Always a prompt, whichever project they name.
 LWS_ASK = (
-    "job stop", "job policy-confirm",
+    "job stop", "job policy-confirm", "job answer",
     "schedule add", "schedule edit", "schedule remove", "schedule trigger", "schedule cancel",
     "schedule postpone", "schedule queue set",
     "project bootstrap", "project connect-github", "project import", "project remove",

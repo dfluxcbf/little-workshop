@@ -2,7 +2,7 @@
 {% block title %}Tasks — little-workshop{% endblock %}
 {% block content %}
 <h1>Tasks</h1>
-<p class="lede">Every task Claude has been given on any project &mdash; queued, running, needing your attention, or done. Start one from <a href="/tasks/new">New task</a>.</p>
+<p class="lede">Every task Claude has been given on any project &mdash; queued, running, needing your attention, or done. A failed task asks for attention until you move it to done, or for a week. Start one from <a href="/tasks/new">New task</a>.</p>
 {% if not runs %}
 <p class="muted">No task has run yet.</p>
 {% else %}
@@ -14,7 +14,7 @@
 {% else %}
 <div class="panel">
 <table>
-  <thead><tr><th>Project</th><th>Task</th><th>Status</th><th>Branch</th><th>Started</th></tr></thead>
+  <thead><tr><th>Project</th><th>Task</th><th>Status</th><th>Branch</th><th>Started</th>{% if key == 'attention' %}<th></th>{% endif %}</tr></thead>
   <tbody>
   {% for r in task_sections[key] %}
   <tr>
@@ -23,6 +23,12 @@
     <td data-label="Status"><span class="pill {{ 'warn' if r.status in ('awaiting_finish', 'waiting') else ('ok' if r.status in ('running', 'finished') else ('fail' if r.status in ('failed', 'stopped') else 'idle')) }}">{{ r.status.replace('_', ' ') }}</span></td>
     <td data-label="Branch">{% if r.branch %}<code>{{ r.branch }}</code>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
     <td data-label="Started">{{ (r.created_at or '')[:16].replace('T', ' ') }}</td>
+    {% if key == 'attention' %}<td class="task-actions">
+      {% if not r.job_only and r.status in ('failed', 'stopped') %}
+      <form class="inline" method="post" action="/tasks/{{ r.project_id }}/{{ r.id }}/dismiss"><button type="submit">Move to done</button></form>
+      {% if r.status == 'failed' %}<a class="btn" href="/tasks/{{ r.project_id }}/{{ r.id }}/retry">Retry</a>{% endif %}
+      {% endif %}
+    </td>{% endif %}
   </tr>
   {% endfor %}
   </tbody>

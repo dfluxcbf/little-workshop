@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from common.job_steps import StepReporter, reporting
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.pillar_socket import resolve_pillar_socket
@@ -115,6 +116,10 @@ def build_app(
         )
     app.state.doc_flow = doc_flow
 
+    def reported(job_id: str):
+        """Report the Job's steps while the code inside runs (a worker thread installs its own)."""
+        return reporting(StepReporter(paths, job_id))
+
     def read(fn, *args, **kwargs):
         """Reads must never queue behind `lock`: `agent.run_task`'s worker
         holds it for the whole of a run (up to an hour), and the Dashboard's
@@ -154,7 +159,7 @@ def build_app(
         run_id = db.new_run_id()
 
         def worker() -> None:
-            with lock:
+            with reported(job_id), lock:
                 result = flow.run_task(conn, project_id, project_dir, repo_url, params, run_id=run_id)
             if result.status == db.FAILED:
                 _complete_orchestration_job(paths, job_id, succeeded=False, result=None, error=result.error)
@@ -221,6 +226,18 @@ def build_app(
                 return {"outcome": "failed", "error": str(exc)}
         return {"outcome": "succeeded", "result": {"summary": summary}}
 
+    @app.post("/v1/jobs/agent.dismiss_task")
+    def job_dismiss_task(request: JobRequest) -> dict:
+        run_id = request.params.get("run_id")
+        if not run_id:
+            return {"outcome": "failed", "error": "missing params.run_id"}
+        with lock:
+            try:
+                summary = flow.dismiss_task(conn, run_id)
+            except AgentFlowError as exc:
+                return {"outcome": "failed", "error": str(exc)}
+        return {"outcome": "succeeded", "result": {"summary": summary}}
+
     @app.post("/v1/jobs/agent.ci_check")
     def job_ci_check(request: JobRequest) -> dict:
         if not request.project_id:
@@ -236,7 +253,7 @@ def build_app(
         job_id = request.job_id
 
         def worker() -> None:
-            with lock:
+            with reported(job_id), lock:
                 try:
                     result = flow.run_ci_check(conn, project_id, repo_url, params)
                 except AgentFlowError as exc:
@@ -278,7 +295,8 @@ def build_app(
         except ProjectResolutionError as exc:
             return {"outcome": "failed", "error": str(exc)}
         try:
-            name = session_flow.start(request.project_id, project_dir)
+            with reported(request.job_id):
+                name = session_flow.start(request.project_id, project_dir)
         except SessionError as exc:
             return {"outcome": "failed", "error": str(exc)}
         return {"outcome": "succeeded", "result": {"session_name": name}}
@@ -401,14 +419,16 @@ def build_app(
         branch = str(request.params.get("branch") or "")
         remote_control = bool(request.params.get("remote_control"))
         try:
-            comments = doc_flow.claim(conn, request.job_id, request.project_id, project_dir, branch, remote_control)
+            with reported(request.job_id):
+                comments = doc_flow.claim(conn, request.job_id, request.project_id, project_dir, branch, remote_control)
         except DocUpdateError as exc:
             return {"outcome": "failed", "error": str(exc)}
-        threading.Thread(
-            target=doc_flow.launch,
-            args=(conn, request.job_id, request.project_id, project_dir, branch, comments, remote_control),
-            daemon=True,
-        ).start()
+
+        def launch() -> None:
+            with reported(request.job_id):
+                doc_flow.launch(conn, request.job_id, request.project_id, project_dir, branch, comments, remote_control)
+
+        threading.Thread(target=launch, daemon=True).start()
         return {"outcome": "accepted", "result": {"dispatched": True, "comments": len(comments)}}
 
     @app.post("/v1/jobs/{job_id}/stop")

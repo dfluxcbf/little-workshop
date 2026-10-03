@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     description TEXT NOT NULL DEFAULT '',
     source_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    dismissed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS remote_control_sessions (
@@ -116,6 +117,8 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     if "description" not in {row["name"] for row in conn.execute("PRAGMA table_info(agent_runs)")}:
         conn.execute("ALTER TABLE agent_runs ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+    if "dismissed_at" not in {row["name"] for row in conn.execute("PRAGMA table_info(agent_runs)")}:
+        conn.execute("ALTER TABLE agent_runs ADD COLUMN dismissed_at TEXT")
     conn.commit()
     return conn
 

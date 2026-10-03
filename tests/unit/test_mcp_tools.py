@@ -568,6 +568,24 @@ def test_job_stop_calls_client_stop_job(paths, monkeypatch):
     assert result["stopped"] is True
 
 
+# --- REQ-000000311: An action that needs the user asks, and times out after 12 hours ---
+
+def test_job_answer_sends_the_users_choice_for_the_step(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "answer_step", result={"state": "running"})
+    result = tools_mod.TOOLS_BY_NAME["workshop_job_answer"].handler(paths, {"job_id": "j1", "step": "check_clean_tree", "choice": "commit"})
+    assert calls[0] == ((paths, "j1", "check_clean_tree", "commit"), {})
+    assert result == {"state": "running"}
+
+
+def test_a_version_finish_waits_for_the_job_when_it_may_ask(paths, monkeypatch):
+    job = {"id": "j1", "status": "running", "steps": [{"key": "a", "state": "running", "needs_attention": True}]}
+    monkeypatch.setattr(tools_mod.client, "create_job", lambda p, **fields: job)
+    seen = []
+    monkeypatch.setattr(tools_mod.client, "await_job", lambda p, j, timeout: seen.append((j, timeout)) or {"waited": True})
+    result = tools_mod.TOOLS_BY_NAME["workshop_version_feature_finish"].handler(paths, {"project_id": "little-widget"})
+    assert result == {"waited": True} and seen == [(job, 120.0)]
+
+
 def test_schedule_add_recurring_builds_the_right_payload(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "create_scheduled_task", result={"id": "s1"})
     tools_mod.TOOLS_BY_NAME["workshop_schedule_add"].handler(paths, {

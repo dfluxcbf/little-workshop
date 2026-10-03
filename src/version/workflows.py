@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from version.common import CommandResult, get_integration_branch, require_branch_exists, require_clean_tree, run_version_hooks
+from common.job_steps import StepFailed, done, step
+from version.common import CommandResult, ensure_clean_tree, get_integration_branch, require_branch_exists, run_version_hooks
 from version.configstore import load_config, set_issue_link
 from version.gitops import (
     branch_exists,
@@ -43,14 +44,22 @@ def create_prefixed_branch(
     repo_root: Path, *, prefix: str, short_name: str, source_branch: str, issue: int | None
 ) -> CommandResult:
     branch_name = f"{prefix}/{short_name}"
-    if branch_exists(repo_root, branch_name):
-        return CommandResult(success=False, message=f"Branch {branch_name!r} already exists.")
-
-    create_and_checkout(repo_root, branch_name, source_branch)
+    try:
+        with step("create_branch") as handle:
+            if branch_exists(repo_root, branch_name):
+                raise StepFailed(f"Branch {branch_name!r} already exists.")
+            create_and_checkout(repo_root, branch_name, source_branch)
+            handle.detail = f"{branch_name} from {source_branch}"
+    except StepFailed as exc:
+        return CommandResult(success=False, message=str(exc))
 
     if issue is not None:
-        set_issue_link(repo_root, branch_name, issue)
-        commit_if_dirty(repo_root, no_requirement(f"chore(version): link issue #{issue} to {branch_name}"))
+        with step("link_issue") as handle:
+            set_issue_link(repo_root, branch_name, issue)
+            commit_if_dirty(repo_root, no_requirement(f"chore(version): link issue #{issue} to {branch_name}"))
+            handle.detail = f"issue #{issue}"
+    else:
+        done("link_issue", "no issue given")
 
     return CommandResult(
         success=True,
@@ -62,7 +71,7 @@ def create_prefixed_branch(
 def start_integration_branch(
     repo_root: Path, *, prefix: str, short_name: str, issue: int | None, force: bool = False
 ) -> CommandResult:
-    require_clean_tree(repo_root, force)
+    ensure_clean_tree(repo_root, force, commit_message=f"chore: commit pending changes before starting {prefix}/{short_name}")
 
     integ = get_integration_branch(repo_root)
     invalid = require_checked_out_branch(repo_root, integ)
@@ -73,10 +82,16 @@ def start_integration_branch(
 
 
 def require_checked_out_branch(repo_root: Path, required_branch: str) -> CommandResult | None:
-    current = current_branch(repo_root)
-    if current != required_branch:
-        return CommandResult(success=False, message=f"Must run from {required_branch!r}. Current branch: {current!r}")
-    require_branch_exists(repo_root, required_branch)
+    """None when `required_branch` is checked out; otherwise a failure result (its `check_branch` step failed)."""
+    try:
+        with step("check_branch") as handle:
+            current = current_branch(repo_root)
+            if current != required_branch:
+                raise StepFailed(f"Must run from {required_branch!r}. Current branch: {current!r}")
+            require_branch_exists(repo_root, required_branch)
+            handle.detail = f"on {required_branch}"
+    except StepFailed as exc:
+        return CommandResult(success=False, message=str(exc))
     return None
 
 
@@ -105,24 +120,32 @@ def finished_version(merged: GitflowVersion, target_before: GitflowVersion) -> G
 
 
 def squash_merge_and_bump_patch(repo_root: Path, plan: PatchMergePlan) -> CommandResult:
-    if plan.pre_merge_cleanup is not None:
-        plan.pre_merge_cleanup(repo_root)
-    if plan.pre_merge_commit_message is not None:
-        commit_if_dirty(repo_root, plan.pre_merge_commit_message)
+    with step("squash") as handle:
+        if plan.pre_merge_cleanup is not None:
+            plan.pre_merge_cleanup(repo_root)
+        if plan.pre_merge_commit_message is not None:
+            commit_if_dirty(repo_root, plan.pre_merge_commit_message)
 
-    merge_base = get_merge_base(repo_root, "HEAD", plan.target_branch)
-    squash_to_single_commit(repo_root, merge_base, plan.merge_message)
+        merge_base = get_merge_base(repo_root, "HEAD", plan.target_branch)
+        squash_to_single_commit(repo_root, merge_base, plan.merge_message)
+        handle.detail = plan.merge_message
 
-    checkout(repo_root, plan.target_branch)
-    target_ver = read_version(repo_root)
-    merge_no_ff(repo_root, plan.work_branch, plan.merge_message)
+    with step("merge") as handle:
+        checkout(repo_root, plan.target_branch)
+        target_ver = read_version(repo_root)
+        merge_no_ff(repo_root, plan.work_branch, plan.merge_message)
+        handle.detail = f"{plan.work_branch} into {plan.target_branch}"
 
-    new_ver = finished_version(read_version(repo_root), target_ver)
-    write_version(repo_root, new_ver)
-    hook_errors = run_version_hooks(repo_root, str(new_ver))
-    commit_if_dirty(repo_root, no_requirement(f"chore: bump version to {new_ver}"))
+    with step("bump_version") as handle:
+        new_ver = finished_version(read_version(repo_root), target_ver)
+        write_version(repo_root, new_ver)
+        hook_errors = run_version_hooks(repo_root, str(new_ver))
+        commit_if_dirty(repo_root, no_requirement(f"chore: bump version to {new_ver}"))
+        handle.detail = f"{target_ver} -> {new_ver}"
 
-    delete_branch_if_configured(repo_root, plan.work_branch)
+    with step("delete_branch") as handle:
+        delete_branch_if_configured(repo_root, plan.work_branch)
+        handle.detail = plan.work_branch
     return success_with_hook_warnings(
         message=f"Merged {plan.work_branch!r} into {plan.target_branch!r}. Version bumped to {new_ver}.",
         hook_errors=hook_errors,

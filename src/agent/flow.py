@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from datetime import datetime, timezone
 import time
 import uuid
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from common import playwright
+from common.job_steps import done, step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from agent import db, gitutil, report, requirements_client, standards, templates_util, version_client
@@ -258,16 +260,20 @@ class AgentFlow:
         db.create_run(conn, run_id, job_id=job_id, project_id=project_id, intent=intent, review_mode=review_mode, title=title, source=source, description=description)
 
         try:
-            self._require_clean(project_dir)
-            cfg = version_client.get_config(self.paths, project_id)
-            resolved_spec = resolve_branching(spec, intent, cfg)
+            with step("check_checkout") as handle:
+                self._require_clean(project_dir)
+                cfg = version_client.get_config(self.paths, project_id)
+                resolved_spec = resolve_branching(spec, intent, cfg)
+                handle.detail = str(project_dir)
         except (AgentFlowError, BranchingError, VersionClientError) as exc:
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, None, "failed", None, None, str(exc))
 
         short_name = f"agent-{slugify(title)}"
         try:
-            branch = self._prepare_branch(project_id, project_dir, resolved_spec, cfg, short_name)
+            with step("prepare_branch") as handle:
+                branch = self._prepare_branch(project_id, project_dir, resolved_spec, cfg, short_name)
+                handle.detail = branch
         except (AgentFlowError, VersionClientError) as exc:
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, None, "failed", None, None, str(exc))
@@ -287,7 +293,8 @@ class AgentFlow:
         )
 
         try:
-            summary_text, _is_error = self._invoke_claude(project_dir, prompt, session_name, playwright_args)
+            with step("run_claude"):
+                summary_text, _is_error = self._invoke_claude(project_dir, prompt, session_name, playwright_args)
         except AgentFlowError as exc:
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, branch, "failed", None, None, str(exc))
@@ -298,9 +305,13 @@ class AgentFlow:
 
         rescued = False
         if resolved_spec.mode == MODE_AUTO:
-            fallback_type = BRANCH_TYPE_FOR_INTENT.get(intent, "improvement")
-            fallback_branch = f"{fallback_type}/{short_name}"
-            branch, rescued = self._detect_auto_branch(project_dir, integ, fallback_branch, base_sha)
+            with step("detect_branch") as handle:
+                fallback_type = BRANCH_TYPE_FOR_INTENT.get(intent, "improvement")
+                fallback_branch = f"{fallback_type}/{short_name}"
+                branch, rescued = self._detect_auto_branch(project_dir, integ, fallback_branch, base_sha)
+                handle.detail = branch
+        else:
+            done("detect_branch", "the branch was fixed by the task")
 
         branch_type = resolved_spec.branch_type
         if branch_type is None:
@@ -314,9 +325,15 @@ class AgentFlow:
         # caller that already has it to pass through params if it wants one.
         manifest = params.get("_deployment_manifest")
         if manifest is not None:
-            screenshots, screenshot_note = self.screenshotter.capture(manifest, project_dir, branch, run_id, github_repo)
+            with step("screenshots") as handle:
+                screenshots, screenshot_note = self.screenshotter.capture(manifest, project_dir, branch, run_id, github_repo)
+                handle.detail = f"{len(screenshots)} screenshot(s)"
+        else:
+            done("screenshots", "the project has no screenshot manifest here")
 
-        pr_url = self._publish(project_dir, branch, integ, title, summary_text, github_repo)
+        with step("publish") as handle:
+            pr_url = self._publish(project_dir, branch, integ, title, summary_text, github_repo)
+            handle.detail = pr_url or "nothing to publish"
 
         report_text = report.render_report(
             project_id=project_id, title=title, intent=intent, branch=branch, result=agent_result,
@@ -331,17 +348,23 @@ class AgentFlow:
             except GitHubError:
                 pass
 
-        db.update_run(
-            conn, run_id, branch=branch, branch_type=branch_type, completion_status=completion_status,
-            summary=summary_text, report=report_text, pr_url=pr_url, status=db.AWAITING_FINISH,
-        )
+        with step("record_run") as handle:
+            db.update_run(
+                conn, run_id, branch=branch, branch_type=branch_type, completion_status=completion_status,
+                summary=summary_text, report=report_text, pr_url=pr_url, status=db.AWAITING_FINISH,
+            )
+            handle.detail = f"run {run_id}: {completion_status}"
 
         if resolved_spec.auto_approve and completion_status == "done" and agent_result.test_results:
             try:
-                self.finish_task(conn, run_id, project_dir=project_dir)
+                with step("auto_finish") as handle:
+                    self.finish_task(conn, run_id, project_dir=project_dir)
+                    handle.detail = f"finished {branch}"
                 return RunTaskResult(run_id, db.FINISHED, branch, completion_status, report_text, pr_url)
             except AgentFlowError:
                 pass  # falls through: stays awaiting_finish, same as a refused auto-approve
+        else:
+            done("auto_finish", "not auto-approved or not done: awaiting your finish")
 
         return RunTaskResult(run_id, db.AWAITING_FINISH, branch, completion_status, report_text, pr_url)
 
@@ -387,6 +410,18 @@ class AgentFlow:
         db.update_run(conn, run_id, status=db.SKIPPED)
         return f"skipped {run['branch']!r}; the branch was left as-is for manual handling"
 
+    def dismiss_task(self, conn: sqlite3.Connection, run_id: str) -> str:
+        """Move a failed or stopped task from the user's attention list to the done list. The run keeps its
+        status, so it can still be retried; only `dismissed_at` says the user has seen it."""
+        run = db.get_run(conn, run_id)
+        if run is None:
+            raise AgentFlowError(f"no such run {run_id!r}")
+        if run["status"] not in (db.FAILED, "stopped"):
+            raise AgentFlowError(f"run {run_id!r} did not fail (status={run['status']!r}); there is nothing to dismiss")
+        if not run.get("dismissed_at"):
+            db.update_run(conn, run_id, dismissed_at=datetime.now(timezone.utc).isoformat())
+        return f"moved {run['title']!r} to the done list"
+
     # -- entry point: ci_check ----------------------------------------------
 
     def run_ci_check(self, conn: sqlite3.Connection, project_id: str, repo_url: str | None, params: dict) -> dict:
@@ -405,27 +440,32 @@ class AgentFlow:
         if not pr_number or not suite_id:
             raise AgentFlowError("agent.ci_check requires params.pr_number and params.suite_id")
 
-        try:
-            pr = self.github.pull_request(github_repo, pr_number)
-        except GitHubError as exc:
-            raise AgentFlowError(str(exc)) from exc
-        branch = pr.get("headRefName")
-        sha = pr.get("headRefOid")
-        if not branch or not sha:
-            raise AgentFlowError(f"could not resolve head branch/sha for pull request #{pr_number}")
+        with step("resolve_pr") as handle:
+            try:
+                pr = self.github.pull_request(github_repo, pr_number)
+            except GitHubError as exc:
+                raise AgentFlowError(str(exc)) from exc
+            branch = pr.get("headRefName")
+            sha = pr.get("headRefOid")
+            if not branch or not sha:
+                raise AgentFlowError(f"could not resolve head branch/sha for pull request #{pr_number}")
+            handle.detail = f"#{pr_number}: {branch} at {sha[:8]}"
 
         context = params.get("context", "little-workshop/ci")
-        self.github.post_status(github_repo, sha, state=db.CI_PENDING, context=context, description="running tests")
+        with step("post_pending"):
+            self.github.post_status(github_repo, sha, state=db.CI_PENDING, context=context, description="running tests")
 
         run_params = {"suite_id": suite_id, "commitish": sha}
         if params.get("test_command"):
             run_params["test_command"] = params["test_command"]
 
         try:
-            result = requirements_client.run_job(
-                self.paths, project_id, "requirements.run_tests", run_params,
-                timeout=params.get("timeout_seconds", 600.0),
-            )
+            with step("run_tests") as handle:
+                result = requirements_client.run_job(
+                    self.paths, project_id, "requirements.run_tests", run_params,
+                    timeout=params.get("timeout_seconds", 600.0),
+                )
+                handle.detail = f"{result.get('ran', 0)} test(s) ran"
         except RequirementsClientError as exc:
             self.github.post_status(github_repo, sha, state=db.CI_ERROR, context=context, description=str(exc)[:139])
             db.record_ci_check(conn, project_id, pr_number=pr_number, branch=branch, sha=sha, state=db.CI_ERROR, summary=str(exc))
@@ -441,6 +481,8 @@ class AgentFlow:
         else:
             state, summary = db.CI_SUCCESS, f"all {ran} tests passed"
 
-        self.github.post_status(github_repo, sha, state=state, context=context, description=summary)
-        db.record_ci_check(conn, project_id, pr_number=pr_number, branch=branch, sha=sha, state=state, summary=summary)
+        with step("post_result") as handle:
+            self.github.post_status(github_repo, sha, state=state, context=context, description=summary)
+            db.record_ci_check(conn, project_id, pr_number=pr_number, branch=branch, sha=sha, state=state, summary=summary)
+            handle.detail = summary
         return {"pr_number": pr_number, "branch": branch, "sha": sha, "state": state, "summary": summary, "ran": ran, "results": results}

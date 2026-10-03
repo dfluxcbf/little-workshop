@@ -15,8 +15,11 @@
   <form class="inline" method="post" action="/tasks/{{ run.project_id }}/{{ run.id }}/skip"><button type="submit">Skip</button></form>
 </div>
 {% endif %}
-{% if can_retry %}
-<div class="row"><form class="inline" method="get" action="/tasks/{{ run.project_id }}/{{ run.id }}/retry"><button type="submit" class="primary">Retry</button></form></div>
+{% if can_retry or can_dismiss %}
+<div class="row">
+  {% if can_retry %}<form class="inline" method="get" action="/tasks/{{ run.project_id }}/{{ run.id }}/retry"><button type="submit" class="primary">Retry</button></form>{% endif %}
+  {% if can_dismiss %}<form class="inline" method="post" action="/tasks/{{ run.project_id }}/{{ run.id }}/dismiss"><button type="submit">Move to done</button></form>{% endif %}
+</div>
 {% endif %}
 {% if description %}<section>
   <h2>Description <button type="button" class="copy-btn" data-copy="task-description">Copy</button></h2>

@@ -22,6 +22,10 @@ def _fake_chromium(root: Path, build: str) -> Path:
     return exe
 
 
+# --- REQ-000000252: Agent runs get the Playwright MCP server ------------------
+# (the server's configuration; tests/unit/test_agent_flow.py attaches it to a run)
+
+
 def test_installed_chromium_picks_the_newest_build(tmp_path):
     _fake_chromium(tmp_path, "999")
     newest = _fake_chromium(tmp_path, "1234")
@@ -65,6 +69,11 @@ def test_mcp_claude_args_need_npx(tmp_path):
     assert args[0] == "--mcp-config"
     assert "playwright" in json.loads(args[1])["mcpServers"]
     assert (tmp_path / "out").is_dir()
+
+
+# --- REQ-000000255: UI tests run against the branch's own app ----------------
+# (which files are UI tests and whether pytest has pytest-playwright;
+# tests/unit/test_requirements_testrun.py starts the app)
 
 
 def test_is_ui_test_file():

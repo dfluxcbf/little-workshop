@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from common.incident import install_incident_reporting
 from common.paths import Paths
-from orchestration import db, policy_gate
+from orchestration import db, policy_gate, steps
 from orchestration.dispatch import SocketLookup, complete_job, dispatch_ready_jobs, dispatch_timeout_for, stop_job, wait_for_dispatch
 from orchestration.models import (
     Job,
@@ -41,6 +41,8 @@ class JobCleanupRequest(BaseModel):
 
 
 class CreateJobRequest(BaseModel):
+    # A caller may choose the id, to follow the Job's steps while its creation call is still running.
+    id: str | None = None
     type: str
     target_pillar: str
     project_id: str | None = None
@@ -54,6 +56,16 @@ class CompleteJobRequest(BaseModel):
     succeeded: bool
     result: dict[str, Any] | None = None
     error: str | None = None
+
+
+class StepReportRequest(BaseModel):
+    state: str
+    detail: str | None = None
+    prompt: dict[str, Any] | None = None
+
+
+class StepAnswerRequest(BaseModel):
+    choice: str
 
 
 class TriggerPipelineRequest(BaseModel):
@@ -95,6 +107,10 @@ def build_app(
     # minutes-long Job never stalls reads. Shared with the scheduler thread.
     lock = lock or threading.Lock()
 
+    def payload(job: Job) -> dict:
+        """The Job with its checklist; call with `lock` held."""
+        return {**job.model_dump(mode="json"), "steps": steps.list_steps(conn, job)}
+
     @app.get("/v1/health")
     def health() -> dict:
         with lock:
@@ -104,7 +120,10 @@ def build_app(
 
     @app.post("/v1/jobs")
     def create_job(request: CreateJobRequest) -> dict:
-        job = Job(**request.model_dump())
+        fields = request.model_dump()
+        if fields["id"] is None:
+            del fields["id"]
+        job = Job(**fields)
         with lock:
             db.insert_job(conn, job)
             policy_gate.attach_policy_gate(conn, socket_lookup, job)
@@ -117,18 +136,26 @@ def build_app(
             # unreachable" while the Job went on to run (2026-09-24).
             threading.Thread(target=dispatch_ready_jobs, args=(conn, socket_lookup), kwargs={"lock": lock}, daemon=True).start()
             with lock:
-                return db.get_job(conn, job.id).model_dump(mode="json")
+                return payload(db.get_job(conn, job.id))
         dispatch_ready_jobs(conn, socket_lookup, lock=lock)
         # A concurrent request's pump may have claimed this Job; report its outcome, not "running".
         wait_for_dispatch(job.id, dispatch_timeout_for(job.type) + 5)
         with lock:
-            return db.get_job(conn, job.id).model_dump(mode="json")
+            return payload(db.get_job(conn, job.id))
+
+    @app.get("/v1/jobs/steps")
+    def steps_of_jobs(ids: str) -> dict:
+        """The checklists of several Jobs at once ({job id: steps}), for a page listing many Jobs."""
+        wanted = [i for i in ids.split(",") if i][:200]
+        with lock:
+            found = {job_id: db.get_job(conn, job_id) for job_id in wanted}
+            return {job_id: steps.list_steps(conn, job) for job_id, job in found.items() if job is not None}
 
     @app.get("/v1/jobs")
     def list_jobs(status: str | None = None) -> list[dict]:
         status_enum = JobStatus(status) if status else None
         with lock:
-            return [job.model_dump(mode="json") for job in db.list_jobs(conn, status=status_enum)]
+            return [{**job.model_dump(mode="json"), "progress": steps.progress(conn, job.id)} for job in db.list_jobs(conn, status=status_enum)]
 
     # Job history cleanup. Paths avoid `/v1/jobs/...` so they are never read as a job id.
 
@@ -158,9 +185,34 @@ def build_app(
     def get_job(job_id: str) -> dict:
         with lock:
             job = db.get_job(conn, job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="job not found")
-        return job.model_dump(mode="json")
+            if job is None:
+                raise HTTPException(status_code=404, detail="job not found")
+            return payload(job)
+
+    @app.post("/v1/jobs/{job_id}/steps/{key}")
+    def report_step(job_id: str, key: str, request: StepReportRequest) -> dict:
+        """A pillar reports one step of its running Job: running, succeeded, failed, or
+        attention (with a `prompt` {question, options: [{id, label}]} for the user)."""
+        with lock:
+            job = db.get_job(conn, job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="job not found")
+            try:
+                return steps.report(conn, job, key, request.state, detail=request.detail, prompt=request.prompt)
+            except steps.StepError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=str(exc))
+
+    @app.post("/v1/jobs/{job_id}/steps/{key}/answer")
+    def answer_step(job_id: str, key: str, request: StepAnswerRequest) -> dict:
+        """The user's choice for a step awaiting attention; the pillar waiting on it carries on."""
+        with lock:
+            job = db.get_job(conn, job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail="job not found")
+            try:
+                return steps.answer(conn, job, key, request.choice)
+            except steps.StepError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=str(exc))
 
     @app.post("/v1/jobs/{job_id}/complete")
     def complete(job_id: str, request: CompleteJobRequest) -> dict:

@@ -30,6 +30,7 @@ from version.commands.release import cmd_release_finish, cmd_release_start
 from version.common import get_integration_branch, get_production_branch
 from version.configstore import load_release_finish_state
 from version.gitops import checkout, commit_file, current_branch, get_commit_sha, is_ancestor, is_dirty, list_tags, run, write_file_in_repo, no_requirement
+from common.job_steps import key_prefix, step
 from version.stages import GitflowVersion
 
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git's own empty tree: "since the beginning"
@@ -337,33 +338,39 @@ def run_release(repo: Path, project_id: str, params: dict, services: ReleaseServ
     if original != integ:
         checkout(repo, integ)
     try:
-        commit = get_commit_sha(repo, integ)
-        checks = [merge_check(repo, integ, prod), *delta_checks(repo, conditions, integ, prod)]
-        if all(c.passed for c in checks):  # the costly checks only once the cheap ones hold
-            checks += suite_checks(services, project_id, commit, conditions)
-            if conditions.all_policies:
-                checks.append(policy_check(services, project_id))
-        failed = [c for c in checks if not c.passed]
-        if failed:
-            raise ReleaseRefused("release conditions not met: " + "; ".join(f"{c.name} — {c.detail}" for c in failed),
-                                 [asdict(c) for c in checks])
+        with step("check_conditions") as handle:
+            commit = get_commit_sha(repo, integ)
+            checks = [merge_check(repo, integ, prod), *delta_checks(repo, conditions, integ, prod)]
+            if all(c.passed for c in checks):  # the costly checks only once the cheap ones hold
+                checks += suite_checks(services, project_id, commit, conditions)
+                if conditions.all_policies:
+                    checks.append(policy_check(services, project_id))
+            failed = [c for c in checks if not c.passed]
+            if failed:
+                raise ReleaseRefused("release conditions not met: " + "; ".join(f"{c.name} — {c.detail}" for c in failed),
+                                     [asdict(c) for c in checks])
+            handle.detail = f"{len(checks)} condition(s) met"
     except BaseException:
         if original != integ and current_branch(repo) != original:
             checkout(repo, original)
         raise
 
     base_tag = last_production_tag(repo, prod)
-    started = cmd_release_start(repo)
+    with key_prefix("start_"):
+        started = cmd_release_start(repo)
     if not started.success:
         if original != integ:
             checkout(repo, original)
         raise ReleaseFailed(f"release start failed: {started.message}")
     version = started.data["version"]
 
-    changelog = write_changelog(repo, version, changelog_entries(repo, base_tag, integ))
-    commit_file(repo, changelog, no_requirement(f"docs: changelog for {version}"))
+    with step("changelog") as handle:
+        changelog = write_changelog(repo, version, changelog_entries(repo, base_tag, integ))
+        commit_file(repo, changelog, no_requirement(f"docs: changelog for {version}"))
+        handle.detail = CHANGELOG_FILE
 
-    finished = cmd_release_finish(repo)
+    with key_prefix("finish_"):
+        finished = cmd_release_finish(repo)
     if not finished.success:
         # Mid-release (e.g. a merge conflict): leave the checkout where it is, so
         # `version release finish --continue`/`--abort` can pick it up.
@@ -376,5 +383,12 @@ def run_release(repo: Path, project_id: str, params: dict, services: ReleaseServ
         "version": version,
         "checks": [asdict(c) for c in checks],
         "changelog": CHANGELOG_FILE,
-        "relaunch": relaunch(services, project_id, repo, integ, job_id),
+        "relaunch": _relaunch_step(services, project_id, repo, integ, job_id),
     }
+
+
+def _relaunch_step(services: ReleaseServices, project_id: str, repo: Path, integ: str, job_id: str) -> dict:
+    with step("relaunch") as handle:
+        result = relaunch(services, project_id, repo, integ, job_id)
+        handle.detail = result.get("reason") or result.get("action")
+        return result

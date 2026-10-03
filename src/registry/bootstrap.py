@@ -19,6 +19,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from common.job_steps import done, step
 from common.paths import Paths
 from common.projectfiles import ProjectFilesClient
 from registry import claude_templates, db, gitops, github, scaffold
@@ -30,19 +31,24 @@ class BootstrapError(Exception):
 
 
 def bootstrap_project(conn: sqlite3.Connection, paths: Paths, params: BootstrapParams) -> BootstrapResult:
-    if not claude_templates.is_project_id(params.name):
-        # The name becomes the project id inside the scaffolded .claude/settings.json rules (REQ-000000296).
-        raise BootstrapError(
-            f"{params.name!r} is not a usable project name: use letters, digits, '.', '_' and '-', "
-            "starting with a letter or digit"
-        )
-    if db.get_project(conn, params.name) is not None:
-        raise BootstrapError(f"project {params.name!r} is already registered")
+    with step("check_name") as handle:
+        if not claude_templates.is_project_id(params.name):
+            # The name becomes the project id inside the scaffolded .claude/settings.json rules (REQ-000000296).
+            raise BootstrapError(
+                f"{params.name!r} is not a usable project name: use letters, digits, '.', '_' and '-', "
+                "starting with a letter or digit"
+            )
+        if db.get_project(conn, params.name) is not None:
+            raise BootstrapError(f"project {params.name!r} is already registered")
+        handle.detail = params.name
 
     dest = Path(params.dest_dir) / params.name
-    scaffold.create_project_tree(dest, params.name, params.template)
-    gitops.init_repo_and_commit(dest, author_email=f"{params.owner}@users.noreply.github.com")
-    gitops.create_dev_branch(dest)
+    with step("scaffold") as handle:
+        scaffold.create_project_tree(dest, params.name, params.template)
+        handle.detail = str(dest)
+    with step("init_repo"):
+        gitops.init_repo_and_commit(dest, author_email=f"{params.owner}@users.noreply.github.com")
+        gitops.create_dev_branch(dest)
 
     repo_url: str | None = None
     github_created = False
@@ -50,34 +56,44 @@ def bootstrap_project(conn: sqlite3.Connection, paths: Paths, params: BootstrapP
     labels_created: list[str] = []
 
     if params.create_github_repo:
-        try:
-            repo = github.create_repo(
-                params.name, params.owner, token=params.github_token,
-                private=not params.public, description=params.description,
-            )
-        except github.NoGitHubCredentials as exc:
-            raise BootstrapError(
-                f"{exc} — the project is scaffolded and committed "
-                "locally; retry with create_github_repo=false or provide a token"
-            ) from exc
-        github_created = True
-        remote_url = f"git@{params.remote_host}:{params.owner}/{params.name}.git"
-        gitops.add_remote_and_push(dest, remote_url)
-        pushed = True
-        repo_url = repo.get("html_url") or f"https://{params.remote_host}/{params.owner}/{params.name}"
+        with step("create_github") as handle:
+            try:
+                repo = github.create_repo(
+                    params.name, params.owner, token=params.github_token,
+                    private=not params.public, description=params.description,
+                )
+            except github.NoGitHubCredentials as exc:
+                raise BootstrapError(
+                    f"{exc} — the project is scaffolded and committed "
+                    "locally; retry with create_github_repo=false or provide a token"
+                ) from exc
+            github_created = True
+            remote_url = f"git@{params.remote_host}:{params.owner}/{params.name}.git"
+            gitops.add_remote_and_push(dest, remote_url)
+            pushed = True
+            repo_url = repo.get("html_url") or f"https://{params.remote_host}/{params.owner}/{params.name}"
+            handle.detail = repo_url
 
         if params.ensure_labels:
-            labels_created = github.ensure_bootstrap_labels(f"{params.owner}/{params.name}", params.github_token)
+            with step("labels") as handle:
+                labels_created = github.ensure_bootstrap_labels(f"{params.owner}/{params.name}", params.github_token)
+                handle.detail = f"{len(labels_created)} label(s) created"
+        else:
+            done("labels", "not requested")
+    else:
+        done("create_github", "not requested")
+        done("labels", "not requested")
 
-    project = Project(name=params.name, path=str(dest), repo_url=repo_url)
-    db.insert_project(conn, project)
+    with step("register"):
+        project = Project(name=params.name, path=str(dest), repo_url=repo_url)
+        db.insert_project(conn, project)
 
-    files = ProjectFilesClient(paths, caller_pillar="registry")
-    files.write(
-        params.name,
-        "info.registry.json",
-        json.dumps({"name": params.name, "path": str(dest), "repo_url": repo_url}),
-    )
+        files = ProjectFilesClient(paths, caller_pillar="registry")
+        files.write(
+            params.name,
+            "info.registry.json",
+            json.dumps({"name": params.name, "path": str(dest), "repo_url": repo_url}),
+        )
 
     return BootstrapResult(
         name=params.name, path=str(dest), repo_url=repo_url, github_created=github_created, pushed=pushed,

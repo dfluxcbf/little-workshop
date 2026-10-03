@@ -73,6 +73,30 @@ def cmd_job_stop(args: argparse.Namespace) -> int:
     return 0 if result.get("stopped") else 1
 
 
+def cmd_job_answer(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.answer_step(paths, args.job_id, args.step, args.choice)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_job_watch(args: argparse.Namespace) -> int:
+    from cli import progress
+
+    paths = Paths.from_env()
+    try:
+        job = progress.watch(paths, args.job_id)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(job)
+    return 0 if job.get("status") == "succeeded" else 1
+
+
 def cmd_job_policy_confirm(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -304,8 +328,13 @@ def cmd_project_list(args: argparse.Namespace) -> int:
     return 0
 
 
+# A branch finish merges, tags and back-merges for real; the client's plain 30s wait is too short for it.
+VERSION_FINISH_TIMEOUT_SECONDS = 120.0
+
+
 def _version_job(args: argparse.Namespace, job_type: str, params: dict) -> int:
     paths = Paths.from_env()
+    extra = {"timeout": VERSION_FINISH_TIMEOUT_SECONDS} if job_type.endswith("_finish") else {}
     try:
         result = client.create_job(
             paths,
@@ -316,6 +345,7 @@ def _version_job(args: argparse.Namespace, job_type: str, params: dict) -> int:
             queue_key=args.project_id,  # serialize gitflow operations per project
             depends_on=[],
             created_by="lws",
+            **extra,
         )
     except client.DaemonUnavailable as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1767,6 +1797,16 @@ def build_parser() -> argparse.ArgumentParser:
     job_stop = job_sub.add_parser("stop", help="Interrupt a currently running Job")
     job_stop.add_argument("job_id")
     job_stop.set_defaults(func=cmd_job_stop)
+
+    job_answer = job_sub.add_parser("answer", help="Answer a step that is waiting for your attention")
+    job_answer.add_argument("job_id")
+    job_answer.add_argument("step", help="The step's key, as the question printed it")
+    job_answer.add_argument("choice", help="One of the question's option ids")
+    job_answer.set_defaults(func=cmd_job_answer)
+
+    job_watch = job_sub.add_parser("watch", help="Follow a Job's checklist until it ends")
+    job_watch.add_argument("job_id")
+    job_watch.set_defaults(func=cmd_job_watch)
 
     job_policy_confirm = job_sub.add_parser("policy-confirm", help="Confirm a policy-gated Job pending_confirmation, dispatching it")
     job_policy_confirm.add_argument("job_id")

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Jobs — little-workshop{% endblock %}
 {% from "_job_gate_actions.html" import job_gate_actions %}
+{% from "_job_steps.html" import job_steps %}
 {% macro fchip(label, href, count, on) -%}
 <a class="fchip{{ ' on' if on }}" href="{{ href }}">{{ label }}<span class="fchip-n">{{ count }}</span></a>
 {%- endmacro %}
@@ -80,10 +81,17 @@
             <span class="job-meta">{{ [j.created_at | reltime, job_duration(j.created_at, j.updated_at) if finished else "", j.created_by] | select | join(" · ") }}</span>
           </span>
         </span>
+        {% if j.progress and j.progress.total > 1 %}
+        <span class="job-progress{{ ' asks' if j.progress.attention }}">
+          {{ j.progress.done }}/{{ j.progress.total }} actions{% if j.progress.current %} · {{ j.progress.current }}{% endif %}{% if j.progress.attention %} · <b>needs your answer</b>{% endif %}
+        </span>
+        {% endif %}
         {% if j.error %}<span class="job-error">{{ j.error }}</span>{% endif %}
       </summary>
       <div class="job-body">
+        <p><a class="btn" href="/jobs/{{ j.id }}">Open the job page</a></p>
         {% if j.status == "pending_confirmation" %}{{ job_gate_actions(j.id, "/jobs?status=pending_confirmation") }}{% endif %}
+        {% if job_steps_of.get(j.id) %}<h4 class="job-h">Actions</h4>{{ job_steps(j.id, job_steps_of[j.id]) }}{% endif %}
         <dl class="kv">
           <dt>ID</dt><dd><code>{{ j.id }}</code></dd>
           <dt>Target</dt><dd>{{ j.target_pillar }}</dd>

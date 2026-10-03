@@ -352,6 +352,20 @@ are the current state of every pillar.
   pillar behind this panel is down" is simply the real answer to show,
   rendered as a visible banner, never a 500).
 
+## Job page: the checklist (2026-10-03)
+
+REQ-000000312.
+
+`/jobs/{id}` shows one job and what it does: the ordered actions, an icon per state (empty circle
+not started, blue running, green finished OK, red did not finish OK, yellow needs your attention),
+each action's runtime (running ones count up; an action waiting for the user holds its runtime) and
+its expected runtime, and for an action waiting for the user its question with one button per
+option (`POST /jobs/{id}/steps/{key}/answer`); unanswered, the job fails after 12 hours. The page
+refreshes itself while the job is active. Each Jobs-page card shows `done/total actions` and the
+current action, flags a question, and links to the page; a running job with a question is also a
+card in the attention list.
+
+
 ## Interfacing
 
 - **Calls**: every other pillar's Pillar Interface, read-only for
@@ -414,3 +428,15 @@ The form's `next` field (a local path only) says where to return, with the outco
 
 Each Settings "Needs attention" card carries a tag chip (REQ-000000292): **Policies** (a failing check), **Jobs**
 (awaiting confirmation) or **Incidents** (an open bug). `/attention.json` items carry the same `tag`.
+
+## Failed tasks leave the attention list (2026-10-03)
+
+REQ-000000313.
+
+A failed (or stopped) task is listed under Needs attention with **Move to done** and **Retry**
+buttons (the task page offers both too). Moving it runs the `agent.dismiss_task` job, which sets
+`dismissed_at` on the run; the run keeps its `failed` status, so Retry stays available from the Done
+list. A task that failed more than a week ago (`TASK_ATTENTION_DAYS`, measured from the run's last
+update) is listed under Done by itself, with no job: the grouping is computed on every page load.
+A failed job that never became a run has no button, and moves by age only. `awaiting_finish` tasks
+are not affected: they still wait for Finish or Skip.

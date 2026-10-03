@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ValidationError
 
+from common.job_steps import StepReporter, reporting, step
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from registry import db, github, gitops, version_client
@@ -60,6 +61,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     install_incident_reporting(app, paths, pillar="registry")
     lock = threading.Lock()
 
+    def reported(request: "JobRequest"):
+        return reporting(StepReporter(paths, request.job_id))
+
     @app.get("/v1/health")
     def health() -> dict:
         with lock:
@@ -72,7 +76,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             bootstrap_params = BootstrapParams(**request.params)
         except ValidationError as exc:
             return {"outcome": "failed", "error": str(exc)}
-        with lock:
+        with reported(request), lock:
             try:
                 result = bootstrap_project(conn, paths, bootstrap_params)
             except BootstrapError as exc:
@@ -86,19 +90,24 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         # `lvx init` as part of `create`; little-workshop's own `version`
         # pillar already writes a byte-compatible `.lvx/config.json`.
         project_dir = Path(result.path)
-        if version_client.init_version_tracking(paths, result.name):
-            gitops.run(["git", "add", "-A"], cwd=project_dir)
-            gitops.run(["git", "commit", "-m", "chore: version init"], cwd=project_dir)
-            gitops.run(["git", "checkout", "dev"], cwd=project_dir)
-            gitops.run(["git", "merge", "--ff-only", "master"], cwd=project_dir)
-            # Deliberately left checked out on `dev`, not `master` — the
-            # ready-to-start-working gitflow state, matching what a
-            # caller doing this same "bootstrap then version.init" dance
-            # by hand already expected before this was automated.
-            result.version_initialized = True
-            if result.pushed:
-                gitops.run(["git", "push", "origin", "master:master"], cwd=project_dir)
-                gitops.run(["git", "push", "origin", "dev:dev"], cwd=project_dir)
+        with reported(request):
+            with step("init_version") as handle:
+                if version_client.init_version_tracking(paths, result.name):
+                    gitops.run(["git", "add", "-A"], cwd=project_dir)
+                    gitops.run(["git", "commit", "-m", "chore: version init"], cwd=project_dir)
+                    gitops.run(["git", "checkout", "dev"], cwd=project_dir)
+                    gitops.run(["git", "merge", "--ff-only", "master"], cwd=project_dir)
+                    # Deliberately left checked out on `dev`, not `master` — the
+                    # ready-to-start-working gitflow state, matching what a
+                    # caller doing this same "bootstrap then version.init" dance
+                    # by hand already expected before this was automated.
+                    result.version_initialized = True
+                    if result.pushed:
+                        gitops.run(["git", "push", "origin", "master:master"], cwd=project_dir)
+                        gitops.run(["git", "push", "origin", "dev:dev"], cwd=project_dir)
+                    handle.detail = "gitflow branches ready, checked out on dev"
+                else:
+                    handle.detail = "version tracking was not initialized"
         return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
 
     @app.post("/v1/jobs/project.import")
@@ -107,7 +116,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             import_params = ImportParams(**request.params)
         except ValidationError as exc:
             return {"outcome": "failed", "error": str(exc)}
-        with lock:
+        with reported(request), lock:
             try:
                 result = import_project(conn, paths, import_params)
             except ProjectImportError as exc:
@@ -120,7 +129,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             connect_params = ConnectGitHubParams(**{"name": request.project_id, **request.params})
         except ValidationError as exc:
             return {"outcome": "failed", "error": str(exc)}
-        with lock:
+        with reported(request), lock:
             try:
                 result = connect_github(conn, paths, connect_params)
             except (ConnectGitHubError, subprocess.CalledProcessError) as exc:
@@ -133,7 +142,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         name = request.params.get("name") or request.project_id
         if not name:
             return {"outcome": "failed", "error": "missing project name"}
-        with lock:
+        with reported(request), lock:
             try:
                 remove_project(conn, paths, name)
             except ProjectNotFoundError:

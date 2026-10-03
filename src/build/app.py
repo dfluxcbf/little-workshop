@@ -20,6 +20,7 @@ from build import db
 from build.models import BuildRun, BuildRunStatus, Package, PackageKind
 from build.pep503 import normalize_name, parse_distribution_filename, render_project_index, render_root_index, same_version
 from build.runner import run_build
+from common.job_steps import StepReporter, reporting, step
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.worktree_client import WorktreeUnavailable
@@ -29,6 +30,10 @@ class JobRequest(BaseModel):
     job_id: str
     project_id: str | None = None
     params: dict[str, Any] = {}
+
+
+class _Refused(Exception):
+    """A publish the request or the build run does not allow; its step fails and the job answers `failed`."""
 
 
 def _require(params: dict, *names: str) -> str | None:
@@ -53,6 +58,10 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
 
     @app.post("/v1/jobs/build.run")
     def job_run(request: JobRequest) -> dict:
+        with reporting(StepReporter(paths, request.job_id)):
+            return _job_run(request)
+
+    def _job_run(request: JobRequest) -> dict:
         error = _require(request.params, "commitish", "command") or (
             None if request.project_id else "missing project_id"
         )
@@ -83,8 +92,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         run.log = outcome.log
         run.status = BuildRunStatus.SUCCEEDED if outcome.exit_code == 0 else BuildRunStatus.FAILED
         run.finished_at = datetime.now(timezone.utc)
-        with lock:
+        with step("save_result") as handle, lock:
             db.update_build_run(conn, run)
+            handle.detail = f"build run {run.id}: {run.status.value}"
 
         if run.status == BuildRunStatus.FAILED:
             return {"outcome": "failed", "error": f"build command exited {outcome.exit_code}", "result": run.model_dump(mode="json")}
@@ -93,50 +103,64 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     # -- publishing (fork-safety-gated) --------------------------------------
 
     def _publish(request: JobRequest, kind: PackageKind) -> dict:
-        required = ("build_run_id", "filename", "content_base64") if kind == PackageKind.PYPI else (
-            "build_run_id", "name", "version", "filename", "content_base64")
-        error = _require(request.params, *required) or (None if request.project_id else "missing project_id")
-        if error:
-            return {"outcome": "failed", "error": error}
+        try:
+            with reporting(StepReporter(paths, request.job_id)):
+                return _publish_steps(request, kind)
+        except _Refused as exc:
+            return {"outcome": "failed", "error": str(exc)}
 
-        name, version = request.params.get("name"), request.params.get("version")
-        if kind == PackageKind.PYPI:
-            parsed = parse_distribution_filename(request.params["filename"])
-            if parsed is None:
-                return {"outcome": "failed", "error": (
-                    f"filename {request.params['filename']!r} does not carry a version; "
-                    "a wheel/sdist must be named <name>-<version>[-<tags>].whl|.tar.gz")}
-            name, version = name or parsed[0], version or parsed[1]
-            if not same_version(version, parsed[1]):
-                return {"outcome": "failed", "error": (
-                    f"version {version!r} does not match the version in filename "
-                    f"{request.params['filename']!r} ({parsed[1]!r})")}
+    def _publish_steps(request: JobRequest, kind: PackageKind) -> dict:
+        with step("check_input") as handle:
+            required = ("build_run_id", "filename", "content_base64") if kind == PackageKind.PYPI else (
+                "build_run_id", "name", "version", "filename", "content_base64")
+            error = _require(request.params, *required) or (None if request.project_id else "missing project_id")
+            if error:
+                raise _Refused(error)
+
+            name, version = request.params.get("name"), request.params.get("version")
+            if kind == PackageKind.PYPI:
+                parsed = parse_distribution_filename(request.params["filename"])
+                if parsed is None:
+                    raise _Refused(
+                        f"filename {request.params['filename']!r} does not carry a version; "
+                        "a wheel/sdist must be named <name>-<version>[-<tags>].whl|.tar.gz")
+                name, version = name or parsed[0], version or parsed[1]
+                if not same_version(version, parsed[1]):
+                    raise _Refused(
+                        f"version {version!r} does not match the version in filename "
+                        f"{request.params['filename']!r} ({parsed[1]!r})")
+            handle.detail = f"{name} {version}"
 
         with lock:
-            run = db.get_build_run(conn, request.params["build_run_id"])
-            if run is None:
-                return {"outcome": "failed", "error": f"build run {request.params['build_run_id']!r} not found"}
-            if run.from_fork:
-                return {"outcome": "failed", "error": "fork-safety gate: a fork-triggered build run cannot publish"}
-            if run.status != BuildRunStatus.SUCCEEDED:
-                return {"outcome": "failed", "error": f"build run {run.id!r} did not succeed ({run.status.value})"}
+            with step("check_build_run") as handle:
+                run = db.get_build_run(conn, request.params["build_run_id"])
+                if run is None:
+                    raise _Refused(f"build run {request.params['build_run_id']!r} not found")
+                if run.from_fork:
+                    raise _Refused("fork-safety gate: a fork-triggered build run cannot publish")
+                if run.status != BuildRunStatus.SUCCEEDED:
+                    raise _Refused(f"build run {run.id!r} did not succeed ({run.status.value})")
+                handle.detail = f"build run {run.id}"
 
-            try:
-                content = base64.b64decode(request.params["content_base64"])
-            except Exception as exc:  # noqa: BLE001 — any decode failure is a clean "bad input"
-                return {"outcome": "failed", "error": f"invalid base64 content: {exc}"}
+            with step("store_file") as handle:
+                try:
+                    content = base64.b64decode(request.params["content_base64"])
+                except Exception as exc:  # noqa: BLE001 — any decode failure is a clean "bad input"
+                    raise _Refused(f"invalid base64 content: {exc}") from exc
 
-            filename = request.params["filename"]
-            blob_path = paths.package_blob_path(kind.value, filename)
-            blob_path.parent.mkdir(parents=True, exist_ok=True)
-            blob_path.write_bytes(content)
+                filename = request.params["filename"]
+                blob_path = paths.package_blob_path(kind.value, filename)
+                blob_path.parent.mkdir(parents=True, exist_ok=True)
+                blob_path.write_bytes(content)
+                handle.detail = f"{filename} ({len(content)} bytes)"
 
-            package = Package(
-                id=db.new_id(), project_id=request.project_id, kind=kind, name=name,
-                normalized_name=normalize_name(name), version=version,
-                filename=filename, source_build_run_id=run.id,
-            )
-            db.insert_package(conn, package)
+            with step("register"):
+                package = Package(
+                    id=db.new_id(), project_id=request.project_id, kind=kind, name=name,
+                    normalized_name=normalize_name(name), version=version,
+                    filename=filename, source_build_run_id=run.id,
+                )
+                db.insert_package(conn, package)
         return {"outcome": "succeeded", "result": package.model_dump(mode="json")}
 
     @app.post("/v1/jobs/build.publish_pypi")

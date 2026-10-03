@@ -90,6 +90,10 @@ def _job_stop(paths: Paths, args: JSONDict) -> Any:
     return client.stop_job(paths, args["job_id"])
 
 
+def _job_answer(paths: Paths, args: JSONDict) -> Any:
+    return client.answer_step(paths, args["job_id"], args["step"], args["choice"])
+
+
 def _schedule_add(paths: Paths, args: JSONDict) -> Any:
     job_template = {
         "type": args["type"], "target_pillar": args["target_pillar"], "project_id": args.get("project_id"),
@@ -202,11 +206,17 @@ def _project_get(paths: Paths, args: JSONDict) -> Any:
 # Version Control & Release
 # ---------------------------------------------------------------------------
 
+# A branch finish merges, tags and back-merges for real; the client's plain 30s wait is too short for it.
+VERSION_FINISH_TIMEOUT_SECONDS = 120.0
+
+
 def _version_job(paths: Paths, job_type: str, project_id: str, params: JSONDict) -> Any:
-    return client.create_job(
+    extra = {"timeout": VERSION_FINISH_TIMEOUT_SECONDS} if job_type.endswith("_finish") else {}
+    job = client.create_job(
         paths, type=job_type, target_pillar="version", project_id=project_id,
-        params=params, queue_key=project_id, depends_on=[], created_by="mcp",
+        params=params, queue_key=project_id, depends_on=[], created_by="mcp", **extra,
     )
+    return client.await_job(paths, job, timeout=VERSION_FINISH_TIMEOUT_SECONDS)
 
 
 def _version_init(paths: Paths, args: JSONDict) -> Any:
@@ -768,8 +778,18 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_core_status", "Return every pillar's enabled/active status, as Core sees it.", _schema(), _core_status),
     ToolSpec("workshop_job_list", "List Jobs known to Orchestration, optionally filtered by status.",
              _schema({"status": _prop("string", "queued|running|pending_confirmation|succeeded|failed|cancelled")}), _job_list),
-    ToolSpec("workshop_job_status", "Get one Job's current status and result by id.",
+    ToolSpec("workshop_job_status", "Get one Job's current status and result by id, with its `steps` checklist "
+             "(each step's state, runtime and expected runtime; a step in state `attention` carries the "
+             "question the user must answer, see workshop_job_answer).",
              _schema({"job_id": _prop("string", "The Job id.")}, ["job_id"]), _job_status),
+    ToolSpec("workshop_job_answer", "Answer a Job step that is waiting for the user's attention (a step in "
+             "state `attention` in a Job's `steps`, with its `prompt` question and options). Only relay the "
+             "choice the USER made: never pick an option on their behalf. An unanswered step fails its Job "
+             "after 12 hours.",
+             _schema({"job_id": _prop("string", "The Job id."),
+                      "step": _prop("string", "The step's key."),
+                      "choice": _prop("string", "One of the prompt's option ids.")}, ["job_id", "step", "choice"]),
+             _job_answer),
     ToolSpec("workshop_job_stop", "Interrupt a Job that is currently running. Most Job types have no safe "
              "mid-flight interruption point and report back that they are not stoppable, rather than being "
              "silently ignored or left to hang.",

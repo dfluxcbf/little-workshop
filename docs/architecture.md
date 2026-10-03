@@ -253,7 +253,7 @@ row is what "this project exists" actually means. A
 Portfolio creates it as part of registering a project, the same way it
 creates the registry row, never the other way around.
 
-- **Orchestration** — `jobs`, `job_runs`, `pipelines`, `pipeline_runs`.
+- **Orchestration** — `jobs`, `job_runs`, `job_steps`, `step_durations`, `pipelines`, `pipeline_runs`.
 - **Policy & Compliance** — `policies`, `policy_check_results`
   (three-outcome: pass/fail/not-applicable), `policy_projects` (the
   projects each policy applies to, with per-project gating on/off; added

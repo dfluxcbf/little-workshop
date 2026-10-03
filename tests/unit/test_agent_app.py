@@ -813,3 +813,42 @@ def test_recover_interrupted_runs_is_a_noop_with_nothing_running(paths, conn, mo
 
     monkeypatch.setattr(app_module, "_complete_orchestration_job", lambda *a, **kw: pytest.fail("nothing to report"))
     assert app_module.recover_interrupted_runs(paths, conn) == []
+
+
+# --- REQ-000000313: A failed task leaves the attention list when moved to done, or after a week ---
+
+def test_dismiss_task_job_marks_a_failed_run_and_keeps_its_status(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    db.create_run(conn, "r1", job_id="j1", project_id="little-meals", intent="task", review_mode="manual", title="t", source={})
+    db.update_run(conn, "r1", status=db.FAILED)
+    answer = client.post("/v1/jobs/agent.dismiss_task", json={"job_id": "j9", "params": {"run_id": "r1"}}).json()
+    assert answer["outcome"] == "succeeded" and "done list" in answer["result"]["summary"]
+    run = client.get("/v1/runs/little-meals/r1").json()
+    assert run["status"] == db.FAILED and run["dismissed_at"]
+    client.post("/v1/jobs/agent.dismiss_task", json={"job_id": "j9", "params": {"run_id": "r1"}})
+    assert client.get("/v1/runs/little-meals/r1").json()["dismissed_at"] == run["dismissed_at"]  # idempotent
+    assert client.post("/v1/jobs/agent.dismiss_task", json={"job_id": "j9", "params": {}}).json()["outcome"] == "failed"
+    assert client.post("/v1/jobs/agent.dismiss_task", json={"job_id": "j9", "params": {"run_id": "nope"}}).json()["outcome"] == "failed"
+
+
+def test_dismiss_task_refuses_a_run_that_did_not_fail(conn):
+    from agent.flow import AgentFlowError
+
+    db.create_run(conn, "r2", job_id="j2", project_id="p", intent="task", review_mode="manual", title="t", source={})
+    flow = AgentFlow.__new__(AgentFlow)
+    with pytest.raises(AgentFlowError, match="did not fail"):
+        flow.dismiss_task(conn, "r2")
+    with pytest.raises(AgentFlowError, match="no such run"):
+        flow.dismiss_task(conn, "ghost")
+
+
+def test_an_existing_database_gets_the_dismissed_column(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE agent_runs (id TEXT PRIMARY KEY, job_id TEXT, project_id TEXT NOT NULL, status TEXT NOT NULL, intent TEXT NOT NULL, branch TEXT, branch_type TEXT, review_mode TEXT NOT NULL, completion_status TEXT, title TEXT NOT NULL, summary TEXT, report TEXT, pr_url TEXT, source_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    assert "dismissed_at" in {row["name"] for row in conn.execute("PRAGMA table_info(agent_runs)")}

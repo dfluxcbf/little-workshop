@@ -8,6 +8,7 @@ split Registry & Portfolio's own Pillar Interface already establishes.
 
 from __future__ import annotations
 
+import functools
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from common.job_steps import StepReporter, reporting, step
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.worktree_client import WorktreeUnavailable
@@ -48,10 +50,26 @@ def _require(params: dict, *names: str) -> str | None:
     return None
 
 
+class _Refused(Exception):
+    """A job step that cannot go on; the route answers it as a failed outcome with this message."""
+
+
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     app = FastAPI(title="little-workshop Requirements & Quality")
     install_incident_reporting(app, paths, pillar="requirements")
     lock = threading.Lock()
+
+    def _reported(route):
+        """Run a job route with its steps reported to Orchestration; a `_Refused` raised inside a
+        step fails that step and is answered as the job's failed outcome."""
+        @functools.wraps(route)
+        def wrapper(request: JobRequest) -> dict:
+            try:
+                with reporting(StepReporter(paths, request.job_id)):
+                    return route(request)
+            except _Refused as exc:
+                return {"outcome": "failed", "error": str(exc)}
+        return wrapper
 
     @app.get("/v1/health")
     def health() -> dict:
@@ -226,28 +244,36 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
 
     @app.post("/v1/jobs/requirements.import_junit")
+    @_reported
     def job_import_junit(request: JobRequest) -> dict:
-        error = _require(request.params, "suite_id", "xml") or (None if request.project_id else "missing project_id")
-        if error:
-            return {"outcome": "failed", "error": error}
-        suite_id = request.params["suite_id"]
-        with lock:
-            if db.get_test_suite(conn, suite_id) is None:
-                return {"outcome": "failed", "error": f"test suite {suite_id!r} not found"}
+        with step("validate_request") as handle:
+            error = _require(request.params, "suite_id", "xml") or (None if request.project_id else "missing project_id")
+            if error:
+                raise _Refused(error)
+            suite_id = request.params["suite_id"]
+            with lock:
+                if db.get_test_suite(conn, suite_id) is None:
+                    raise _Refused(f"test suite {suite_id!r} not found")
+            handle.detail = f"suite {suite_id}"
+        with step("parse_report") as handle:
             try:
                 parsed = parse_junit_xml(request.params["xml"])
             except JUnitParseError as exc:
-                return {"outcome": "failed", "error": str(exc)}
+                raise _Refused(str(exc))
+            handle.detail = f"{len(parsed)} test result(s)"
+        with step("record_results") as handle:
             executed_at = datetime.now(timezone.utc)
             recorded = []
-            for item in parsed:
-                result = TestResult(
-                    id=db.new_id(), project_id=request.project_id, suite_id=suite_id,
-                    test_name=item.test_name, verdict=item.verdict, detail=item.detail,
-                    source="junit", executed_at=executed_at,
-                )
-                db.insert_test_result(conn, result)
-                recorded.append(result.model_dump(mode="json"))
+            with lock:
+                for item in parsed:
+                    result = TestResult(
+                        id=db.new_id(), project_id=request.project_id, suite_id=suite_id,
+                        test_name=item.test_name, verdict=item.verdict, detail=item.detail,
+                        source="junit", executed_at=executed_at,
+                    )
+                    db.insert_test_result(conn, result)
+                    recorded.append(result.model_dump(mode="json"))
+            handle.detail = f"{len(recorded)} recorded"
         return {"outcome": "succeeded", "result": {"imported": len(recorded), "results": recorded}}
 
     def _scopes(project_id: str, suite_ids: list[str] | None) -> tuple[dict[str, TestSuite], dict[str, set[str]]]:
@@ -264,91 +290,111 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         return suites, scopes
 
     @app.post("/v1/jobs/requirements.discover_tests")
+    @_reported
     def job_discover_tests(request: JobRequest) -> dict:
         """Which of the project's current tests each suite covers — collected, never run."""
-        if not request.project_id:
-            return {"outcome": "failed", "error": "missing project_id"}
-        suites, scopes = _scopes(request.project_id, None)
-        try:
-            node_ids = collect_sandboxed(
-                paths, request.project_id, request.params.get("commitish", "HEAD"),
-                test_command=request.params.get("test_command"),
-            )
-        except (TestRunError, WorktreeUnavailable) as exc:
-            return {"outcome": "failed", "error": str(exc)}
-        by_suite = tests_for_scopes(node_ids, scopes)
-        covered = {n for tests in by_suite.values() for n in tests}
+        with step("find_suites") as handle:
+            if not request.project_id:
+                raise _Refused("missing project_id")
+            suites, scopes = _scopes(request.project_id, None)
+            handle.detail = f"{len(suites)} suite(s)"
+        with step("collect_tests") as handle:
+            try:
+                node_ids = collect_sandboxed(
+                    paths, request.project_id, request.params.get("commitish", "HEAD"),
+                    test_command=request.params.get("test_command"),
+                )
+            except (TestRunError, WorktreeUnavailable) as exc:
+                raise _Refused(str(exc))
+            handle.detail = f"{len(node_ids)} test(s) collected"
+        with step("match_suites") as handle:
+            by_suite = tests_for_scopes(node_ids, scopes)
+            covered = {n for tests in by_suite.values() for n in tests}
+            handle.detail = f"{len(set(node_ids) - covered)} test(s) in no suite"
         return {"outcome": "succeeded", "result": {
             "total": len(node_ids), "unassigned": len(set(node_ids) - covered),
             "suites": [{"id": sid, "name": suites[sid].name, "tests": by_suite[sid]} for sid in suites],
         }}
 
     @app.post("/v1/jobs/requirements.run_tests")
+    @_reported
     def job_run_tests(request: JobRequest) -> dict:
         if "suite_ids" in request.params:
             return _run_suites(request)
-        error = _require(request.params, "suite_id", "commitish") or (
-            None if request.project_id else "missing project_id"
-        )
-        if error:
-            return {"outcome": "failed", "error": error}
-        suite_id = request.params["suite_id"]
-        with lock:
-            if db.get_test_suite(conn, suite_id) is None:
-                return {"outcome": "failed", "error": f"test suite {suite_id!r} not found"}
-        try:
-            parsed = run_sandboxed(
-                paths, request.project_id, request.params["commitish"],
-                test_command=request.params.get("test_command"),
+        with step("validate_request") as handle:
+            error = _require(request.params, "suite_id", "commitish") or (
+                None if request.project_id else "missing project_id"
             )
-        except (TestRunError, WorktreeUnavailable) as exc:
-            return {"outcome": "failed", "error": str(exc)}
-        executed_at = datetime.now(timezone.utc)
-        recorded = []
-        with lock:
-            for item in parsed:
-                result = TestResult(
-                    id=db.new_id(), project_id=request.project_id, suite_id=suite_id,
-                    test_name=item.test_name, verdict=item.verdict, detail=item.detail,
-                    source="pytest", executed_at=executed_at,
+            if error:
+                raise _Refused(error)
+            suite_id = request.params["suite_id"]
+            with lock:
+                if db.get_test_suite(conn, suite_id) is None:
+                    raise _Refused(f"test suite {suite_id!r} not found")
+            handle.detail = f"suite {suite_id} at {request.params['commitish']}"
+        with step("run_tests") as handle:
+            try:
+                parsed = run_sandboxed(
+                    paths, request.project_id, request.params["commitish"],
+                    test_command=request.params.get("test_command"),
                 )
-                db.insert_test_result(conn, result)
-                recorded.append(result.model_dump(mode="json"))
+            except (TestRunError, WorktreeUnavailable) as exc:
+                raise _Refused(str(exc))
+            handle.detail = f"{len(parsed)} test(s) ran"
+        with step("record_results") as handle:
+            executed_at = datetime.now(timezone.utc)
+            recorded = []
+            with lock:
+                for item in parsed:
+                    result = TestResult(
+                        id=db.new_id(), project_id=request.project_id, suite_id=suite_id,
+                        test_name=item.test_name, verdict=item.verdict, detail=item.detail,
+                        source="pytest", executed_at=executed_at,
+                    )
+                    db.insert_test_result(conn, result)
+                    recorded.append(result.model_dump(mode="json"))
+            handle.detail = f"{len(recorded)} recorded"
         return {"outcome": "succeeded", "result": {"ran": len(recorded), "results": recorded}}
 
     def _run_suites(request: JobRequest) -> dict:
         """`suite_ids`: run just the tests those suites cover (discovered, not
         listed anywhere) in one go, and record each result under its suite."""
-        suite_ids = request.params.get("suite_ids")
-        if not request.project_id:
-            return {"outcome": "failed", "error": "missing project_id"}
-        if not isinstance(suite_ids, list) or not suite_ids or not all(isinstance(s, str) for s in suite_ids):
-            return {"outcome": "failed", "error": "'suite_ids' must be a non-empty list of suite ids"}
-        suites, scopes = _scopes(request.project_id, suite_ids)
-        missing = [sid for sid in suite_ids if sid not in suites]
-        if missing:
-            return {"outcome": "failed", "error": f"test suite {missing[0]!r} not found in {request.project_id}"}
-        try:
-            by_suite = run_suites_sandboxed(
-                paths, request.project_id, request.params.get("commitish", "HEAD"), scopes,
-                test_command=request.params.get("test_command"),
-            )
-        except (TestRunError, WorktreeUnavailable) as exc:
-            return {"outcome": "failed", "error": str(exc)}
-        executed_at = datetime.now(timezone.utc)
-        summary = []
-        with lock:
-            for sid, items in by_suite.items():
-                for item in items:
-                    db.insert_test_result(conn, TestResult(
-                        id=db.new_id(), project_id=request.project_id, suite_id=sid,
-                        test_name=item.test_name, verdict=item.verdict, detail=item.detail,
-                        source="pytest", executed_at=executed_at,
-                    ))
-                counts: dict[str, int] = {}
-                for item in items:
-                    counts[item.verdict.value] = counts.get(item.verdict.value, 0) + 1
-                summary.append({"suite_id": sid, "name": suites[sid].name, "ran": len(items), "verdicts": counts})
+        with step("validate_request") as handle:
+            suite_ids = request.params.get("suite_ids")
+            if not request.project_id:
+                raise _Refused("missing project_id")
+            if not isinstance(suite_ids, list) or not suite_ids or not all(isinstance(s, str) for s in suite_ids):
+                raise _Refused("'suite_ids' must be a non-empty list of suite ids")
+            suites, scopes = _scopes(request.project_id, suite_ids)
+            missing = [sid for sid in suite_ids if sid not in suites]
+            if missing:
+                raise _Refused(f"test suite {missing[0]!r} not found in {request.project_id}")
+            handle.detail = f"{len(suites)} suite(s) at {request.params.get('commitish', 'HEAD')}"
+        with step("run_tests") as handle:
+            try:
+                by_suite = run_suites_sandboxed(
+                    paths, request.project_id, request.params.get("commitish", "HEAD"), scopes,
+                    test_command=request.params.get("test_command"),
+                )
+            except (TestRunError, WorktreeUnavailable) as exc:
+                raise _Refused(str(exc))
+            handle.detail = f"{sum(len(items) for items in by_suite.values())} test(s) ran"
+        with step("record_results") as handle:
+            executed_at = datetime.now(timezone.utc)
+            summary = []
+            with lock:
+                for sid, items in by_suite.items():
+                    for item in items:
+                        db.insert_test_result(conn, TestResult(
+                            id=db.new_id(), project_id=request.project_id, suite_id=sid,
+                            test_name=item.test_name, verdict=item.verdict, detail=item.detail,
+                            source="pytest", executed_at=executed_at,
+                        ))
+                    counts: dict[str, int] = {}
+                    for item in items:
+                        counts[item.verdict.value] = counts.get(item.verdict.value, 0) + 1
+                    summary.append({"suite_id": sid, "name": suites[sid].name, "ran": len(items), "verdicts": counts})
+            handle.detail = f"results recorded for {len(summary)} suite(s)"
         return {"outcome": "succeeded", "result": {"suites": summary}}
 
     # -- reads ----------------------------------------------------------------
