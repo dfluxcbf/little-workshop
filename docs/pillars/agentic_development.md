@@ -392,8 +392,9 @@ The backend of the Dashboard's Docs pages (`docs/pillars/dashboard.md`).
      `claude --worktree lws-docs-<job> --remote-control <name> ... -- "<prompt>"`
      runs under `dtach` (in a `systemd --user` scope) from the project
      folder, which Claude Code must already trust: Claude creates and owns
-     the worktree under `.claude/worktrees/`, is told first to reset it to
-     the branch's tip, and nothing is pre-approved, so permission requests
+     the worktree under `.claude/worktrees/`, is told first to move it to
+     the branch's tip with `git switch --detach <sha>` (REQ-000000319: never
+     `git reset --hard`, which the project's own guard and deny rules refuse), and nothing is pre-approved, so permission requests
      are answered from the app. The job files live in `doc-jobs/<job>/` in
      the pillar's state. Either way the session survives this pillar
      restarting, and a restart resumes watching it (`resume_doc_updates`).

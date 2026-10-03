@@ -269,8 +269,9 @@ class DocUpdateFlow:
         worktree = project_dir / ".claude" / "worktrees" / worktree_name
         setup = (
             f"You are in a git worktree of the project that Claude Code created for this session (`{worktree}`), on its own new branch. "
-            f"Its first commit is NOT the branch you must document. Before anything else, run `git reset --hard {base_sha}` — "
-            f"that is the latest commit of `{payload['branch']}` — and then check that `git log -1 --format=%H` prints `{base_sha}`."
+            f"Its first commit is NOT the branch you must document. Before anything else, run `git switch --detach {base_sha}` — "
+            f"that is the latest commit of `{payload['branch']}` — and then check that `git log -1 --format=%H` prints `{base_sha}`. "
+            "Commit on that detached HEAD; little-workshop publishes the commits to the branch."
         )
         prompt_file = job_dir / "prompt.md"
         prompt_file.write_text(self._prompt(project_id, payload["branch"], payload, setup, str(job_file)), encoding="utf-8")
