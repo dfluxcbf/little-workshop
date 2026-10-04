@@ -34,6 +34,13 @@ from deployment.workshop_repo import workshop_repo_dir
 # already used elsewhere in this project as the human-override window.
 DEFAULT_SELF_REDEPLOY_CONFIRM_SECONDS = 600
 SELF_REDEPLOY_GATED_BY_DEFAULT = ("core", "deployment")
+# On a real install Core is not a transient `little-workshop-core` unit like the pillars: it is the
+# installed unit below, running `python -m core` from the same environment as `lws`. Redeploying
+# it means refreshing that environment and restarting the unit. Launching a transient Core beside
+# it gave two Cores, and the rollback of that put an old Core on the socket (2026-10-04).
+CORE_PILLAR = "core"
+INSTALLED_CORE_UNIT = "little-workshop.service"
+INSTALLED_CORE_HOW = f"restarted the installed unit {INSTALLED_CORE_UNIT}"
 # Pillars whose process is the one waiting on the redeploy Job's HTTP reply
 # (Orchestration dispatches every Job): stopping it mid-request times the Job
 # out, re-queues it, and the retry restarts it again — a loop. Always dispatch
@@ -421,6 +428,21 @@ class DeploymentFlow:
             if not self._wait(lambda: not self._pids_matching(match), stop_timeout_seconds):
                 self.runner.run(["pkill", "-A", "-KILL", "-f", match])
 
+    def _core_is_installed_unit(self) -> bool:
+        result = self.runner.run(["systemctl", "--user", "is-active", INSTALLED_CORE_UNIT])
+        return result.stdout.strip() == "active"
+
+    def _restart_installed_core(self) -> str:
+        """Restart the installed Core, which reconnects to the running pillars ("reconnect, don't
+        relaunch") and starts any the manifest newly names."""
+        result = self.runner.run(["systemctl", "--user", "restart", INSTALLED_CORE_UNIT])
+        if not result.ok:
+            raise DeploymentError(f"could not restart {INSTALLED_CORE_UNIT}: {(result.stderr or result.stdout).strip()}")
+        probed = self.health_probe(self.paths.core_socket_path, timeout=5.0, max_retries=20, sleep=self.sleep)
+        if not probed.ok:
+            raise DeploymentError(f"Core did not become healthy after restarting {INSTALLED_CORE_UNIT}: {probed.error}")
+        return INSTALLED_CORE_HOW
+
     def _xdg_env_for_own_paths(self) -> dict[str, str]:
         """Env vars that make a launched process's own `Paths.from_env()`
         resolve to this exact `self.paths` — not "whatever XDG_CONFIG_HOME
@@ -508,6 +530,16 @@ class DeploymentFlow:
 
         previous = db.get_pillar_deployment(conn, pillar)
 
+        if pillar == CORE_PILLAR and self._core_is_installed_unit():
+            done("stop_old", "the installed unit is restarted in place")
+            with step("launch") as handle:
+                how = self._restart_installed_core()
+                handle.detail = how
+            shutil.rmtree(install_dir, ignore_errors=True)  # Core runs from lws's environment, not from this copy
+            db.save_server_state(conn, pillar, commit, version, resolved_commit)
+            db.record_deployment(conn, pillar, commit, resolved_commit, version, "succeeded", how)
+            return UpResult(branch=commit, version=version, commit=resolved_commit, how=how, exposure=None, cli_note=cli_note)
+
         with step("stop_old"):
             self._stop_pillar(pillar)
         with step("launch") as handle:
@@ -579,6 +611,10 @@ class DeploymentFlow:
         gate_timeout = confirm_timeout_seconds
         if gate_timeout is None and pillar in SELF_REDEPLOY_GATED_BY_DEFAULT:
             gate_timeout = DEFAULT_SELF_REDEPLOY_CONFIRM_SECONDS
+        if result.how == INSTALLED_CORE_HOW:
+            # Nothing to roll back to: the installed Core runs whatever `lws`'s environment holds,
+            # and that never moves backwards.
+            gate_timeout = None
         if gate_timeout:
             with step("confirm_gate") as handle:
                 result.confirm_message = self.arm_confirm_gate(conn, pillar, commit, result.commit, result.version, gate_timeout)

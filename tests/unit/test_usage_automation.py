@@ -96,8 +96,7 @@ def test_work_that_writes_content_or_takes_prose_is_heuristic(conn):
     found = {c["signature"]: c for c in mining.mine(conn, PRICES, today=TODAY)}
     edit = found["Edit(<path>) → Bash(python3 -m pytest <path>)"]
     assert edit["checks"]["no_content_creation"] is False and edit["class"] == "heuristic" and "Stays with Claude" in edit["proposed_form"]
-    agent = found["Agent(test-runner)"]
-    assert agent["checks"]["argument_derivability"] is False and agent["checks"]["checkability"] is False and agent["class"] != "deterministic"
+    assert "Agent(test-runner)" not in found  # a call whose argument is prose alone is nothing code could make
     assert "subagent that returns only the failures" in found["Bash(python3 -m pytest <path>)"]["proposed_form"]
 
 
@@ -108,6 +107,48 @@ def test_candidates_are_ranked_by_what_they_cost_per_week(conn):
         episode(conn, f"t{i}", "p1", [("Bash", {"command": "python3 tools/sync_policies.py"})])
     ranked = [c["signature"] for c in mining.mine(conn, PRICES, today=TODAY)]
     assert ranked == ["Bash(python3 tools/sync_policies.py)", "mcp:workshop_deployment_redeploy_pillar(commit, pillar)"]
+
+
+def test_a_shell_signature_names_the_command_that_does_the_work():
+    sign = lambda command: signatures.signature("Bash", {"command": command})
+    assert sign("cd /home/x/repo; python3 -m pytest tests/unit -q") == "Bash(python3 -m pytest <path>)"
+    assert sign("cd /home/x/repo\nexport FOO=1\nlws job list") == "Bash(lws job list)"
+    assert sign("cd /home/x/repo") == "Bash(cd <path>)"
+    assert sign("python3 - <<'EOF'\np='/a/b'\nprint(p)\nEOF") == "Bash(python3 <inline>)"
+    assert sign("cd /x && python3 -c 'print(1)'") == "Bash(python3 <inline>)"
+    assert sign("bash -lc 'bazel test //...'") == "Bash(bash <inline>)"
+    assert sign("") == "Bash(?)" and signatures.signature("Bash", None) == "Bash(?)"
+
+
+def test_reading_writing_and_inline_scripts_alone_are_no_candidates(conn):
+    noise = [("Bash", {"command": "cd /home/x/repo"}), ("Bash", {"command": ""}), ("Bash", {"command": "cat docs/a.md"}),
+             ("Bash", {"command": "python3 - <<'EOF'\nprint(1)\nEOF"}), ("Write", {"file_path": "a.py"}), ("Edit", {"file_path": "a.py"}),
+             ("Bash", {"command": "git status --short"}), ("Bash", {"command": "ls -la src"})]
+    for i in range(4):
+        episode(conn, f"s{i}", "p1", noise + [REDEPLOY])
+    found = {c["signature"] for c in mining.mine(conn, PRICES, today=TODAY)}
+    assert "mcp:workshop_deployment_redeploy_pillar(commit, pillar)" in found
+    singles = {signature for signature in found if " → " not in signature}
+    assert singles == {"mcp:workshop_deployment_redeploy_pillar(commit, pillar)"}
+    assert all("workshop_deployment_redeploy_pillar" in signature for signature in found)  # a sequence needs a call that code could make
+
+
+def test_mining_again_resigns_stored_calls_and_drops_open_candidates_that_are_gone(usage, conn):
+    for i in range(3):
+        episode(conn, f"s{i}", "p1", [REDEPLOY])
+        conn.execute("INSERT INTO tool_calls (id, session_id, prompt_id, ts, tool, signature, detail, source) VALUES (?, ?, 'p1', ?, 'Bash', 'Bash(cd <path>)', ?, 't')",
+                     (f"old{i}", f"s{i}", NOW.isoformat(), "cd /repo; lws job list"))
+    db.record_candidate(conn, {"signature": "Bash(cd <path>)", "class": "deterministic", "score": 5, "occurrences": 9, "sessions": 9,
+                               "weekly_value": 99.0, "median_cost": 1.0, "proposed_form": "x"})
+    kept = db.record_candidate(conn, {"signature": "Bash(old but dismissed)", "class": "hybrid", "score": 3, "occurrences": 1, "sessions": 1,
+                                      "weekly_value": 1.0, "median_cost": 1.0, "proposed_form": "x"})
+    db.update_candidate(conn, kept, state="dismissed")
+    conn.commit()
+    usage.mine()
+    signatures_now = {c["signature"]: c["state"] for c in db.list_candidates(conn, state=None)}
+    assert "Bash(cd <path>)" not in signatures_now  # an open candidate mining no longer finds is dropped
+    assert signatures_now["Bash(old but dismissed)"] == "dismissed"  # a person's decision is kept
+    assert "Bash(lws job list)" in signatures_now  # the stored calls were signed again from the command kept with them
 
 
 def test_a_transcripts_tool_calls_are_grouped_by_prompt(tmp_path):

@@ -14,6 +14,7 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 from statistics import median
 
+from usage import signatures
 from usage.pricing import Price, weighted
 
 MIN_SESSIONS, MIN_OCCURRENCES, PERIOD_DAYS = 3, 10, 14
@@ -24,8 +25,24 @@ CHECKS = ("argument_derivability", "output_stability", "checkability", "no_conte
 # Tools whose arguments are text Claude wrote, or whose outcome only a person can judge.
 FREE_TEXT_TOOLS = ("Agent", "Task", "WebSearch", "WebFetch", "AskUserQuestion", "Skill")
 CONTENT_TOOLS = ("Edit(", "Write(", "MultiEdit(", "NotebookEdit(")
-# Exploration is judgment by nature: a candidate made only of these is never proposed.
+# What no code could do in Claude's place: looking around (exploration is judgment by nature),
+# writing content, a script written on the command line, a shell command that only moves about or
+# could not be read. A candidate needs at least one call that is none of these.
 EXPLORATION = ("Read(", "Grep(", "Glob(", "LS(", "ToolSearch(", "TodoWrite(")
+LOOKING_SHELL = ("cat", "ls", "head", "tail", "grep", "rg", "find", "sed", "awk", "wc", "echo", "pwd", "cd", "which", "tree", "stat",
+                 "git status", "git diff", "git log", "git show", "git branch", "git rev-parse", "git ls-files")
+
+
+def actionable(signature: str) -> bool:
+    """Whether code could make this call: an MCP call, or a shell command that does work."""
+    if not signature or signature.startswith(EXPLORATION) or signature.startswith(CONTENT_TOOLS) or signature.startswith(FREE_TEXT_TOOLS):
+        return False
+    if signature.startswith("Bash("):
+        inner = signature[len("Bash("):-1]
+        if inner in ("", "?") or signatures.INLINE in inner:
+            return False
+        return not any(inner == word or inner.startswith(word + " ") for word in LOOKING_SHELL)
+    return True
 NIGHT_START = (2, 0)  # recommended runs start at 02:00 and follow one another
 NIGHT_STEP_MINUTES = 30
 WEEKDAYS = 7
@@ -53,7 +70,7 @@ def _average_request_cost(conn: sqlite3.Connection, start: date, end: date, pric
 
 
 def _is_free_text(signature: str) -> bool:
-    return signature.startswith(FREE_TEXT_TOOLS)
+    return signature.startswith(FREE_TEXT_TOOLS) or signatures.INLINE in signature
 
 
 def score(key: tuple[str, ...], occurrences: list[dict]) -> dict[str, bool]:
@@ -121,6 +138,18 @@ def recommend_schedule(timestamps: list[str], slot: int) -> dict:
             "note": "in the middle of the night, one task after another, so it does not compete with your own sessions"}
 
 
+def resign(conn: sqlite3.Connection) -> int:
+    """Sign every stored shell call again from the command kept with it, so calls stored under an
+    older normalization compare with new ones. Returns how many signatures changed."""
+    changed = 0
+    for row in conn.execute("SELECT id, signature, detail FROM tool_calls WHERE tool = 'Bash'").fetchall():
+        fresh = signatures.bash_signature(row["detail"])
+        if fresh != row["signature"]:
+            conn.execute("UPDATE tool_calls SET signature = ? WHERE id = ?", (fresh, row["id"]))
+            changed += 1
+    return changed
+
+
 def mine(conn: sqlite3.Connection, prices: dict[str, Price], *, today: date | None = None, days: int = PERIOD_DAYS) -> list[dict]:
     """The candidates of the last `days`, ranked by the weighted tokens their occurrences cost per week."""
     end = today or date.today()
@@ -135,7 +164,7 @@ def mine(conn: sqlite3.Connection, prices: dict[str, Price], *, today: date | No
                 key = tuple(signatures[index:index + length])
                 if length > 1 and len(set(key)) == 1:
                     continue  # a signature repeated is the single signature's candidate
-                if all(signature.startswith(EXPLORATION) or not signature for signature in key):
+                if not any(actionable(signature) for signature in key):
                     continue
                 found.setdefault(key, []).append({
                     "session_id": episode["session_id"], "project": episode["project"], "calls": calls[index:index + length],

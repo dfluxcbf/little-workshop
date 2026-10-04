@@ -490,3 +490,12 @@ def update_candidate(conn: sqlite3.Connection, candidate_id: str, **fields) -> b
     allowed["updated_at"] = now_iso()
     assignments = ", ".join(f"{key} = ?" for key in allowed)
     return bool(conn.execute(f"UPDATE candidates SET {assignments} WHERE id = ?", (*allowed.values(), candidate_id)).rowcount)
+
+
+def drop_stale_candidates(conn: sqlite3.Connection, found: set[str]) -> int:
+    """Remove the open candidates mining no longer finds. One a person decided on (accepted, dismissed,
+    done) is kept, with its decision."""
+    stale = [row["id"] for row in conn.execute("SELECT id, signature FROM candidates WHERE state = 'open'") if row["signature"] not in found]
+    for candidate_id in stale:
+        conn.execute("DELETE FROM candidates WHERE id = ?", (candidate_id,))
+    return len(stale)

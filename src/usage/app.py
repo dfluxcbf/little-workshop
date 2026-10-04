@@ -334,9 +334,11 @@ def build_app(
 
     def mine_automation(today: date | None = None) -> dict:
         with lock:
+            mining.resign(conn)
             found = mining.mine(conn, prices(), today=today)
             for candidate in found:
                 db.record_candidate(conn, candidate)
+            db.drop_stale_candidates(conn, {candidate["signature"] for candidate in found})
             for candidate in db.list_candidates(conn, state=None):
                 if candidate.get("replacement"):
                     db.update_candidate(conn, candidate["id"], tokens_avoided=mining.tokens_avoided(conn, candidate))
