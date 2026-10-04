@@ -23,3 +23,4 @@ right.
 | [Agentic Development](agentic_development.md) | Built (M6) — fully specified |
 | [Dashboard](dashboard.md) | Not yet built (M14) |
 | [MCP Server](mcp_server.md) | Built (M7) |
+| [Usage & Efficiency](usage.md) | Built (M19–M22): collection, findings, automation mining, token-aware operation; not yet deployed on this machine |

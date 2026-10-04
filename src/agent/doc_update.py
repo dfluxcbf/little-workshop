@@ -51,11 +51,14 @@ from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.systemd import user_path_env
 from common.worktree_client import WorktreeUnavailable, provision_worktree, release_worktree
 from agent import db, gitutil, review_store, templates_util
-from agent.claude_invoke import model_args
+from agent import usage_client
+from agent.launch import JOB_UPDATE_DOCS, launch_for
+from agent.claude_invoke import model_args, parse_claude_output, setenv_args, usage_from_raw
 from agent.session_flow import is_trusted
 
 JOB_FILE = ".review/update-doc-job.json"
 RESULT_FILE = ".review/update-doc-result.json"
+SESSION_LOG = ".review/session.log"
 IDLE_LIMIT = timedelta(hours=5)
 POLL_SECONDS = 30.0
 ACTIONS = ("edited", "removed", "unchanged")
@@ -213,7 +216,7 @@ class DocUpdateFlow:
                     (worktree / JOB_FILE).write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
                     setup = f"You are working in a throwaway git worktree of that branch: `{worktree}` (the current directory). It is checked out detached at the branch's latest commit."
                     (worktree / ".review" / "prompt.md").write_text(self._prompt(project_id, branch, payload, setup, JOB_FILE), encoding="utf-8")
-                    self._start_headless_session(worktree, unit)
+                    self._start_headless_session(worktree, unit, self._launch_env(project_id, job_id))
                 with self._db_lock:
                     if db.get_doc_update(conn, job_id)["status"] != db.DOC_UPDATE_STARTING:
                         stopped = True  # the user stopped the job while it was starting
@@ -242,13 +245,19 @@ class DocUpdateFlow:
             comments_summary=_summary(payload),
         )
 
-    def _start_headless_session(self, worktree: Path, unit: str) -> None:
-        argv = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions", *model_args()]
+    def _launch_env(self, project_id: str, job_id: str) -> dict[str, str]:
+        return usage_client.launch_env(self.paths, project=project_id, job_id=job_id, job_type="agent.update_docs")
+
+    def _start_headless_session(self, worktree: Path, unit: str, env: dict[str, str] | None = None) -> None:
+        chosen = launch_for(JOB_UPDATE_DOCS, self.paths)
+        argv = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions", *model_args(chosen.model, chosen.effort)]
+        if chosen.max_budget_usd is not None:
+            argv += ["--max-budget-usd", str(chosen.max_budget_usd)]
         # The prompt comes in on stdin; the output goes to a log beside it.
-        shell = f"exec {shlex.join(argv)} < .review/prompt.md > .review/session.log 2>&1"
+        shell = f"exec {shlex.join(argv)} < .review/prompt.md > {SESSION_LOG} 2>&1"
         result = self.runner.run([
             "systemd-run", "--user", "--collect", f"--unit={unit}", f"--working-directory={worktree}",
-            f"--setenv=PATH={user_path_env()}", "/bin/bash", "-c", shell,
+            f"--setenv=PATH={user_path_env()}", *setenv_args(env), "/bin/bash", "-c", shell,
         ])
         if not result.ok:
             raise DocUpdateError(f"could not start the Claude session: {(result.stderr or result.stdout).strip()}")
@@ -280,12 +289,14 @@ class DocUpdateFlow:
         socket.parent.mkdir(parents=True, exist_ok=True)
         if socket.exists():
             socket.unlink()
+        chosen = launch_for(JOB_UPDATE_DOCS, self.paths)
         argv = [
             "dtach", "-n", str(socket), "claude", "--worktree", worktree_name, "--remote-control", name,
-            "--add-dir", str(job_dir), *model_args(), "--", f"Follow the instructions in {prompt_file}",
+            "--add-dir", str(job_dir), *model_args(chosen.model, chosen.effort), "--", f"Follow the instructions in {prompt_file}",
         ]
         result = self.runner.run(
-            ["systemd-run", "--user", "--collect", "--scope", f"--unit={unit}", f"--setenv=PATH={user_path_env()}", *argv],
+            ["systemd-run", "--user", "--collect", "--scope", f"--unit={unit}", f"--setenv=PATH={user_path_env()}",
+             *setenv_args(self._launch_env(project_id, job_id)), *argv],
             cwd=project_dir,
         )
         if not result.ok:
@@ -408,6 +419,7 @@ class DocUpdateFlow:
         _report("wait_session", SUCCEEDED, "the session signalled it was done" if signalled else "the session went idle")
         _report("finalize", RUNNING)
         self._stop_session(update["unit"])
+        self._record_usage(conn, update, worktree)
         try:
             result = json.loads((worktree / RESULT_FILE).read_text(encoding="utf-8")) if (worktree / RESULT_FILE).exists() else None
         except (OSError, json.JSONDecodeError):
@@ -432,6 +444,16 @@ class DocUpdateFlow:
         self._db(conn, db.update_doc_update, job_id, status=db.DOC_UPDATE_DONE, result=summary)
         _report("finalize", SUCCEEDED, f"{done} of {len(update['comment_ids'])} comment(s) done")
         self.on_complete(job_id, True, summary, None)
+
+    def _record_usage(self, conn: sqlite3.Connection, update: dict, worktree: Path) -> None:
+        """A headless session's log ends with its result JSON; a Remote Control session writes none."""
+        try:
+            log = (worktree / SESSION_LOG).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        _text, _is_error, raw = parse_claude_output(log)
+        self._db(conn, db.record_usage, db.USAGE_DOC_UPDATE, usage_from_raw(raw), ref_id=update["job_id"],
+                 project_id=update["project_id"], job_id=update["job_id"])
 
     def stop(self, conn: sqlite3.Connection, job_id: str, project_dir: Path | None) -> bool:
         """Kill the session and discard the worktree; the comments stay open."""

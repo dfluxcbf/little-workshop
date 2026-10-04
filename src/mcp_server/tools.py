@@ -88,6 +88,10 @@ def _job_status(paths: Paths, args: JSONDict) -> Any:
     return client.job_status(paths, args["job_id"])
 
 
+def _job_wait(paths: Paths, args: JSONDict) -> Any:
+    return client.job_wait(paths, args["job_id"], args.get("timeout_seconds"))
+
+
 def _job_stop(paths: Paths, args: JSONDict) -> Any:
     return client.stop_job(paths, args["job_id"])
 
@@ -751,6 +755,79 @@ def _agent_skip_task(paths: Paths, args: JSONDict) -> Any:
     )
 
 
+# -- Usage & Efficiency ------------------------------------------------------
+
+_USAGE_DROP = ("days", "previous_week", "next_week", "four_week_average", "pays_for_itself", "outcomes_by_week")
+
+
+def _usage_summary(paths: Paths, args: JSONDict) -> Any:
+    """The week's numbers without the per-day series the Dashboard plots: a session asks for the totals."""
+    summary = client.usage_summary(paths, project=args.get("project"), week=args.get("week"), origin=args.get("origin"))
+    return {key: value for key, value in summary.items() if key not in _USAGE_DROP} if isinstance(summary, dict) else summary
+
+
+def _usage_job(paths: Paths, job_type: str, params: JSONDict) -> Any:
+    return client.create_job(
+        paths, type=job_type, target_pillar="usage", project_id=None, params=params, queue_key="usage",
+        depends_on=[], created_by="mcp",
+    )
+
+
+def _usage_findings(paths: Paths, args: JSONDict) -> Any:
+    return client.usage_findings(paths, project=args.get("project"), state=args.get("state") or "open")
+
+
+def _usage_analyze(paths: Paths, args: JSONDict) -> Any:
+    return _usage_job(paths, "usage.analyze", {})
+
+
+def _usage_candidates(paths: Paths, args: JSONDict) -> Any:
+    return client.usage_candidates(paths, state=args.get("state") or "open")
+
+
+def _usage_mine_automation(paths: Paths, args: JSONDict) -> Any:
+    return _usage_job(paths, "usage.mine_automation", {})
+
+
+def _trigger_list(paths: Paths, args: JSONDict) -> Any:
+    return client.list_triggers(paths)
+
+
+def _trigger_add(paths: Paths, args: JSONDict) -> Any:
+    template = {"type": args["type"], "target_pillar": args["target_pillar"], "project_id": args.get("project_id"),
+                "params": args.get("params") or {}, "queue_key": args.get("queue_key"), "depends_on": []}
+    return client.add_trigger(paths, name=args["name"], event=args["event"], event_filter=args.get("filter") or {}, job_template=template)
+
+
+def _trigger_remove(paths: Paths, args: JSONDict) -> Any:
+    return client.remove_trigger(paths, args["trigger_id"])
+
+
+def _requirements_sync_markers(paths: Paths, args: JSONDict) -> Any:
+    params = {key: args[key] for key in ("suite_id", "dry_run") if args.get(key) is not None}
+    return _requirements_job(paths, "requirements.sync_markers", args["project_id"], params)
+
+
+def _deployment_redeploy_changed_pillars(paths: Paths, args: JSONDict) -> Any:
+    params = {key: args[key] for key in ("commit", "base") if args.get(key)}
+    return client.create_job(
+        paths, type="deployment.redeploy_changed_pillars", target_pillar="deployment", project_id=None,
+        params=params, queue_key="redeploy-changed-pillars", depends_on=[], created_by="mcp",
+    )
+
+
+def _usage_doctor(paths: Paths, args: JSONDict) -> Any:
+    return _usage_job(paths, "usage.doctor", {})
+
+
+def _usage_ingest_transcripts(paths: Paths, args: JSONDict) -> Any:
+    return _usage_job(paths, "usage.ingest_transcripts", {})
+
+
+def _usage_configure_claude(paths: Paths, args: JSONDict) -> Any:
+    return _usage_job(paths, "usage.configure_claude", {"apply": bool(args.get("apply", False))})
+
+
 def _agent_runs(paths: Paths, args: JSONDict) -> Any:
     return client.agent_runs(paths, args["project_id"], status=args.get("status"))
 
@@ -806,10 +883,17 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_core_status", "Return every pillar's enabled/active status, as Core sees it.", _schema(), _core_status),
     ToolSpec("workshop_job_list", "List Jobs known to Orchestration, optionally filtered by status.",
              _schema({"status": _prop("string", "queued|running|pending_confirmation|succeeded|failed|cancelled")}), _job_list),
-    ToolSpec("workshop_job_status", "Get one Job's current status and result by id, with its `steps` checklist "
+    ToolSpec("workshop_job_status", "Get one Job's current status and result by id (to wait for it, use workshop_job_wait), with its `steps` checklist "
              "(each step's state, runtime and expected runtime; a step in state `attention` carries the "
              "question the user must answer, see workshop_job_answer).",
              _schema({"job_id": _prop("string", "The Job id.")}, ["job_id"]), _job_status),
+    ToolSpec("workshop_job_wait", "Wait for a Job in one call: returns the Job (as workshop_job_status does) as soon "
+             "as it has settled, is held in `pending_confirmation`, or has a step in state `attention`, and "
+             "otherwise when the timeout passes (the Job is then still queued or running: call again). Use "
+             "this instead of repeating workshop_job_status or sleeping.",
+             _schema({"job_id": _prop("string", "The Job id."),
+                      "timeout_seconds": _prop("number", "How long to wait at most. Default 120, at most 300.")},
+                     ["job_id"]), _job_wait),
     ToolSpec("workshop_job_answer", "Answer a Job step that is waiting for the user's attention (a step in "
              "state `attention` in a Job's `steps`, with its `prompt` question and options). Only relay the "
              "choice the USER made: never pick an option on their behalf. An unanswered step fails its Job "
@@ -1248,6 +1332,71 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_agent_runs", "List a project's agent runs, optionally filtered by status.",
              _schema({"project_id": _PROJECT_ID, "status": _prop("string", "running|awaiting_finish|finished|failed|skipped")},
                       ["project_id"]), _agent_runs),
+    ToolSpec("workshop_usage_summary", "Claude usage of one week (default: the current one, weeks start on Monday): "
+             "weighted tokens (list-price dollars as a common unit, not money spent), cache hit ratio, average "
+             "context per request, long-context share, startup context, per-project totals and the heaviest "
+             "sessions. Collected for every Claude session on this machine.",
+             _schema({"project": _prop("string", "Only this project (a registered id, `little-projects` for the workspace, or `unattributed`)."),
+                      "week": _prop("string", "Any day of the week wanted, YYYY-MM-DD."),
+                      "origin": _prop("string", "Only this origin.", enum=["interactive", "job", "query", "subagent"])}),
+             _usage_summary),
+    ToolSpec("workshop_usage_findings", "Claude-usage findings: what the detectors measured (long contexts, startup "
+             "growth, cache misses, polling, large command output, files reread, routes not taken), each with its "
+             "evidence, the estimated weekly saving and the recommended action, ranked by saving. Check these before "
+             "optimizing anything.",
+             _schema({"project": _prop("string", "Only this project's findings (plus the machine-wide ones)."),
+                      "state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "resolved", "all"])}),
+             _usage_findings),
+    ToolSpec("workshop_usage_analyze", "Run the Claude-usage detectors now over the last 14 days: opens, refreshes and "
+             "resolves findings, and measures the experiments that are due. No Claude involved.", _schema(), _usage_analyze),
+    ToolSpec("workshop_usage_candidates", "Automation candidates: work Claude sessions repeat with the same shape "
+             "(a tool call, or a short sequence), each with a determinism score, its class (deterministic, hybrid, "
+             "heuristic), what its occurrences cost per week, the proposed form (job, MCP tool, hook, trigger) and a "
+             "recommended schedule. Ranked by weekly cost.",
+             _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"])}),
+             _usage_candidates),
+    ToolSpec("workshop_usage_mine_automation", "Mine the last 14 days of tool calls into automation candidates now. "
+             "No Claude involved, and nothing is implemented from it.", _schema(), _usage_mine_automation),
+    ToolSpec("workshop_trigger_list", "List the workshop triggers: each fires a Job when an event happens (a Job "
+             "settling, a branch finishing, a Claude session ending, a finding opening).", _schema(), _trigger_list),
+    ToolSpec("workshop_trigger_add", "Add a workshop trigger: when `event` happens (job.settled, job.succeeded, "
+             "job.failed, version.branch_finished, version.release_finished, claude.session_ended, "
+             "usage.finding_opened, registry.project_registered) and every `filter` key equals the event's value, "
+             "create the Job. Refused for a Job type that merges, finishes, releases, removes or deletes. Add one "
+             "only when the USER asked for it.",
+             _schema({"name": _prop("string", "What the trigger is for."), "event": _prop("string", "The event name."),
+                      "filter": {"type": "object", "description": "Event values that must match, e.g. {\"project_id\": \"little-workshop\"}."},
+                      "type": _prop("string", "The Job type to create."), "target_pillar": _prop("string", "The pillar that runs it."),
+                      "project_id": _prop("string", "The Job's project; omitted, the event's project."),
+                      "params": {"type": "object", "description": "The Job's params; a value `$event.<key>` takes that value of the event."},
+                      "queue_key": _prop("string", "The Job's queue.")},
+                     ["name", "event", "type", "target_pillar"]), _trigger_add),
+    ToolSpec("workshop_trigger_remove", "Remove a workshop trigger by id.",
+             _schema({"trigger_id": _prop("string", "The trigger's id.")}, ["trigger_id"]), _trigger_remove),
+    ToolSpec("workshop_requirements_sync_markers", "Bring the Requirements pillar in line with the "
+             "`# --- REQ-nnnnnnnnn: title ---` markers of the project's test files, in one call: a marked requirement "
+             "the pillar lacks is created from its docs/requirements.md row, and every marked requirement is linked "
+             "to the suite. Use this instead of one workshop_requirements_create and _link_suite call per requirement.",
+             _schema({"project_id": _PROJECT_ID, "suite_id": _prop("string", "The suite to link to. Default: the suite named 'Unit tests'."),
+                      "dry_run": _prop("boolean", "Only report what would be created and linked.")}, ["project_id"]),
+             _requirements_sync_markers),
+    ToolSpec("workshop_deployment_redeploy_changed_pillars", "Redeploy the pillars of little-workshop whose code "
+             "changed in a commit (default HEAD, compared with its first parent: after a branch finish, exactly the "
+             "pillars that branch touched), in dependency order. One call; nothing to list by hand.",
+             _schema({"commit": _prop("string", "Commit/ref to deploy. Default HEAD."),
+                      "base": _prop("string", "Compare against this instead of the commit's first parent.")}),
+             _deployment_redeploy_changed_pillars),
+    ToolSpec("workshop_usage_doctor", "Check the configuration Claude usage collection depends on: the intake, the "
+             "user profile in ~/.claude/settings.json, `claude doctor`, the language servers, and whether data "
+             "arrived recently. Read-only: reports each check with a hint.", _schema(), _usage_doctor),
+    ToolSpec("workshop_usage_ingest_transcripts", "Backfill Claude usage from the local transcripts "
+             "(~/.claude/projects) into the usage store and rebuild the rollups. Counts nothing twice.",
+             _schema(), _usage_ingest_transcripts),
+    ToolSpec("workshop_usage_configure_claude", "Show what the Claude usage user profile would change in "
+             "~/.claude/settings.json (telemetry environment, session hooks, statusline, transcript retention). "
+             "With `apply` true it writes the change, keeping a backup and every entry of the user's own. Apply "
+             "only when the USER asked for it.",
+             _schema({"apply": _prop("boolean", "Write the profile. Default false: a dry run.")}), _usage_configure_claude),
     ToolSpec("workshop_agent_run_status", "Get one agent run's full status and result by id.",
              _schema({"project_id": _PROJECT_ID, "run_id": _prop("string", "The run's id.")}, ["project_id", "run_id"]), _agent_run_status),
     ToolSpec("workshop_agent_ci_check", "Test a pull request's real head branch in an isolated worktree and post "

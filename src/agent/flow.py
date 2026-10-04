@@ -23,7 +23,8 @@ from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from agent import db, gitutil, report, requirements_client, standards, templates_util, version_client
 from agent.branching import BranchingError, BranchingSpec, MODE_AUTO, MODE_EXISTING, MODE_NEW, resolve as resolve_branching
-from agent.claude_invoke import claude_argv, parse_claude_output, parse_status
+from agent import launch, usage_client
+from agent.claude_invoke import claude_argv, parse_claude_output, parse_status, usage_from_raw, with_budget, with_env
 from agent.github_adapter import GitHubAdapter, GitHubError, parse_github_slug
 from agent.requirements_client import RequirementsClientError
 from agent.screenshots import Screenshotter
@@ -171,13 +172,20 @@ class AgentFlow:
             return ()
         return playwright.mcp_claude_args(self.runner, self.paths.state_home / "playwright-mcp" / f"run-{run_id}")
 
-    def _invoke_claude(self, project_dir: Path, prompt: str, session_name: str | None, extra_args: tuple[str, ...] = ()) -> tuple[str, bool]:
+    def _invoke_claude(
+        self, project_dir: Path, prompt: str, session_name: str | None, extra_args: tuple[str, ...] = (),
+        on_usage: Callable[[dict | None], object] = lambda usage: None, env: dict[str, str] | None = None,
+    ) -> tuple[str, bool]:
+        """`on_usage` gets what the run reported using, before a failed run raises: a failure costs tokens too."""
+        chosen = launch.launch_for(launch.JOB_RUN_TASK, self.paths)
+        budget = self.max_budget_usd if self.max_budget_usd is not None else chosen.max_budget_usd
         argv = claude_argv(
-            prompt, session_name=session_name, model=self.model, max_budget_usd=self.max_budget_usd,
+            prompt, session_name=session_name, model=self.model or chosen.model, effort=chosen.effort, max_budget_usd=budget,
             user_messages=self.user_messages, extra_args=extra_args,
         )
-        result = self.runner.run(argv, cwd=project_dir, timeout=self.claude_timeout_seconds)
-        text, is_error, _raw = parse_claude_output(result.stdout)
+        result = self.runner.run(with_env(argv, env), cwd=project_dir, timeout=self.claude_timeout_seconds)
+        text, is_error, raw = parse_claude_output(result.stdout)
+        on_usage(with_budget(usage_from_raw(raw), budget))
         if not result.ok or is_error:
             raise AgentFlowError(f"Claude exited with {result.returncode}{' (is_error)' if is_error else ''}: {(text or result.stderr)[-4000:]}")
         return text, is_error
@@ -294,7 +302,11 @@ class AgentFlow:
 
         try:
             with step("run_claude"):
-                summary_text, _is_error = self._invoke_claude(project_dir, prompt, session_name, playwright_args)
+                summary_text, _is_error = self._invoke_claude(
+                    project_dir, prompt, session_name, playwright_args,
+                    on_usage=lambda usage: db.record_usage(conn, db.USAGE_RUN, usage, ref_id=run_id, project_id=project_id, job_id=job_id),
+                    env=usage_client.launch_env(self.paths, project=project_id, job_id=job_id, job_type="agent.run_task", run_id=run_id),
+                )
         except AgentFlowError as exc:
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, branch, "failed", None, None, str(exc))

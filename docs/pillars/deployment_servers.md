@@ -140,3 +140,15 @@ Users of the plan: the Dashboard's Pillars page, the Release job's relaunch of l
 `workshop_deployment_redeploy_pillars` MCP tool (default: every enabled pillar). Redeploying one pillar is
 unchanged. `lws` is shared by all pillars, so refreshing it is serialized (`_CLI_REFRESH_LOCK`): of two
 pillars redeployed at once, the second finds it already current.
+
+## Redeploying the pillars a commit changed (2026-10-04)
+
+REQ-000000345. `deployment.redeploy_changed_pillars` (`params.commit`, default HEAD; `params.base`, default the
+commit's first parent, so a finished branch's merge commit gives that branch's changes) lists the files changed
+under `src/`, maps each `src/<directory>` to its pillar (`mcp_server` is `mcp`; a change under `src/common`
+means every live pillar; the CLI, docs, tests and tools redeploy nothing; `common/redeploy_plan.changed_pillars`),
+keeps the pillars Core runs, and creates one `deployment.redeploy_pillar` Job per pillar in the order of
+`REDEPLOY_AFTER`, each confirm-gated as any redeploy. With no pillar changed it does nothing. It replaces
+redeploying pillars by hand, one call each, after every finish; a trigger runs it after a branch finishes on
+little-workshop (`docs/pillars/orchestration.md`, "Triggers"). `lws deployment redeploy-changed-pillars`,
+`workshop_deployment_redeploy_changed_pillars`.

@@ -3111,3 +3111,143 @@ def test_the_pillars_page_redeploys_the_chosen_pillars_in_batches(test_client, m
     assert by_pillar["policy"]["depends_on"] == [by_pillar["dashboard"]["id"]]
     assert {f["created_by"] for f in created} == {"dashboard"} and {f["params"]["commit"] for f in created} == {"abc123"}
     assert "orchestration" in unquote(response.headers["location"]) and "→" in unquote(response.headers["location"])
+
+
+# --- REQ-000000334: Usage is read through lws, the MCP server and the Dashboard ---
+
+
+def _usage_summary():
+    day = {"day": "2026-09-28", "weighted": 1.5, "weighted_cache_read": 1.0, "weighted_cache_write": 0.2, "weighted_output": 0.2,
+           "weighted_input": 0.1, "average_context": 250000.0, "cache_hit_ratio": 0.98, "long_context_share": 0.6, "requests": 12}
+    total = {**day, "cache_read_tokens": 3_000_000, "cache_write_tokens": 20_000, "output_tokens": 900}
+    return {
+        "week": "2026-09-28", "week_end": "2026-10-04", "weeks": ["2026-09-21", "2026-09-28"], "project": None, "origin": None,
+        "complete": False, "days": [day], "total": total, "previous_week": [day], "next_week": None, "four_week_average": None,
+        "startup_context_p50": 44000,
+        "projects": [{**total, "project": "little-meals", "sessions": 2, "startup_context_p50": 44000}],
+        "top_sessions": [{"session_id": "s1", "first": "2026-09-28T10:00:00+00:00", "project": "little-meals", "origin": "interactive",
+                          "requests": 12, "max_context": 400000, "weighted": 1.5}],
+        "plan_pressure": [], "pays_for_itself": [{"week": "2026-09-28", "workshop": 1.0, "others": 0.5}],
+    }
+
+
+def test_the_claude_usage_page_shows_one_week(test_client, monkeypatch):
+    asked = []
+    monkeypatch.setattr(app_module.client, "usage_summary", lambda paths, **kw: asked.append(kw) or _usage_summary())
+    monkeypatch.setattr(app_module.client, "usage_doctor", lambda paths: {"ts": "2026-10-04T10:00:00+00:00", "ok": False, "checks": [
+        {"check": "user_profile", "ok": False, "detail": "differs", "hint": "run the job"}, {"check": "intake", "ok": True, "detail": "", "hint": ""}]})
+    response = test_client.get("/usage", params={"week": "2026-09-28", "project": "little-meals"})
+    assert response.status_code == 200
+    assert asked == [{"week": "2026-09-28", "project": "little-meals", "origin": None}]
+    page = response.text
+    assert "Compare to previous week" in page and 'data-compare="next_week" disabled' in page
+    assert "little-meals" in page and "98.0%" in page and "This week is not over yet" in page
+    assert "user_profile" in page and "run the job" in page and "<strong>intake</strong>" not in page
+    assert 'id="usage-data"' in page and "/static/usage.js" in page
+
+
+def test_the_claude_usage_page_says_so_when_the_pillar_is_off(test_client, monkeypatch):
+    def down(paths, **kw):
+        raise app_module.client.PillarUnavailable("usage daemon unreachable")
+
+    monkeypatch.setattr(app_module.client, "usage_summary", down)
+    response = test_client.get("/usage")
+    assert response.status_code == 200 and "not reachable" in response.text
+
+
+# --- REQ-000000340: Findings are read through lws, the MCP server and the Dashboard ---
+
+
+def test_the_claude_usage_page_lists_findings_with_their_job_and_experiments(test_client, monkeypatch):
+    finding = {"id": "f1", "detector": "D6", "title": "Turns spent polling or waiting", "project": "little-meals", "state": "open",
+               "metric": "polling share", "value": 0.125, "saving": 3.5, "action": "Wait with workshop_job_wait.",
+               "evidence": {"polls": 13}, "period_start": "2026-09-21", "period_end": "2026-10-04",
+               "experiments": [{"created_at": "2026-09-20T10:00:00+00:00", "change": "job j9", "before_value": 0.2, "after_value": None, "state": "running"}]}
+    done = {**finding, "id": "f2", "detector": "D1", "state": "dismissed", "experiments": []}
+    monkeypatch.setattr(app_module.client, "usage_summary", lambda paths, **kw: _usage_summary())
+    monkeypatch.setattr(app_module.client, "usage_doctor", lambda paths: None)
+    monkeypatch.setattr(app_module.client, "usage_findings", lambda paths, **kw: [finding, done])
+    page = test_client.get("/usage").text
+    assert "Turns spent polling or waiting" in page and "about $3.50 a week" in page and '"polls": 13' in page
+    assert "/jobs/new?project=little-meals&job=optimize_usage" in page and "/usage/findings/f1/dismiss" in page
+    assert "before 0.200" in page and "not measured yet" in page
+    assert "1 resolved or dismissed" in page and "/usage/findings/f2/reopen" in page
+
+
+def test_dismissing_a_finding_goes_to_the_usage_pillar(test_client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(app_module.client, "set_usage_finding_state", lambda paths, finding_id, state: sent.append((finding_id, state)) or {"ok": True})
+    response = test_client.post("/usage/findings/f1/dismiss", follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/usage#findings"
+    test_client.post("/usage/findings/f1/reopen", follow_redirects=False)
+    test_client.post("/usage/findings/f1/delete", follow_redirects=False)
+    assert sent == [("f1", "dismissed"), ("f1", "open")]
+
+
+def test_the_findings_choices_of_the_optimize_job_come_from_the_usage_pillar(test_client, monkeypatch):
+    monkeypatch.setattr(app_module.client, "usage_findings", lambda paths, **kw: [
+        {"id": "f1", "detector": "D6", "title": "Turns spent polling or waiting", "saving": 3.5}])
+    choices = test_client.get("/jobs/catalog/choices/findings", params={"project": "little-meals"}).json()["choices"]
+    assert choices == [{"value": "f1", "label": "D6 Turns spent polling or waiting (about $3.50 a week)"}]
+
+
+# --- REQ-000000347: Candidates, triggers and the new Jobs are reached through lws, the MCP server and the Dashboard ---
+
+
+def test_the_claude_usage_page_lists_candidates_with_their_schedule_and_buttons(test_client, monkeypatch):
+    candidate = {"id": "c1", "signature": "mcp:workshop_deployment_redeploy_pillar(commit, pillar)", "state": "open", "class": "deterministic",
+                 "score": 5, "occurrences": 240, "sessions": 12, "weekly_value": 42.5, "proposed_form": "A trigger that runs it",
+                 "checks": {"argument_derivability": True}, "examples": [{"project": "little-workshop", "calls": ["agent"]}],
+                 "schedule": {"frequency": "weekly", "days_of_week": [0, 3], "time_of_day": "02:30", "note": "at night"},
+                 "replacement": None, "tokens_avoided": 0}
+    monkeypatch.setattr(app_module.client, "usage_summary", lambda paths, **kw: _usage_summary())
+    monkeypatch.setattr(app_module.client, "usage_doctor", lambda paths: None)
+    monkeypatch.setattr(app_module.client, "usage_findings", lambda paths, **kw: [])
+    monkeypatch.setattr(app_module.client, "usage_candidates", lambda paths, **kw: [candidate, {**candidate, "id": "c2", "state": "dismissed"}])
+    page = test_client.get("/usage").text
+    assert "mcp:workshop_deployment_redeploy_pillar(commit, pillar)" in page and "deterministic (5/5)" in page and "about $42.50 a week" in page
+    assert "weekly," in page and "Mon, Thu at 02:30" in page and "A trigger that runs it" in page
+    assert "/usage/candidates/c1/automate" in page and "Make it a task" in page and "/usage/candidates/c1/dismiss" in page
+    assert "/usage/candidates/c2/" not in page
+
+
+def test_make_it_a_task_and_dismiss_go_to_the_usage_pillar(test_client, monkeypatch):
+    jobs, edits = [], []
+    monkeypatch.setattr(app_module.client, "create_job", lambda paths, **kw: jobs.append(kw) or {"status": "succeeded"})
+    monkeypatch.setattr(app_module.client, "set_usage_candidate", lambda paths, candidate_id, **kw: edits.append((candidate_id, kw)) or {"ok": True})
+    assert test_client.post("/usage/candidates/c1/automate", follow_redirects=False).headers["location"] == "/usage#candidates"
+    test_client.post("/usage/candidates/c1/dismiss", follow_redirects=False)
+    assert (jobs[0]["type"], jobs[0]["target_pillar"], jobs[0]["params"]) == ("usage.automate", "usage", {"candidate_id": "c1"})
+    assert edits == [("c1", {"state": "dismissed"})]
+
+
+def test_the_triggers_page_lists_them_and_acts_on_them(test_client, monkeypatch):
+    trigger = {"id": "t1", "name": "Redeploy the pillars a finished branch changed", "enabled": True,
+               "on": {"event": "version.branch_finished", "filter": {"project_id": "little-workshop"}},
+               "job_template": {"type": "deployment.redeploy_changed_pillars", "project_id": "little-workshop"},
+               "last_job_id": "j9", "last_fired_at": "2026-10-04T10:00:00+00:00"}
+    calls = []
+    monkeypatch.setattr(app_module.client, "triggers", lambda paths: [trigger])
+    monkeypatch.setattr(app_module.client, "trigger_action", lambda paths, method, path="", json=None: calls.append((method, path, json)))
+    page = test_client.get("/triggers").text
+    assert "Redeploy the pillars a finished branch changed" in page and "version.branch_finished" in page and "/jobs/j9" in page
+    assert "project_id = little-workshop" in page and "/triggers/t1/disable" in page
+    for action in ("disable", "enable", "remove"):
+        assert test_client.post(f"/triggers/t1/{action}", follow_redirects=False).status_code == 303
+    test_client.post("/triggers/install-defaults", follow_redirects=False)
+    assert calls == [("PATCH", "/t1", {"enabled": False}), ("PATCH", "/t1", {"enabled": True}), ("DELETE", "/t1", None), ("POST", "/install-defaults", None)]
+
+
+# --- REQ-000000350: Tokens are reported per finished task, finished branch and requirement done ---
+
+
+def test_the_claude_usage_page_shows_tokens_per_outcome(test_client, monkeypatch):
+    summary = {**_usage_summary(), "outcomes": [{
+        "week": "2026-09-28", "project": "little-meals", "weighted": 12.0, "tasks_finished": 2, "task_cost": 7.0, "weighted_per_task": 3.5,
+        "branches_finished": 2, "weighted_per_branch": 6.0, "requirements_done": None, "weighted_per_requirement": None}]}
+    monkeypatch.setattr(app_module.client, "usage_summary", lambda paths, **kw: summary)
+    monkeypatch.setattr(app_module.client, "usage_doctor", lambda paths: None)
+    page = test_client.get("/usage").text
+    assert "Tokens per outcome" in page and "<td>$3.50</td>" in page and "<td>$6.00</td>" in page
+    row = page[page.index('id="outcomes"'):page.index('id="findings"')]
+    assert row.count("<td>—</td>") == 2  # no requirement reading for that week: a dash, not a zero

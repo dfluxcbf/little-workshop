@@ -32,6 +32,7 @@ def parse_status(summary: str) -> str:
 def claude_argv(
     prompt: str, *, session_name: str | None = None, model: str | None = None,
     max_budget_usd: float | None = None, user_messages: bool = True, extra_args: tuple[str, ...] = (),
+    minimal: bool = False, effort: str | None = None,
 ) -> list[str]:
     argv = ["claude", "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"]
     # Remote Control works in print mode: the run stays headless and
@@ -40,9 +41,12 @@ def claude_argv(
         argv += ["--remote-control", session_name]
     if user_messages:
         argv += ["--brief"]
-    argv += model_args(model)
+    argv += model_args(model, effort)
     if max_budget_usd is not None:
         argv += ["--max-budget-usd", str(max_budget_usd)]
+    if minimal:
+        # A text-in/text-out call needs no MCP server and no skill: both only add to its startup context.
+        argv += ["--strict-mcp-config", "--disable-slash-commands"]
     argv += list(extra_args)
     return argv
 
@@ -68,3 +72,48 @@ def parse_claude_output(stdout: str) -> tuple[str, bool, dict[str, Any]]:
         data = next((d for d in reversed(data) if isinstance(d, dict) and d.get("type") == "result"), data[-1] if data else {})
     result = data.get("result") if isinstance(data, dict) else None
     return (result if isinstance(result, str) else text), bool(isinstance(data, dict) and data.get("is_error")), data if isinstance(data, dict) else {}
+
+
+def _count(value: Any) -> int:
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+
+def usage_from_raw(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """What a run's result JSON says it used, or None when it carries no usage (unparseable output,
+    a run killed before its result). The cost is Claude Code's estimate at list price, not a bill."""
+    usage = raw.get("usage") if isinstance(raw, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    model_usage = raw.get("modelUsage") if isinstance(raw.get("modelUsage"), dict) else {}
+    cost = raw.get("total_cost_usd")
+    return {
+        "session_id": raw.get("session_id") if isinstance(raw.get("session_id"), str) else None,
+        # The model that produced the most output: a run's subagents may use others.
+        "model": max(model_usage, key=lambda name: _count((model_usage[name] or {}).get("outputTokens")), default=None),
+        "input_tokens": _count(usage.get("input_tokens")),
+        "cache_read_tokens": _count(usage.get("cache_read_input_tokens")),
+        "cache_write_tokens": _count(usage.get("cache_creation_input_tokens")),
+        "output_tokens": _count(usage.get("output_tokens")),
+        "cost_usd": float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else 0.0,
+        "num_turns": _count(raw.get("num_turns")),
+        "duration_ms": _count(raw.get("duration_ms")),
+        "is_error": bool(raw.get("is_error")),
+        "model_usage": model_usage,
+    }
+
+
+def with_env(argv: list[str], env: dict[str, str] | None) -> list[str]:
+    """`argv` run with `env` added to its environment (through `env(1)`); unchanged when there is none."""
+    return ["env", *(f"{key}={value}" for key, value in env.items()), *argv] if env else argv
+
+
+def setenv_args(env: dict[str, str] | None) -> list[str]:
+    """`env` as `systemd-run --setenv=` arguments."""
+    return [f"--setenv={key}={value}" for key, value in (env or {}).items()]
+
+
+def with_budget(usage: dict[str, Any] | None, budget_usd: float | None) -> dict[str, Any] | None:
+    """The usage with the budget the run was given, so what it used of it can be shown."""
+    if usage is None:
+        return None
+    return {**usage, "budget_usd": budget_usd}

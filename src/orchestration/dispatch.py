@@ -16,7 +16,7 @@ import httpx
 from common.job_steps import ATTENTION_TIMEOUT_SECONDS
 from common.uds_client import client_for_socket
 from orchestration import steps
-from orchestration.db import get_job, insert_job_run, list_jobs, update_job
+from orchestration.db import get_job, insert_job, insert_job_run, list_jobs, update_job
 from orchestration.models import Job, JobStatus
 from orchestration.queue import cascade_dependency_failures, is_ready, ready_jobs
 
@@ -239,10 +239,22 @@ def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup, *
     same Job, and then dispatched without it, side by side."""
     from orchestration import policy_gate
 
+    from orchestration import triggers
+
+    def insert_triggered(job: Job) -> None:
+        insert_job(conn, job)
+        policy_gate.attach_policy_gate(conn, socket_lookup, job)
+
+    from orchestration import plan_pressure
+
     if lock is None:
+        triggers.fire_pending(conn, insert_triggered)
         cascade_dependency_failures(conn)
         dispatched: list[Job] = []
+        hold = plan_pressure.holding(socket_lookup)
         for job in ready_jobs(conn):
+            if hold and plan_pressure.applies(job):
+                continue  # stays queued until the plan's 5-hour window has room again
             if policy_gate.maybe_gate(conn, job):
                 dispatched.append(job)
                 continue
@@ -256,11 +268,16 @@ def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup, *
     tried: set[str] = set()
     while True:
         claimed: list[Job] = []
+        hold = plan_pressure.holding(socket_lookup)  # asked before the lock: it calls another pillar
         with lock:
+            triggers.fire_pending(conn, insert_triggered)
             cascade_dependency_failures(conn)
             for job in ready_jobs(conn):
                 # Re-checked per Job: claiming an earlier one may have filled its queue_key.
                 if job.id in tried or not is_ready(conn, job):
+                    continue
+                if hold and plan_pressure.applies(job):
+                    tried.add(job.id)  # stays queued until the plan's 5-hour window has room again
                     continue
                 tried.add(job.id)
                 if policy_gate.maybe_gate(conn, job):

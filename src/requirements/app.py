@@ -21,7 +21,8 @@ from common.job_steps import StepReporter, reporting, step
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.worktree_client import WorktreeUnavailable
-from requirements import db
+from common.registry_client import ProjectResolutionError, resolve_project_path
+from requirements import db, markers
 from requirements.ears import ears_error
 from requirements.junit import JUnitParseError, parse_junit_xml
 from requirements.models import (
@@ -52,6 +53,9 @@ def _require(params: dict, *names: str) -> str | None:
 
 class _Refused(Exception):
     """A job step that cannot go on; the route answers it as a failed outcome with this message."""
+
+
+markers_default_suite = "Unit tests"
 
 
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
@@ -208,6 +212,49 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 return {"outcome": "failed", "error": f"test suite {suite_id!r} not found"}
             db.link_requirement_to_suite(conn, requirement_id, suite_id)
         return {"outcome": "succeeded", "result": {"requirement_id": requirement_id, "suite_id": suite_id}}
+
+    @app.post("/v1/jobs/requirements.sync_markers")
+    def job_sync_markers(request: JobRequest) -> dict:
+        """Bring the pillar in line with the `# --- REQ-nnnnnnnnn: title ---` markers of the project's
+        test files: a marked requirement the pillar lacks is created as a draft from the project's
+        `docs/requirements.md` row (EARS-checked like any other), and every marked requirement is
+        linked to the suite (`params.suite_id`, default the suite named "Unit tests"). Nothing is
+        deleted or unlinked, and `params.dry_run` only reports."""
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        try:
+            root = resolve_project_path(paths, request.project_id)
+        except ProjectResolutionError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        dry_run = bool(request.params.get("dry_run"))
+        found, written = markers.scan(root), markers.register(root)
+        report: dict[str, list] = {"created": [], "linked": [], "missing_text": [], "in_place": []}
+        with lock:
+            suites = db.list_test_suites(conn, project_id=request.project_id)
+            suite = next((s for s in suites if s.id == request.params.get("suite_id")), None) if request.params.get("suite_id") else \
+                next((s for s in suites if s.name == markers_default_suite), None)
+            if suite is None:
+                return {"outcome": "failed", "error": "no suite to link to: pass params.suite_id, or create a suite named 'Unit tests'"}
+            by_key = {r.key: r for r in db.list_requirements(conn, project_id=request.project_id)}
+            for key in sorted(found):
+                requirement = by_key.get(key)
+                if requirement is None:
+                    row = written.get(key) or {}
+                    if ears_error(row.get("description")):
+                        report["missing_text"].append({"key": key, "title": found[key]["title"], "files": found[key]["files"]})
+                        continue
+                    requirement = Requirement(id=db.new_id(), project_id=request.project_id, key=key,
+                                              title=row.get("title") or found[key]["title"], description=row["description"])
+                    if not dry_run:
+                        db.insert_requirement(conn, requirement)
+                    report["created"].append(key)
+                elif suite.id in db.list_suites_for_requirement(conn, requirement.id):
+                    report["in_place"].append(key)
+                    continue
+                if not dry_run:
+                    db.link_requirement_to_suite(conn, requirement.id, suite.id)
+                report["linked"].append(key)
+        return {"outcome": "succeeded", "result": {**report, "suite": suite.name, "markers": len(found), "dry_run": dry_run}}
 
     @app.post("/v1/jobs/requirements.unlink_requirement_from_suite")
     def job_unlink(request: JobRequest) -> dict:

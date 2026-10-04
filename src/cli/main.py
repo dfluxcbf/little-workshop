@@ -84,6 +84,17 @@ def cmd_job_answer(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_job_wait(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.job_wait(paths, args.job_id, args.timeout)
+    except client.DaemonUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("job") is not None else 1
+
+
 def cmd_job_watch(args: argparse.Namespace) -> int:
     from cli import progress
 
@@ -685,6 +696,13 @@ def cmd_requirements_run_tests(args: argparse.Namespace) -> int:
     if args.test_command:
         params["test_command"] = args.test_command.split()
     return _requirements_job(args, "requirements.run_tests", params, timeout=600.0)
+
+
+def cmd_requirements_sync_markers(args: argparse.Namespace) -> int:
+    params = {"dry_run": bool(args.dry_run)}
+    if args.suite_id:
+        params["suite_id"] = args.suite_id
+    return _requirements_job(args, "requirements.sync_markers", params, timeout=120.0)
 
 
 def cmd_requirements_report(args: argparse.Namespace) -> int:
@@ -1448,6 +1466,19 @@ def cmd_deployment_redeploy_pillar(args: argparse.Namespace) -> int:
     return 0 if result.get("status") in ("succeeded", "running") else 1
 
 
+def cmd_deployment_redeploy_changed_pillars(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    params = {key: value for key, value in (("commit", args.commit), ("base", args.base)) if value}
+    try:
+        job = client.create_job(paths, type="deployment.redeploy_changed_pillars", target_pillar="deployment", project_id=None,
+                                params=params, queue_key="redeploy-changed-pillars", depends_on=[], created_by="cli")
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(job)
+    return 0 if job.get("status") == "succeeded" else 1
+
+
 def cmd_deployment_redeploy_pillars(args: argparse.Namespace) -> int:
     """Several pillars in dependency order (common/redeploy_plan.py): batches, each starting once the one
     before has succeeded. Without --pillar, every enabled pillar."""
@@ -1606,6 +1637,113 @@ def cmd_agent_runs(args: argparse.Namespace) -> int:
         return 1
     _print(result)
     return 0
+
+
+def cmd_usage_summary(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        summary = client.usage_summary(paths, project=args.project_id, week=args.week, origin=args.origin)
+    except client.UsagePillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not args.days:
+        for key in ("days", "previous_week", "next_week", "four_week_average", "pays_for_itself", "outcomes_by_week"):
+            summary.pop(key, None)
+    _print(summary)
+    return 0
+
+
+def _usage_job(job_type: str, params: dict) -> int:
+    paths = Paths.from_env()
+    try:
+        job = client.create_job(paths, type=job_type, target_pillar="usage", project_id=None, params=params,
+                                queue_key="usage", depends_on=[], created_by="cli", timeout=600.0)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(job)
+    return 0 if job.get("status") == "succeeded" else 1
+
+
+def cmd_usage_findings(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _print(client.usage_findings(paths, project=args.project_id, state=args.state))
+    except client.UsagePillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_usage_analyze(args: argparse.Namespace) -> int:
+    return _usage_job("usage.analyze", {})
+
+
+def cmd_usage_candidates(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _print(client.usage_candidates(paths, state=args.state))
+    except client.UsagePillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_usage_mine_automation(args: argparse.Namespace) -> int:
+    return _usage_job("usage.mine_automation", {})
+
+
+def _trigger(method: str, path: str = "", body: dict | None = None) -> int:
+    try:
+        _print(client.trigger_request(Paths.from_env(), method, path, json=body))
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_trigger_list(args: argparse.Namespace) -> int:
+    return _trigger("GET")
+
+
+def cmd_trigger_add(args: argparse.Namespace) -> int:
+    try:
+        params = json.loads(args.params) if args.params else {}
+        event_filter = json.loads(args.filter) if args.filter else {}
+    except ValueError as exc:
+        print(f"error: --params and --filter take a JSON object: {exc}", file=sys.stderr)
+        return 2
+    template = {"type": args.type, "target_pillar": args.target_pillar, "project_id": args.project_id, "params": params,
+                "queue_key": args.queue_key, "depends_on": []}
+    return _trigger("POST", body={"name": args.name, "on": {"event": args.event, "filter": event_filter}, "job_template": template})
+
+
+def cmd_trigger_remove(args: argparse.Namespace) -> int:
+    return _trigger("DELETE", f"/{args.trigger_id}")
+
+
+def cmd_trigger_enable(args: argparse.Namespace) -> int:
+    return _trigger("PATCH", f"/{args.trigger_id}", {"enabled": True})
+
+
+def cmd_trigger_disable(args: argparse.Namespace) -> int:
+    return _trigger("PATCH", f"/{args.trigger_id}", {"enabled": False})
+
+
+def cmd_trigger_install_defaults(args: argparse.Namespace) -> int:
+    return _trigger("POST", "/install-defaults")
+
+
+def cmd_usage_doctor(args: argparse.Namespace) -> int:
+    return _usage_job("usage.doctor", {})
+
+
+def cmd_usage_ingest_transcripts(args: argparse.Namespace) -> int:
+    return _usage_job("usage.ingest_transcripts", {})
+
+
+def cmd_usage_configure_claude(args: argparse.Namespace) -> int:
+    return _usage_job("usage.configure_claude", {"apply": bool(args.apply)})
 
 
 def cmd_agent_run_status(args: argparse.Namespace) -> int:
@@ -1804,6 +1942,55 @@ def build_parser() -> argparse.ArgumentParser:
     core_status = core_sub.add_parser("status", help="Show every pillar's registered status")
     core_status.set_defaults(func=cmd_core_status)
 
+    usage = subparsers.add_parser("usage", help="Claude usage: Usage & Efficiency commands")
+    usage_sub = usage.add_subparsers(dest="usage_command", required=True)
+    u_summary = usage_sub.add_parser("summary", help="One week's Claude usage, for everything or one project")
+    u_summary.add_argument("--project-id", default=None)
+    u_summary.add_argument("--week", default=None, help="Any day of the week wanted (YYYY-MM-DD); default the current week")
+    u_summary.add_argument("--origin", default=None, choices=["interactive", "job", "query", "subagent"])
+    u_summary.add_argument("--days", action="store_true", help="Include the per-day series and the weeks compared")
+    u_summary.set_defaults(func=cmd_usage_summary)
+    u_findings = usage_sub.add_parser("findings", help="What the detectors found, ranked by estimated saving")
+    u_findings.add_argument("--project-id", default=None)
+    u_findings.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "resolved", "all"])
+    u_findings.set_defaults(func=cmd_usage_findings)
+    u_analyze = usage_sub.add_parser("analyze", help="Run the detectors now and measure the experiments that are due")
+    u_analyze.set_defaults(func=cmd_usage_analyze)
+    u_candidates = usage_sub.add_parser("candidates", help="Work Claude repeats that code could do, ranked by weekly cost")
+    u_candidates.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "done", "all"])
+    u_candidates.set_defaults(func=cmd_usage_candidates)
+    u_mine = usage_sub.add_parser("mine-automation", help="Mine the last 14 days of tool calls into automation candidates")
+    u_mine.set_defaults(func=cmd_usage_mine_automation)
+    u_doctor = usage_sub.add_parser("doctor", help="Check the configuration usage collection depends on")
+    u_doctor.set_defaults(func=cmd_usage_doctor)
+    u_ingest = usage_sub.add_parser("ingest-transcripts", help="Backfill usage from the local Claude transcripts")
+    u_ingest.set_defaults(func=cmd_usage_ingest_transcripts)
+    u_configure = usage_sub.add_parser("configure-claude", help="Show, or with --apply write, the Claude user profile")
+    u_configure.add_argument("--apply", action="store_true", help="Write ~/.claude/settings.json (a backup is kept)")
+    u_configure.set_defaults(func=cmd_usage_configure_claude)
+
+    trigger = subparsers.add_parser("trigger", help="Workshop triggers: an event starts a Job")
+    trigger_sub = trigger.add_subparsers(dest="trigger_command", required=True)
+    trigger_sub.add_parser("list", help="List the triggers").set_defaults(func=cmd_trigger_list)
+    t_add = trigger_sub.add_parser("add", help="Add a trigger")
+    t_add.add_argument("name")
+    t_add.add_argument("--event", required=True, help="job.settled, job.succeeded, job.failed, version.branch_finished, "
+                       "version.release_finished, claude.session_ended, usage.finding_opened, registry.project_registered")
+    t_add.add_argument("--filter", default=None, help="JSON object of event values that must match")
+    t_add.add_argument("--type", required=True, help="The Job type the trigger creates")
+    t_add.add_argument("--target-pillar", required=True)
+    t_add.add_argument("--project-id", default=None, help="The Job's project; omitted, the event's project")
+    t_add.add_argument("--params", default=None, help="JSON object; a value `$event.<key>` takes that value of the event")
+    t_add.add_argument("--queue-key", default=None)
+    t_add.set_defaults(func=cmd_trigger_add)
+    for name, func, text in (("remove", cmd_trigger_remove, "Remove a trigger"), ("enable", cmd_trigger_enable, "Enable a trigger"),
+                             ("disable", cmd_trigger_disable, "Disable a trigger")):
+        sub_parser = trigger_sub.add_parser(name, help=text)
+        sub_parser.add_argument("trigger_id")
+        sub_parser.set_defaults(func=func)
+    trigger_sub.add_parser("install-defaults", help="Add little-workshop's own triggers that are not there yet").set_defaults(
+        func=cmd_trigger_install_defaults)
+
     job = subparsers.add_parser("job", help="Orchestration Job commands")
     job_sub = job.add_subparsers(dest="job_command", required=True)
 
@@ -1833,6 +2020,11 @@ def build_parser() -> argparse.ArgumentParser:
     job_answer.add_argument("step", help="The step's key, as the question printed it")
     job_answer.add_argument("choice", help="One of the question's option ids")
     job_answer.set_defaults(func=cmd_job_answer)
+
+    job_wait = job_sub.add_parser("wait", help="Wait until a Job settles, is held for a confirmation or asks a question")
+    job_wait.add_argument("job_id")
+    job_wait.add_argument("--timeout", type=float, default=None, help="Seconds to wait at most (default 120, at most 300)")
+    job_wait.set_defaults(func=cmd_job_wait)
 
     job_watch = job_sub.add_parser("watch", help="Follow a Job's checklist until it ends")
     job_watch.add_argument("job_id")
@@ -2231,6 +2423,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_tests.add_argument("--test-command", default=None, help="Space-separated command, default: python3 -m pytest")
     run_tests.set_defaults(func=cmd_requirements_run_tests)
 
+    sync_markers = requirements_sub.add_parser(
+        "sync-markers", help="Create and link the requirements the tests' `# --- REQ-nnnnnnnnn: title ---` markers name")
+    sync_markers.add_argument("--project-id", required=True)
+    sync_markers.add_argument("--suite-id", default=None, help="The suite to link to (default: the suite named 'Unit tests')")
+    sync_markers.add_argument("--dry-run", action="store_true", help="Only report what would be created and linked")
+    sync_markers.set_defaults(func=cmd_requirements_sync_markers)
+
     report = requirements_sub.add_parser("report", help="Definition-of-done report for a project")
     report.add_argument("--project-id", required=True)
     report.add_argument("--csv", action="store_true", default=False, help="Also write a CSV report file")
@@ -2509,6 +2708,12 @@ def build_parser() -> argparse.ArgumentParser:
     d_branches = deployment_sub.add_parser("branches", help="List a project's branches")
     d_branches.add_argument("--project-id", required=True)
     d_branches.set_defaults(func=cmd_deployment_branches)
+
+    d_changed = deployment_sub.add_parser(
+        "redeploy-changed-pillars", help="Redeploy the pillars whose code changed in a commit (default HEAD against its first parent)")
+    d_changed.add_argument("--commit", default=None)
+    d_changed.add_argument("--base", default=None, help="Compare against this instead of the commit's first parent")
+    d_changed.set_defaults(func=cmd_deployment_redeploy_changed_pillars)
 
     d_redeploy = deployment_sub.add_parser("redeploy-pillar", help="Redeploy one of little-workshop's own pillars from a commit")
     d_redeploy.add_argument("pillar")

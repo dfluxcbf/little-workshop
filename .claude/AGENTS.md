@@ -7,7 +7,7 @@ sentence here. This file is .claude/AGENTS.md on purpose: Claude Code reads AGEN
 no CLAUDE.md, .claude/CLAUDE.md or CLAUDE.local.md, and the guard refuses those. `@little-workshop.md` imports the
 section every project shares (generated: .claude/little-workshop.md). -->
 
-Self-hosted daemon that governs a project's lifecycle through ten pillars (`src/<pillar>`), each its own process
+Self-hosted daemon that governs a project's lifecycle through eleven pillars (`src/<pillar>`), each its own process
 on a Unix socket; the `lws` CLI, the Dashboard and the MCP server are thin stateless proxies over them. Python
 >=3.11, FastAPI, Bazel. little-workshop is registered in its own system (project id `little-workshop`) and is the
 first user of every pillar, so its own policies apply to this repository too. Read `docs/design.md` (concepts) and

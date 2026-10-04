@@ -18,7 +18,8 @@ answers to, not about the architecture itself.
 ## Revision note (this round)
 
 The first round described one process with internal modules sharing one
-database. This round replaces that with **Core + ten pillars**, each its own
+database. This round replaces that with **Core + ten pillars** (eleven since 2026-10-04, with
+Usage & Efficiency), each its own
 process with its own storage, communicating only through a declared Pillar
 Interface (PI). Every section below (Components, Data model, Feature
 mapping, Technical decisions) reflects the pillar model; where it differs
@@ -62,6 +63,7 @@ Interface (a small FastAPI app bound to a Unix domain socket):
 | **Agentic Development** | Claude does real implementation work on a real branch, safely, and the human stays in control of when it's finished. | little-runner's `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`/`sessions.py`, generalized from GitHub-issue-only triggers | Optional — a project not using agentic dev never starts it. Fully specified: `docs/pillars/agentic_development.md`. |
 | **Dashboard** | A human can see and act on everything above, without a terminal. | little-runner's `web/`, extended with panels for every other pillar | Optional — a headless/automation-only setup can disable it. Visual identity decided: see `presentations/06-visual-identity.md`. |
 | **MCP Server** | An agent (Claude, or another tool) can see and act on everything above, without a terminal. | little-requirements' and little-versions' MCP tool surfaces, unified and namespaced | Optional — but the common case, since Claude is this ecosystem's primary caller |
+| **Usage & Efficiency** | Claude is used knowingly: what every session on this machine costs is recorded, interpreted and reduced. | Nothing absorbed: new with `docs/claude_usage_optimization.md` (accepted 2026-10-04) | Optional, on by default — switched off, nothing is collected and nothing else changes. Specified: `docs/pillars/usage.md`. |
 
 Dashboard and MCP Server hold no domain data of their own — both are thin,
 stateless proxies translating their caller's request (an HTTP request, an
@@ -173,6 +175,7 @@ number of distinctly-named files per project.
 | `.agent` | Agentic Development |
 | `.dashboard` | Dashboard |
 | `.mcp` | MCP Server |
+| `.usage` | Usage & Efficiency |
 
 Examples: `retention.policy.json` (Policy & Compliance's, for one project),
 `manifest.deployment.toml` (Deployment & Servers', for one project's server
@@ -277,6 +280,8 @@ creates the registry row, never the other way around.
 - **Deployment & Servers** — `servers`, `deployments`,
   `deploy_confirmations`.
 - **Agentic Development** — `agent_runs`, `remote_control_sessions`.
+- **Usage & Efficiency** — `sessions`, `requests`, `tool_calls`, `session_events`, `plan_pressure`,
+  `day_rollups`, `run_usage`, `doctor_reports` (`docs/pillars/usage.md`, "Store").
 - **Dashboard**, **MCP Server** — no persistent storage of their own.
 
 What stays outside every pillar's database, deliberately: git repositories

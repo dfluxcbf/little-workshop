@@ -438,3 +438,39 @@ Every `agent.run_task` run is given a **temporary, read-only copy of little-work
   default; the choice is carried through scheduling and retry; `workshop_agent_run_task` takes
   `include_standards: false`. The "Update Standards Documentation" job sets it false, since it edits the
   original folder.
+
+## Claude usage of the runs this pillar starts (2026-10-04)
+
+M18 of `docs/milestones.md` (REQ-000000320, REQ-000000321); the reasons are in
+[../claude_usage_optimization.md](../claude_usage_optimization.md), §3 (F4, F5).
+
+- **Stored usage.** Every `claude -p` result JSON carries what the run used. `claude_invoke.usage_from_raw`
+  reads it and `db.record_usage` stores one `claude_usage` row per Claude call: kind (`run`, `query`,
+  `doc_update`), the run or Job it belongs to, project, session id, main model, the four token counts, the
+  estimated cost (list price, not a bill), turns, duration and the per-model split. A failed run is stored too.
+  A headless update-doc session's row comes from the result JSON that ends `.review/session.log`; a Remote
+  Control session writes none. `GET /v1/runs/{project}/{run}` returns the run's summed `usage`, and
+  `GET /v1/usage?project_id=&kind=&since=` lists the rows.
+- **`agent.query`.** Each query runs in `<state home>/agent-query`, the same directory every time, because
+  Claude's prompt cache is scoped to the working directory; with `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, because a
+  one-request call gains nothing from a 1-hour cache write; and with `--strict-mcp-config
+  --disable-slash-commands`, because a text-in/text-out call uses neither MCP servers nor skills. Checked on a real query
+  (2026-10-04, decision 9 of the proposal): the answer was the same with and without the two flags, and the
+  context the call starts with fell from about 30k to about 11k tokens.
+
+## Launch defaults per job type (2026-10-04)
+
+M22 (REQ-000000348). `agent/launch.py` holds one `Launch(model, effort, max_budget_usd)` per job type
+(`agent.run_task`, `agent.query`, `agent.update_docs`, `agent.session`) in place of the single default every run
+shared. All four start from `claude-sonnet-5-5` at effort `medium`; a query is bounded at $1.00
+(`--max-budget-usd`: Claude Code's estimate at list price, a stop for a run that keeps going, not money
+spent). `<config>/agent/launch.json` overrides any of it per job type:
+
+```json
+{"agent.query": {"model": "claude-haiku-4-5-20251001", "effort": "low", "max_budget_usd": 0.25}}
+```
+
+A task run's own `model` and `max_budget_usd` (an `AgentFlow` built with them) win over the table. The budget a
+run was given is stored with its usage (`claude_usage.budget_usd`), and a run's status carries `budget_usd` and
+`budget_used`. Claude Code 2.1.289 has no `--max-turns` option, so a bound on turns is not set. The launch
+environment a run gets for attribution is described in `docs/pillars/usage.md`, "Configuration".

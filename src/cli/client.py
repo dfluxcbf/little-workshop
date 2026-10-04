@@ -267,6 +267,21 @@ def job_status(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
         return {"source": "fallback", "job": job.model_dump(mode="json") if job else None}
 
 
+def job_wait(paths: Paths, job_id: str, timeout_seconds: float | None = None) -> dict:
+    """Orchestration's long poll: the Job once it settled, is held for a confirmation or asks a question,
+    else as it is when the timeout passed."""
+    params = {"timeout": timeout_seconds} if timeout_seconds is not None else {}
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=(timeout_seconds or 120.0) + 15.0) as client:
+            response = client.get(f"/v1/jobs/{job_id}/wait", params=params)
+        if response.status_code == 404:
+            return {"source": "daemon", "job": None}
+        response.raise_for_status()
+        return {"source": "daemon", "job": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable(f"could not wait for the Job: the Orchestration daemon is unreachable: {exc}") from exc
+
+
 def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> dict:
     try:
         with client_for_socket(paths.socket_path("registry"), timeout=timeout) as client:
@@ -740,6 +755,56 @@ def complete_orchestration_job(
 
 class AgentPillarUnavailable(Exception):
     pass
+
+
+def usage_candidates(paths: Paths, *, state: str = "open", timeout: float = 10.0) -> list:
+    try:
+        with client_for_socket(paths.socket_path("usage"), timeout=timeout) as client:
+            response = client.get("/v1/candidates", params={"state": state})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
+
+
+def trigger_request(paths: Paths, method: str, path: str = "", *, json: dict | None = None, timeout: float = 10.0):
+    """One call to Orchestration's `/v1/triggers` routes; a refusal's reason is in the error."""
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.request(method, f"/v1/triggers{path}", json=json)
+        if response.status_code in (404, 422):
+            raise DaemonUnavailable(f"refused: {response.json().get('detail', response.text)}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable(f"the Orchestration daemon is unreachable: {exc}") from exc
+
+
+def usage_findings(paths: Paths, *, project: str | None = None, state: str = "open", timeout: float = 10.0) -> list:
+    params = {"state": state, **({"project": project} if project else {})}
+    try:
+        with client_for_socket(paths.socket_path("usage"), timeout=timeout) as client:
+            response = client.get("/v1/findings", params=params)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
+
+
+class UsagePillarUnavailable(Exception):
+    pass
+
+
+def usage_summary(paths: Paths, *, project: str | None = None, week: str | None = None, origin: str | None = None,
+                  timeout: float = 20.0) -> dict:
+    params = {key: value for key, value in (("project", project), ("week", week), ("origin", origin)) if value}
+    try:
+        with client_for_socket(paths.socket_path("usage"), timeout=timeout) as client:
+            response = client.get("/v1/summary", params=params)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
 
 
 def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> dict:

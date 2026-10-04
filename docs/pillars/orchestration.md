@@ -219,6 +219,11 @@ summary (`total`, `done`, `current`, `attention`).
   A Job waiting for the user is exempt from the six-hour stuck-Job sweep.
 - **Choosing the id**: `POST /v1/jobs` accepts an optional `id`, so a caller can follow the steps
   while the creation call (which lasts as long as the Job, for most types) is still running.
+- **Waiting** (2026-10-04, REQ-000000322): `GET /v1/jobs/{id}/wait?timeout=` answers with the Job, as
+  `GET /v1/jobs/{id}` does, as soon as there is something to act on (the Job settled, it is held in
+  `pending_confirmation`, or a step is in `attention`), and otherwise when the timeout passes (120 seconds
+  by default, 300 at most), with the Job still queued or running. It is one call (`workshop_job_wait`,
+  `lws job wait`) where a Claude session used to poll the status, each poll re-reading its whole context.
 
 
 ## Interfacing
@@ -249,3 +254,59 @@ what every *other* pillar was asked to do.
   `target_pillar`, on `stop`, if that pillar declares a `stop` hook for
   the Job type in question — the same discovery-through-Core, no-shared-
   import discipline as every other pillar-to-pillar call.
+
+## Triggers (2026-10-04)
+
+M21 (REQ-000000343, REQ-000000344); the reasons are in
+[../claude_usage_optimization.md](../claude_usage_optimization.md) §13. A git hook runs code at fixed points in
+git and a Claude Code hook at fixed points in a session; a **trigger** is the same idea one level up: when an
+event happens in little-workshop, create a Job. A schedule fires on time; a trigger fires on an event.
+
+```
+Trigger { id, name, on: { event, filter }, job_template, enabled }
+```
+
+`orchestration/triggers.py`; the `job_template` has the shape a scheduled task's has.
+
+- **Events.** There is no event bus. `db.update_job` queues `job.settled` once for each Job that settles
+  (data: `type`, `project_id`, `status`, `job_id`, `created_by`, `target_pillar`), and only while a trigger
+  exists. The same event also answers to `job.succeeded` or `job.failed`, to `version.branch_finished` (a
+  succeeded `version.<type>_finish`) and to `version.release_finished`. Other pillars report theirs with
+  `POST /v1/events {name, project_id, data}` (`common/events.py`, best effort): `claude.session_ended` and
+  `usage.finding_opened` from Usage & Efficiency, `registry.project_registered` from the Registry. That route
+  refuses `job.*` and `version.*`, which only Orchestration raises.
+- **Matching.** A trigger fires when its event name is one of the names the event answers to and every
+  `filter` key equals the event's value.
+- **Firing.** The dispatch pump turns queued events into Jobs (`triggers.fire_pending`, under the dispatch
+  lock), so a triggered Job is created like any other: `created_by` is `trigger:<id>`, the policy gate is
+  attached, and a gated type whose policy fails stops in `pending_confirmation` (decision 7). A template
+  without a project takes the event's; a parameter value `$event.<key>` takes that value of the event.
+- **Safety.** Checked when the trigger is created, never left to firing time: a template whose type merges,
+  finishes, releases, removes or deletes is refused (`FORBIDDEN_TARGET`: `*_finish`, `version.release`,
+  `version.stabilize`, `*.remove`, `*_delete`, `agent.finish_task`, `agent.skip_task`, confirmations,
+  `usage.purge_project`), which keeps "automation never merges, deletes or finishes on its own initiative". A
+  Job a trigger created never fires that same trigger, and a chain of triggers stops at depth 3
+  (`trigger_jobs` records each triggered Job's depth).
+- **Interface.** `POST|GET /v1/triggers`, `PATCH|DELETE /v1/triggers/{id}`, `POST /v1/triggers/install-defaults`;
+  `lws trigger …`; `workshop_trigger_list`, `workshop_trigger_add`, `workshop_trigger_remove` (the last two
+  always ask); the Dashboard's Triggers page.
+- **little-workshop's own triggers** (`triggers.DEFAULTS`, added by `install-defaults`, each once): after a
+  branch finishes on little-workshop, `deployment.redeploy_changed_pillars` and a `registry.sync_claude_files`
+  report (it does not write); after a Claude session ends, `usage.ingest_transcripts`.
+
+## Plan pressure (2026-10-04)
+
+M22 (REQ-000000349, decision 6 of the proposal). A Claude plan has a 5-hour usage window, and the Usage &
+Efficiency pillar knows how full it is (`GET /v1/plan_pressure`: the latest statusline reading, the owner's
+limit, and `hold`). While `hold` is true, the pump leaves queued every Job that **uses Claude**
+(`plan_pressure.CLAUDE_JOB_TYPES`: `agent.run_task`, `agent.update_docs`, `agent.query`, `agent.ci_check`,
+`usage.optimize`, `usage.automate`) and that **nobody is waiting for** (`created_by` is `scheduler` or
+`trigger:<id>`). A Job a person started from the Dashboard, the CLI or a Claude session is dispatched as
+usual, and so is every Job that runs only code.
+
+- The limit is `plan_pressure_hold_percent` in the usage pillar's `config.json` (80 by default). A reading
+  older than five hours describes a window that has passed and holds nothing.
+- The reading is asked for at most once a minute, before the dispatch lock is taken.
+- With the usage pillar switched off, unreachable, or without a reading, nothing is held.
+- The scheduler thread now pumps the queue on every tick (ten minutes), so a held Job starts once the window
+  has room again without waiting for another request, and so does a Job a trigger queued.

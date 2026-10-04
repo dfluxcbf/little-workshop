@@ -368,6 +368,7 @@ PILLAR_NAMES = {
     "orchestration": "Orchestration", "policy": "Policy & Compliance", "registry": "Registry & Portfolio",
     "requirements": "Requirements & Quality", "version": "Version Control & Release", "build": "Build & Packages",
     "deployment": "Deployment & Servers", "agent": "Agentic Development", "dashboard": "Dashboard", "mcp": "MCP Server",
+    "usage": "Usage & Efficiency",
 }
 
 
@@ -594,6 +595,65 @@ def build_app(paths: Paths) -> FastAPI:
                 return
 
     background.append(_count_statistics_regularly)
+
+    # -- Claude usage: what the Usage & Efficiency pillar holds, one week at a time ----
+
+    @app.get("/usage", response_class=HTMLResponse)
+    def usage_page(request: Request, week: str | None = None, project: str | None = None, origin: str | None = None):
+        try:
+            summary = client.usage_summary(paths, week=week or None, project=project or None, origin=origin or None)
+            report = _try(client.usage_doctor, paths)
+            findings = _try(lambda: client.usage_findings(paths, project=project or None, state="all"), default=[])
+            candidates = _try(client.usage_candidates, paths, default=[])
+            error = None
+        except client.PillarUnavailable:
+            summary, report, findings, candidates = None, None, [], []
+            error = "The Usage & Efficiency pillar is not reachable, so there is nothing to show. It is optional: check it on the Pillars page."
+        return _render(request, "usage.html", summary=summary, doctor=report, error=error, nav_active="usage",
+                       origins=("interactive", "job", "query", "subagent"), findings=findings, candidates=candidates,
+                       weekdays=WEEKDAYS)
+
+    @app.post("/usage/candidates/{candidate_id}/{action}")
+    def usage_candidate_action(candidate_id: str, action: str):
+        """Make it a task (the fixed improvement task on little-workshop), dismiss, or open again."""
+        if action == "automate":
+            _try(lambda: client.create_job(
+                paths, type="usage.automate", target_pillar="usage", project_id=None, params={"candidate_id": candidate_id},
+                queue_key=None, depends_on=[], created_by="dashboard"))
+        elif action in ("dismiss", "reopen"):
+            _try(lambda: client.set_usage_candidate(paths, candidate_id, state="dismissed" if action == "dismiss" else "open"))
+        return RedirectResponse("/usage#candidates", status_code=303)
+
+    # -- Triggers: an event starts a Job (Orchestration) -------------------------------
+
+    @app.get("/triggers", response_class=HTMLResponse)
+    def triggers_page(request: Request):
+        try:
+            rows, error = client.triggers(paths), None
+        except client.PillarUnavailable as exc:
+            rows, error = [], str(exc)
+        return _render(request, "triggers.html", triggers=rows, error=error, nav_active="triggers")
+
+    @app.post("/triggers/install-defaults")
+    def triggers_install_defaults():
+        _try(lambda: client.trigger_action(paths, "POST", "/install-defaults"))
+        return RedirectResponse("/triggers", status_code=303)
+
+    @app.post("/triggers/{trigger_id}/{action}")
+    def trigger_action(trigger_id: str, action: str):
+        if action in ("enable", "disable"):
+            _try(lambda: client.trigger_action(paths, "PATCH", f"/{trigger_id}", {"enabled": action == "enable"}))
+        elif action == "remove":
+            _try(lambda: client.trigger_action(paths, "DELETE", f"/{trigger_id}"))
+        return RedirectResponse("/triggers", status_code=303)
+
+    @app.post("/usage/findings/{finding_id}/{action}")
+    def usage_finding_action(finding_id: str, action: str):
+        """Dismiss a finding, or open a dismissed one again."""
+        state = {"dismiss": "dismissed", "reopen": "open"}.get(action)
+        if state is not None:
+            _try(client.set_usage_finding_state, paths, finding_id, state)
+        return RedirectResponse("/usage#findings", status_code=303)
 
     # -- Incidents: an unhandled exception, awaiting the user's confirmation -----
 
@@ -1234,7 +1294,11 @@ def build_app(paths: Paths) -> FastAPI:
             for s in suites
         ]
 
-    CHOICE_LOADERS = {"suites": _discover_suites}
+    def _open_findings(project: str) -> list[dict]:
+        return [{"value": f["id"], "label": f"{f['detector']} {f['title']} (about ${f['saving']:.2f} a week)"}
+                for f in client.usage_findings(paths, project=project)]
+
+    CHOICE_LOADERS = {"suites": _discover_suites, "findings": _open_findings}
 
     @app.get("/jobs/catalog/choices/{arg}")
     def job_arg_choices(arg: str, project: str = "") -> Response:

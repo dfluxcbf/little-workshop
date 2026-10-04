@@ -130,6 +130,9 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    from orchestration import triggers
+
+    conn.executescript(triggers.SCHEMA)
     conn.commit()
     return conn
 
@@ -206,6 +209,9 @@ def update_job(conn: sqlite3.Connection, job: Job) -> None:
     )
     conn.commit()
     steps.on_job_updated(conn, job)
+    from orchestration import triggers
+
+    triggers.on_job_updated(conn, job)
 
 
 def get_job(conn: sqlite3.Connection, job_id: str) -> Job | None:

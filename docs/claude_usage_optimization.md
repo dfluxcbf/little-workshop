@@ -1,8 +1,10 @@
 # Claude usage and efficiency: design proposal
 
-Status: **proposal, for review** (2026-10-03). Nothing here is built. If it is accepted, its concepts move into
+Status: **accepted 2026-10-04 and built** as milestones M18–M22 (2026-10-04; `docs/milestones.md`). What is built is
+described in `docs/pillars/usage.md`, `docs/pillars/orchestration.md` (triggers, plan pressure) and the other pillar
+specifications; this file is their history, and where it and they differ, they are right. Its concepts move into
 `docs/design.md`, its implementation into `docs/architecture.md` and a pillar specification, and its phases into
-`docs/milestones.md`; this file then becomes their history. Owner decisions are collected in
+`docs/milestones.md` as each phase is built; this file then becomes their history. Owner decisions are collected in
 [§16](#16-decisions-for-the-owner).
 
 This proposal combines three inputs: the notes on Claude Code token usage and `/doctor` collected beforehand,
@@ -650,7 +652,8 @@ Answers from the owner's review of 2026-10-04 are marked **Decided**. Item 10 is
      whether the install also has to enable them.
    - the exact OTLP JSON payloads, tested against a real export
    - whether `--strict-mcp-config` and `--disable-slash-commands` keep `agent.query`'s answers unchanged. This
-     is tested and decided during development.
+     is tested and decided during development. **Checked 2026-10-04 (M18): unchanged**, and the startup
+     context of a query fell from about 30k to about 11k tokens, so both flags are kept.
 10. **Logging prompt and response text** (`OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES`). Open: the
     owner is willing to give up some privacy but wants to understand it first, which
     [§7.2](#72-sessions-independent-of-little-workshop) now explains. Recommended until decided: off.

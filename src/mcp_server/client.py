@@ -126,6 +126,12 @@ def job_status(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "orchestration", f"/v1/jobs/{job_id}", timeout=timeout)
 
 
+def job_wait(paths: Paths, job_id: str, timeout_seconds: float | None = None) -> dict:
+    """Orchestration's long poll; the request may take as long as the wait itself, plus a margin."""
+    params = {"timeout": timeout_seconds} if timeout_seconds is not None else None
+    return _get(paths, "orchestration", f"/v1/jobs/{job_id}/wait", params=params, timeout=(timeout_seconds or 120.0) + 15.0)
+
+
 def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5.0):
     return _get(paths, "registry", "/v1/projects", params={"status": status} if status else None, timeout=timeout)
 
@@ -239,6 +245,34 @@ def policy_evaluate(paths: Paths, project_id: str, gate_point: str, *, timeout: 
     branch_finish preflight includes policies that run the project's own test suite."""
     return _mutate(paths, "policy", "POST", "/v1/policies/evaluate",
                    json={"project_id": project_id, "gate_point": gate_point}, timeout=timeout)
+
+
+def usage_summary(paths: Paths, *, project: str | None = None, week: str | None = None, origin: str | None = None,
+                  timeout: float = 20.0) -> dict:
+    params = {key: value for key, value in (("project", project), ("week", week), ("origin", origin)) if value}
+    return _get(paths, "usage", "/v1/summary", params=params or None, timeout=timeout)
+
+
+def usage_findings(paths: Paths, *, project: str | None = None, state: str = "open", timeout: float = 10.0) -> dict:
+    params = {"state": state, **({"project": project} if project else {})}
+    return _get(paths, "usage", "/v1/findings", params=params, timeout=timeout)
+
+
+def usage_candidates(paths: Paths, *, state: str = "open", timeout: float = 10.0) -> dict:
+    return _get(paths, "usage", "/v1/candidates", params={"state": state}, timeout=timeout)
+
+
+def list_triggers(paths: Paths, *, timeout: float = 5.0):
+    return _get(paths, "orchestration", "/v1/triggers", timeout=timeout)
+
+
+def add_trigger(paths: Paths, *, name: str, event: str, event_filter: dict, job_template: dict, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "orchestration", "POST", "/v1/triggers",
+                   json={"name": name, "on": {"event": event, "filter": event_filter}, "job_template": job_template}, timeout=timeout)
+
+
+def remove_trigger(paths: Paths, trigger_id: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "orchestration", "DELETE", f"/v1/triggers/{trigger_id}", timeout=timeout)
 
 
 def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> dict:

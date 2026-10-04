@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Triggers — little-workshop{% endblock %}
+{% block content %}
+<h1>Triggers</h1>
+<p class="lede">A trigger starts a Job when an event happens: a Job settling, a branch finishing, a Claude session ending.
+  A schedule fires on time; a trigger fires on an event. A triggered Job is policy-gated like any other, and no trigger
+  can merge, finish, release, remove or delete.</p>
+{% if error %}<div class="card fail">{{ error }}</div>{% endif %}
+<table>
+  <thead><tr><th>Trigger</th><th>When</th><th>Runs</th><th>Last fired</th><th></th></tr></thead>
+  <tbody>
+  {% for t in triggers %}
+    <tr>
+      <td>{{ t.name }} {% if not t.enabled %}<span class="pill idle">disabled</span>{% endif %}</td>
+      <td><code>{{ t.on.event }}</code>{% for key, value in t.on.filter.items() %} &middot; {{ key }} = {{ value }}{% endfor %}</td>
+      <td><code>{{ t.job_template.type }}</code>{% if t.job_template.project_id %} on {{ t.job_template.project_id }}{% endif %}</td>
+      <td>{% if t.last_job_id %}<a href="/jobs/{{ t.last_job_id }}">{{ t.last_fired_at[:16].replace('T', ' ') }}</a>{% else %}never{% endif %}</td>
+      <td>
+        <form class="inline" method="post" action="/triggers/{{ t.id }}/{{ 'disable' if t.enabled else 'enable' }}"><button type="submit">{{ 'Disable' if t.enabled else 'Enable' }}</button></form>
+        <form class="inline" method="post" action="/triggers/{{ t.id }}/remove"><button type="submit" class="danger">Remove</button></form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No trigger yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<div class="row">
+  <form class="inline" method="post" action="/triggers/install-defaults"><button type="submit">Add little-workshop's own triggers</button></form>
+</div>
+<p class="muted">Add one with <code>lws trigger add</code> or the <code>workshop_trigger_add</code> tool.</p>
+{% endblock %}

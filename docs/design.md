@@ -134,10 +134,12 @@ supersede the first round's "Module" concept.
   (a `systemd --user` unit, the same primitive `little-runner` already uses
   for every project server) that can be started, stopped, crash-relaunched,
   upgraded, and — critically — **disabled entirely**, without any other
-  pillar's code or process being touched. There are ten: Orchestration,
+  pillar's code or process being touched. There are eleven: Orchestration,
   Policy & Compliance, Registry & Portfolio, Requirements & Quality, Version
   Control & Release, Build & Packages, Deployment & Servers, Agentic
-  Development, Dashboard, and MCP Server. See `architecture.md`'s Components
+  Development, Dashboard, MCP Server, and Usage & Efficiency (added 2026-10-04:
+  it records and interprets what every Claude session on this machine uses, see
+  `pillars/usage.md`). See `architecture.md`'s Components
   table for each one's goal, what it absorbs, and its interface summary.
 - **Core** — the one thing that is *not* a pillar and cannot be disabled: a
   small, rarely-changing process-supervision layer that starts every enabled

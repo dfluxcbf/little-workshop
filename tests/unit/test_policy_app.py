@@ -1,5 +1,7 @@
 import time
 
+import threading
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -22,6 +24,11 @@ def paths(tmp_path):
 def conn(tmp_path):
     connection = db.connect(tmp_path / "policy.db")
     yield connection
+    # A policy check's worker thread may still be writing its result: closing the connection under
+    # it crashed the interpreter (a segfault in sqlite3, seen 2026-10-04), so let the workers end first.
+    for thread in threading.enumerate():
+        if "(worker)" in thread.name:
+            thread.join(timeout=10)
     connection.close()
 
 

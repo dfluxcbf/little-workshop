@@ -32,6 +32,9 @@ AGENTS_PATH = ".claude/AGENTS.md"
 PREFLIGHT_SKILL_PATH = ".claude/skills/policy-preflight/SKILL.md"
 PREFLIGHT_SCRIPT_PATH = ".claude/skills/policy-preflight/scripts/preflight.py"
 LIFECYCLE_SKILL_PATH = ".claude/skills/workshop-lifecycle/SKILL.md"
+POLICIES_SKILL_PATH = ".claude/skills/policies-digest/SKILL.md"
+POLICIES_SCRIPT_PATH = ".claude/skills/policies-digest/scripts/digest.py"
+TEST_FILTER_PATH = ".claude/hooks/test_output_filter.py"
 INSTRUCTIONS_RULE_PATH = ".claude/rules/claude-instructions.md"
 # Imported by the project's briefing: `@little-workshop.md` from `.claude/AGENTS.md`,
 # `@.claude/little-workshop.md` from a root `AGENTS.md`.
@@ -56,7 +59,7 @@ _PROJECT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 MCP_READ_ONLY = (
     "workshop_core_status",
     "workshop_project_list", "workshop_project_get",
-    "workshop_job_list", "workshop_job_status",
+    "workshop_job_list", "workshop_job_status", "workshop_job_wait",
     "workshop_version_status", "workshop_version_config", "workshop_version_issue_list",
     "workshop_version_branch_audit", "workshop_version_release_candidate_list",
     "workshop_requirements_list", "workshop_requirements_get", "workshop_requirements_report",
@@ -70,6 +73,7 @@ MCP_READ_ONLY = (
     "workshop_agent_runs", "workshop_agent_run_status", "workshop_agent_ci_list",
     "workshop_agent_ci_status", "workshop_agent_session_status",
     "workshop_schedule_list", "workshop_schedule_status", "workshop_schedule_queue_get",
+    "workshop_usage_summary", "workshop_usage_findings", "workshop_usage_candidates", "workshop_trigger_list",
 )
 
 # Routine, reversible day-to-day work on the project (each takes the project's `project_id`).
@@ -82,7 +86,7 @@ MCP_ROUTINE = (
     "workshop_requirements_suite_create", "workshop_requirements_use_case_create",
     "workshop_requirements_milestone_create", "workshop_requirements_link_suite",
     "workshop_requirements_unlink_suite", "workshop_requirements_result_record",
-    "workshop_requirements_import_junit", "workshop_requirements_run_tests",
+    "workshop_requirements_import_junit", "workshop_requirements_run_tests", "workshop_requirements_sync_markers",
     "workshop_build_run",
 )
 
@@ -110,6 +114,7 @@ MCP_ASK = (
     "workshop_requirements_publish", "workshop_requirements_delete", "workshop_requirements_suite_delete",
     "workshop_job_stop", "workshop_job_answer", "workshop_schedule_add", "workshop_schedule_remove", "workshop_schedule_trigger",
     "workshop_schedule_cancel", "workshop_schedule_postpone", "workshop_schedule_queue_set",
+    "workshop_usage_configure_claude", "workshop_trigger_add", "workshop_trigger_remove",
 )
 
 # Administration of little-workshop itself (policies, its own pillars): they name no project, so
@@ -118,6 +123,8 @@ MCP_PLATFORM = (
     "workshop_policy_check_all", "workshop_policy_author", "workshop_policy_draft_import",
     "workshop_policy_catalog_run", "workshop_policy_remove", "workshop_policy_activate",
     "workshop_policy_configure", "workshop_deployment_redeploy_pillar", "workshop_deployment_redeploy_pillars",
+    "workshop_usage_doctor", "workshop_usage_ingest_transcripts", "workshop_usage_analyze",
+    "workshop_usage_mine_automation", "workshop_deployment_redeploy_changed_pillars",
 )
 
 # Tools whose `project_id` is optional: left out, they act on every project, so the guard
@@ -125,7 +132,7 @@ MCP_PLATFORM = (
 MCP_NEEDS_PROJECT_ID = (
     "workshop_build_package_list", "workshop_build_run_list", "workshop_policy_projects_list",
     "workshop_policy_results", "workshop_requirements_list", "workshop_requirements_suite_list",
-    "workshop_schedule_add",
+    "workshop_schedule_add", "workshop_trigger_add",
 )
 
 # Tools that name a project in `name` (not `project_id`). The guard holds `name` to the project.
@@ -138,8 +145,8 @@ MCP_NAMED_PROJECT = (
 
 # No project argument: a read by id or of the whole system, pre-allowed as it stands.
 LWS_READ_ONLY_ANY = (
-    "core status", "project list", "job list", "job status", "job watch", "job queue show",
-    "schedule list", "schedule status", "schedule queue get",
+    "core status", "project list", "job list", "job status", "job wait", "job watch", "job queue show",
+    "schedule list", "schedule status", "schedule queue get", "trigger list", "usage candidates",
     "policy list", "policy status", "policy catalog list", "policy draft list",
     "requirements status", "requirements suite status", "build run-status", "agent session-list",
 )
@@ -156,6 +163,7 @@ LWS_READ_ONLY = (
     "deployment status", "deployment history", "deployment confirmation", "deployment branches",
     "build run-list", "build package-list",
     "agent runs", "agent run-status", "agent ci-list", "agent ci-status",
+    "usage summary", "usage findings",
 )
 
 LWS_ROUTINE = (
@@ -165,7 +173,7 @@ LWS_ROUTINE = (
     "requirements create", "requirements update", "requirements suite create",
     "requirements use-case create", "requirements milestone create", "requirements link",
     "requirements unlink", "requirements result record", "requirements import-junit",
-    "requirements run-tests",
+    "requirements run-tests", "requirements sync-markers",
     "build run",
 )
 
@@ -189,12 +197,15 @@ LWS_ASK = (
     "deployment set-manifest", "deployment seed-confirmation",
     "agent run-task", "agent finish-task", "agent skip-task", "agent ci-check",
     "agent session-start", "agent session-stop",
+    "usage configure-claude", "trigger add", "trigger remove", "trigger enable", "trigger disable", "trigger install-defaults",
 )
 
 # Administration of little-workshop itself, as MCP_PLATFORM.
 LWS_PLATFORM = (
     "policy author", "policy draft import", "policy activate", "policy configure", "policy remove",
     "policy check-all", "policy catalog run", "deployment redeploy-pillar", "deployment redeploy-pillars",
+    "usage doctor", "usage ingest-transcripts", "usage analyze", "usage mine-automation",
+    "deployment redeploy-changed-pillars",
 )
 
 # Left to the default prompt on purpose: plumbing the pillars call themselves, host
@@ -291,6 +302,22 @@ TEST_BASH = {
 }
 
 
+# Heavy generated folders Claude must not read: a hard exclusion (`permissions.deny` with `Read(...)`;
+# Claude Code has no `.claudeignore`). Build output is in `.gitignore` as well.
+READ_DENY = {
+    "python": ("./bazel-*/**", "./.venv*/**", "./node_modules/**", "./**/node_modules/**"),
+    "bazel": ("./bazel-*/**", "./.venv*/**", "./node_modules/**", "./**/node_modules/**"),
+    "unity": ("./Library/**", "./Temp/**", "./Logs/**", "./obj/**"),
+}
+
+# The code-intelligence plugin of each language (Anthropic's marketplace): Claude gets an `LSP` tool
+# (definitions, references) instead of reading whole files. Each needs its language server on PATH,
+# which `usage.doctor` checks.
+PLUGIN_MARKETPLACE = "claude-plugins-official"
+LSP_PLUGINS = ("pyright-lsp", "typescript-lsp", "clangd-lsp", "csharp-lsp")
+# What a freshly scaffolded project of each template gets; an existing checkout's are detected.
+TEMPLATE_PLUGINS = {"python": ("pyright-lsp",), "bazel": (), "unity": ("csharp-lsp",)}
+
 # little-workshop's own Claude Code settings: the scaffolded table plus what only this repository needs
 # (REQ-000000295). Its checked-in .claude/ files are claude_files("little-workshop", "python",
 # **OWN_SETTINGS); a unit test keeps them equal. The live-install guard denies running
@@ -298,6 +325,7 @@ TEST_BASH = {
 LIVE_INSTALL_GUARD_PATH = ".claude/hooks/live_install_guard.py"
 OWN_SETTINGS = dict(
     platform=True,
+    plugins=("pyright-lsp",),
     extra_allow=("python3 tools/sync_versions.py*", "tools/check_system_deps.sh*", "python3 tools/sync_policies.py*"),
     extra_ask=("bazel run //:install*", "bazel run //*_server*", "python3 tools/sync_policies.py --apply*"),
     extra_hooks=({
@@ -338,20 +366,33 @@ def guard_hooks(project_id: str, extra_pre_tool_use: tuple[dict, ...] = ()) -> d
                 "command": f'python3 "${{CLAUDE_PROJECT_DIR}}"/{GUARD_PATH} {_checked_id(project_id)}',
                 "timeout": 10,
             }],
+        }, {
+            # After the guard: a plain test command is run through the filter, so a long run puts its
+            # failures and summary in the context, not every line.
+            "matcher": "Bash",
+            "hooks": [{
+                "type": "command",
+                "command": f'python3 "${{CLAUDE_PROJECT_DIR}}"/{TEST_FILTER_PATH}',
+                "timeout": 10,
+            }],
         }, *extra_pre_tool_use],
     }
 
 
 def settings(project_id: str, template: str = "python", *, platform: bool = False,
              extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = (),
-             extra_hooks: tuple[dict, ...] = ()) -> dict:
+             extra_hooks: tuple[dict, ...] = (), plugins: tuple[str, ...] = ()) -> dict:
     """The `.claude/settings.json` of project `project_id`.
 
     Every `lws` command that takes `--project-id` is pre-allowed only with this project's id; the
     guard hook denies a call that names another. `platform=True` (little-workshop itself) also
     pre-allows the tools that administer little-workshop rather than a project. `extra_hooks` are
-    PreToolUse entries added after the scope guard."""
+    PreToolUse entries added after the scope guard and the test-output filter; `plugins` are the
+    code-intelligence plugins of the project's languages (`LSP_PLUGINS`)."""
     project = _checked_id(project_id)
+    unknown = [plugin for plugin in plugins if plugin not in LSP_PLUGINS]
+    if unknown:
+        raise ValueError(f"unknown plugin(s) {', '.join(unknown)}, expected some of {', '.join(LSP_PLUGINS)}")
     if template not in TEST_BASH:
         raise ValueError(f"unknown template {template!r}, expected one of {', '.join(TEST_BASH)}")
     bash = (*READ_ONLY_BASH, *COMMIT_BASH, *TEST_BASH[template], *SKILL_BASH, *extra_allow)
@@ -364,21 +405,24 @@ def settings(project_id: str, template: str = "python", *, platform: bool = Fals
     ask += [f"Bash({c})" for c in extra_ask]
     admin = [f"{MCP}{t}" for t in MCP_PLATFORM] + [f"Bash(lws {c} *)" for c in LWS_PLATFORM]
     (allow if platform else ask).extend(admin)
-    return {
+    out = {
         "permissions": {
             "allow": allow,
             "ask": ask,
-            "deny": [f"Bash({c})" for c, _ in DENY_REROUTED],
+            "deny": [f"Bash({c})" for c, _ in DENY_REROUTED] + [f"Read({path})" for path in READ_DENY[template]],
         },
         "hooks": guard_hooks(project, extra_hooks),
     }
+    if plugins:
+        out["enabledPlugins"] = {f"{plugin}@{PLUGIN_MARKETPLACE}": True for plugin in plugins}
+    return out
 
 
 def settings_json(project_id: str, template: str = "python", *, platform: bool = False,
                   extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = (),
-                  extra_hooks: tuple[dict, ...] = ()) -> str:
+                  extra_hooks: tuple[dict, ...] = (), plugins: tuple[str, ...] = ()) -> str:
     return json.dumps(settings(project_id, template, platform=platform, extra_allow=extra_allow,
-                               extra_ask=extra_ask, extra_hooks=extra_hooks), indent=2) + "\n"
+                               extra_ask=extra_ask, extra_hooks=extra_hooks, plugins=plugins), indent=2) + "\n"
 
 
 # The guard hook (REQ-000000297, extended REQ pending). A real, standalone script copied into each
@@ -689,7 +733,8 @@ def generated_files_reasons() -> dict[str, str]:
     regenerate = ("little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run "
                   "its `python3 tools/sync_claude_files.py --write`")
     reasons = {path: regenerate for path in (GUARD_PATH, PREFLIGHT_SKILL_PATH, PREFLIGHT_SCRIPT_PATH,
-                                             LIFECYCLE_SKILL_PATH, INSTRUCTIONS_RULE_PATH, SHARED_BRIEFING_PATH)}
+                                             LIFECYCLE_SKILL_PATH, INSTRUCTIONS_RULE_PATH, SHARED_BRIEFING_PATH,
+                                             POLICIES_SKILL_PATH, POLICIES_SCRIPT_PATH, TEST_FILTER_PATH)}
     reasons["VERSION"] = ("little-workshop writes VERSION: the pre-commit hook on feature/ and improvement/ branches "
                           "(`lws version sync-version-files`), the finish and release commands elsewhere")
     return reasons
@@ -910,9 +955,17 @@ def preflight_py() -> str:
 
 # The workshop-lifecycle skill (REQ pending): the routes and the steps before a finish, loaded
 # when the work reaches one of them instead of in every session.
-def lifecycle_skill_md(name: str) -> str:
-    """The text of `.claude/skills/workshop-lifecycle/SKILL.md`."""
+def lifecycle_skill_md(name: str, *, platform: bool = False) -> str:
+    """The text of `.claude/skills/workshop-lifecycle/SKILL.md`. `platform=True` (little-workshop itself)
+    adds the route for redeploying its pillars."""
     project = _checked_id(name)
+    redeploy = (
+        "| Redeploy little-workshop's pillars | After a branch finish, `workshop_deployment_redeploy_changed_pillars` "
+        "(the pillars the branch touched, found for you; a trigger may already have started it: check "
+        "`workshop_job_list`). To choose them yourself, `workshop_deployment_redeploy_pillars`: one call for several "
+        "pillars, which orders them itself; never one `workshop_deployment_redeploy_pillar` call per pillar |\n"
+        if platform else ""
+    )
     return f"""---
 name: workshop-lifecycle
 description: The little-workshop routes for this project's lifecycle - starting or finishing a feature, improvement or hotfix branch, cutting or finishing a release, deploying or stopping the server, publishing a package, recording requirements and test runs - and the steps before a branch finish. Use when the work reaches one of those steps, or when the guard refused a raw git, systemd or publishing command.
@@ -933,9 +986,11 @@ the guard refuses them. Name the project in every call: `project_id` `{project}`
 | Deploy, stop or inspect the server | `workshop_deployment_deploy`, `_stop`, `_status` |
 | Publish a package | `workshop_build_publish_pypi`, `workshop_build_publish_vsix` |
 | Create or update a requirement; record a Definition-of-Done run | `workshop_requirements_create` / `_update`; `workshop_requirements_run_tests` (or `_import_junit`) |
+| Register and link the requirements the tests' `REQ-` markers name | `workshop_requirements_sync_markers`: one call, instead of a create and a link per requirement |
 | Know the branch, version or policy state | `workshop_version_status`, `workshop_policy_results` |
 | Create the GitHub repository and push to it | `workshop_project_connect_github` |
-
+| Wait for a Job (a test run, a finish, a deploy) | `workshop_job_wait`: one call that returns when the Job settles, is held or asks a question. Never repeat `workshop_job_status` or `sleep` |
+{redeploy}
 If the daemon is down (`workshop_core_status`), say so and stop at that step: a raw git fallback skips the
 policies.
 
@@ -946,6 +1001,166 @@ policies.
 3. Finish with `workshop_version_<type>_finish`. A finish that lands in `pending_confirmation` was held by a
    policy: report which one (`workshop_policy_results`) and leave the confirmation to the user.
 """
+
+
+# The policies digest (REQ-000000339): which policies cover this project and what each requires,
+# asked of little-workshop when the question comes up, instead of rereading the policy documents.
+def policies_skill_md(name: str) -> str:
+    """The text of `.claude/skills/policies-digest/SKILL.md`."""
+    project = _checked_id(name)
+    return f"""---
+name: policies-digest
+description: Lists the little-workshop policies that cover this project - each policy's rule in one sentence and the actions it gates (commit, branch finish, release, publish, deploy). Use when you need to know what the policies require or which rule a change must satisfy, instead of reading the policy documents.
+---
+
+# The policies that cover `{project}`
+
+Run it from the repository root:
+
+```
+python3 {POLICIES_SCRIPT_PATH} --project-id {project}            # every policy attached to the project
+python3 {POLICIES_SCRIPT_PATH} --project-id {project} --gate commit
+```
+
+It prints one line per policy: its name, the actions it gates and its rule, read live from
+little-workshop, so it is never out of date. To check the project against them, use the `policy-preflight`
+skill; to see the last recorded results, `workshop_policy_results`.
+"""
+
+
+_POLICIES_DIGEST_SOURCE = r'''#!/usr/bin/env python3
+"""Print the little-workshop policies attached to a project: name, gate points, rule.
+
+Generated by little-workshop (registry/claude_templates.py): change the generator, not this copy."""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+
+def lws(*args):
+    env = {**os.environ, "LWS_NO_PROGRESS": "1"}
+    result = subprocess.run(["lws", *args], capture_output=True, text=True, env=env)
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        sys.exit("could not read little-workshop's answer to `lws " + " ".join(args) + "`: is the daemon running "
+                 "(`lws core status`)?")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--project-id", required=True)
+    parser.add_argument("--gate", default=None, help="Only the policies gating this action (commit, branch_finish, ...)")
+    args = parser.parse_args()
+    attached = {row["policy_id"]: row for row in lws("policy", "projects", "list", "--project-id", args.project_id).get("projects", [])}
+    shown = 0
+    for policy in sorted(lws("policy", "list").get("policies", []), key=lambda p: p.get("topic") or ""):
+        if policy.get("id") not in attached:
+            continue
+        gates = policy.get("gating") or policy.get("gate_points") or []
+        if args.gate and args.gate not in gates:
+            continue
+        held = "" if attached[policy["id"]].get("gating_enabled", True) else " (gating off for this project)"
+        print("- " + str(policy.get("topic")) + " [" + (", ".join(gates) or "advisory") + "]" + held + ": " + " ".join(str(policy.get("ears_text") or "").split()))
+        shown += 1
+    print(str(shown) + " polic" + ("y" if shown == 1 else "ies") + " for " + args.project_id + (" gating " + args.gate if args.gate else ""))
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def policies_digest_py() -> str:
+    return _POLICIES_DIGEST_SOURCE
+
+
+# The test-output filter (REQ-000000339): a PreToolUse hook that sends a plain test command through
+# itself, so a long run leaves its failures and summary in Claude's context instead of every line.
+_TEST_FILTER_SOURCE = r'''#!/usr/bin/env python3
+"""PreToolUse hook and output filter for test runs.
+
+As a hook (no arguments, the hook's JSON on stdin): when the Bash command is one plain test run
+(pytest, bazel test, npm test, vitest, tools/run-unity-tests) it rewrites the command to pipe its
+output through this file with --filter, keeping the command's exit status. Anything else passes
+unchanged, as does input it cannot read.
+
+As a filter (--filter): short output is printed whole. Long output is saved to a file and reduced
+to the lines that report failures, with some context, and the end of the run.
+
+Generated by little-workshop (registry/claude_templates.py): change the generator, not this copy."""
+
+import json
+import os
+import re
+import sys
+import tempfile
+
+TEST_COMMAND = re.compile(r"^\s*(python3? -m pytest|pytest|bazel test|npm (run )?test|npx vitest|tools/run-unity-tests)\b")
+SHELL_SYNTAX = re.compile(r"[|;&<>`$()]")
+KEEP_WHOLE_LINES = 150
+TAIL_LINES = 40
+CONTEXT_LINES = 3
+MAX_KEPT_LINES = 400
+FAILURE = re.compile(r"(FAIL|ERROR|Error|error:|Traceback|AssertionError|^E\s|^\s*assert |panicked|✗|✘|not ok)")
+
+
+def hook():
+    try:
+        event = json.load(sys.stdin)
+        command = event["tool_input"]["command"]
+    except (ValueError, KeyError, TypeError):
+        return
+    if event.get("tool_name") != "Bash" or not TEST_COMMAND.match(command) or SHELL_SYNTAX.search(command):
+        return
+    here = os.path.join(os.environ.get("CLAUDE_PROJECT_DIR") or ".", ".claude", "hooks", "test_output_filter.py")
+    rewritten = "set -o pipefail; " + command + " 2>&1 | python3 " + json.dumps(here) + " --filter"
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse", "permissionDecision": "allow",
+        "permissionDecisionReason": "a test run, its output filtered to failures and the summary",
+        "updatedInput": {**event["tool_input"], "command": rewritten},
+    }}))
+
+
+def filtered(lines):
+    """The lines worth reading of a long test run, in order, with a marker where lines were left out."""
+    keep = set(range(max(len(lines) - TAIL_LINES, 0), len(lines)))
+    for index, line in enumerate(lines):
+        if FAILURE.search(line):
+            keep.update(range(max(index - CONTEXT_LINES, 0), min(index + CONTEXT_LINES + 1, len(lines))))
+    chosen = sorted(keep)
+    if len(chosen) > MAX_KEPT_LINES:
+        chosen = chosen[:MAX_KEPT_LINES - TAIL_LINES] + chosen[-TAIL_LINES:]
+    out, previous = [], -1
+    for index in chosen:
+        if index != previous + 1:
+            out.append("[... " + str(index - previous - 1) + " line(s) left out ...]")
+        out.append(lines[index])
+        previous = index
+    return out
+
+
+def filter_output():
+    lines = sys.stdin.read().splitlines()
+    if len(lines) <= KEEP_WHOLE_LINES:
+        print("\n".join(lines))
+        return
+    with tempfile.NamedTemporaryFile("w", prefix="test-output-", suffix=".log", delete=False, encoding="utf-8") as full:
+        full.write("\n".join(lines) + "\n")
+    print("[test output: " + str(len(lines)) + " lines, filtered to failures and the end of the run; all of it is in " + full.name + "]")
+    print("\n".join(filtered(lines)))
+
+
+if __name__ == "__main__":
+    filter_output() if sys.argv[1:] == ["--filter"] else hook()
+'''
+
+
+def test_output_filter_py() -> str:
+    return _TEST_FILTER_SOURCE
 
 
 # The path-scoped rule on the instructions themselves (REQ pending): where an instruction belongs,
@@ -1025,20 +1240,23 @@ These are checked, not remembered. When one refuses something, its message says 
 
 def claude_files(project_id: str, template: str = "python", *, platform: bool = False,
                  extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = (),
-                 extra_hooks: tuple[dict, ...] = ()) -> dict[str, str]:
+                 extra_hooks: tuple[dict, ...] = (), plugins: tuple[str, ...] = ()) -> dict[str, str]:
     """Path (relative to the project root) -> text of every `.claude/` file little-workshop
     generates: the settings, the guard, the shared briefing section, the instructions rule and the
     two skills. The `AGENTS.md` is separate (`agents_md`): a registered project keeps its own and
     imports the shared section from it."""
     return {
         SETTINGS_PATH: settings_json(project_id, template, platform=platform, extra_allow=extra_allow,
-                                     extra_ask=extra_ask, extra_hooks=extra_hooks),
+                                     extra_ask=extra_ask, extra_hooks=extra_hooks, plugins=plugins),
         GUARD_PATH: scope_guard_py(),
         SHARED_BRIEFING_PATH: shared_briefing_md(project_id, platform=platform),
         INSTRUCTIONS_RULE_PATH: instructions_rule_md(),
-        LIFECYCLE_SKILL_PATH: lifecycle_skill_md(project_id),
+        LIFECYCLE_SKILL_PATH: lifecycle_skill_md(project_id, platform=platform),
         PREFLIGHT_SKILL_PATH: preflight_skill_md(),
         PREFLIGHT_SCRIPT_PATH: preflight_py(),
+        POLICIES_SKILL_PATH: policies_skill_md(project_id),
+        POLICIES_SCRIPT_PATH: policies_digest_py(),
+        TEST_FILTER_PATH: test_output_filter_py(),
     }
 
 

@@ -26,122 +26,23 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from registry import claude_templates as ct  # noqa: E402
-
-PLATFORM_PROJECT = "little-workshop"
-
-
-def detect_template(checkout: Path) -> str:
-    if (checkout / "ProjectSettings" / "ProjectVersion.txt").is_file():
-        return "unity"
-    if (checkout / "pyproject.toml").is_file():
-        return "python"
-    return "bazel"
-
-
-def detect_project_id(checkout: Path) -> str:
-    """The scope guard's argument in the checkout's settings, else the directory name."""
-    try:
-        settings = json.loads((checkout / ct.SETTINGS_PATH).read_text(encoding="utf-8"))
-        for entry in (settings.get("hooks") or {}).get("PreToolUse") or []:
-            for hook in entry.get("hooks") or []:
-                match = re.search(r"lws_scope_guard\.py\s+(\S+)", hook.get("command", ""))
-                if match:
-                    return match.group(1)
-    except (OSError, ValueError):
-        pass
-    return checkout.resolve().name
-
-
-def options_for(project_id: str) -> dict:
-    return dict(ct.OWN_SETTINGS) if project_id == PLATFORM_PROJECT else {}
-
-
-def generator_owned(project_id: str) -> set[str]:
-    """Every permission entry the generator writes for this project, under any template."""
-    owned: set[str] = set()
-    for template in ct.TEST_BASH:
-        for platform in (False, True):
-            for entries in ct.settings(project_id, template, platform=platform)["permissions"].values():
-                owned.update(entries)
-    owned.update(e for entries in ct.settings(project_id, **ct.OWN_SETTINGS)["permissions"].values() for e in entries)
-    owned.update(ct.RETIRED_RULES)
-    return owned
-
-
-def is_generated_entry(entry: str, owned: set[str]) -> bool:
-    return entry in owned or entry.startswith(ct.MCP) or entry.startswith("Bash(lws ")
-
-
-def is_guard_entry(entry: dict) -> bool:
-    return any(ct.GUARD_PATH in (hook.get("command") or "") for hook in entry.get("hooks") or [])
-
-
-def merged_settings(project_id: str, template: str, current: dict | None) -> dict:
-    """The generated settings, plus what the project added beside them."""
-    generated = ct.settings(project_id, template, **options_for(project_id))
-    if not current:
-        return generated
-    owned = generator_owned(project_id)
-    permissions = dict(generated["permissions"])
-    for key, entries in (current.get("permissions") or {}).items():
-        if key not in permissions:
-            permissions[key] = entries
-            continue
-        extra = [e for e in entries if isinstance(e, str) and not is_generated_entry(e, owned)]
-        permissions[key] = permissions[key] + [e for e in extra if e not in permissions[key]]
-    hooks = dict(generated["hooks"])
-    for event, entries in (current.get("hooks") or {}).items():
-        if event not in hooks:
-            hooks[event] = entries
-            continue
-        kept = [e for e in entries if not is_guard_entry(e) and e not in hooks[event]]
-        hooks[event] = hooks[event] + kept
-    merged = {"permissions": permissions, "hooks": hooks}
-    merged.update({k: v for k, v in current.items() if k not in merged})
-    return merged
-
-
-def wanted_files(checkout: Path, project_id: str, template: str) -> dict[str, str]:
-    files = ct.claude_files(project_id, template, **options_for(project_id))
-    try:
-        current = json.loads((checkout / ct.SETTINGS_PATH).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        current = None
-    files[ct.SETTINGS_PATH] = json.dumps(merged_settings(project_id, template, current), indent=2) + "\n"
-    return files
-
-
-def briefing_note(checkout: Path) -> str | None:
-    """Why the project's briefing does not load the shared section yet, or None."""
-    for rel, token in ((ct.AGENTS_PATH, ct.SHARED_BRIEFING_IMPORT), ("AGENTS.md", "@" + ct.SHARED_BRIEFING_PATH)):
-        path = checkout / rel
-        if path.is_file():
-            if token in path.read_text(encoding="utf-8"):
-                return None
-            return f"{rel} does not import the shared section: add a line `{token}`"
-    return f"no AGENTS.md briefing: start one from claude_templates.agents_md() ending with `{ct.SHARED_BRIEFING_IMPORT}`"
+from registry.claude_sync import (  # noqa: E402,F401 - the functions this command line is made of
+    PLATFORM_PROJECT, briefing_note, detect_plugins, detect_project_id, detect_template, generator_owned, is_generated_entry,
+    is_guard_entry, merged_settings, options_for, pending, wanted_files, write as write_files,
+)
 
 
 def sync(checkout: Path, project_id: str | None, template: str | None, write: bool) -> list[str]:
-    project_id = project_id or detect_project_id(checkout)
-    template = template or detect_template(checkout)
-    changed = []
-    for rel, text in wanted_files(checkout, project_id, template).items():
-        path = checkout / rel
-        current = path.read_text(encoding="utf-8") if path.is_file() else None
-        if current == text:
-            continue
-        changed.append(f"{'created' if current is None else 'updated'} {rel}")
-        if write:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-    print(f"{checkout} ({project_id}, {template}): " + ("in sync" if not changed else
+    report = pending(checkout, project_id, template)
+    changed = report["changed"]
+    if write:
+        write_files(checkout, report["files"])
+    print(f"{checkout} ({report['project_id']}, {report['template']}): " + ("in sync" if not changed else
           f"{len(changed)} file(s) {'written' if write else 'to write'}"))
     for line in changed:
         print(f"  {line}")
-    note = briefing_note(checkout)
-    if note:
-        print(f"  note: {note}")
+    if report["note"]:
+        print(f"  note: {report['note']}")
     return changed
 
 

@@ -15,13 +15,17 @@ import time
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ValidationError
 
+from common import events
 from common.job_steps import StepReporter, reporting, step
 from common.paths import Paths
 from common.incident import install_incident_reporting
-from registry import db, github, gitops, version_client
+from common.pillar_socket import resolve_pillar_socket
+from common.uds_client import client_for_socket
+from registry import claude_sync, db, github, gitops, version_client
 from registry.bootstrap import BootstrapError, bootstrap_project
 from registry.connect_github import ConnectGitHubError, connect_github
 from registry.import_ import ProjectImportError, import_project
@@ -56,10 +60,28 @@ class CreateTicketRequest(BaseModel):
 SECRETS_CACHE_TTL_SECONDS = 300.0
 
 
-def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
+def start_improvement_branch(paths: Paths, project_id: str, name: str) -> dict:
+    """Ask Orchestration for a `version.improvement_start` Job and return it as it settled."""
+    socket_path = resolve_pillar_socket(paths, "orchestration")
+    if socket_path is None:
+        return {"status": "failed", "error": "Orchestration is unreachable"}
+    template = {"type": "version.improvement_start", "target_pillar": "version", "project_id": project_id,
+                "params": {"name": name, "issue": None, "force": False}, "queue_key": project_id, "depends_on": [],
+                "created_by": "registry"}
+    try:
+        with client_for_socket(socket_path, timeout=60.0) as client:
+            response = client.post("/v1/jobs", json=template)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
+def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> FastAPI:
     app = FastAPI(title="little-workshop Registry & Portfolio")
     install_incident_reporting(app, paths, pillar="registry")
     lock = threading.Lock()
+    start_branch = start_branch or (lambda project_id, name: start_improvement_branch(paths, project_id, name))
 
     def reported(request: "JobRequest"):
         return reporting(StepReporter(paths, request.job_id))
@@ -108,6 +130,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                     handle.detail = "gitflow branches ready, checked out on dev"
                 else:
                     handle.detail = "version tracking was not initialized"
+        events.emit_in_background(paths, "registry.project_registered", result.name, {"how": "bootstrap"})
         return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
 
     @app.post("/v1/jobs/project.import")
@@ -121,6 +144,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 result = import_project(conn, paths, import_params)
             except ProjectImportError as exc:
                 return {"outcome": "failed", "error": str(exc)}
+        events.emit_in_background(paths, "registry.project_registered", result.name, {"how": "import"})
         return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
 
     @app.post("/v1/jobs/project.connect_github")
@@ -148,6 +172,28 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             except ProjectNotFoundError:
                 return {"outcome": "failed", "error": f"project {name!r} not found"}
         return {"outcome": "succeeded", "result": {"name": name}}
+
+    @app.post("/v1/jobs/registry.sync_claude_files")
+    def job_sync_claude_files(request: JobRequest) -> dict:
+        """What differs between each registered project's generated Claude files and the templates; with
+        `params.write`, each differing project gets them on an improvement branch of its own, committed
+        and left for the owner to finish. `project_id` limits it to one project."""
+        with lock:
+            projects = [p for p in db.list_projects(conn) if not request.project_id or p.name == request.project_id]
+        if request.project_id and not projects:
+            return {"outcome": "failed", "error": f"project {request.project_id!r} not found"}
+        reports = []
+        for project in projects:
+            checkout = Path(project.path)
+            if not checkout.is_dir():
+                reports.append({"project_id": project.name, "changed": [], "written": False, "detail": "skipped: checkout not found"})
+            elif request.params.get("write") is True:
+                reports.append(claude_sync.sync_on_branch(checkout, project.name, start_branch))
+            else:
+                report = claude_sync.pending(checkout, project.name)
+                reports.append({"project_id": project.name, "changed": report["changed"], "note": report["note"], "written": False,
+                                "detail": "in sync" if not report["changed"] else f"{len(report['changed'])} file(s) differ"})
+        return {"outcome": "succeeded", "result": {"projects": reports, "differing": sum(1 for r in reports if r["changed"])}}
 
     @app.get("/v1/projects")
     def list_projects(status: str | None = None) -> list[dict]:

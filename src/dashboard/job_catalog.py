@@ -105,6 +105,22 @@ def _update_standards(project: str, values: dict) -> dict:
                        "include_standards": False}}
 
 
+def _optimize_usage(project: str, values: dict) -> dict:
+    # The usage pillar writes the task from the chosen findings and starts it on the project's queue.
+    return {"type": "usage.optimize", "target_pillar": "usage", "project_id": project, "queue_key": None,
+            "params": {"finding_ids": values["findings"]}}
+
+
+def _apply_claude_config(project: str, values: dict) -> dict:
+    return {"type": "registry.sync_claude_files", "target_pillar": "registry", "project_id": None, "queue_key": "claude-files-sync",
+            "params": {"write": values["write"]}}
+
+
+def _configure_claude_telemetry(project: str, values: dict) -> dict:
+    return {"type": "usage.configure_claude", "target_pillar": "usage", "project_id": None, "queue_key": "usage",
+            "params": {"apply": values["apply"]}}
+
+
 _CONDITIONS = "Conditions — all must hold before the release branch is started"
 
 CATALOG: tuple[JobSpec, ...] = (
@@ -147,6 +163,31 @@ CATALOG: tuple[JobSpec, ...] = (
         description=(f"Has Claude review every little-workshop standard, every policy and every project's own rules, then "
                      f"update the documents in {STANDARDS_FOLDER}/. Opens a branch for your review, like any task."),
         make=_update_standards, projects=(WORKSHOP_PROJECT,),
+    ),
+    JobSpec(
+        key="optimize_usage", label="Optimize Claude usage",
+        description=("Has Claude address the chosen Claude-usage findings in this project: a fixed task with the findings' "
+                     "evidence, on a branch for your review. Each finding is measured again afterwards."),
+        make=_optimize_usage,
+        args=(JobArg("findings", "Findings to address", "multi", required=True,
+                     help="The open findings of this project, ranked by what a fix is estimated to save."),),
+    ),
+    JobSpec(
+        key="apply_claude_config", label="Apply common Claude configuration",
+        description=("Compares every project's generated Claude files with little-workshop's templates. With the box "
+                     "ticked, each project that differs gets them on an improvement branch of its own, committed and "
+                     "left for you to finish; the branch finish runs claude-config-present and claude-instructions-valid."),
+        make=_apply_claude_config, projects=(WORKSHOP_PROJECT,),
+        args=(JobArg("write", "Write the files on a branch in each project", "flag",
+                     help="Unticked, the job only reports which projects differ."),),
+    ),
+    JobSpec(
+        key="configure_claude_telemetry", label="Configure Claude telemetry",
+        description=("Shows what the Claude usage profile would change in ~/.claude/settings.json: the telemetry "
+                     "environment, the session hooks, the statusline and the transcript retention."),
+        make=_configure_claude_telemetry, projects=(WORKSHOP_PROJECT,),
+        args=(JobArg("apply", "Write the profile", "flag",
+                     help="Keeps a backup of the settings file and every entry of your own. Unticked: a dry run."),),
     ),
 )
 
