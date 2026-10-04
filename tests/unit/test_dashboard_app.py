@@ -3110,7 +3110,31 @@ def test_the_pillars_page_redeploys_the_chosen_pillars_in_batches(test_client, m
     assert by_pillar["dashboard"]["depends_on"] == [by_pillar["orchestration"]["id"]]
     assert by_pillar["policy"]["depends_on"] == [by_pillar["dashboard"]["id"]]
     assert {f["created_by"] for f in created} == {"dashboard"} and {f["params"]["commit"] for f in created} == {"abc123"}
-    assert "orchestration" in unquote(response.headers["location"]) and "→" in unquote(response.headers["location"])
+    assert "Orchestration → Dashboard → Policy & Compliance (abc123)" in unquote(response.headers["location"])
+
+
+def test_redeploying_every_pillar_includes_usage_and_names_each_pillar(test_client, monkeypatch):
+    import threading
+
+    names = ("orchestration", "policy", "registry", "requirements", "version", "build", "deployment", "agent", "dashboard", "usage")
+    created, done = [], threading.Event()
+    monkeypatch.setattr(client, "core_status", lambda paths: {"pillars": {**{n: {"status": "healthy"} for n in names}, "mcp": {"status": "disabled"}}})
+
+    def create_job(paths, **fields):
+        created.append(fields)
+        if len(created) == len(names):
+            done.set()
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(client, "create_job", create_job)
+    response = test_client.post("/pillars/redeploy", data={"pillar": [*names, "mcp"], "commit": "HEAD"}, follow_redirects=False)
+    assert done.wait(5)
+    assert sorted(f["project_id"] for f in created) == sorted(names)  # the disabled MCP server is left out
+    by_pillar = {f["project_id"]: f for f in created}
+    assert sorted(by_pillar["usage"]["depends_on"]) == sorted(by_pillar[n]["id"] for n in ("agent", "build", "dashboard"))
+    assert by_pillar["usage"]["id"] in by_pillar["deployment"]["depends_on"]
+    assert ("Orchestration → Agentic Development, Build & Packages, Dashboard → Policy & Compliance, Registry & Portfolio, "
+            "Requirements & Quality, Usage & Efficiency, Version Control & Release → Deployment & Servers (HEAD)") in unquote(response.headers["location"])
 
 
 # --- REQ-000000334: Usage is read through lws, the MCP server and the Dashboard ---

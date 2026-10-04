@@ -1085,7 +1085,7 @@ TOOLS: tuple[ToolSpec, ...] = (
              _deployment_redeploy_pillar),
     ToolSpec("workshop_deployment_redeploy_pillars", "Redeploy several of little-workshop's own pillars (default: every "
              "enabled one) to a commit, in dependency order: the pillars are split into batches (for all of them: "
-             "orchestration; then build, agent, dashboard; then policy, registry, requirements, version; then "
+             "orchestration; then build, agent, dashboard; then policy, registry, requirements, version, usage (and mcp); then "
              "deployment), the redeploys of a batch run side by side and a batch starts once the one before it "
              "has succeeded. Two pillars with nothing to wait for between them are one batch.",
              _schema({"commit": _prop("string", "Commit/ref to deploy."),
