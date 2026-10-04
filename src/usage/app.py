@@ -28,6 +28,9 @@ from common.uds_client import client_for_socket
 from usage import attribution, db, detectors, doctor, intake, mining, optimize, outcomes, pricing, profile, proxy, rollup, transcripts
 
 TICK_SECONDS = 600.0
+# A summary older than this is rolled up before it is read, so a session shows up within a minute
+# instead of at the next ten-minute tick.
+SUMMARY_ROLLUP_SECONDS = 60.0
 ANALYSIS_DAYS = 14  # the period the detectors look at
 EXPERIMENT_DAYS = 7  # an experiment compares this many days before a change with as many after
 EXPERIMENT_SETTLE_DAYS = 14  # measured on its own this long after it began: a week to land, a week to measure
@@ -266,7 +269,10 @@ def build_app(
             conn.commit()
         return added
 
+    last_rollup = {"at": None}
+
     def do_rollup() -> dict:
+        last_rollup["at"] = time.monotonic()
         with lock:
             attribute(row["id"] for row in conn.execute("SELECT id FROM sessions").fetchall())
             days = rollup.rebuild(conn, prices(), polls=detectors.poll_request_ids(conn))
@@ -454,6 +460,8 @@ def build_app(
 
     @app.get("/v1/summary")
     def summary(week: str | None = None, project: str | None = None, origin: str | None = None) -> dict:
+        if last_rollup["at"] is None or time.monotonic() - last_rollup["at"] >= SUMMARY_ROLLUP_SECONDS:
+            do_rollup()
         with lock:
             result = rollup.summary(conn, prices(), week=week, project=project or None, origin=origin or None)
             rows = outcomes.weekly(conn, weeks=8, project=project or None, today=date.fromisoformat(result["week"]) + timedelta(days=6))
@@ -487,10 +495,12 @@ def build_app(
         return {"ok": changed}
 
     @app.get("/v1/candidates")
-    def candidates(state: str | None = db.CANDIDATE_OPEN) -> list[dict]:
-        """Automation candidates ranked by the weighted tokens they cost per week; `state=all` lists every state."""
+    def candidates(state: str | None = db.CANDIDATE_OPEN, limit: int | None = None) -> list[dict]:
+        """Automation candidates ranked by the weighted tokens they cost per week; `state=all` lists every
+        state, `limit` keeps the first ones."""
         with lock:
-            return db.list_candidates(conn, state=None if state == "all" else state)
+            rows = db.list_candidates(conn, state=None if state == "all" else state)
+        return rows[:max(limit, 0)] if limit is not None else rows
 
     @app.post("/v1/candidates/{candidate_id}")
     def edit_candidate(candidate_id: str, body: dict) -> dict:

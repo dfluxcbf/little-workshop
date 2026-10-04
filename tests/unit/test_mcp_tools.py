@@ -464,9 +464,9 @@ def test_usage_findings_calls_the_client_and_analyze_is_a_usage_job(paths, monke
 def test_candidates_and_triggers_are_read_through_the_client(paths, monkeypatch):
     candidates = _fake_client_call(monkeypatch, "usage_candidates", result=[{"signature": "x"}])
     listed = _fake_client_call(monkeypatch, "list_triggers", result=[{"id": "t1"}])
-    assert tools_mod.TOOLS_BY_NAME["workshop_usage_candidates"].handler(paths, {}) == [{"signature": "x"}]
+    assert tools_mod.TOOLS_BY_NAME["workshop_usage_candidates"].handler(paths, {}) == [{"signature": "x", "examples": []}]
     assert tools_mod.TOOLS_BY_NAME["workshop_trigger_list"].handler(paths, {}) == [{"id": "t1"}]
-    assert candidates[0] == ((paths,), {"state": "open"}) and listed[0] == ((paths,), {})
+    assert candidates[0] == ((paths,), {"state": "open", "limit": 10}) and listed[0] == ((paths,), {})
 
 
 def test_trigger_add_and_remove_build_the_orchestration_calls(paths, monkeypatch):

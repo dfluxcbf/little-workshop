@@ -757,10 +757,10 @@ class AgentPillarUnavailable(Exception):
     pass
 
 
-def usage_candidates(paths: Paths, *, state: str = "open", timeout: float = 10.0) -> list:
+def usage_candidates(paths: Paths, *, state: str = "open", limit: int | None = None, timeout: float = 10.0) -> list:
     try:
         with client_for_socket(paths.socket_path("usage"), timeout=timeout) as client:
-            response = client.get("/v1/candidates", params={"state": state})
+            response = client.get("/v1/candidates", params={"state": state, **({"limit": limit} if limit is not None else {})})
         response.raise_for_status()
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
