@@ -815,3 +815,9 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000358 | **Each tool call's outcome is read from its result.** When a transcript is ingested, the Usage & Efficiency pillar shall record how each tool call ended, as ok, failed, held, running or cancelled, with its exit code and the passed and failed test counts it printed, reading in turn a pytest, Bazel or Vitest summary in its output, the exit code a failed command's result starts with, the status of the Job a little-workshop call answers with, and the tool's own error flag; shall record a call that telemetry reports as only ok or failed; shall read every stored transcript once more when the parser learns to read something new; and shall return per signature how its stored calls ended. | draft |
+
+## Findings: what fixes them, replayed savings (2026-10-04)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000359 | **A finding says what fixes it, and its saving is replayed where the store allows.** The Usage & Efficiency pillar shall give each finding what fixes it and how its weekly saving is known, as replayed, priced, a rough estimate or not estimated; shall estimate the saving of polling by replaying each run of back-to-back turns that only poll or wait as the job waits it needs, one per default wait timeout it lasted; shall estimate the saving of large command output by replaying each large result cut to what the test-output filter leaves; and the Dashboard shall say that findings are habits and configuration rather than automation and show each finding's fix and saving basis. | draft |

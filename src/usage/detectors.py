@@ -9,12 +9,14 @@ measurements into findings; an experiment compares a metric's value before and a
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 from dataclasses import asdict, dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from statistics import median
 
+from usage import counterfactual
 from usage.pricing import Price, weighted
 from usage.rollup import LONG_CONTEXT_TOKENS
 
@@ -58,6 +60,21 @@ ACTIONS = {
     "D11": "Disable the MCP server, or rely on deferred tool search.",
     "D12": "Move Claude-based scheduled jobs to quieter hours.",
 }
+# What fixes a finding. None is automation: findings are habits and configuration, and work a Job or a
+# trigger could take over is mined separately (mining.py, the automation candidates).
+FIXED_BY = {
+    "D1": "a habit and a setting", "D2": "configuration", "D3": "a habit", "D4": "a setting", "D5": "a setting",
+    "D6": "a route that exists (workshop_job_wait)", "D7": "a hook or a subagent", "D8": "a skill or a digest",
+    "D9": "a setting (the model)", "D10": "instruction wording", "D11": "a setting (MCP servers)", "D12": "scheduling",
+}
+# How a finding's saving is known. `replayed`: the past occurrences replayed with the fix in place
+# (counterfactual.py); `priced`: the recorded cost of the cache writes the fix removes; `rough estimate`: a
+# share of a measured cost, since the saving depends on how habits change; None: not estimated.
+SAVING_BASIS = {"D1": "rough estimate", "D3": "priced", "D4": "priced", "D5": "rough estimate", "D6": "replayed", "D7": "replayed"}
+REPLAYED = ("D6", "D7")  # detectors that need the replay of the stored threads
+WAIT_SECONDS = 120  # what one workshop_job_wait waits when Claude names no timeout (orchestration's default)
+FILTERED_BYTES = 3_000  # what the test-output filter leaves of a run: about its last 40 lines and the failures
+
 TITLES = {
     "D1": "Long sessions re-read a large context", "D2": "Startup context grew", "D3": "Prompt cache misses",
     "D4": "One-shot runs write a 1-hour cache", "D5": "One-shot runs spread over many directories",
@@ -83,7 +100,13 @@ class Measurement:
     saving: float = 0.0  # weighted tokens per week a fix is estimated to save
 
     def as_dict(self) -> dict:
-        return {**asdict(self), "title": TITLES[self.detector], "metric": METRICS[self.detector], "action": ACTIONS[self.detector]}
+        return {**asdict(self), "title": TITLES[self.detector], "metric": METRICS[self.detector], "action": ACTIONS[self.detector],
+                **described(self.detector)}
+
+
+def described(detector: str) -> dict:
+    """What fixes a detector's finding, and how its saving is known."""
+    return {"fixed_by": FIXED_BY.get(detector), "saving_basis": SAVING_BASIS.get(detector)}
 
 
 @dataclass
@@ -239,7 +262,27 @@ def d5_one_shot_directories(requests, calls, conn, period, t, prices) -> list[Me
     return out
 
 
-def d6_polling(requests, calls, conn, period, t, prices) -> list[Measurement]:
+def _poll_runs(polls: list[dict], calls: list[dict], replay: counterfactual.Replay) -> list[list[dict]]:
+    """The polls as runs of back-to-back turns that only poll or wait, per thread: what one wait replaces."""
+    other = {c["request_id"] for c in calls if c.get("request_id") and not is_poll(c["signature"])}
+    located = sorted(((where, c) for c in polls if c.get("request_id") not in other for where in [replay.locate(c)] if where),
+                     key=lambda item: (item[0], item[1]["ts"]))
+    runs: list[list[dict]] = []
+    last = None
+    for (key, index), call in located:
+        if last is not None and last[0] == key and index - last[1] <= 1:
+            runs[-1].append(call)
+        else:
+            runs.append([call])
+        last = (key, index)
+    return runs
+
+
+def _seconds(start: str, end: str) -> float:
+    return max((datetime.fromisoformat(end.replace("Z", "+00:00")) - datetime.fromisoformat(start.replace("Z", "+00:00"))).total_seconds(), 0.0)
+
+
+def d6_polling(requests, calls, conn, period, t, prices, replay, calibration) -> list[Measurement]:
     by_project_requests = _by(requests, "project")
     out = []
     for project, rows in _by(calls, "project").items():
@@ -251,12 +294,20 @@ def d6_polling(requests, calls, conn, period, t, prices) -> list[Measurement]:
             key = (c["session_id"], c.get("prompt_id") or "")
             episodes[key] = episodes.get(key, 0) + 1
         worst = max(episodes.values(), default=0)
-        # Each poll is a request that re-reads the session's context.
-        average = (sum(sum(weighted(r, prices).values()) for r in project_requests) / len(project_requests)) if project_requests else 0.0
+        # Replayed: each run of polling turns becomes the waits it needs (one per WAIT_SECONDS it lasted),
+        # each answering like the run's largest status read. A lone poll is already one turn: it saves nothing.
+        saving, turns_saved = 0.0, 0
+        for run in _poll_runs(polls, rows, replay):
+            waits = max(1, math.ceil(_seconds(run[0]["ts"], run[-1]["ts"]) / WAIT_SECONDS))
+            replayed = replay.occurrence(run, calibration, trigger_ok=False, kept_turns=waits,
+                                         reply_bytes=max(c.get("result_bytes") or 0 for c in run))
+            if replayed:
+                saving += replayed["called"]
+                turns_saved += max(replayed["turns"] - waits, 0)
         out.append(Measurement("D6", project, share, share > t["d6_polling_share"] or worst > t["d6_polls_per_episode"], {
             "polls": len(polls), "requests": len(project_requests), "most_polls_in_one_episode": worst,
-            "by_signature": _counts(c["signature"] for c in polls),
-        }, len(polls) * average / period.weeks))
+            "by_signature": _counts(c["signature"] for c in polls), "turns_a_wait_saves": turns_saved,
+        }, saving / period.weeks))
     return out
 
 
@@ -267,16 +318,19 @@ def _counts(values) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda item: -item[1])[:8])
 
 
-def d7_large_output(requests, calls, conn, period, t, prices) -> list[Measurement]:
+def d7_large_output(requests, calls, conn, period, t, prices, replay, calibration) -> list[Measurement]:
     out = []
     for project, rows in _by(calls, "project").items():
-        heavy = []
+        heavy, saving = [], 0.0
         for signature, group in _by([c for c in rows if c.get("result_bytes")], "signature").items():
             average = sum(c["result_bytes"] for c in group) / len(group)
             if len(group) >= t["d7_min_calls"] and average > t["d7_result_bytes"]:
-                heavy.append({"signature": signature, "calls": len(group), "average_bytes": round(average)})
+                # Replayed: each result cut to what a filter leaves, the rest no longer re-read by the later requests.
+                saved = sum(replay.trimmed(c, calibration, FILTERED_BYTES) or 0.0 for c in group) / period.weeks
+                heavy.append({"signature": signature, "calls": len(group), "average_bytes": round(average), "saving": round(saved, 2)})
+                saving += saved
         heavy.sort(key=lambda item: -item["average_bytes"] * item["calls"])
-        out.append(Measurement("D7", project, float(heavy[0]["average_bytes"]) if heavy else 0.0, bool(heavy), {"commands": heavy[:8]}))
+        out.append(Measurement("D7", project, float(heavy[0]["average_bytes"]) if heavy else 0.0, bool(heavy), {"commands": heavy[:8]}, saving))
     return out
 
 
@@ -360,12 +414,22 @@ DETECTORS = {
 
 
 def measure(conn: sqlite3.Connection, period: Period, prices: dict[str, Price], config: dict | None = None,
-            only: tuple[str, ...] | None = None) -> list[Measurement]:
-    """Every detector's measurement of every project over `period`."""
+            only: tuple[str, ...] | None = None, *, replay: counterfactual.Replay | None = None,
+            calibration: counterfactual.Calibration | None = None) -> list[Measurement]:
+    """Every detector's measurement of every project over `period`. The replay the D6 and D7 savings rest
+    on is built once, when one of them runs, unless the caller has one."""
     t = thresholds(config)
     requests, calls = _requests(conn, period), _tool_calls(conn, period)
     out: list[Measurement] = []
     for name, detector in DETECTORS.items():
-        if only is None or name in only:
+        if only is not None and name not in only:
+            continue
+        if name in REPLAYED:
+            if replay is None:
+                replay, calibration = counterfactual.prepare(conn, prices)
+            elif calibration is None:
+                calibration = counterfactual.calibrate(conn, replay)
+            out.extend(detector(requests, calls, conn, period, t, prices, replay, calibration))
+        else:
             out.extend(detector(requests, calls, conn, period, t, prices))
     return out

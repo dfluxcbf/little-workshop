@@ -114,9 +114,28 @@
   <h2>Findings</h2>
   <p class="muted">What the detectors found over the last 14 days, ranked by what a fix is estimated to save per week.
     A finding is addressed by the <em>Optimize Claude usage</em> job on its project and measured again two weeks later.</p>
-  {% for f in findings if f.state in ('open', 'accepted') %}
+  <p class="muted">Findings are about habits and configuration, not automation: each says where tokens go and what fixes it,
+    a habit, a setting, an instruction or a hook. Work that a Job or a trigger could take over is under
+    <a href="#candidates">Automation candidates</a>. A saving marked <em>replayed</em> comes from replaying the past
+    occurrences with the fix in place; <em>priced</em> is the recorded cost of the cache writes the fix removes; a
+    <em>rough estimate</em> is a share of a measured cost, since it depends on how habits change.</p>
+  {% set open_findings = findings | selectattr('state', 'in', ['open', 'accepted']) | list %}
+  {% if open_findings %}
+  <div class="table-scroll stack"><table>
+    <thead><tr><th>Finding</th><th>Project</th><th>Fixed by</th><th>Saving a week</th><th>How the saving is known</th></tr></thead>
+    <tbody>
+    {% for f in open_findings %}
+      <tr><td>{{ f.detector }} {{ f.title }}</td><td>{{ f.project }}</td><td>{{ f.fixed_by or "—" }}</td>
+        <td>{{ "—" if not (f.saving_basis or f.saving) else "$" ~ "{:,.2f}".format(f.saving) }}</td><td>{{ f.saving_basis or "not estimated" }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+  {% for f in open_findings %}
   <details class="stats-table">
-    <summary><strong>{{ f.detector }}</strong> {{ f.title }} &middot; {{ f.project }} &middot; about ${{ "{:,.2f}".format(f.saving) }} a week
+    <summary><strong>{{ f.detector }}</strong> {{ f.title }} &middot; {{ f.project }} &middot;
+      {% if f.saving_basis or f.saving %}about ${{ "{:,.2f}".format(f.saving) }} a week{% if f.saving_basis %} ({{ f.saving_basis }}){% endif %}{% else %}saving not estimated{% endif %}
+      &middot; fixed by {{ f.fixed_by or "—" }}
       {% if f.state == 'accepted' %}<span class="pill warn">being addressed</span>{% endif %}</summary>
     <p>{{ f.metric }}: <strong>{{ "{:,.3f}".format(f.value).rstrip('0').rstrip('.') }}</strong> ({{ f.period_start }} to {{ f.period_end }})</p>
     <p>{{ f.action }}</p>
