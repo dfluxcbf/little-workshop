@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Claude usage — little-workshop{% endblock %}
+{% macro plot(id, title, about) -%}
+<section class="card stats-plot" data-usage-plot="{{ id }}">
+  <h2>{{ title }}</h2>
+  <p class="muted">{{ about }}</p>
+  <div class="stats-chart"></div>
+</section>
+{%- endmacro %}
+{% macro tokens(n) -%}{{ "{:,.1f} M".format(n / 1000000) if n >= 1000000 else "{:,.0f} k".format(n / 1000) if n >= 1000 else n }}{%- endmacro %}
+{% macro pct(v) -%}{{ "—" if v is none else "{:.1f}%".format(v * 100) }}{%- endmacro %}
+{% block content %}
+{% if summary %}
+<p class="muted stats-head">Every Claude session on this machine, from telemetry, hooks, run results and the transcript backfill.
+  Weighted tokens are tokens priced at list price so that cache reads, cache writes and output of different models add up;
+  on a subscription they stand for plan usage, not money spent.</p>
+
+<section class="card stats-scope">
+  <h2>Week, project and origin</h2>
+  <p class="muted">A week starts on Monday, when the weekly allowance resets.{% if not summary.complete %} This week is not over yet.{% endif %}</p>
+  <form method="get" action="/usage" class="stats-scope-selects">
+    <label>Week of <select name="week" onchange="this.form.submit()">
+      {% for w in summary.weeks | reverse %}<option value="{{ w }}"{{ ' selected' if w == summary.week }}>{{ w }}</option>{% endfor %}
+      {% if summary.week not in summary.weeks %}<option value="{{ summary.week }}" selected>{{ summary.week }}</option>{% endif %}
+    </select></label>
+    <label>Project <select name="project" onchange="this.form.submit()">
+      <option value="">All projects</option>
+      {% for p in summary.projects %}<option value="{{ p.project }}"{{ ' selected' if p.project == summary.project }}>{{ p.project }}</option>{% endfor %}
+      {% if summary.project and summary.project not in summary.projects | map(attribute='project') | list %}<option value="{{ summary.project }}" selected>{{ summary.project }}</option>{% endif %}
+    </select></label>
+    <label>Origin <select name="origin" onchange="this.form.submit()">
+      <option value="">All origins</option>
+      {% for o in origins %}<option value="{{ o }}"{{ ' selected' if o == summary.origin }}>{{ o }}</option>{% endfor %}
+    </select></label>
+  </form>
+  <div class="stats-quick" id="usage-compare">
+    <button type="button" data-compare="previous_week"{{ ' disabled' if not summary.previous_week }}>Compare to previous week</button>
+    <button type="button" data-compare="next_week"{{ ' disabled' if not summary.next_week }}>Compare to next week</button>
+    <button type="button" data-compare="four_week_average"{{ ' disabled' if not summary.four_week_average }}>Compare with last 4 weeks average</button>
+  </div>
+</section>
+
+<section class="card">
+  <h2>This week</h2>
+  <dl class="kv">
+    <dt>Weighted tokens</dt><dd>${{ "{:,.2f}".format(summary.total.weighted) }} at list price</dd>
+    <dt>Requests</dt><dd>{{ "{:,}".format(summary.total.requests) }}</dd>
+    <dt>Cache read / write / output</dt><dd>{{ tokens(summary.total.cache_read_tokens) }} / {{ tokens(summary.total.cache_write_tokens) }} / {{ tokens(summary.total.output_tokens) }}</dd>
+    <dt>Cache hit ratio</dt><dd>{{ pct(summary.total.cache_hit_ratio) }}</dd>
+    <dt>Average context per request</dt><dd>{{ tokens(summary.total.average_context) if summary.total.average_context else "—" }}</dd>
+    <dt>Long-context share (over 200k)</dt><dd>{{ pct(summary.total.long_context_share) }}</dd>
+    <dt>Median startup context</dt><dd>{{ tokens(summary.startup_context_p50) if summary.startup_context_p50 else "—" }}</dd>
+  </dl>
+</section>
+
+{{ plot('weighted', 'Weighted tokens per day', 'By token type: cache reads, cache writes, output and uncached input.') }}
+{{ plot('context', 'Average context per request', 'How many tokens a request carried on average each day. Every request re-reads the whole conversation.') }}
+{{ plot('hit', 'Cache hit ratio', 'Share of each day\'s input that was read from cache.') }}
+{{ plot('long', 'Long-context share', 'Share of each day\'s context tokens that sat in requests above 200k tokens.') }}
+{{ plot('pressure', 'Plan pressure', 'The highest 5-hour and 7-day plan usage the statusline reported each day.') }}
+{{ plot('pays', 'Does little-workshop pay for itself?', 'Weighted tokens per week spent building little-workshop against every other project. Building it pays off only if the others get cheaper.') }}
+
+<section class="card">
+  <h2>Projects</h2>
+  <table>
+    <thead><tr><th>Project</th><th>Sessions</th><th>Requests</th><th>Weighted</th><th>Avg context</th><th>Hit ratio</th><th>Long-context</th><th>Startup p50</th></tr></thead>
+    <tbody>
+    {% for p in summary.projects %}
+      <tr><td><a href="/usage?week={{ summary.week }}&project={{ p.project }}">{{ p.project }}</a></td><td>{{ p.sessions }}</td><td>{{ "{:,}".format(p.requests) }}</td>
+        <td>${{ "{:,.2f}".format(p.weighted) }}</td><td>{{ tokens(p.average_context) if p.average_context else "—" }}</td><td>{{ pct(p.cache_hit_ratio) }}</td>
+        <td>{{ pct(p.long_context_share) }}</td><td>{{ tokens(p.startup_context_p50) if p.startup_context_p50 else "—" }}</td></tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">No usage stored for this week.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Heaviest sessions</h2>
+  <table>
+    <thead><tr><th>Started</th><th>Project</th><th>Origin</th><th>Requests</th><th>Largest context</th><th>Weighted</th></tr></thead>
+    <tbody>
+    {% for s in summary.top_sessions %}
+      <tr><td title="{{ s.session_id }}">{{ s.first[:16].replace('T', ' ') }}</td><td>{{ s.project }}</td><td>{{ s.origin }}</td><td>{{ "{:,}".format(s.requests) }}</td>
+        <td>{{ tokens(s.max_context) }}</td><td>${{ "{:,.2f}".format(s.weighted) }}</td></tr>
+    {% else %}
+      <tr><td colspan="6" class="muted">No sessions this week.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card" id="outcomes">
+  <h2>Tokens per outcome</h2>
+  <p class="muted">What the week's work produced for what it cost: agent tasks that ran to their end, branches finished and
+    requirements that turned to done. It shows whether an optimization made the work cheaper, or only shorter.</p>
+  <table>
+    <thead><tr><th>Project</th><th>Weighted</th><th>Tasks finished</th><th>Per task</th><th>Branches finished</th><th>Per branch</th><th>Requirements done</th><th>Per requirement</th></tr></thead>
+    <tbody>
+    {% for o in summary.outcomes or [] %}
+      <tr><td>{{ o.project }}</td><td>${{ "{:,.2f}".format(o.weighted) }}</td>
+        <td>{{ o.tasks_finished }}</td><td>{{ "—" if o.weighted_per_task is none else "$" ~ "{:,.2f}".format(o.weighted_per_task) }}</td>
+        <td>{{ o.branches_finished }}</td><td>{{ "—" if o.weighted_per_branch is none else "$" ~ "{:,.2f}".format(o.weighted_per_branch) }}</td>
+        <td>{{ "—" if o.requirements_done is none else o.requirements_done }}</td><td>{{ "—" if o.weighted_per_requirement is none else "$" ~ "{:,.2f}".format(o.weighted_per_requirement) }}</td></tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">No outcome recorded for this week.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card" id="findings">
+  <h2>Findings</h2>
+  <p class="muted">What the detectors found over the last 14 days, ranked by what a fix is estimated to save per week.
+    A finding is addressed by the <em>Optimize Claude usage</em> job on its project and measured again two weeks later.</p>
+  {% for f in findings if f.state in ('open', 'accepted') %}
+  <details class="stats-table">
+    <summary><strong>{{ f.detector }}</strong> {{ f.title }} &middot; {{ f.project }} &middot; about ${{ "{:,.2f}".format(f.saving) }} a week
+      {% if f.state == 'accepted' %}<span class="pill warn">being addressed</span>{% endif %}</summary>
+    <p>{{ f.metric }}: <strong>{{ "{:,.3f}".format(f.value).rstrip('0').rstrip('.') }}</strong> ({{ f.period_start }} to {{ f.period_end }})</p>
+    <p>{{ f.action }}</p>
+    <pre>{{ f.evidence | tojson(indent=2) }}</pre>
+    {% for e in f.experiments %}
+    <p class="muted">Experiment ({{ e.created_at[:10] }}, {{ e.change }}): before {{ "—" if e.before_value is none else "{:,.3f}".format(e.before_value) }},
+      after {{ "not measured yet" if e.after_value is none else "{:,.3f}".format(e.after_value) }}{% if e.state != 'running' %} &middot; {{ e.state.replace('_', ' ') }}{% endif %}</p>
+    {% endfor %}
+    <div class="row">
+      {% if f.project != 'all' %}<a href="/jobs/new?project={{ f.project }}&job=optimize_usage"><button type="button" class="primary">Optimize Claude usage</button></a>{% endif %}
+      <form class="inline" method="post" action="/usage/findings/{{ f.id }}/dismiss"><button type="submit">Dismiss</button></form>
+    </div>
+  </details>
+  {% else %}
+  <p class="muted">No open finding. The detectors run daily (<code>usage.analyze</code>).</p>
+  {% endfor %}
+  {% set closed = findings | selectattr('state', 'in', ['resolved', 'dismissed']) | list %}
+  {% if closed %}
+  <details class="stats-table"><summary>{{ closed | length }} resolved or dismissed</summary>
+    <ul>{% for f in closed %}<li>{{ f.detector }} {{ f.title }} &middot; {{ f.project }} &middot; {{ f.state }}
+      {% for e in f.experiments if e.after_value is not none %}(before {{ "{:,.3f}".format(e.before_value or 0) }}, after {{ "{:,.3f}".format(e.after_value) }}){% endfor %}
+      {% if f.state == 'dismissed' %}<form class="inline" method="post" action="/usage/findings/{{ f.id }}/reopen"><button type="submit">Reopen</button></form>{% endif %}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+</section>
+
+<section class="card" id="candidates">
+  <h2>Automation candidates</h2>
+  <p class="muted">Work Claude repeated with the same shape in the last 14 days, ranked by what it cost per week. A deterministic
+    candidate can become a job, a tool or a trigger: every later run of that code costs no tokens. Nothing is built until you choose.</p>
+  {% for c in candidates if c.state in ('open', 'accepted') %}
+  <details class="stats-table">
+    <summary><code>{{ c.signature }}</code> &middot; {{ c.class }} ({{ c.score }}/5) &middot; {{ c.occurrences }}&times; in {{ c.sessions }} session{{ '' if c.sessions == 1 else 's' }}
+      &middot; about ${{ "{:,.2f}".format(c.weekly_value) }} a week {% if c.state == 'accepted' %}<span class="pill warn">task started</span>{% endif %}</summary>
+    <p>Proposed form: {{ c.proposed_form }}</p>
+    <p class="muted">{% for name, ok in (c.checks or {}).items() %}{{ name.replace('_', ' ') }}: {{ 'yes' if ok else 'no' }}{{ '' if loop.last else ' · ' }}{% endfor %}</p>
+    {% if c.schedule %}<p><strong>Schedule</strong> (recommended once it is automated): {{ c.schedule.frequency }},
+      {% for d in c.schedule.days_of_week %}{{ weekdays[d] }}{{ '' if loop.last else ', ' }}{% endfor %} at {{ c.schedule.time_of_day }} &mdash; {{ c.schedule.note }}.</p>{% endif %}
+    {% if c.examples %}<ul>{% for e in c.examples %}<li class="muted">{{ e.project }}: {% for call in e.calls %}<code>{{ call }}</code>{{ '' if loop.last else ' → ' }}{% endfor %}</li>{% endfor %}</ul>{% endif %}
+    {% if c.replacement %}<p class="muted">Replaced by <code>{{ c.replacement }}</code>: about ${{ "{:,.2f}".format(c.tokens_avoided) }} of weighted tokens avoided so far.</p>{% endif %}
+    <div class="row">
+      {% if c.state == 'open' %}<form class="inline" method="post" action="/usage/candidates/{{ c.id }}/automate"><button type="submit" class="primary">Make it a task</button></form>{% endif %}
+      <form class="inline" method="post" action="/usage/candidates/{{ c.id }}/dismiss"><button type="submit">Dismiss</button></form>
+    </div>
+  </details>
+  {% else %}
+  <p class="muted">No candidate yet. Mining runs weekly (<code>usage.mine_automation</code>).</p>
+  {% endfor %}
+</section>
+
+{% block usage_extra %}{% endblock %}
+
+<section class="card{{ '' if not doctor or doctor.ok else ' fail' }}">
+  <h2>Collection health</h2>
+  {% if doctor %}
+  <p class="muted">Checked {{ doctor.ts[:16].replace('T', ' ') }} UTC by <code>usage.doctor</code>.</p>
+  <ul>
+    {% for check in doctor.checks if not check.ok %}<li><strong>{{ check.check }}</strong>: {{ check.detail }}{% if check.hint %} <span class="muted">({{ check.hint }})</span>{% endif %}</li>{% else %}<li>Every check passed.</li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">Not checked yet: run <code>lws usage doctor</code>.</p>
+  {% endif %}
+</section>
+
+<script type="application/json" id="usage-data">{{ summary | tojson }}</script>
+<script src="/static/usage.js?v={{ static_v }}"></script>
+{% else %}
+<div class="card fail">{{ error }}</div>
+{% endif %}
+{% endblock %}

@@ -25,9 +25,9 @@
 {% set groups = [
   ('dashboard', 'Dashboard', '/', 'dashboard', [('dashboard', '/', 'Dashboard', 'dashboard')]),
   ('documentation', 'Documentation', '/docs', 'report', [('docs', '/docs', 'Review', 'review'), ('report', '/report', 'Report', 'report')]),
-  ('actions', 'Actions', '/tasks', 'tasks', [('tasks', '/tasks', 'Task list', 'tasks'), ('new-task', '/tasks/new', 'New task', 'plus'), ('jobs', '/jobs', 'Jobs', 'jobs'), ('new-job', '/jobs/new', 'New job', 'plus')]),
+  ('actions', 'Actions', '/tasks', 'tasks', [('tasks', '/tasks', 'Task list', 'tasks'), ('new-task', '/tasks/new', 'New task', 'plus'), ('jobs', '/jobs', 'Jobs', 'jobs'), ('new-job', '/jobs/new', 'New job', 'plus'), ('triggers', '/triggers', 'Triggers', 'jobs')]),
   ('policies', 'Policies', '/policies', 'policies', [('policies', '/policies', 'Policies', 'policies'), ('new-policy', '/policies/new', 'New policy', 'plus')]),
-  ('system', 'System', '/pillars', 'system', [('pillars', '/pillars', 'Pillars', 'pillars'), ('incidents', '/incidents', 'Incidents', 'bug'), ('statistics', '/statistics', 'Statistics', 'chart'), ('settings', '/settings', 'Settings', 'gear')]),
+  ('system', 'System', '/pillars', 'system', [('pillars', '/pillars', 'Pillars', 'pillars'), ('incidents', '/incidents', 'Incidents', 'bug'), ('statistics', '/statistics', 'Statistics', 'chart'), ('usage', '/usage', 'Claude usage', 'chart'), ('settings', '/settings', 'Settings', 'gear')]),
 ] %}
 {% set ns = namespace(active=None) %}
 {% for g in groups %}{% for page in g[4] %}{% if page[0] == nav_active %}{% set ns.active = g %}{% endif %}{% endfor %}{% endfor %}

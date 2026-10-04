@@ -14,11 +14,15 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from common import redeploy_plan
 from common.job_steps import StepReporter, reporting
 from common.paths import Paths
+from common.pillar_socket import resolve_pillar_socket
+from common.uds_client import client_for_socket
 from common.incident import install_incident_reporting
 from common.projectfiles import ProjectFilesClient
 from common.registry_client import ProjectResolutionError, resolve_project_path
@@ -66,13 +70,40 @@ def _load_manifest(paths: Paths, project_id: str) -> ServerManifest:
         raise DeploymentError(f"invalid {MANIFEST_FILENAME} for {project_id!r}: {exc}") from exc
 
 
+def core_live_pillars(paths: Paths) -> list[str]:
+    """The pillars Core runs (every one it does not report disabled); none when Core is unreachable."""
+    try:
+        with client_for_socket(paths.core_socket_path, timeout=5.0) as client:
+            response = client.get("/v1/status")
+        response.raise_for_status()
+        return [name for name, info in response.json().get("pillars", {}).items() if info.get("status") != "disabled"]
+    except (httpx.HTTPError, OSError, ValueError):
+        return []
+
+
+def create_orchestration_job(paths: Paths, template: dict) -> dict:
+    socket_path = resolve_pillar_socket(paths, "orchestration")
+    if socket_path is None:
+        return {"status": "failed", "error": "Orchestration is unreachable"}
+    try:
+        with client_for_socket(socket_path, timeout=330.0) as client:
+            response = client.post("/v1/jobs", json=template)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
 def build_app(
-    paths: Paths, conn: sqlite3.Connection, resolve: ResolveFn = resolve_project_path, flow: DeploymentFlow | None = None
+    paths: Paths, conn: sqlite3.Connection, resolve: ResolveFn = resolve_project_path, flow: DeploymentFlow | None = None,
+    *, live_pillars: Callable[[], list[str]] | None = None, create_job: Callable[[dict], object] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="little-workshop Deployment & Servers")
     install_incident_reporting(app, paths, pillar="deployment")
     lock = threading.Lock()
     flow = flow or DeploymentFlow(paths=paths)
+    live_pillars = live_pillars or (lambda: core_live_pillars(paths))
+    create_job = create_job or (lambda template: create_orchestration_job(paths, template))
 
     db_row = conn.execute("PRAGMA database_list").fetchone()
     db_file = db_row[2] if db_row else ""
@@ -182,6 +213,32 @@ def build_app(
             except DeploymentError as exc:
                 return {"outcome": "failed", "error": str(exc)}
         return {"outcome": "succeeded", "result": {"seeded": True}}
+
+    @app.post("/v1/jobs/deployment.redeploy_changed_pillars")
+    def job_redeploy_changed_pillars(request: JobRequest) -> dict:
+        """Redeploy the pillars whose code changed between `params.base` (default: the first parent of
+        `commit`, so a finished branch's merge commit gives that branch's changes) and `params.commit`
+        (default HEAD), in dependency order. One `deployment.redeploy_pillar` Job per pillar, each
+        confirm-gated as any redeploy; nothing is redeployed when no pillar's code changed."""
+        repo = workshop_repo_dir()
+        commit = gitutil.run(["git", "rev-parse", request.params.get("commit") or "HEAD"], repo)
+        if commit.returncode != 0:
+            return {"outcome": "failed", "error": f"unknown commit: {commit.stderr.strip()}"}
+        sha = commit.stdout.strip()
+        base = request.params.get("base") or f"{sha}^1"
+        diff = gitutil.run(["git", "diff", "--name-only", base, sha, "--", "src"], repo)
+        if diff.returncode != 0:
+            return {"outcome": "failed", "error": f"could not compare {base} with {sha}: {diff.stderr.strip()}"}
+        pillars = redeploy_plan.changed_pillars(diff.stdout.splitlines(), live_pillars())
+        if not pillars:
+            return {"outcome": "succeeded", "result": {"commit": sha, "pillars": [], "note": "no pillar's code changed"}}
+        plan = [[{"pillar": p} for p in batch] for batch in redeploy_plan.redeploy_batches(pillars)]
+        # The first batch's redeploys run inside their creation call, so the Jobs are created beside this answer.
+        threading.Thread(
+            target=redeploy_plan.submit_redeploy_batches, args=(create_job, pillars, sha),
+            kwargs={"created_by": f"job:{request.job_id}"}, daemon=True,
+        ).start()
+        return {"outcome": "succeeded", "result": {"commit": sha, "pillars": pillars, "batches": plan}}
 
     @app.post("/v1/jobs/deployment.redeploy_pillar")
     def job_redeploy_pillar(request: JobRequest) -> dict:

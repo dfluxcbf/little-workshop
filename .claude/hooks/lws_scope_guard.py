@@ -32,6 +32,7 @@ NEEDS_PROJECT_ID = frozenset((
     "workshop_requirements_list",
     "workshop_requirements_suite_list",
     "workshop_schedule_add",
+    "workshop_trigger_add",
 ))
 # MCP tools that take the project's own name in `name`.
 NAMED_PROJECT = frozenset((
@@ -63,8 +64,11 @@ ROUTES = {
 # Files little-workshop writes, relative to the checkout -> how they change.
 GENERATED = {
     ".claude/hooks/lws_scope_guard.py": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
+    ".claude/hooks/test_output_filter.py": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
     ".claude/little-workshop.md": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
     ".claude/rules/claude-instructions.md": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
+    ".claude/skills/policies-digest/SKILL.md": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
+    ".claude/skills/policies-digest/scripts/digest.py": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
     ".claude/skills/policy-preflight/SKILL.md": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
     ".claude/skills/policy-preflight/scripts/preflight.py": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
     ".claude/skills/workshop-lifecycle/SKILL.md": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",

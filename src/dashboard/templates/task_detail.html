@@ -8,6 +8,7 @@
   <dt>Branch</dt><dd>{% if run.branch %}<code>{{ run.branch }}</code>{% else %}&mdash;{% endif %}</dd>
   <dt>Result</dt><dd>{{ run.completion_status or '—' }}</dd>
   {% if run.pr_url %}<dt>Pull request</dt><dd><a href="{{ run.pr_url }}" target="_blank" rel="noopener">{{ run.pr_url }}</a></dd>{% endif %}
+  {% if run.usage %}<dt>Claude usage</dt><dd>{{ "{:,}".format(run.usage.input_tokens + run.usage.cache_read_tokens + run.usage.cache_write_tokens) }} tokens in ({{ "{:,}".format(run.usage.cache_read_tokens) }} from cache), {{ "{:,}".format(run.usage.output_tokens) }} out, {{ run.usage.num_turns }} turn(s), about ${{ "%.2f"|format(run.usage.cost_usd) }} at list price{% if run.usage.budget_usd %} ({{ "%.0f"|format(run.usage.budget_used * 100) }}% of its ${{ "%.2f"|format(run.usage.budget_usd) }} budget){% endif %}</dd>{% endif %}
 </dl>
 {% if run.status == 'awaiting_finish' %}
 <div class="row">

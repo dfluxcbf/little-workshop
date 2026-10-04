@@ -8,6 +8,9 @@ the Claude Code configuration little-workshop maintains, and nothing that switch
   .claude/rules/claude-instructions.md, the workshop-lifecycle and policy-preflight skills, and the
   guard .claude/hooks/lws_scope_guard.py, which .claude/settings.json registers as a PreToolUse
   hook for Bash, the file-edit tools and the little-workshop MCP tools.
+- What keeps Claude's token usage down (docs/pillars/usage.md): the policies-digest skill, the
+  test-output filter .claude/hooks/test_output_filter.py registered as a PreToolUse hook for Bash,
+  and at least one `Read(...)` deny rule keeping a heavy generated folder out of the context.
 - No CLAUDE.md, .claude/CLAUDE.md or CLAUDE.local.md anywhere in the project: Claude Code reads
   AGENTS.md only where none of them exists.
 
@@ -24,12 +27,16 @@ import pytest
 
 PROJECT = os.environ.get("POLICY_PROJECT_DIR", "/project")
 GUARD = ".claude/hooks/lws_scope_guard.py"
+TEST_FILTER = ".claude/hooks/test_output_filter.py"
 GENERATED = (
     ".claude/little-workshop.md",
     ".claude/rules/claude-instructions.md",
     ".claude/skills/workshop-lifecycle/SKILL.md",
     ".claude/skills/policy-preflight/SKILL.md",
     ".claude/skills/policy-preflight/scripts/preflight.py",
+    ".claude/skills/policies-digest/SKILL.md",
+    ".claude/skills/policies-digest/scripts/digest.py",
+    TEST_FILTER,
     GUARD,
 )
 # The briefing -> the import that loads the shared section from it.
@@ -126,3 +133,17 @@ def test_claude_code_configuration_present():
     unguarded = [t for t in GUARDED_TOOLS if not any(matches(e.get("matcher"), t) for e in entries)]
     named = ["the little-workshop MCP tools" if t == MCP_TOOL else t for t in unguarded]
     assert not unguarded, f".claude/settings.json does not run {GUARD} for {', '.join(named)}. {FIX}"
+
+    filters = [
+        entry for entry in (settings.get("hooks") or {}).get("PreToolUse") or []
+        if isinstance(entry, dict) and any(TEST_FILTER in (h.get("command") or "") for h in entry.get("hooks") or [])
+    ]
+    assert any(matches(e.get("matcher"), "Bash") for e in filters), (
+        f".claude/settings.json does not register {TEST_FILTER} as a PreToolUse hook for Bash, so a test run puts all "
+        f"of its output in Claude's context. {FIX}"
+    )
+    denies = [d for d in (settings.get("permissions") or {}).get("deny") or [] if isinstance(d, str) and d.startswith("Read(")]
+    assert denies, (
+        ".claude/settings.json has no `Read(...)` deny rule, so nothing keeps generated folders (bazel-*, node_modules, "
+        f"a Unity Library) out of Claude's context. {FIX}"
+    )

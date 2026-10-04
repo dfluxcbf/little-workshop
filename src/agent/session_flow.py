@@ -28,7 +28,9 @@ import json
 import os
 from pathlib import Path
 
-from agent.claude_invoke import model_args
+from agent import usage_client
+from agent.launch import JOB_SESSION, launch_for
+from agent.claude_invoke import model_args, setenv_args
 from common import playwright
 from common.job_steps import step
 from common.paths import Paths
@@ -111,7 +113,8 @@ class SessionFlow:
                 socket.unlink()
 
             name = session_name(project_id)
-            argv = ["dtach", "-n", str(socket), "claude", "--remote-control", name, *model_args()]
+            chosen = launch_for(JOB_SESSION, self.paths)
+            argv = ["dtach", "-n", str(socket), "claude", "--remote-control", name, *model_args(chosen.model, chosen.effort)]
             if self.playwright_mcp:
                 # Last, since `--mcp-config` takes every value after it.
                 argv += playwright.mcp_claude_args(
@@ -120,7 +123,8 @@ class SessionFlow:
             unit = _unit_name(project_id)
             result = self.runner.run([
                 "systemd-run", "--user", "--collect", "--scope", f"--unit={unit}",
-                f"--setenv=PATH={user_path_env()}", *argv,
+                f"--setenv=PATH={user_path_env()}",
+                *setenv_args(usage_client.launch_env(self.paths, project=project_id, job_type="agent.session")), *argv,
             ], cwd=project_dir)
             if not result.ok:
                 raise SessionError(f"could not start a session for {project_id!r}: {(result.stderr or result.stdout).strip()}")

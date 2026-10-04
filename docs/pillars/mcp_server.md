@@ -49,7 +49,8 @@ and `little-versions`' own MCP surfaces.
 
 ## Job checklists (2026-10-03)
 
-`workshop_job_status` returns the Job's `steps`; `workshop_job_answer` relays the user's choice for
+`workshop_job_wait` waits for a Job in one call (Orchestration's `GET /v1/jobs/{id}/wait`), instead of
+repeated `workshop_job_status` calls. `workshop_job_status` returns the Job's `steps`; `workshop_job_answer` relays the user's choice for
 a step in state `attention` (always a prompt, since it stands in for a human decision). A version
 job that can ask is waited for up to 120 seconds, until it ends or a step asks, and comes back with
 its checklist so the question can be relayed.

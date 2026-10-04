@@ -414,6 +414,84 @@ def test_job_status_calls_client_job_status(paths, monkeypatch):
     assert result == {"id": "j1"}
 
 
+# --- REQ-000000322: A caller waits for a Job in one call ---
+
+
+def test_job_wait_calls_client_job_wait(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "job_wait", result={"id": "j1", "status": "succeeded"})
+    tool = tools_mod.TOOLS_BY_NAME["workshop_job_wait"]
+    assert tool.handler(paths, {"job_id": "j1", "timeout_seconds": 60}) == {"id": "j1", "status": "succeeded"}
+    tool.handler(paths, {"job_id": "j1"})
+    assert calls == [((paths, "j1", 60), {}), ((paths, "j1", None), {})]
+
+
+# --- REQ-000000334: Usage is read through lws, the MCP server and the Dashboard ---
+
+
+def test_usage_summary_returns_the_week_without_the_per_day_series(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "usage_summary", result={"week": "2026-09-28", "total": {"requests": 3}, "days": [1], "pays_for_itself": [2]})
+    result = tools_mod.TOOLS_BY_NAME["workshop_usage_summary"].handler(paths, {"project": "little-meals", "week": "2026-10-01"})
+    assert calls[0] == ((paths,), {"project": "little-meals", "week": "2026-10-01", "origin": None})
+    assert result == {"week": "2026-09-28", "total": {"requests": 3}}
+
+
+def test_usage_jobs_go_to_the_usage_pillar(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_usage_doctor"].handler(paths, {})
+    tools_mod.TOOLS_BY_NAME["workshop_usage_ingest_transcripts"].handler(paths, {})
+    tools_mod.TOOLS_BY_NAME["workshop_usage_configure_claude"].handler(paths, {})
+    tools_mod.TOOLS_BY_NAME["workshop_usage_configure_claude"].handler(paths, {"apply": True})
+    assert [(c["type"], c["params"]) for c in fake_create_job] == [
+        ("usage.doctor", {}), ("usage.ingest_transcripts", {}),
+        ("usage.configure_claude", {"apply": False}), ("usage.configure_claude", {"apply": True})]
+    assert all(c["target_pillar"] == "usage" and c["project_id"] is None for c in fake_create_job)
+
+
+# --- REQ-000000340: Findings are read through lws, the MCP server and the Dashboard ---
+
+
+def test_usage_findings_calls_the_client_and_analyze_is_a_usage_job(paths, monkeypatch, fake_create_job):
+    calls = _fake_client_call(monkeypatch, "usage_findings", result=[{"detector": "D1"}])
+    assert tools_mod.TOOLS_BY_NAME["workshop_usage_findings"].handler(paths, {"project": "little-meals"}) == [{"detector": "D1"}]
+    tools_mod.TOOLS_BY_NAME["workshop_usage_findings"].handler(paths, {"state": "all"})
+    assert calls == [((paths,), {"project": "little-meals", "state": "open"}), ((paths,), {"project": None, "state": "all"})]
+    tools_mod.TOOLS_BY_NAME["workshop_usage_analyze"].handler(paths, {})
+    assert (fake_create_job[0]["type"], fake_create_job[0]["target_pillar"]) == ("usage.analyze", "usage")
+
+
+# --- REQ-000000347: Candidates, triggers and the new Jobs are reached through lws, the MCP server and the Dashboard ---
+
+
+def test_candidates_and_triggers_are_read_through_the_client(paths, monkeypatch):
+    candidates = _fake_client_call(monkeypatch, "usage_candidates", result=[{"signature": "x"}])
+    listed = _fake_client_call(monkeypatch, "list_triggers", result=[{"id": "t1"}])
+    assert tools_mod.TOOLS_BY_NAME["workshop_usage_candidates"].handler(paths, {}) == [{"signature": "x"}]
+    assert tools_mod.TOOLS_BY_NAME["workshop_trigger_list"].handler(paths, {}) == [{"id": "t1"}]
+    assert candidates[0] == ((paths,), {"state": "open"}) and listed[0] == ((paths,), {})
+
+
+def test_trigger_add_and_remove_build_the_orchestration_calls(paths, monkeypatch):
+    added = _fake_client_call(monkeypatch, "add_trigger", result={"id": "t1"})
+    removed = _fake_client_call(monkeypatch, "remove_trigger", result={"removed": "t1"})
+    tools_mod.TOOLS_BY_NAME["workshop_trigger_add"].handler(paths, {
+        "name": "after finish", "event": "version.branch_finished", "filter": {"project_id": "little-meals"},
+        "type": "requirements.sync_markers", "target_pillar": "requirements", "params": {"dry_run": True}})
+    assert added[0][1] == {"name": "after finish", "event": "version.branch_finished", "event_filter": {"project_id": "little-meals"},
+                           "job_template": {"type": "requirements.sync_markers", "target_pillar": "requirements", "project_id": None,
+                                            "params": {"dry_run": True}, "queue_key": None, "depends_on": []}}
+    tools_mod.TOOLS_BY_NAME["workshop_trigger_remove"].handler(paths, {"trigger_id": "t1"})
+    assert removed[0] == ((paths, "t1"), {})
+
+
+def test_the_jobs_that_replace_hand_work_are_one_call_each(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_usage_mine_automation"].handler(paths, {})
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_sync_markers"].handler(paths, {"project_id": "little-meals", "dry_run": True})
+    tools_mod.TOOLS_BY_NAME["workshop_deployment_redeploy_changed_pillars"].handler(paths, {"commit": "abc"})
+    assert [(c["type"], c["target_pillar"], c["project_id"], c["params"]) for c in fake_create_job] == [
+        ("usage.mine_automation", "usage", None, {}),
+        ("requirements.sync_markers", "requirements", "little-meals", {"dry_run": True}),
+        ("deployment.redeploy_changed_pillars", "deployment", None, {"commit": "abc"})]
+
+
 def test_project_list_calls_client_list_projects(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "list_projects", result=[{"name": "little-widget"}])
     result = tools_mod.TOOLS_BY_NAME["workshop_project_list"].handler(paths, {})

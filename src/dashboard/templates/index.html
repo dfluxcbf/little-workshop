@@ -160,7 +160,7 @@
     </div>
 
     <div class="subsection">
-      <h3>Work <a class="dim" href="/report?project={{ r.name }}" style="font-weight:normal;font-size:12.5px">Report &rarr;</a> <a class="dim" href="/docs/{{ r.name }}" style="font-weight:normal;font-size:12.5px">Docs &rarr;</a></h3>
+      <h3>Work <a class="dim" href="/report?project={{ r.name }}" style="font-weight:normal;font-size:12.5px">Report &rarr;</a> <a class="dim" href="/docs/{{ r.name }}" style="font-weight:normal;font-size:12.5px">Docs &rarr;</a> <a class="dim" href="/usage?project={{ r.name }}" style="font-weight:normal;font-size:12.5px">Claude usage &rarr;</a></h3>
       {% if r.runs %}
       <ul class="plain-list">
         {% for run in r.runs[:5] %}

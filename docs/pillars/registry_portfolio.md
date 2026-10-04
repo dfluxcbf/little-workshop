@@ -140,3 +140,20 @@ when the credential carries one, its expiration date read from GitHub's own
 `github-authentication-token-expiration` response header on a real `gh api /user` call.
 The token itself is never read, stored, or returned — only whether it authenticates and
 when it expires.
+
+## Claude files sync (2026-10-04)
+
+REQ-000000338. The generated Claude files of a project (`registry/claude_templates.py`) are compared with a
+checkout and written by `registry/claude_sync.py`; `tools/sync_claude_files.py` is its command line. The Job
+`registry.sync_claude_files` does the same for every registered project (or the one in `project_id`):
+
+- Without `params.write` it reports, per project, which files differ.
+- With `write: true`, each project that differs and has a clean tree gets an improvement branch
+  `improvement/claude-files-sync` from the Version pillar (a `version.improvement_start` Job through
+  Orchestration), the files written and committed there (`impr (-1): claude-files-sync`), and nothing more:
+  the branch is the owner's to finish, and its finish runs `claude-config-present` and
+  `claude-instructions-valid`. A checkout with uncommitted changes, or whose branch cannot be started, is
+  skipped and says so.
+
+`.claude/settings.json` is merged: the generated permission table, hooks and plugins, plus every entry the
+project added. The Dashboard's catalog job *Apply common Claude configuration* runs it.

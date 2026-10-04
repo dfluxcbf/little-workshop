@@ -44,7 +44,7 @@ def test_write_brings_a_checkout_in_line_and_a_second_run_finds_nothing(tmp_path
     root = _checkout(tmp_path)
     tool = _tool()
     tool.main(["--checkout", str(root), "--write"])
-    for rel, text in claude_templates.claude_files("little-widget", "python").items():
+    for rel, text in claude_templates.claude_files("little-widget", "python", plugins=tool.detect_plugins(root)).items():
         assert (root / rel).read_text() == text, rel
     (root / ".claude" / "AGENTS.md").write_text(claude_templates.agents_md("little-widget"))
     capsys.readouterr()

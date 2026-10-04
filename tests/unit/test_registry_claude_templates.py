@@ -213,7 +213,7 @@ def test_project_bound_lws_commands_take_project_id_and_the_others_do_not():
 
 def test_settings_register_the_guard_for_bash_the_edit_tools_and_the_mcp_tools():
     hooks = claude_templates.settings(PROJECT)["hooks"]["PreToolUse"]
-    assert len(hooks) == 1
+    assert len(hooks) == 2  # the guard, then the test-output filter (REQ-000000339)
     matcher = hooks[0]["matcher"]
     for tool in ("Bash", GUARD_TOOL, "Edit", "Write", "MultiEdit", "NotebookEdit"):
         assert re.fullmatch(matcher, tool), tool
@@ -422,7 +422,8 @@ def test_every_denied_command_names_a_route():
     for pattern, route in claude_templates.DENY_REROUTED:
         assert route in claude_templates.ROUTES, pattern
     deny = claude_templates.settings(PROJECT)["permissions"]["deny"]
-    assert deny == [f"Bash({pattern})" for pattern, _ in claude_templates.DENY_REROUTED]
+    assert [d for d in deny if d.startswith("Bash(")] == [f"Bash({pattern})" for pattern, _ in claude_templates.DENY_REROUTED]
+    assert [d for d in deny if not d.startswith("Bash(")] == [f"Read({path})" for path in claude_templates.READ_DENY["python"]]
 
 
 @pytest.mark.parametrize("command, denied", [
@@ -556,7 +557,7 @@ def test_guard_leaves_files_outside_the_project_alone(tmp_path):
 def test_bootstrap_writes_the_shared_section_the_rule_and_the_lifecycle_skill(tmp_path, template):
     dest = tmp_path / PROJECT
     scaffold.create_project_tree(dest, PROJECT, template)
-    for rel, text in claude_templates.claude_files(PROJECT, template).items():
+    for rel, text in claude_templates.claude_files(PROJECT, template, plugins=claude_templates.TEMPLATE_PLUGINS[template]).items():
         assert (dest / rel).read_text() == text, rel
     rule = (dest / claude_templates.INSTRUCTIONS_RULE_PATH).read_text()
     assert rule.startswith('---\npaths:\n  - ".claude/**"\n')

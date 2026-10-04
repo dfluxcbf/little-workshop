@@ -204,6 +204,12 @@ class SchedulerThread:
         self._expire_stuck_jobs()
         while not self._stop_event.wait(self._interval_seconds):
             tick_once(self._conn, self._socket_lookup, lock=self._lock)
+            # A pump on every tick: a Job held for plan pressure, or one a trigger queued, starts
+            # without waiting for some other request to pump.
+            try:
+                dispatch_ready_jobs(self._conn, self._socket_lookup, lock=self._lock)
+            except Exception:  # never let a failed pump take the tick loop down with it
+                logger.exception("pumping ready jobs failed")
             self._expire_stuck_jobs()
 
     def _expire_stuck_jobs(self) -> None:

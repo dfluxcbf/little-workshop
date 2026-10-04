@@ -40,6 +40,11 @@ discipline this project already applies to itself); the *sequence* and
 | M15 | Self-hosting / dogfooding | M2, M3, M10, M12 | Done — registered, requirements migrated, first framework-policy draft; see `docs/requirements.md` M15 |
 | M16 | Full functional parity with the absorbed tools | M1–M14 (whichever tool each gap belongs to) | Done (2026-09-17) — every real gap in all five absorbed tools closed (`docs/requirements.md`'s M16 follow-up); the handful of items left un-ported (`.lrun/config.toml`, `little-requirements`' client-config model, `lock`/`unlock`) are documented, deliberate architectural non-gaps, not deferred work |
 | M17 | Ecosystem cutover | M15, M16 | In progress — `little-mindcheck` is the pilot (registered, requirements data migrated, real `deploy`/`stop`/`status` verified against the actual app, 2026-09-17); a new `deployment.set_manifest` capability and a real dispatch-timeout fix were required along the way (`docs/requirements.md`'s M17 section) |
+| M18 | Claude usage — quick wins | M6, M7, M9 | Done (2026-10-04) — run usage stored, `agent.query` cache fix, `workshop_job_wait`, redeploy and wait routes; see `docs/requirements.md` |
+| M19 | Claude usage — collection (the `usage` pillar) | M18 | Done (2026-10-04) — built and unit-tested, not yet deployed; see `docs/pillars/usage.md` |
+| M20 | Claude usage — findings | M19 | Done (2026-10-04) — built and unit-tested, not yet deployed; see `docs/pillars/usage.md` |
+| M21 | Claude usage — automation mining and workshop triggers | M20 | Done (2026-10-04) — built and unit-tested, not yet deployed; see `docs/pillars/usage.md` and `docs/pillars/orchestration.md` |
+| M22 | Claude usage — token-aware operation | M19 | Done (2026-10-04) — built and unit-tested, not yet deployed |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
 dependency graph is visible up front, not discovered one milestone late.
@@ -597,3 +602,46 @@ file). Work for this happens on a dedicated branch in `little-mindcheck`'s
 own repo, merged to `dev` then `master` only once confirmed working —
 never in place, per this milestone's own explicit instruction for the
 pilot.
+
+## M18–M22 — Claude usage and efficiency
+
+The five phases of [claude_usage_optimization.md](claude_usage_optimization.md) (accepted 2026-10-04; its §15
+lists what each phase holds and §16 the owner's decisions), one milestone and one `feature/` branch each. The
+proposal owns the design until a phase is built; what is built is then described in `docs/architecture.md` and
+the pillar specifications.
+
+### M18 — Quick wins
+
+No new pillar. Depends on M6 (the agent launches), M7 (the MCP proxy) and M9 (the Job model).
+
+- The usage each `claude -p` run reports (`agent.run_task`, `agent.query`, a headless update-doc session) is
+  stored by Agentic Development (`claude_usage`) and returned with a run's status and by `GET /v1/usage`.
+- `agent.query` runs in one stable directory with a 5-minute cache lifetime and without MCP servers or skills.
+- `GET /v1/jobs/{id}/wait` on Orchestration, the `workshop_job_wait` MCP tool and `lws job wait` replace
+  status polling.
+- The generated `workshop-lifecycle` skill routes waiting to `workshop_job_wait` and, for little-workshop,
+  several redeploys to `workshop_deployment_redeploy_pillars`.
+
+### M19 — Collection
+
+The optional `usage` pillar: the intake (OTLP http/json, Claude hooks, statusline) behind a loopback socket
+proxy, the store, the transcript backfill, attribution to a project, the rollups, the user profile
+(`usage.configure_claude`), `usage.doctor`, and the Dashboard's Claude usage page. Depends on M18, whose stored
+run usage it reads.
+
+### M20 — Findings
+
+Detectors D1 to D12, the "Optimize Claude usage" job, experiments (before and after), `registry.sync_claude_files`,
+and the project-scope entries of the generated Claude files (deny paths, LSP plugin, test-output hook, policies
+digest). Depends on M19.
+
+### M21 — Automation
+
+`usage.mine_automation` and its candidates, Orchestration triggers with the first three (redeploy the changed
+pillars, sync the Claude files, ingest a transcript), `requirements.sync_markers`, and scheduling
+recommendations. Depends on M20.
+
+### M22 — Token-aware operation
+
+Model, effort and budget per job type, holding Claude-based scheduled jobs while the plan's 5-hour window is
+above 80% (decision 6, configurable), and tokens per outcome. Depends on M19.

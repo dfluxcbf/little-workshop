@@ -27,7 +27,7 @@ def create_project_tree(dest: Path, name: str, template: str = "python") -> list
         raise FileExistsError(f"{dest} already exists")
     # Built before anything is written: a name that cannot be a project id raises here, not
     # halfway through the tree (REQ-000000296).
-    claude_files = claude_templates.claude_files(name, template)
+    claude_files = claude_templates.claude_files(name, template, plugins=claude_templates.TEMPLATE_PLUGINS[template])
 
     written: list[Path] = []
 

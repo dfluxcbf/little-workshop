@@ -213,6 +213,40 @@ def deployment_branches(paths: Paths, project_id: str) -> list[str]:
     return result if isinstance(result, list) else result.get("branches", [])
 
 
+def usage_summary(paths: Paths, *, week: str | None = None, project: str | None = None, origin: str | None = None) -> dict:
+    params = {key: value for key, value in (("week", week), ("project", project), ("origin", origin)) if value}
+    return _get(paths, "usage", "/v1/summary", params=params, timeout=20.0)
+
+
+def usage_findings(paths: Paths, *, project: str | None = None, state: str = "open") -> list[dict]:
+    params = {"state": state, **({"project": project} if project else {})}
+    return _get(paths, "usage", "/v1/findings", params=params, timeout=10.0)
+
+
+def set_usage_finding_state(paths: Paths, finding_id: str, state: str) -> dict:
+    return _send(paths, "usage", "POST", f"/v1/findings/{finding_id}/state", json={"state": state})
+
+
+def usage_candidates(paths: Paths, *, state: str = "all") -> list[dict]:
+    return _get(paths, "usage", "/v1/candidates", params={"state": state}, timeout=10.0)
+
+
+def set_usage_candidate(paths: Paths, candidate_id: str, **fields) -> dict:
+    return _send(paths, "usage", "POST", f"/v1/candidates/{candidate_id}", json=fields)
+
+
+def triggers(paths: Paths) -> list[dict]:
+    return _get(paths, "orchestration", "/v1/triggers")
+
+
+def trigger_action(paths: Paths, method: str, path: str = "", json: dict | None = None):
+    return _send(paths, "orchestration", method, f"/v1/triggers{path}", json=json)
+
+
+def usage_doctor(paths: Paths) -> dict | None:
+    return _get(paths, "usage", "/v1/doctor").get("report")
+
+
 def agent_session_status(paths: Paths, project_id: str) -> dict:
     return _get(paths, "agent", f"/v1/sessions/{project_id}")
 

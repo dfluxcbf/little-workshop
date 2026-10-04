@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from common.incident import install_incident_reporting
 from common.paths import Paths
-from orchestration import db, policy_gate, steps
+from orchestration import db, policy_gate, steps, triggers
 from orchestration.dispatch import SocketLookup, complete_job, dispatch_ready_jobs, dispatch_timeout_for, stop_job, wait_for_dispatch
 from orchestration.models import (
     Job,
@@ -34,6 +35,14 @@ from orchestration.scheduler import cancel_task, postpone_task, trigger_task
 
 
 MAX_CLEANUP_HOURS = 3650 * 24
+
+
+# `GET /v1/jobs/<id>/wait`: how long it waits when the caller names no timeout, the most it ever
+# waits (under the proxies' own request timeouts), and how often it looks.
+WAIT_DEFAULT_SECONDS = 120.0
+WAIT_MAX_SECONDS = 300.0
+WAIT_POLL_SECONDS = 0.5
+WAIT_FOR_STATUSES = (JobStatus.QUEUED, JobStatus.RUNNING)
 
 
 class JobCleanupRequest(BaseModel):
@@ -88,6 +97,23 @@ class EditScheduledTaskRequest(BaseModel):
 
 class PostponeRequest(BaseModel):
     at: datetime
+
+
+class CreateTriggerRequest(BaseModel):
+    name: str
+    on: triggers.TriggerOn
+    job_template: JobTemplate
+    enabled: bool = True
+
+
+class EditTriggerRequest(BaseModel):
+    enabled: bool
+
+
+class EventRequest(BaseModel):
+    name: str
+    project_id: str | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class SetQueueCapacityRequest(BaseModel):
@@ -188,6 +214,23 @@ def build_app(
             if job is None:
                 raise HTTPException(status_code=404, detail="job not found")
             return payload(job)
+
+    @app.get("/v1/jobs/{job_id}/wait")
+    def wait_job(job_id: str, timeout: float = WAIT_DEFAULT_SECONDS) -> dict:
+        """The Job as soon as there is something to act on: it settled, it is held for a confirmation,
+        or a step asks the user a question. Otherwise the Job as it is once `timeout` seconds passed.
+        One call instead of a caller's status polls, each of which costs a Claude session a turn."""
+        deadline = time.monotonic() + max(0.0, min(timeout, WAIT_MAX_SECONDS))
+        while True:
+            with lock:
+                job = db.get_job(conn, job_id)
+                if job is None:
+                    raise HTTPException(status_code=404, detail="job not found")
+                body = payload(job)
+            asks = any(s.get("state") == "attention" for s in body["steps"])
+            if job.status not in WAIT_FOR_STATUSES or asks or time.monotonic() >= deadline:
+                return body
+            time.sleep(WAIT_POLL_SECONDS)
 
     @app.post("/v1/jobs/{job_id}/steps/{key}")
     def report_step(job_id: str, key: str, request: StepReportRequest) -> dict:
@@ -381,6 +424,56 @@ def build_app(
             return updated.model_dump(mode="json")
 
     # -- Queue capacity (the `queue` operation) ---------------------------
+
+    # -- triggers: an event starts a Job (docs/pillars/orchestration.md, "Triggers") ----
+
+    @app.post("/v1/triggers")
+    def create_trigger(request: CreateTriggerRequest) -> dict:
+        trigger = triggers.Trigger(name=request.name, on=request.on, job_template=request.job_template, enabled=request.enabled)
+        with lock:
+            try:
+                triggers.save(conn, trigger)
+            except triggers.TriggerError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+        return trigger.model_dump(mode="json")
+
+    @app.get("/v1/triggers")
+    def list_triggers() -> list[dict]:
+        with lock:
+            return [t.model_dump(mode="json") for t in triggers.list_all(conn)]
+
+    @app.post("/v1/triggers/install-defaults")
+    def install_default_triggers() -> list[dict]:
+        with lock:
+            return [t.model_dump(mode="json") for t in triggers.install_defaults(conn)]
+
+    @app.patch("/v1/triggers/{trigger_id}")
+    def edit_trigger(trigger_id: str, request: EditTriggerRequest) -> dict:
+        with lock:
+            trigger = triggers.get(conn, trigger_id)
+            if trigger is None:
+                raise HTTPException(status_code=404, detail="trigger not found")
+            trigger.enabled = request.enabled
+            triggers.save(conn, trigger)
+            return trigger.model_dump(mode="json")
+
+    @app.delete("/v1/triggers/{trigger_id}")
+    def remove_trigger(trigger_id: str) -> dict:
+        with lock:
+            if not triggers.delete(conn, trigger_id):
+                raise HTTPException(status_code=404, detail="trigger not found")
+        return {"removed": trigger_id}
+
+    @app.post("/v1/events")
+    def post_event(request: EventRequest) -> dict:
+        """An event another pillar reports (`claude.session_ended`, `usage.finding_opened`,
+        `registry.project_registered`). The Jobs its triggers create are returned."""
+        if request.name.startswith("job.") or request.name.startswith("version."):
+            raise HTTPException(status_code=422, detail="that event is Orchestration's own: it comes from a Job settling")
+        with lock:
+            triggers.queue_event(conn, request.name, request.project_id, {**request.data, "project_id": request.project_id})
+        fired = [job for job in dispatch_ready_jobs(conn, socket_lookup, lock=lock) if job.created_by.startswith("trigger:")]
+        return {"jobs": [job.id for job in fired]}
 
     @app.get("/v1/queue_keys/{queue_key}/capacity")
     def get_queue_capacity(queue_key: str) -> dict:

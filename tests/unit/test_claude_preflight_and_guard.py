@@ -182,8 +182,8 @@ def test_workshops_own_agents_md_is_a_short_briefing_that_imports_its_convention
 def test_extra_hooks_follow_the_scope_guard():
     hooks = claude_templates.settings("little-workshop", **claude_templates.OWN_SETTINGS)["hooks"]["PreToolUse"]
     assert "lws_scope_guard.py" in hooks[0]["hooks"][0]["command"]
-    assert hooks[1]["hooks"][0]["command"].endswith(claude_templates.LIVE_INSTALL_GUARD_PATH)
-    assert len(claude_templates.settings("little-widget")["hooks"]["PreToolUse"]) == 1
+    assert hooks[2]["hooks"][0]["command"].endswith(claude_templates.LIVE_INSTALL_GUARD_PATH)
+    assert len(claude_templates.settings("little-widget")["hooks"]["PreToolUse"]) == 2
 
 
 # --- REQ-000000304: little-workshop's live-install guard ------------------------------------------

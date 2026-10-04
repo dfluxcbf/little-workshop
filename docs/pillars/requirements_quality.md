@@ -176,3 +176,18 @@ The same scratch-port command Agentic Development's screenshots use is reused ra
 run never collides with an agent's screenshot or another test run. Without pytest-playwright or a launch
 command, the UI tests run exactly as they are — against whatever base URL their own configuration gives
 them — so a project that starts its own server in a fixture is unaffected.
+
+## Marker sync (2026-10-04)
+
+REQ-000000346. `requirements.sync_markers` reads the `# --- REQ-nnnnnnnnn: <title> ---` (or `// --- …`) section
+markers of the project's test files (`requirements/markers.py`; files git tracks or would track, in a test
+directory) and brings the pillar in line with them in one Job:
+
+- A marked requirement the pillar lacks is created as a draft from its row in the project's
+  `docs/requirements.md` (`| REQ-… | **Title.** text | status |`), EARS-checked like any other. A marker with
+  no such row, or whose text is not EARS, is reported under `missing_text` and not created.
+- Every marked requirement is linked to `params.suite_id`, or to the suite named "Unit tests".
+- Nothing is deleted or unlinked. `params.dry_run` only reports.
+
+It replaces one `workshop_requirements_create` and one `_link_suite` call per requirement.
+`lws requirements sync-markers --project-id <id>`, `workshop_requirements_sync_markers`.

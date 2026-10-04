@@ -26,7 +26,9 @@ from common.workspace import WORKSPACE_ID, workspace_dir
 from agent import db, review_store
 from agent.doc_update import DocUpdateError, DocUpdateFlow
 from agent.flow import AgentFlow, AgentFlowError
-from agent.query import run_query
+from agent import usage_client
+from agent.launch import JOB_QUERY, launch_for
+from agent.query import query_dir, run_query
 from agent.gitutil import is_dirty as gitutil_is_dirty
 from agent.session_flow import SessionError, SessionFlow, is_trusted, session_name as session_name_for
 
@@ -139,6 +141,20 @@ def build_app(
         finally:
             reader.close()
 
+    def write_apart(fn, *args, **kwargs):
+        """A short write on a connection of its own, for the same reason as `read`: a query must not
+        wait for `lock` while a task run holds it."""
+        row = conn.execute("PRAGMA database_list").fetchone()
+        db_file = row[2] if row else ""
+        if not db_file:
+            with lock:
+                return fn(conn, *args, **kwargs)
+        writer = sqlite3.connect(db_file, timeout=30)
+        try:
+            return fn(writer, *args, **kwargs)
+        finally:
+            writer.close()
+
     @app.get("/v1/health")
     def health() -> dict:
         return {"ok": True}
@@ -190,7 +206,12 @@ def build_app(
         kwargs = {"runner": flow.runner}
         if timeout:
             kwargs["timeout"] = float(timeout)
-        result = run_query(prompt, **kwargs)
+
+        def record(usage: dict | None) -> None:
+            write_apart(db.record_usage, db.USAGE_QUERY, usage, ref_id=request.job_id, project_id=request.project_id, job_id=request.job_id)
+
+        env = usage_client.launch_env(paths, project=request.project_id, job_id=request.job_id, job_type="agent.query")
+        result = run_query(prompt, cwd=query_dir(paths), on_usage=record, env=env, launch=launch_for(JOB_QUERY, paths), **kwargs)
         if result.is_error:
             return {"outcome": "failed", "error": result.text or "claude reported an error"}
         return {"outcome": "succeeded", "result": {"text": result.text}}
@@ -273,7 +294,12 @@ def build_app(
         run = read(db.get_run, run_id)
         if run is None or run["project_id"] != project_id:
             raise HTTPException(status_code=404, detail="run not found")
-        return run
+        return {**run, "usage": read(db.usage_total, db.USAGE_RUN, run_id)}
+
+    @app.get("/v1/usage")
+    def list_usage(project_id: str | None = None, kind: str | None = None, since: str | None = None) -> list[dict]:
+        """What each Claude run this pillar started reported using, oldest first."""
+        return read(db.list_usage, project_id=project_id, kind=kind, since=since)
 
     @app.get("/v1/ci_checks/{project_id}")
     def list_ci_checks(project_id: str) -> list[dict]:

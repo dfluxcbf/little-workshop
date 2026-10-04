@@ -31,7 +31,7 @@ from typing import Callable, Iterable
 
 _FIRST = "orchestration"
 _RUNNERS = ("build", "agent", "dashboard")
-_REST = ("policy", "registry", "requirements", "version", "mcp")
+_REST = ("policy", "registry", "requirements", "version", "mcp", "usage")
 _DEPLOYER = "deployment"
 _CORE = "core"
 
@@ -67,6 +67,28 @@ def redeploy_batches(pillars: Iterable[str]) -> list[list[str]]:
     for pillar, n in level.items():
         batches[n].append(pillar)
     return [sorted(batch) for batch in batches if batch]
+
+
+# `src/<directory>` -> the pillar it is, where the two differ.
+_DIRECTORY_PILLAR = {"mcp_server": "mcp"}
+# Code every pillar imports: a change there is a change to all of them.
+_SHARED_DIRECTORIES = ("common",)
+
+
+def changed_pillars(changed_files: Iterable[str], live_pillars: Iterable[str]) -> list[str]:
+    """The live pillars whose code `changed_files` (paths relative to the repository) touch: the
+    pillar of each `src/<pillar>/` directory, and every live pillar when shared code changed. Files
+    outside `src/` (docs, tests, tools) and the CLI redeploy nothing."""
+    live = list(dict.fromkeys(live_pillars))
+    touched: set[str] = set()
+    for path in changed_files:
+        parts = path.split("/")
+        if len(parts) < 3 or parts[0] != "src":
+            continue
+        if parts[1] in _SHARED_DIRECTORIES:
+            return sorted(live)
+        touched.add(_DIRECTORY_PILLAR.get(parts[1], parts[1]))
+    return sorted(pillar for pillar in live if pillar in touched)
 
 
 CreateJob = Callable[[dict], object]

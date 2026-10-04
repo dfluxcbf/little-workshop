@@ -18,8 +18,11 @@ the guard refuses them. Name the project in every call: `project_id` `little-wor
 | Deploy, stop or inspect the server | `workshop_deployment_deploy`, `_stop`, `_status` |
 | Publish a package | `workshop_build_publish_pypi`, `workshop_build_publish_vsix` |
 | Create or update a requirement; record a Definition-of-Done run | `workshop_requirements_create` / `_update`; `workshop_requirements_run_tests` (or `_import_junit`) |
+| Register and link the requirements the tests' `REQ-` markers name | `workshop_requirements_sync_markers`: one call, instead of a create and a link per requirement |
 | Know the branch, version or policy state | `workshop_version_status`, `workshop_policy_results` |
 | Create the GitHub repository and push to it | `workshop_project_connect_github` |
+| Wait for a Job (a test run, a finish, a deploy) | `workshop_job_wait`: one call that returns when the Job settles, is held or asks a question. Never repeat `workshop_job_status` or `sleep` |
+| Redeploy little-workshop's pillars | After a branch finish, `workshop_deployment_redeploy_changed_pillars` (the pillars the branch touched, found for you; a trigger may already have started it: check `workshop_job_list`). To choose them yourself, `workshop_deployment_redeploy_pillars`: one call for several pillars, which orders them itself; never one `workshop_deployment_redeploy_pillar` call per pillar |
 
 If the daemon is down (`workshop_core_status`), say so and stop at that step: a raw git fallback skips the
 policies.

@@ -85,6 +85,27 @@ CREATE TABLE IF NOT EXISTS doc_updates (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS claude_usage (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    ref_id TEXT NOT NULL DEFAULT '',
+    project_id TEXT NOT NULL DEFAULT '',
+    job_id TEXT,
+    session_id TEXT,
+    model TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    num_turns INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    is_error INTEGER NOT NULL DEFAULT 0,
+    model_usage_json TEXT NOT NULL DEFAULT '{}',
+    budget_usd REAL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS ci_checks (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -119,6 +140,8 @@ def connect(path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE agent_runs ADD COLUMN description TEXT NOT NULL DEFAULT ''")
     if "dismissed_at" not in {row["name"] for row in conn.execute("PRAGMA table_info(agent_runs)")}:
         conn.execute("ALTER TABLE agent_runs ADD COLUMN dismissed_at TEXT")
+    if "budget_usd" not in {row["name"] for row in conn.execute("PRAGMA table_info(claude_usage)")}:
+        conn.execute("ALTER TABLE claude_usage ADD COLUMN budget_usd REAL")
     conn.commit()
     return conn
 
@@ -182,6 +205,68 @@ def list_runs(conn: sqlite3.Connection, project_id: str, *, status: str | None =
             (project_id, status),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+# -- claude_usage: what each Claude run this pillar started reported using --
+
+USAGE_RUN, USAGE_QUERY, USAGE_DOC_UPDATE = "run", "query", "doc_update"
+_USAGE_SUMS = ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens", "cost_usd", "num_turns", "duration_ms")
+
+
+def record_usage(
+    conn: sqlite3.Connection, kind: str, usage: dict | None, *, ref_id: str = "", project_id: str | None = None,
+    job_id: str | None = None,
+) -> str | None:
+    """Store one run's usage (`claude_invoke.usage_from_raw`); a run that reported none stores nothing."""
+    if not usage:
+        return None
+    usage_id = uuid.uuid4().hex
+    conn.execute(
+        """INSERT INTO claude_usage (id, kind, ref_id, project_id, job_id, session_id, model, input_tokens,
+               cache_read_tokens, cache_write_tokens, output_tokens, cost_usd, num_turns, duration_ms, is_error,
+               model_usage_json, budget_usd, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (usage_id, kind, ref_id or "", project_id or "", job_id, usage.get("session_id"), usage.get("model"),
+         usage.get("input_tokens", 0), usage.get("cache_read_tokens", 0), usage.get("cache_write_tokens", 0),
+         usage.get("output_tokens", 0), usage.get("cost_usd", 0.0), usage.get("num_turns", 0),
+         usage.get("duration_ms", 0), int(bool(usage.get("is_error"))), json.dumps(usage.get("model_usage") or {}),
+         usage.get("budget_usd"), _now()),
+    )
+    conn.commit()
+    return usage_id
+
+
+def _usage(row) -> dict:
+    out = dict(row)
+    out["is_error"] = bool(out["is_error"])
+    out["model_usage"] = json.loads(out.pop("model_usage_json") or "{}")
+    return out
+
+
+def list_usage(
+    conn: sqlite3.Connection, *, project_id: str | None = None, kind: str | None = None, since: str | None = None,
+) -> list[dict]:
+    """Stored usage, oldest first. `since` is an ISO time: only rows created after it."""
+    where, values = [], []
+    for column, value, op in (("project_id", project_id, "="), ("kind", kind, "="), ("created_at", since, ">")):
+        if value is not None:
+            where.append(f"{column} {op} ?")
+            values.append(value)
+    sql = "SELECT * FROM claude_usage" + (f" WHERE {' AND '.join(where)}" if where else "") + " ORDER BY created_at, id"
+    return [_usage(row) for row in conn.execute(sql, values).fetchall()]
+
+
+def usage_total(conn: sqlite3.Connection, kind: str, ref_id: str) -> dict | None:
+    """The usage of everything Claude did for one run, query or doc update, summed; None when nothing was stored."""
+    rows = [_usage(r) for r in conn.execute(
+        "SELECT * FROM claude_usage WHERE kind = ? AND ref_id = ? ORDER BY created_at, id", (kind, ref_id)).fetchall()]
+    if not rows:
+        return None
+    total = {key: sum(row[key] for row in rows) for key in _USAGE_SUMS}
+    budgets = [row["budget_usd"] for row in rows if row["budget_usd"] is not None]
+    budget = sum(budgets) if budgets else None
+    return {**total, "model": rows[-1]["model"], "session_id": rows[-1]["session_id"], "invocations": len(rows),
+            "budget_usd": budget, "budget_used": (total["cost_usd"] / budget) if budget else None}
 
 
 # -- incidents: an unhandled exception, awaiting the user's confirmation --
