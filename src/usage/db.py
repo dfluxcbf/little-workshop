@@ -68,7 +68,11 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     result_bytes INTEGER,
     duration_ms INTEGER,
     success INTEGER,
-    source TEXT NOT NULL
+    source TEXT NOT NULL,
+    outcome TEXT,
+    exit_code INTEGER,
+    tests_passed INTEGER,
+    tests_failed INTEGER
 );
 CREATE INDEX IF NOT EXISTS tool_calls_session ON tool_calls (session_id, ts);
 CREATE TABLE IF NOT EXISTS session_events (
@@ -177,11 +181,20 @@ SESSION_FIELDS = ("entrypoint", "cwd", "transcript_path", "repository", "tag_pro
                   "model", "cc_version", "end_reason")
 
 
+# Columns added after a store was first created: (table, column, type).
+ADDED_COLUMNS = (("tool_calls", "outcome", "TEXT"), ("tool_calls", "exit_code", "INTEGER"),
+                 ("tool_calls", "tests_passed", "INTEGER"), ("tool_calls", "tests_failed", "INTEGER"))
+
+
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    for table, column, kind in ADDED_COLUMNS:
+        present = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if present and column not in present:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
     conn.executescript(SCHEMA)
     from usage import outcomes
 
@@ -266,6 +279,8 @@ def upsert_tool_call(conn: sqlite3.Connection, call: dict) -> bool:
         "ts": call["ts"], "tool": call["tool"], "signature": call.get("signature") or "", "detail": call.get("detail") or "",
         "input_bytes": call.get("input_bytes"), "result_bytes": call.get("result_bytes"), "duration_ms": call.get("duration_ms"),
         "success": None if call.get("success") is None else int(bool(call["success"])), "source": call.get("source") or "",
+        "outcome": call.get("outcome"), "exit_code": call.get("exit_code"),
+        "tests_passed": call.get("tests_passed"), "tests_failed": call.get("tests_failed"),
     }
     cursor = conn.execute(f"INSERT OR IGNORE INTO tool_calls ({', '.join(row)}) VALUES ({', '.join(':' + c for c in row)})", row)
     if cursor.rowcount:
@@ -273,7 +288,9 @@ def upsert_tool_call(conn: sqlite3.Connection, call: dict) -> bool:
     conn.execute(
         """UPDATE tool_calls SET prompt_id = COALESCE(prompt_id, :prompt_id), request_id = COALESCE(request_id, :request_id),
                input_bytes = COALESCE(input_bytes, :input_bytes), result_bytes = COALESCE(result_bytes, :result_bytes),
-               duration_ms = COALESCE(duration_ms, :duration_ms), success = COALESCE(success, :success)
+               duration_ms = COALESCE(duration_ms, :duration_ms), success = COALESCE(success, :success),
+               outcome = COALESCE(:outcome, outcome), exit_code = COALESCE(:exit_code, exit_code),
+               tests_passed = COALESCE(:tests_passed, tests_passed), tests_failed = COALESCE(:tests_failed, tests_failed)
            WHERE id = :id""", row)
     return False
 
@@ -499,3 +516,16 @@ def drop_stale_candidates(conn: sqlite3.Connection, found: set[str]) -> int:
     for candidate_id in stale:
         conn.execute("DELETE FROM candidates WHERE id = ?", (candidate_id,))
     return len(stale)
+
+
+OUTCOMES = ("ok", "failed", "held", "running", "cancelled")
+
+
+def call_outcomes(conn: sqlite3.Connection, *, signature: str | None = None, limit: int = 50) -> list[dict]:
+    """Per signature, how its calls ended (and the test counts they printed), most calls first."""
+    where, values = ("WHERE signature LIKE ? ESCAPE '\\'", [signature.replace("%", "\\%").replace("_", "\\_") + "%"]) if signature else ("", [])
+    sums = ", ".join(f"SUM(outcome = '{name}') AS {name}" for name in OUTCOMES)
+    rows = conn.execute(
+        f"""SELECT signature, {sums}, SUM(outcome IS NULL) AS unknown, SUM(tests_passed) AS tests_passed, SUM(tests_failed) AS tests_failed
+            FROM tool_calls {where} GROUP BY signature ORDER BY COUNT(*) DESC LIMIT ?""", (*values, limit)).fetchall()
+    return [{key: (row[key] or 0) if key != "signature" else row[key] for key in row.keys()} for row in rows]

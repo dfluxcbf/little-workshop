@@ -33,6 +33,24 @@ hook at session start, so the profile's `SessionStart` hook is a `command` hook 
 other three are `http` hooks. The transcript format is internal to Claude Code: `transcripts.py` skips what it
 cannot read and has only been tested against lines written for the tests.
 
+### Call outcomes
+
+How each tool call ended (`usage/results.py`, REQ-000000358), kept with the call (`tool_calls.outcome`,
+`exit_code`, `tests_passed`, `tests_failed`): the branch a workflow took after it. Claude Code marks a shell
+command failed only when the command itself exits non-zero; a test run piped into `tail` or `grep` exits 0,
+so its failures show only in the summary it printed. The transcript parser therefore reads, in order: a test
+summary in the output (pytest, Bazel, Vitest), the `Exit code N` that starts a failed command's result, the
+`status` of the Job a little-workshop call answers with, and the tool's own error flag. Outcomes: `ok`,
+`failed`, `held` (`pending_confirmation`), `running` (a Job not done yet), `cancelled`, or none. Telemetry
+carries no result text, so its calls are only `ok` or `failed`. `GET /v1/call_outcomes?signature=` sums them
+per signature.
+
+On this machine's transcripts (2026-10-04): 1,779 test runs printed a summary and 405 failed, 397 of them
+reported as a success by the tool because the run was piped; 868 of 15,544 shell commands failed; a
+`workshop_version_improvement_finish` mostly answered `running`, since a finish waits behind its policy
+checks. When the parser learns to read something new, `transcripts.PARSER_VERSION` is raised and every
+stored transcript is read once more (a file's mark carries the version).
+
 ## Intake
 
 The pillar binds only its Unix socket. Claude Code needs an HTTP URL, so at start the pillar
