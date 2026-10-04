@@ -8,6 +8,7 @@ and never fails a session; the **reads** the Dashboard, the MCP server and `lws`
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -25,7 +26,8 @@ from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.uds_client import client_for_socket
-from usage import attribution, db, detectors, doctor, intake, mining, optimize, outcomes, pricing, profile, proxy, rollup, transcripts
+from usage import (attribution, counterfactual, db, detectors, doctor, intake, mining, optimize, outcomes, pricing, profile, proxy,
+                   rollup, transcripts)
 
 TICK_SECONDS = 600.0
 # A summary older than this is rolled up before it is read, so a session shows up within a minute
@@ -36,6 +38,7 @@ EXPERIMENT_DAYS = 7  # an experiment compares this many days before a change wit
 EXPERIMENT_SETTLE_DAYS = 14  # measured on its own this long after it began: a week to land, a week to measure
 PROJECTS_CACHE_SECONDS = 60.0
 AGENT_CURSOR = "agent_usage_since"
+METHOD_KEY = "estimate_method"
 
 
 class JobRequest(BaseModel):
@@ -204,7 +207,7 @@ def build_app(
         path = parsed["session"].get("transcript_path")
         if event == "SessionEnd":
             if path:
-                threading.Thread(target=ingest_file, args=(Path(path),), daemon=True).start()
+                threading.Thread(target=ingest_session, args=(Path(path),), daemon=True).start()
             with lock:
                 session = db.get_session(conn, parsed["session"]["id"]) or {}
             emit("claude.session_ended", session.get("project"), {"session_id": parsed["session"]["id"], "reason": body_reason(parsed)})
@@ -242,6 +245,12 @@ def build_app(
             db.set_meta(conn, key, mark)
             conn.commit()
         return {**added, "skipped": parsed["skipped"], "read": True}
+
+    def ingest_session(path: Path) -> None:
+        """A session that ended: its transcript, then its subagents' (the subagents' requests need the session)."""
+        ingest_file(path)
+        for subagent in transcripts.subagent_files(path):
+            ingest_file(subagent)
 
     def ingest_transcripts() -> dict:
         root = transcripts_root or transcripts.DEFAULT_ROOT
@@ -341,7 +350,10 @@ def build_app(
     def mine_automation(today: date | None = None) -> dict:
         with lock:
             mining.resign(conn)
-            found = mining.mine(conn, prices(), today=today)
+            replay = counterfactual.Replay(conn, prices())
+            calibration = counterfactual.calibrate(conn, replay)
+            db.set_meta(conn, METHOD_KEY, json.dumps(counterfactual.method_report(conn, replay, calibration)))
+            found = mining.mine(conn, prices(), today=today, replay=replay, calibration=calibration)
             for candidate in found:
                 db.record_candidate(conn, candidate)
             db.drop_stale_candidates(conn, {candidate["signature"] for candidate in found})
@@ -349,7 +361,7 @@ def build_app(
                 if candidate.get("replacement"):
                     db.update_candidate(conn, candidate["id"], tokens_avoided=mining.tokens_avoided(conn, candidate))
             conn.commit()
-        return {"candidates": len(found), "by_class": {kind: sum(1 for c in found if c["class"] == kind)
+        return {"candidates": len(found), "calibration": calibration.as_dict(), "by_class": {kind: sum(1 for c in found if c["class"] == kind)
                                                        for kind in (mining.CLASS_DETERMINISTIC, mining.CLASS_HYBRID, mining.CLASS_HEURISTIC)}}
 
     app.state.mine_automation = mine_automation
@@ -501,6 +513,14 @@ def build_app(
         with lock:
             rows = db.list_candidates(conn, state=None if state == "all" else state)
         return rows[:max(limit, 0)] if limit is not None else rows
+
+    @app.get("/v1/estimate_method")
+    def estimate_method() -> dict:
+        """What the candidates' estimates rest on: the constants fitted on the stored turns, their error on
+        the newest turns they were not fitted on, and how long an addition to a conversation is re-read."""
+        with lock:
+            stored = db.get_meta(conn, METHOD_KEY)
+        return {"method": json.loads(stored) if stored else None}
 
     @app.post("/v1/candidates/{candidate_id}")
     def edit_candidate(candidate_id: str, body: dict) -> dict:

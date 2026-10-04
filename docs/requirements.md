@@ -797,3 +797,15 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000355 | **The Claude usage page says what each colour is, dates its days and fits a phone.** The Dashboard's Claude usage page shall draw each plot at the width it has on screen with a legend naming the series of each colour and marking a comparison week as dashed, shall label each day on the x axis with its weekday and its date and each week with the date of its Monday, and on a screen 680 pixels wide or narrower shall show each table row as a block of values under their column names, so that the page needs no horizontal scrolling. | draft |
+
+## Automation candidates valued by their net saving (2026-10-04)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000356 | **A candidate is valued by what automating it would really save.** When the `usage.mine_automation` Job values a candidate, the Usage & Efficiency pillar shall estimate from the stored sessions, before anything is built, the weighted tokens per week automating it would save: when Claude calls the replacement, the turns beyond one that its occurrences took (calls made in the same request counting as one turn, each turn at the weighted cost of its request) plus the output beyond a short answer that later requests of the session re-read, less the new tool's own cost in every session's starting context; and, only for a pillar action that is neither a read nor a decision a trigger may not make, when a trigger or a schedule runs it, all of its turns and output; shall rank candidates by the better of the two, leave out a candidate worth less than $0.10 a week, show both estimates on the Dashboard and in the improvement task, and count tokens avoided as the replacement's runs times what one run saves when Claude calls it. | draft |
+
+## Automation estimates replayed against their sessions (2026-10-04)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000357 | **The estimate replays each occurrence and says how well its constants fit.** When the `usage.mine_automation` Job runs, the Usage & Efficiency pillar shall value each occurrence of a candidate by replaying it against the thread it happened in (the session's main conversation or one subagent's), counting what its own content added to the conversation as re-read by every later request of that thread until the next compaction or clear at that request's own price per context token, shall fit the call overhead and the bytes per token on every stored turn and test that fit on the newest 30% of turns it was not fitted on, shall fall back to the constants measured on 2026-10-04 while fewer than 200 turns are stored, shall give each estimate a low figure that assumes the replacement makes Claude check on it once more, shall keep and serve what the estimates rest on for the Dashboard, and shall read each subagent's transcript as a thread of its session without changing the session's own directory, transcript or version. | draft |

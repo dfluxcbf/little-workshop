@@ -145,13 +145,35 @@
 
 <section class="card" id="candidates">
   <h2>Automation candidates</h2>
-  <p class="muted">Work Claude repeated with the same shape in the last 14 days, ranked by what it cost per week. A deterministic
-    candidate can become a job, a tool or a trigger: every later run of that code costs no tokens. Nothing is built until you choose.</p>
+  <p class="muted">Work Claude repeated with the same shape in the last 14 days, ranked by what automating it would save per week,
+    estimated by replaying each past occurrence against the session it happened in: the turns it would no longer take (each
+    re-reads the whole conversation) and what it added to the conversation, which every later request re-read, less the new
+    tool's own cost. A replacement Claude still calls costs the turn that calls it, so a single call saves only the difference
+    in what it adds; only a pillar action a trigger may take over can run with no turn at all. Work worth less than $0.10 a week
+    is not listed. Nothing is built until you choose.</p>
+  {% if method %}{% set cal = method.calibration %}
+  <details class="stats-table">
+    <summary>How the estimates are made</summary>
+    <p class="muted">A call adds to the conversation the text the model wrote, about {{ cal.call_overhead | round | int }} tokens of overhead,
+      and its result at {{ "%.1f" | format(cal.bytes_per_token) }} bytes per token, fitted on {{ "{:,}".format(cal.turns) }} stored turns.
+      {% if cal.check and cal.check.turns %}Fitted on the older turns and tested on the newest {{ "{:,}".format(cal.check.turns) }}, it predicts
+      a turn's addition within {{ cal.check.median_abs_error_tokens | round | int }} tokens (median, {{ "%.0f%%" | format(cal.check.median_relative_error * 100) }})
+      and their total within {{ "%.1f%%" | format(((cal.check.total_error or 0) * 100) | abs) }}.{% endif %}
+      An addition is re-read by a median of {{ method.later_requests_median | round | int }} later requests, until the session compacts or is cleared.
+      The low figure assumes the replacement makes Claude check on it once more each time.</p>
+  </details>
+  {% endif %}
   {% for c in candidates if c.state in ('open', 'accepted') %}
   <details class="stats-table">
     <summary><code class="usage-signature">{{ c.signature }}</code> &middot; {{ c.class }} ({{ c.score }}/5) &middot; {{ c.occurrences }}&times; in {{ c.sessions }} session{{ '' if c.sessions == 1 else 's' }}
-      &middot; about ${{ "{:,.2f}".format(c.weekly_value) }} a week {% if c.state == 'accepted' %}<span class="pill warn">task started</span>{% endif %}</summary>
+      &middot; saves about ${{ "{:,.2f}".format(c.weekly_value) }} a week {% if c.state == 'accepted' %}<span class="pill warn">task started</span>{% endif %}</summary>
     <p>Proposed form: {{ c.proposed_form }}</p>
+    {% set est = c.estimate or {} %}{% if est.net_if_called is number %}
+    <p class="muted">Estimated net saving per week: about ${{ "{:,.2f}".format(est.net_if_called) }} if Claude calls the replacement
+      (one turn instead of {{ est.turns_per_occurrence }}{% if est.added_tokens_per_occurrence is number %}, and a short answer instead of the
+      {{ "{:,}".format(est.added_tokens_per_occurrence) }} tokens each occurrence added, re-read by {{ est.later_requests_per_occurrence }} later requests{% endif %};
+      {% if est.net_if_called_low is number %}low ${{ "{:,.2f}".format(est.net_if_called_low) }}{% endif %});
+      {% if est.net_if_triggered is number %}about ${{ "{:,.2f}".format(est.net_if_triggered) }} if a trigger or a schedule runs it and Claude spends nothing{% if est.net_if_triggered_low is number %} (low ${{ "{:,.2f}".format(est.net_if_triggered_low) }}){% endif %}{% else %}no trigger can run it, as it is not a pillar action a trigger may take over{% endif %}.</p>{% endif %}
     <p class="muted">{% for name, ok in (c.checks or {}).items() %}{{ name.replace('_', ' ') }}: {{ 'yes' if ok else 'no' }}{{ '' if loop.last else ' · ' }}{% endfor %}</p>
     {% if c.schedule %}<p><strong>Schedule</strong> (recommended once it is automated): {{ c.schedule.frequency }},
       {% for d in c.schedule.days_of_week %}{{ weekdays[d] }}{{ '' if loop.last else ', ' }}{% endfor %} at {{ c.schedule.time_of_day }} &mdash; {{ c.schedule.note }}.</p>{% endif %}

@@ -3267,3 +3267,45 @@ def test_the_usage_tables_stack_on_a_phone_and_the_plots_get_legends_and_dates(t
     assert "card.clientWidth" in script  # drawn at the width it has, so its text stays readable on a phone
     css = test_client.get("/static/app.css").text
     assert ".table-scroll.stack td::before { content: attr(data-label);" in css and ".usage-swatch.dashed" in css
+
+
+# --- REQ-000000356: A candidate is valued by what automating it would really save ---
+
+
+def test_a_candidate_shows_its_net_saving_both_ways(test_client, monkeypatch):
+    shell = {"id": "c1", "signature": "Bash(a) → Bash(b) → Bash(c)", "state": "open", "class": "deterministic", "score": 5,
+             "occurrences": 30, "sessions": 6, "weekly_value": 4.25, "proposed_form": "One job", "checks": {}, "examples": [],
+             "estimate": {"net_if_called": 4.25, "net_if_called_low": 2.0, "net_if_triggered": None, "turns_per_occurrence": 3,
+                          "added_tokens_per_occurrence": 2800, "later_requests_per_occurrence": 190, "output_bytes_per_occurrence": 1200}}
+    pillar = {**shell, "id": "c2", "signature": "mcp:workshop_deployment_redeploy_pillar(commit, pillar)", "weekly_value": 9.5,
+              "estimate": {"net_if_called": -0.02, "net_if_called_low": -1.5, "net_if_triggered": 9.5, "net_if_triggered_low": 8.0,
+                           "turns_per_occurrence": 1, "added_tokens_per_occurrence": 900, "later_requests_per_occurrence": 118,
+                           "output_bytes_per_occurrence": 300}}
+    monkeypatch.setattr(app_module.client, "usage_summary", lambda paths, **kw: _usage_summary())
+    monkeypatch.setattr(app_module.client, "usage_doctor", lambda paths: None)
+    monkeypatch.setattr(app_module.client, "usage_findings", lambda paths, **kw: [])
+    monkeypatch.setattr(app_module.client, "usage_candidates", lambda paths, **kw: [pillar, shell])
+    page = test_client.get("/usage").text
+    assert "saves about $9.50 a week" in page and "saves about $4.25 a week" in page
+    assert "about $4.25 if Claude calls the replacement" in page and "one turn instead of 3" in page
+    assert "2,800 tokens each occurrence added, re-read by 190 later requests" in page and "low $2.00" in page
+    assert "no trigger can run it, as it is not a pillar action a trigger may take over" in page
+    assert "about $9.50 if a trigger or a schedule runs it and Claude spends nothing (low $8.00)" in page
+    assert "A replacement Claude still calls costs the turn that calls it" in page
+    assert "How the estimates are made" not in page  # no method report yet: nothing to explain
+
+
+# --- REQ-000000357: The estimate replays each occurrence and says how well its constants fit ---
+
+
+def test_the_page_explains_how_the_estimates_are_made(test_client, monkeypatch):
+    method = {"calibration": {"bytes_per_token": 2.39, "call_overhead": 97, "call_output": 321, "turns": 20693,
+                              "check": {"turns": 6208, "median_abs_error_tokens": 75.6, "median_relative_error": 0.063, "total_error": -0.008}},
+              "later_requests_median": 144, "threads": 367, "subagent_threads": 44}
+    monkeypatch.setattr(app_module.client, "usage_summary", lambda paths, **kw: _usage_summary())
+    monkeypatch.setattr(app_module.client, "usage_doctor", lambda paths: None)
+    monkeypatch.setattr(app_module.client, "usage_estimate_method", lambda paths: method)
+    page = test_client.get("/usage").text
+    assert "How the estimates are made" in page and "2.4 bytes per token" in page and "about 97 tokens of overhead" in page
+    assert "fitted on 20,693 stored turns" in page and "the newest 6,208" in page and "within 76 tokens (median, 6%)" in page
+    assert "total within 0.8%" in page and "a median of 144 later requests" in page
