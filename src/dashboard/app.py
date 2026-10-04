@@ -1418,7 +1418,8 @@ def build_app(paths: Paths) -> FastAPI:
         threading.Thread(
             target=redeploy_plan.submit_redeploy_batches, args=(create, chosen, commit), kwargs={"created_by": "dashboard"}, daemon=True,
         ).start()
-        steps = " → ".join(", ".join(batch) for batch in batches)
+        # Each pillar by the name the Pillars page shows it under, so none hides behind its tag.
+        steps = " → ".join(", ".join(pillar_name(p) for p in batch) for batch in batches)
         return _back("/pillars", f"Redeploy of {steps} ({commit}) started — each batch starts when the one before has succeeded; progress is on the Jobs page.")
 
     @app.get("/jobs", response_class=HTMLResponse)
