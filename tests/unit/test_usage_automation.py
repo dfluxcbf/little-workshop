@@ -399,7 +399,8 @@ def test_the_job_redeploys_what_the_merge_commit_changed_in_dependency_order(wor
     created = []
     app = build_deployment_app(paths, connection, live_pillars=lambda: ["orchestration", "agent", "usage", "deployment"],
                                create_job=lambda template: created.append(template) or {"status": "succeeded"})
-    result = TestClient(app).post("/v1/jobs/deployment.redeploy_changed_pillars", json={"job_id": "j1"}).json()["result"]
+    explicit = {"job_id": "j1", "params": {"base": "HEAD^1"}}  # the merge commit against its first parent
+    result = TestClient(app).post("/v1/jobs/deployment.redeploy_changed_pillars", json=explicit).json()["result"]
     assert result["pillars"] == ["agent", "usage"] and result["commit"] == git("rev-parse", "HEAD")
     assert result["batches"] == [[{"pillar": "agent"}], [{"pillar": "usage"}]]
     for _ in range(200):
@@ -419,12 +420,40 @@ def test_the_job_redeploys_what_the_merge_commit_changed_in_dependency_order(wor
     connection.close()
 
 
+def test_without_a_base_each_pillar_is_compared_with_the_commit_it_runs(workshop_repo, paths, tmp_path):
+    """A finish here ends in a squash commit and a version-bump commit, not a merge commit: comparing
+    HEAD with its parent sees only the bump (2026-10-04). What a pillar runs is what decides."""
+    repo, git = workshop_repo
+    (repo / "VERSION").write_text("2")
+    git("add", "-A")
+    git("commit", "-m", "chore: bump version")  # HEAD^1..HEAD touches no pillar
+    first, head = git("rev-list", "--max-parents=0", "HEAD"), git("rev-parse", "HEAD")
+    connection = deployment_db.connect(tmp_path / "deployment.db")
+    deployment_db.save_pillar_deployment(connection, "agent", "/x/agent", first)  # runs the commit before the change
+    deployment_db.save_pillar_deployment(connection, "orchestration", "/x/orchestration", head)  # already on HEAD
+    created = []
+    app = build_deployment_app(paths, connection, live_pillars=lambda: ["orchestration", "agent", "usage"],
+                               create_job=lambda template: created.append(template) or {"status": "succeeded"})
+    result = TestClient(app).post("/v1/jobs/deployment.redeploy_changed_pillars", json={"job_id": "j1"}).json()["result"]
+    # agent: its code changed since the commit it runs. usage: never deployed by this pillar, so it is brought in.
+    assert result["pillars"] == ["agent", "usage"] and result["compared_with"] == "the commit each pillar runs"
+    connection.close()
+
+
+def test_a_trigger_can_run_a_job_for_no_project_at_all(orch):
+    connection, client = orch
+    _trigger(client, "claude.session_ended", job_type="registry.sync_claude_files", project_id="*")
+    fired = client.post("/v1/events", json={"name": "claude.session_ended", "project_id": "little-meals"}).json()
+    assert client.get(f"/v1/jobs/{fired['jobs'][0]}").json()["project_id"] is None  # every project, not the event's
+
+
 def test_little_workshops_own_triggers_are_installed_once(orch):
     connection, client = orch
     added = client.post("/v1/triggers/install-defaults").json()
     assert [t["job_template"]["type"] for t in added] == ["deployment.redeploy_changed_pillars", "registry.sync_claude_files", "usage.ingest_transcripts"]
     assert added[0]["on"] == {"event": "version.branch_finished", "filter": {"project_id": "little-workshop"}}
     assert added[1]["job_template"]["params"] == {"write": False}  # it reports; writing is a person's choice
+    assert added[1]["job_template"]["project_id"] == "*" and added[2]["job_template"]["project_id"] == "*"  # every project
     assert client.post("/v1/triggers/install-defaults").json() == [] and len(client.get("/v1/triggers").json()) == 3
 
 

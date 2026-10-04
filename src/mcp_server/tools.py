@@ -1381,10 +1381,10 @@ TOOLS: tuple[ToolSpec, ...] = (
                       "dry_run": _prop("boolean", "Only report what would be created and linked.")}, ["project_id"]),
              _requirements_sync_markers),
     ToolSpec("workshop_deployment_redeploy_changed_pillars", "Redeploy the pillars of little-workshop whose code "
-             "changed in a commit (default HEAD, compared with its first parent: after a branch finish, exactly the "
-             "pillars that branch touched), in dependency order. One call; nothing to list by hand.",
+             "differs from a commit (default HEAD): each pillar is compared with the commit it runs, so after a branch "
+             "finish exactly the pillars that need it are redeployed, in dependency order. One call; nothing to list by hand.",
              _schema({"commit": _prop("string", "Commit/ref to deploy. Default HEAD."),
-                      "base": _prop("string", "Compare against this instead of the commit's first parent.")}),
+                      "base": _prop("string", "Compare every pillar against this commit instead of the one it runs.")}),
              _deployment_redeploy_changed_pillars),
     ToolSpec("workshop_usage_doctor", "Check the configuration Claude usage collection depends on: the intake, the "
              "user profile in ~/.claude/settings.json, `claude doctor`, the language servers, and whether data "
