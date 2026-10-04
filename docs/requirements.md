@@ -788,6 +788,6 @@ imports outside the project, rule fields other than paths, skill and subagent de
 
 | ID | Description | Status |
 | --- | --- | --- |
-| REQ-000000352 | **The doctor looks for programs where the owner's sessions find them.** When the `usage.doctor` Job checks for a program, the Usage & Efficiency pillar shall look for it on the PATH of the owner's login shell rather than its own, and shall never pass the shell a name that is not a plain program name. | draft |
+| REQ-000000352 | **The doctor looks for programs where the owner's sessions find them.** When the `usage.doctor` Job checks for a program, the Usage & Efficiency pillar shall look for it on the PATH of the owner's interactive shell rather than its own, and shall never pass the shell a name that is not a plain program name. | draft |
 | REQ-000000353 | **A summary includes what arrived since the last rollup.** When a summary is asked for and the last rollup is a minute old or older, the Usage & Efficiency pillar shall roll up before answering, so that a session's requests appear within a minute of arriving. | draft |
 | REQ-000000354 | **Candidates are returned a page at a time.** The Usage & Efficiency pillar shall accept a limit on the candidates it lists; the MCP tool `workshop_usage_candidates` shall return ten candidates by default and never more than fifty, each with one example; and `lws usage candidates` shall return twenty by default with a `--limit` option. | draft |

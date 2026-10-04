@@ -28,14 +28,16 @@ _PROGRAM_NAME = re.compile(r"[A-Za-z0-9._+-]+")
 
 
 def login_shell_which(runner: CommandRunner):
-    """`shutil.which` with the PATH of the owner's login shell. The pillar runs under systemd with a
-    short PATH, so a program installed through nvm or a user profile (~/.nvm/.../bin, ~/.dotnet/tools)
-    looked missing although the owner's Claude sessions find it (2026-10-04)."""
+    """`shutil.which` with the PATH of the owner's interactive shell, the one their Claude sessions
+    start from. The pillar runs under systemd with a short PATH, so a program installed through nvm or
+    added to PATH in ~/.bashrc (~/.nvm/.../bin, ~/.dotnet/tools) looked missing; a login shell is not
+    enough either, because ~/.bashrc returns early when the shell is not interactive (2026-10-04)."""
     def which(name: str) -> str | None:
         if not _PROGRAM_NAME.fullmatch(name):
             return None
-        result = runner.run(["bash", "-lc", f"command -v {name}"], timeout=15)
-        found = result.stdout.strip().splitlines()
+        result = runner.run(["bash", "-ic", f"command -v {name}"], timeout=15)
+        # An interactive shell's start-up may print other lines; the answer is the path.
+        found = [line for line in result.stdout.strip().splitlines() if line.startswith("/")]
         return found[-1] if result.ok and found else None
     return which
 

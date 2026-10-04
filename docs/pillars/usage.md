@@ -230,7 +230,7 @@ All are code; none uses Claude.
 |---|---|
 | `usage.ingest_transcripts` | Backfills from the transcripts, skipping unchanged files, then rolls up |
 | `usage.rollup` | Reads new run usage, re-attributes, rebuilds the rollups, prunes; also runs every ten minutes on its own |
-| `usage.doctor` | Checks the intake, the user profile, `claude doctor`, the language servers and recent data; keeps the report. Programs are looked for on the owner's login-shell PATH (`bash -lc 'command -v …'`), not the pillar's own short systemd PATH |
+| `usage.doctor` | Checks the intake, the user profile, `claude doctor`, the language servers and recent data; keeps the report. Programs are looked for on the PATH of the owner's interactive shell (`bash -ic 'command -v …'`), where nvm and `~/.bashrc` additions are, not the pillar's own short systemd PATH |
 | `usage.configure_claude` | Shows, or with `apply: true` writes, the user profile |
 | `usage.purge_project` | Removes a project's rows |
 | `usage.analyze` | Rolls up, runs the detectors, opens, refreshes and resolves findings, measures the experiments that are due |
