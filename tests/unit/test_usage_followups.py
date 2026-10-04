@@ -40,22 +40,23 @@ class Runner:
 
     def run(self, argv, timeout=None, cwd=None):
         self.calls.append(argv)
-        if argv[:2] == ["bash", "-lc"]:
+        if argv[:2] == ["bash", "-ic"]:
             name = argv[2].rsplit(" ", 1)[-1]
-            return CommandResult(0, f"/home/u/.nvm/bin/{name}\n", "") if name in self.found else CommandResult(1, "", "")
+            noise = "welcome from .bashrc\n"  # an interactive shell's start-up may print
+            return CommandResult(0, f"{noise}/home/u/.nvm/bin/{name}\n", "") if name in self.found else CommandResult(1, noise, "")
         return CommandResult(0, "", "")
 
 
-def test_a_program_on_the_login_shells_path_is_found():
+def test_a_program_on_the_interactive_shells_path_is_found():
     runner = Runner({"typescript-language-server"})
     which = doctor.login_shell_which(runner)
     assert which("typescript-language-server") == "/home/u/.nvm/bin/typescript-language-server"
     assert which("csharp-ls") is None
-    assert runner.calls[0] == ["bash", "-lc", "command -v typescript-language-server"]
+    assert runner.calls[0] == ["bash", "-ic", "command -v typescript-language-server"]
     assert which("rm -rf /") is None and len(runner.calls) == 2  # not a program name: never handed to the shell
 
 
-def test_the_doctor_uses_the_login_shells_path_by_default(conn, paths):
+def test_the_doctor_uses_the_interactive_shells_path_by_default(conn, paths):
     runner = Runner({"pyright-langserver", "typescript-language-server", "clangd", "csharp-ls", "claude"})
     report = doctor.run(conn, paths, runner=runner, settings_path=paths.config_home / "none.json")
     servers = {c["check"]: c["ok"] for c in report["checks"] if c["check"].startswith("language_server:")}
