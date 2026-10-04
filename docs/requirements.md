@@ -783,3 +783,11 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000351 | **Redeploying Core restarts the installed Core instead of starting a second one.** When a redeploy of the `core` pillar is asked for while Core runs as the installed unit `little-workshop.service`, the Deployment & Servers pillar shall refresh the installed `lws` environment to the commit, shall restart that unit and wait for Core's socket to answer, shall start no transient Core unit and stop no process by name, and shall arm no confirmation window or rollback for it; and where Core is not running as that unit the pillar shall redeploy it as it does any other pillar. | draft |
+
+## Claude usage follow-ups (2026-10-04)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000352 | **The doctor looks for programs where the owner's sessions find them.** When the `usage.doctor` Job checks for a program, the Usage & Efficiency pillar shall look for it on the PATH of the owner's login shell rather than its own, and shall never pass the shell a name that is not a plain program name. | draft |
+| REQ-000000353 | **A summary includes what arrived since the last rollup.** When a summary is asked for and the last rollup is a minute old or older, the Usage & Efficiency pillar shall roll up before answering, so that a session's requests appear within a minute of arriving. | draft |
+| REQ-000000354 | **Candidates are returned a page at a time.** The Usage & Efficiency pillar shall accept a limit on the candidates it lists; the MCP tool `workshop_usage_candidates` shall return ten candidates by default and never more than fifty, each with one example; and `lws usage candidates` shall return twenty by default with a `--limit` option. | draft |

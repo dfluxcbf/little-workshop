@@ -258,8 +258,9 @@ def usage_findings(paths: Paths, *, project: str | None = None, state: str = "op
     return _get(paths, "usage", "/v1/findings", params=params, timeout=timeout)
 
 
-def usage_candidates(paths: Paths, *, state: str = "open", timeout: float = 10.0) -> dict:
-    return _get(paths, "usage", "/v1/candidates", params={"state": state}, timeout=timeout)
+def usage_candidates(paths: Paths, *, state: str = "open", limit: int | None = None, timeout: float = 10.0) -> dict:
+    params = {"state": state, **({"limit": limit} if limit is not None else {})}
+    return _get(paths, "usage", "/v1/candidates", params=params, timeout=timeout)
 
 
 def list_triggers(paths: Paths, *, timeout: float = 5.0):

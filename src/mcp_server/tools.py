@@ -781,8 +781,14 @@ def _usage_analyze(paths: Paths, args: JSONDict) -> Any:
     return _usage_job(paths, "usage.analyze", {})
 
 
+_CANDIDATES_DEFAULT, _CANDIDATES_MAX = 10, 50
+
+
 def _usage_candidates(paths: Paths, args: JSONDict) -> Any:
-    return client.usage_candidates(paths, state=args.get("state") or "open")
+    """A short page with one example each: the whole list of a busy machine ran past what a tool result holds."""
+    limit = min(int(args.get("limit") or _CANDIDATES_DEFAULT), _CANDIDATES_MAX)
+    rows = client.usage_candidates(paths, state=args.get("state") or "open", limit=limit)
+    return [{**row, "examples": (row.get("examples") or [])[:1]} for row in rows] if isinstance(rows, list) else rows
 
 
 def _usage_mine_automation(paths: Paths, args: JSONDict) -> Any:
@@ -1353,7 +1359,8 @@ TOOLS: tuple[ToolSpec, ...] = (
              "(a tool call, or a short sequence), each with a determinism score, its class (deterministic, hybrid, "
              "heuristic), what its occurrences cost per week, the proposed form (job, MCP tool, hook, trigger) and a "
              "recommended schedule. Ranked by weekly cost.",
-             _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"])}),
+             _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"]),
+                      "limit": _prop("integer", "How many, from the costliest. Default 10, at most 50.")}),
              _usage_candidates),
     ToolSpec("workshop_usage_mine_automation", "Mine the last 14 days of tool calls into automation candidates now. "
              "No Claude involved, and nothing is implemented from it.", _schema(), _usage_mine_automation),

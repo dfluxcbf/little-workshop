@@ -517,7 +517,7 @@ def test_the_job_creates_what_the_register_describes_links_everything_and_report
 def test_lws_usage_candidates_trigger_and_the_new_job_commands(capsys, monkeypatch):
     monkeypatch.setattr(cli_main.client, "usage_candidates", lambda p, **kw: [{"signature": "x", "asked": kw}])
     assert cli_main.main(["usage", "candidates", "--state", "all"]) == 0
-    assert json.loads(capsys.readouterr().out) == [{"signature": "x", "asked": {"state": "all"}}]
+    assert json.loads(capsys.readouterr().out) == [{"signature": "x", "asked": {"state": "all", "limit": 20}}]
 
     calls = []
     monkeypatch.setattr(cli_main.client, "trigger_request", lambda p, method, path="", json=None: calls.append((method, path, json)) or {"ok": True})

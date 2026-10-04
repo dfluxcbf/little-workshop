@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-import shutil
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,13 +24,30 @@ RECENT = timedelta(days=7)
 CLAUDE_DOCTOR_TIMEOUT = 90.0
 
 
+_PROGRAM_NAME = re.compile(r"[A-Za-z0-9._+-]+")
+
+
+def login_shell_which(runner: CommandRunner):
+    """`shutil.which` with the PATH of the owner's login shell. The pillar runs under systemd with a
+    short PATH, so a program installed through nvm or a user profile (~/.nvm/.../bin, ~/.dotnet/tools)
+    looked missing although the owner's Claude sessions find it (2026-10-04)."""
+    def which(name: str) -> str | None:
+        if not _PROGRAM_NAME.fullmatch(name):
+            return None
+        result = runner.run(["bash", "-lc", f"command -v {name}"], timeout=15)
+        found = result.stdout.strip().splitlines()
+        return found[-1] if result.ok and found else None
+    return which
+
+
 def _check(name: str, ok: bool, detail: str, hint: str = "") -> dict:
     return {"check": name, "ok": ok, "detail": detail, "hint": "" if ok else hint}
 
 
 def run(conn: sqlite3.Connection, paths: Paths, *, runner: CommandRunner = DEFAULT_RUNNER, settings_path: Path | None = None,
-        which=shutil.which, now: datetime | None = None) -> dict:
+        which=None, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
+    which = which or login_shell_which(runner)
     checks: list[dict] = []
     config = proxy.load_config(paths)
     port = config.get("intake_port")

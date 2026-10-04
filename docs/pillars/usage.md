@@ -98,7 +98,8 @@ record (decision 4). `usage.purge_project` removes a project's rows.
 - **Startup context**: what a session's first main-thread request carried; reported as a median.
 - **Plan pressure**: the highest 5-hour and 7-day percentage per day.
 
-A week starts on Monday. `GET /v1/summary?week=&project=&origin=` returns one week: the per-day series, totals,
+A week starts on Monday. `GET /v1/summary?week=&project=&origin=` rolls up first when the last rollup is more than a
+minute old, then returns one week: the per-day series, totals,
 per-project totals, the heaviest sessions, plan pressure, the previous week, the next week and the four-week
 average where they have data, and per week the weighted tokens spent on little-workshop against the others.
 
@@ -229,7 +230,7 @@ All are code; none uses Claude.
 |---|---|
 | `usage.ingest_transcripts` | Backfills from the transcripts, skipping unchanged files, then rolls up |
 | `usage.rollup` | Reads new run usage, re-attributes, rebuilds the rollups, prunes; also runs every ten minutes on its own |
-| `usage.doctor` | Checks the intake, the user profile, `claude doctor`, the language servers and recent data; keeps the report |
+| `usage.doctor` | Checks the intake, the user profile, `claude doctor`, the language servers and recent data; keeps the report. Programs are looked for on the owner's login-shell PATH (`bash -lc 'command -v …'`), not the pillar's own short systemd PATH |
 | `usage.configure_claude` | Shows, or with `apply: true` writes, the user profile |
 | `usage.purge_project` | Removes a project's rows |
 | `usage.analyze` | Rolls up, runs the detectors, opens, refreshes and resolves findings, measures the experiments that are due |
@@ -241,7 +242,8 @@ All are code; none uses Claude.
 ## Proxies
 
 - Dashboard: **System → Claude usage** (`/usage`), and a link from each project card.
-- MCP: `workshop_usage_summary`, `workshop_usage_findings`, `workshop_usage_candidates` (reads, every project),
+- MCP: `workshop_usage_summary`, `workshop_usage_findings`, `workshop_usage_candidates` (reads, every project;
+  candidates come ten at a time with one example each, `limit` up to 50),
   `workshop_usage_doctor`, `workshop_usage_ingest_transcripts`, `workshop_usage_analyze`,
   `workshop_usage_mine_automation` (little-workshop's sessions), `workshop_usage_configure_claude` (asks).
 - CLI: `lws usage summary | findings | candidates | analyze | mine-automation | doctor | ingest-transcripts |

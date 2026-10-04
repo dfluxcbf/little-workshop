@@ -1682,7 +1682,7 @@ def cmd_usage_analyze(args: argparse.Namespace) -> int:
 def cmd_usage_candidates(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
-        _print(client.usage_candidates(paths, state=args.state))
+        _print(client.usage_candidates(paths, state=args.state, limit=args.limit))
     except client.UsagePillarUnavailable as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -1958,6 +1958,7 @@ def build_parser() -> argparse.ArgumentParser:
     u_analyze.set_defaults(func=cmd_usage_analyze)
     u_candidates = usage_sub.add_parser("candidates", help="Work Claude repeats that code could do, ranked by weekly cost")
     u_candidates.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "done", "all"])
+    u_candidates.add_argument("--limit", type=int, default=20, help="How many, from the costliest (default 20)")
     u_candidates.set_defaults(func=cmd_usage_candidates)
     u_mine = usage_sub.add_parser("mine-automation", help="Mine the last 14 days of tool calls into automation candidates")
     u_mine.set_defaults(func=cmd_usage_mine_automation)
