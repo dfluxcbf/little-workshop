@@ -1270,6 +1270,21 @@ a.dep:hover { border-color: var(--dep); }
 .usage-swatch { display: inline-block; width: 16px; height: 0; border-top: 3px solid var(--swatch); }
 .usage-swatch.bar { height: 10px; border: 0; border-radius: 2px; background: var(--swatch); }
 .usage-swatch.dashed { border-top-style: dashed; }
+/* The data explorer: one card in view, the others a swipe (scroll-snap), an arrow or a dot away. */
+.explorer { display: flex; align-items: center; gap: 6px; }
+.explorer-track { flex: 1; min-width: 0; display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth;
+  scrollbar-width: none; overscroll-behavior-x: contain; }
+.explorer-track::-webkit-scrollbar { display: none; }
+.explorer-track:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.explorer-card { flex: 0 0 100%; min-width: 0; scroll-snap-align: start; }
+.explorer-card h3 { margin: 0 0 2px; font-size: 15px; }
+.explorer-card > p.muted { margin: 0 0 6px; font-size: 13px; }
+.explorer-note { margin: 0 0 8px; font-size: 13px; }
+.explorer-step { flex: 0 0 auto; padding: 8px 10px; font-size: 18px; }
+.explorer-dots { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.explorer-dots button { width: 10px; height: 10px; padding: 0; border-radius: 50%; border: 0; background: var(--border); }
+.explorer-dots button.on { background: var(--cyan); }
+@media (max-width: 680px) { .explorer-step { display: none; } }
 .table-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .usage-evidence { max-width: 100%; overflow-x: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
 .usage-signature { overflow-wrap: anywhere; word-break: break-word; }

@@ -51,7 +51,10 @@ CREATE TABLE IF NOT EXISTS requests (
     skill_name TEXT,
     duration_ms INTEGER,
     prompt_id TEXT,
-    source TEXT NOT NULL
+    source TEXT NOT NULL,
+    thinking_tokens INTEGER,
+    thinking_ms INTEGER,
+    effort TEXT
 );
 CREATE INDEX IF NOT EXISTS requests_session ON requests (session_id, ts);
 CREATE INDEX IF NOT EXISTS requests_day ON requests (day);
@@ -123,6 +126,21 @@ CREATE TABLE IF NOT EXISTS doctor_reports (
     ok INTEGER NOT NULL,
     data_json TEXT NOT NULL
 );
+-- What a transcript records besides requests and tool calls (docs/pillars/usage.md, "Data explorer"): one
+-- row per record, keyed by its uuid. `kind`: turn (value: its duration in ms), compaction (name: its
+-- trigger; value: tokens dropped), insertion (name: the attachment's type; value: bytes rendered into the
+-- conversation), prompt (name: how it arrived), denial (name: its kind), api_error (name: its status).
+CREATE TABLE IF NOT EXISTS transcript_events (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    day TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    value REAL,
+    data_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS transcript_events_kind ON transcript_events (kind, day);
 CREATE TABLE IF NOT EXISTS findings (
     id TEXT PRIMARY KEY,
     detector TEXT NOT NULL,
@@ -183,7 +201,8 @@ SESSION_FIELDS = ("entrypoint", "cwd", "transcript_path", "repository", "tag_pro
 
 # Columns added after a store was first created: (table, column, type).
 ADDED_COLUMNS = (("tool_calls", "outcome", "TEXT"), ("tool_calls", "exit_code", "INTEGER"),
-                 ("tool_calls", "tests_passed", "INTEGER"), ("tool_calls", "tests_failed", "INTEGER"))
+                 ("tool_calls", "tests_passed", "INTEGER"), ("tool_calls", "tests_failed", "INTEGER"),
+                 ("requests", "thinking_tokens", "INTEGER"), ("requests", "thinking_ms", "INTEGER"), ("requests", "effort", "TEXT"))
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -259,6 +278,7 @@ def upsert_request(conn: sqlite3.Connection, request: dict) -> bool:
         "output_tokens": int(request.get("output_tokens") or 0), "cost_usd": request.get("cost_usd"),
         "query_source": request.get("query_source"), "agent_name": request.get("agent_name"), "skill_name": request.get("skill_name"),
         "duration_ms": request.get("duration_ms"), "prompt_id": request.get("prompt_id"), "source": request.get("source") or "",
+        "thinking_tokens": request.get("thinking_tokens"), "thinking_ms": request.get("thinking_ms"), "effort": request.get("effort"),
     }
     columns = ", ".join(row)
     cursor = conn.execute(f"INSERT OR IGNORE INTO requests ({columns}) VALUES ({', '.join(':' + c for c in row)})", row)
@@ -268,8 +288,23 @@ def upsert_request(conn: sqlite3.Connection, request: dict) -> bool:
         """UPDATE requests SET cache_write_1h_tokens = COALESCE(cache_write_1h_tokens, :cache_write_1h_tokens),
                cost_usd = COALESCE(cost_usd, :cost_usd), query_source = COALESCE(query_source, :query_source),
                agent_name = COALESCE(agent_name, :agent_name), skill_name = COALESCE(skill_name, :skill_name),
-               duration_ms = COALESCE(duration_ms, :duration_ms), prompt_id = COALESCE(prompt_id, :prompt_id)
+               duration_ms = COALESCE(duration_ms, :duration_ms), prompt_id = COALESCE(prompt_id, :prompt_id),
+               thinking_tokens = COALESCE(:thinking_tokens, thinking_tokens), thinking_ms = COALESCE(:thinking_ms, thinking_ms),
+               effort = COALESCE(:effort, effort)
            WHERE request_id = :request_id""", row)
+    return False
+
+
+def upsert_transcript_event(conn: sqlite3.Connection, event: dict) -> bool:
+    """Store one transcript record of `transcript_events`; True when it was not stored before."""
+    row = {"id": event["id"], "session_id": event["session_id"], "ts": event["ts"], "day": local_day(event["ts"]),
+           "kind": event["kind"], "name": event.get("name") or "", "value": event.get("value"),
+           "data_json": json.dumps(event.get("data") or {})}
+    cursor = conn.execute("INSERT OR IGNORE INTO transcript_events (id, session_id, ts, day, kind, name, value, data_json) "
+                          "VALUES (:id, :session_id, :ts, :day, :kind, :name, :value, :data_json)", row)
+    if cursor.rowcount:
+        return True
+    conn.execute("UPDATE transcript_events SET name = :name, value = :value, data_json = :data_json WHERE id = :id", row)
     return False
 
 
@@ -341,7 +376,7 @@ def purge_project(conn: sqlite3.Connection, project: str) -> int:
     """Remove everything attributed to a project that was removed from little-workshop."""
     sessions = [row["id"] for row in conn.execute("SELECT id FROM sessions WHERE project = ?", (project,))]
     for session_id in sessions:
-        for table in ("requests", "tool_calls", "session_events"):
+        for table in ("requests", "tool_calls", "session_events", "transcript_events"):
             conn.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
     conn.execute("DELETE FROM sessions WHERE project = ?", (project,))
     conn.execute("DELETE FROM day_rollups WHERE project = ?", (project,))
@@ -359,6 +394,7 @@ def prune_detail(conn: sqlite3.Connection, before_day: str) -> dict:
     removed = {}
     removed["requests"] = conn.execute("DELETE FROM requests WHERE day < ?", (before_day,)).rowcount
     removed["tool_calls"] = conn.execute("DELETE FROM tool_calls WHERE substr(ts, 1, 10) < ?", (before_day,)).rowcount
+    removed["transcript_events"] = conn.execute("DELETE FROM transcript_events WHERE day < ?", (before_day,)).rowcount
     conn.commit()
     return removed
 

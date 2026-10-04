@@ -222,6 +222,33 @@
   {% endif %}
 </section>
 
+{% if explorer and explorer.cards %}
+<section class="card" id="explorer">
+  <h2>Data explorer</h2>
+  <p class="muted">Data the store keeps before it has a use: one plot per card, over the last {{ explorer.days | length }} days.
+    Swipe, or use the arrows or the dots.</p>
+  <div class="explorer" aria-roledescription="carousel" aria-label="Data explorer">
+    <button type="button" class="explorer-step" data-explorer-step="-1" aria-label="Previous card">&lsaquo;</button>
+    <div class="explorer-track" tabindex="0">
+      {% for card in explorer.cards %}
+      <article class="explorer-card" data-explorer-card="{{ loop.index0 }}" aria-roledescription="slide"
+               aria-label="{{ loop.index }} of {{ explorer.cards | length }}: {{ card.title }}">
+        <h3>{{ card.title }}</h3>
+        <p class="muted">{{ card.about }}</p>
+        {% if card.note %}<p class="explorer-note">{{ card.note }}</p>{% endif %}
+        <div class="stats-chart"></div>
+      </article>
+      {% endfor %}
+    </div>
+    <button type="button" class="explorer-step" data-explorer-step="1" aria-label="Next card">&rsaquo;</button>
+  </div>
+  <div class="explorer-dots">
+    {% for card in explorer.cards %}<button type="button" data-explorer-dot="{{ loop.index0 }}" aria-label="{{ card.title }}"></button>{% endfor %}
+  </div>
+</section>
+<script type="application/json" id="usage-explorer">{{ explorer | tojson }}</script>
+{% endif %}
+
 <script type="application/json" id="usage-data">{{ summary | tojson }}</script>
 <script src="/static/usage.js?v={{ static_v }}"></script>
 {% else %}

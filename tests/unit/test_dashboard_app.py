@@ -3193,6 +3193,27 @@ def test_the_findings_say_they_are_not_automation_and_what_fixes_each(test_clien
     assert "<td>—</td><td>not estimated</td>" in page and "about $4.64 a week (replayed)" in page and "saving not estimated" in page
 
 
+# --- REQ-000000361: The data explorer plots the kept data, one card at a time ---
+
+
+def test_the_data_explorer_shows_one_card_per_plot_at_the_bottom_of_the_page(test_client, monkeypatch):
+    explorer = {"days": ["2026-10-03", "2026-10-04"], "cards": [
+        {"id": "compactions", "title": "Compactions, by trigger", "about": "From the transcripts.", "kind": "stack", "unit": "count",
+         "series": [{"name": "auto", "values": [1, 2]}], "note": "3 compactions."},
+        {"id": "turn_time", "title": "How long a turn takes", "about": "From the transcripts.", "kind": "line", "unit": "minutes",
+         "series": [{"name": "median turn", "values": [1.5, None]}], "note": None}]}
+    monkeypatch.setattr(app_module.client, "usage_summary", lambda paths, **kw: _usage_summary())
+    monkeypatch.setattr(app_module.client, "usage_doctor", lambda paths: None)
+    monkeypatch.setattr(app_module.client, "usage_explorer", lambda paths, **kw: explorer)
+    page = test_client.get("/usage").text
+    assert page.index('id="explorer"') > page.index("Collection health")  # at the bottom
+    assert 'aria-label="1 of 2: Compactions, by trigger"' in page and 'aria-label="2 of 2: How long a turn takes"' in page
+    assert "3 compactions." in page and 'data-explorer-step="-1"' in page and 'data-explorer-step="1"' in page
+    assert page.count("data-explorer-dot=") == 2 and '<script type="application/json" id="usage-explorer">' in page
+    monkeypatch.setattr(app_module.client, "usage_explorer", lambda paths, **kw: None)
+    assert 'id="explorer"' not in test_client.get("/usage").text
+
+
 def test_dismissing_a_finding_goes_to_the_usage_pillar(test_client, monkeypatch):
     sent = []
     monkeypatch.setattr(app_module.client, "set_usage_finding_state", lambda paths, finding_id, state: sent.append((finding_id, state)) or {"ok": True})

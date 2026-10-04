@@ -821,3 +821,10 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000359 | **A finding says what fixes it, and its saving is replayed where the store allows.** The Usage & Efficiency pillar shall give each finding what fixes it and how its weekly saving is known, as replayed, priced, a rough estimate or not estimated; shall estimate the saving of polling by replaying each run of back-to-back turns that only poll or wait as the job waits it needs, one per default wait timeout it lasted; shall estimate the saving of large command output by replaying each large result cut to what the test-output filter leaves; and the Dashboard shall say that findings are habits and configuration rather than automation and show each finding's fix and saving basis. | draft |
+
+## Data explorer (2026-10-04)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000360 | **The transcript backfill keeps what the data explorer plots.** When a transcript is ingested, the Usage & Efficiency pillar shall record each request's thinking tokens, thinking time and effort, and each turn duration, compaction with its tokens before and after, attachment rendered into the conversation with its type and rendered bytes, prompt source, tool denial and API error the transcript records, once each, with its day, and shall remove them with the project or the retention period. | draft |
+| REQ-000000361 | **The data explorer plots the kept data, one card at a time.** The Usage & Efficiency pillar shall compile the kept data into data explorer cards over the last days, each one plot with what it shows, where its data comes from and a note summing up the period, and the Dashboard shall show the cards at the bottom of the Claude usage page one at a time, moved by arrows, dots or a swipe. | draft |
