@@ -453,7 +453,7 @@ def _candidate(row) -> dict:
 def record_candidate(conn: sqlite3.Connection, candidate: dict) -> str:
     """Store what mining found for a signature, keeping the state and the replacement it already has."""
     now = now_iso()
-    data = json.dumps({key: candidate[key] for key in ("checks", "examples", "projects", "schedule") if key in candidate})
+    data = json.dumps({key: candidate[key] for key in ("checks", "examples", "projects", "schedule", "estimate") if key in candidate})
     values = (candidate["class"], candidate["score"], candidate["occurrences"], candidate["sessions"], candidate["weekly_value"],
               candidate["median_cost"], candidate["proposed_form"], data, now)
     row = conn.execute("SELECT id FROM candidates WHERE signature = ?", (candidate["signature"],)).fetchone()
@@ -471,7 +471,7 @@ def record_candidate(conn: sqlite3.Connection, candidate: dict) -> str:
 
 
 def list_candidates(conn: sqlite3.Connection, *, state: str | None = CANDIDATE_OPEN) -> list[dict]:
-    """Candidates ranked by the weighted tokens their episodes cost per week."""
+    """Candidates ranked by the estimated net saving per week of automating them."""
     sql = "SELECT * FROM candidates" + (" WHERE state = ?" if state else "") + " ORDER BY weekly_value DESC, occurrences DESC"
     return [_candidate(row) for row in conn.execute(sql, (state,) if state else ())]
 

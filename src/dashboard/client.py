@@ -243,6 +243,10 @@ def trigger_action(paths: Paths, method: str, path: str = "", json: dict | None 
     return _send(paths, "orchestration", method, f"/v1/triggers{path}", json=json)
 
 
+def usage_estimate_method(paths: Paths) -> dict | None:
+    return _get(paths, "usage", "/v1/estimate_method").get("method")
+
+
 def usage_doctor(paths: Paths) -> dict | None:
     return _get(paths, "usage", "/v1/doctor").get("report")
 

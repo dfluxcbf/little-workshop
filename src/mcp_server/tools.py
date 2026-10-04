@@ -1357,8 +1357,9 @@ TOOLS: tuple[ToolSpec, ...] = (
              "resolves findings, and measures the experiments that are due. No Claude involved.", _schema(), _usage_analyze),
     ToolSpec("workshop_usage_candidates", "Automation candidates: work Claude sessions repeat with the same shape "
              "(a tool call, or a short sequence), each with a determinism score, its class (deterministic, hybrid, "
-             "heuristic), what its occurrences cost per week, the proposed form (job, MCP tool, hook, trigger) and a "
-             "recommended schedule. Ranked by weekly cost.",
+             "heuristic), the estimated net saving per week of automating it (if Claude calls the replacement, and if a "
+             "trigger runs it instead), the proposed form (job, MCP tool, hook, trigger) and a recommended schedule. "
+             "Ranked by that saving; work automating would not save tokens on is not listed.",
              _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"]),
                       "limit": _prop("integer", "How many, from the costliest. Default 10, at most 50.")}),
              _usage_candidates),

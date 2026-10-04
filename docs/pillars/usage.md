@@ -17,7 +17,7 @@ they stand for plan usage and are never money spent.
 | OpenTelemetry (S2) | `POST /v1/logs` (OTLP http/json) | one `requests` row per `api_request` event, one `tool_calls` row per `tool_result` event |
 | Claude hooks (S3) | `POST /v1/hooks/<event>` | the session's working directory, transcript path, end reason; compaction events |
 | Statusline (S4) | `POST /v1/statusline` | the plan's 5-hour and 7-day usage (`plan_pressure`) |
-| Transcripts (S5) | `usage.ingest_transcripts`, and a session-end hook for that session's file | requests and tool calls of sessions telemetry missed; the 1-hour share of a cache write |
+| Transcripts (S5) | `usage.ingest_transcripts`, and a session-end hook for that session's files | requests and tool calls of sessions telemetry missed; the 1-hour share of a cache write; each subagent's transcript (`<session>/subagents/agent-*.jsonl`) as a thread of its own (`requests.agent_name`) |
 
 The sources overlap on purpose. A request is keyed by its API request id, a tool call by its tool-use id and a
 session by its session id, so storing something twice updates the row and counts nothing twice; a later source
@@ -176,7 +176,7 @@ No telemetry variable is generated into a project: Claude Code ignores `OTEL_*` 
 do it for zero tokens. Nothing is implemented from it: a person chooses.
 
 - **Episode**: the tool calls of one prompt (`prompt.id` from telemetry; in a transcript, the calls between two
-  user messages). **Signature**: the tool plus its arguments with everything particular to one call taken out
+  user messages; a subagent's calls form episodes of their own). **Signature**: the tool plus its arguments with everything particular to one call taken out
   (`usage/signatures.py`): `mcp:workshop_deployment_redeploy_pillar(commit, pillar)`,
   `Bash(python3 -m pytest <path>)`, `Bash(python3 tools/sync_policies.py)`. File contents never reach it.
 - **Candidate**: a signature, or a run of two or three consecutive signatures, seen in at least 3 sessions or
@@ -193,8 +193,37 @@ do it for zero tokens. Nothing is implemented from it: a person chooses.
   reader can use; what Claude did next is not judged. All five: **deterministic** (a job, an MCP tool or a
   trigger). No content creation and at
   least three: **hybrid** (code around Claude). Otherwise **heuristic** (stays with Claude; optimize its context).
-- **Value**: the weighted tokens its occurrences cost per week, taking each call as one request of its
-  session's average cost. Candidates are ranked by it.
+- **Value: the estimated net saving**, from replaying each past occurrence against the session it happened
+  in (`usage/counterfactual.py`, REQ-000000356, REQ-000000357). Every request re-sends the whole
+  conversation, so a call costs twice: the turns it takes, and what it adds, which every later request
+  re-reads until the session compacts or is cleared. The stored data has, per thread (the main conversation
+  and each subagent's), every request's context size and weighted cost in order, so for an occurrence that
+  took turns *i1..ik*:
+  - *before* = the cost of its turns + *A* × *R*, where *A* is what its own content added (the text its turns
+    wrote + calls × overhead + result bytes ÷ bytes per token) and *R* is the sum, over the later requests up to
+    the next compaction or clear (a context under 70% of the one before), of each request's own price per
+    context token (its mix of cache reads, writes and misses);
+  - *if Claude calls the replacement*: the first turn stays, the others go, and the replacement adds its turn's
+    text + one call's overhead + a 400-byte answer, re-read the same way; less the new tool's name in every
+    session's starting context (30 tokens a request);
+  - *if a trigger or a schedule runs it* (only a pillar action a trigger may take over, `trigger_can_run`):
+    all of it goes;
+  - each with a *low* figure that assumes the replacement makes Claude check on it once more (a turn like the
+    one after the occurrence, plus a short call re-read later): a call that returns before its work is done
+    does that, and the low figure shows when that would cancel the saving.
+
+  The candidate's value is the better of the two expected figures; one worth less than $0.10 a week
+  (`MIN_WEEKLY_SAVING`) is not listed. The two constants are fitted on every stored turn and checked on the
+  newest 30% they were not fitted on (`calibrate`; the overhead is the median growth of a one-call turn with a
+  tiny result, the bytes per token a ratio of sums over turns with large results, so totals come out right).
+  `GET /v1/estimate_method` and the page's "How the estimates are made" give the constants, the check and
+  how long an addition stays. The data on 2026-10-04 (20,693 turns): 2.41 bytes per token (not the 4 often
+  assumed), 97 tokens of overhead per call, the model's own text staying in the conversation (coefficient
+  1.0), an addition re-read by a median of 144 later requests, and a check within 6.7% per turn and 0.0% in
+  total. Only one episode used the multi-pillar redeploy, too few for a direct before/after comparison: the
+  experiments after automating are that check. Where a call's result is the information Claude needs (a
+  screenshot, a list), the "called" figure assumes a shorter answer would do, which the proposed form must
+  make true.
 - **Schedule**: daily when it happened on most days, else weekly on the weekdays it happened most, at night
   from 02:00 with the candidates one after another every 30 minutes, so the runs do not compete with the
   owner's sessions for plan usage. It is a recommendation shown with the candidate and written into its task;
@@ -202,8 +231,9 @@ do it for zero tokens. Nothing is implemented from it: a person chooses.
 - **Make it a task** (`usage.automate`): one fixed `agent.run_task` improvement task on little-workshop with
   the candidate's evidence. **Dismiss** keeps it out of the list. Once the replacement exists, name it on the
   candidate (`POST /v1/candidates/{id} {"replacement": "<signature prefix>", "state": "done"}`): mining then
-  records **tokens avoided** as the replacement's stored runs × the median cost of the episodes it replaced,
-  and detector D10 watches that Claude takes the route.
+  records **tokens avoided** as the replacement's stored runs × what one run saves when Claude calls it (the
+  median of the occurrences' estimates), and detector D10 watches that Claude takes the route. A run a trigger
+  or a schedule makes is a Job, not a call, and is not counted.
 
 The candidates the baseline showed (proposal §11.3) are built: `workshop_job_wait` (M18),
 `deployment.redeploy_changed_pillars` with its trigger, `requirements.sync_markers`, the test-output filter and

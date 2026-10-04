@@ -605,13 +605,14 @@ def build_app(paths: Paths) -> FastAPI:
             report = _try(client.usage_doctor, paths)
             findings = _try(lambda: client.usage_findings(paths, project=project or None, state="all"), default=[])
             candidates = _try(client.usage_candidates, paths, default=[])
+            method = _try(client.usage_estimate_method, paths)
             error = None
         except client.PillarUnavailable:
-            summary, report, findings, candidates = None, None, [], []
+            summary, report, findings, candidates, method = None, None, [], [], None
             error = "The Usage & Efficiency pillar is not reachable, so there is nothing to show. It is optional: check it on the Pillars page."
         return _render(request, "usage.html", summary=summary, doctor=report, error=error, nav_active="usage",
                        origins=("interactive", "job", "query", "subagent"), findings=findings, candidates=candidates,
-                       weekdays=WEEKDAYS)
+                       weekdays=WEEKDAYS, method=method)
 
     @app.post("/usage/candidates/{candidate_id}/{action}")
     def usage_candidate_action(candidate_id: str, action: str):

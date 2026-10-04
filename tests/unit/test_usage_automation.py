@@ -23,7 +23,7 @@ from registry import claude_templates
 from requirements import db as requirements_db, markers
 from requirements.app import build_app as build_requirements_app
 from requirements.models import Requirement, TestSuite
-from usage import db, mining, pricing, signatures
+from usage import counterfactual, db, mining, pricing, signatures
 from usage.app import build_app as build_usage_app
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
@@ -46,14 +46,23 @@ def conn(tmp_path):
 
 
 def episode(conn, session_id, prompt, calls, *, project="little-workshop", ago=timedelta(hours=1), success=True):
-    """One prompt's tool calls, in order: [(tool, input), ...]."""
+    """One prompt's tool calls, in order: [(tool, input), ...], each made in a turn of its own (as a session
+    makes them one after another), then a few more turns in which the conversation goes on."""
     db.upsert_session(conn, session_id, seen=(NOW - ago).isoformat(), tag_project=project)
     db.set_attribution(conn, session_id, project, "interactive")
-    db.upsert_request(conn, {"request_id": f"r-{session_id}-{prompt}", "session_id": session_id, "ts": (NOW - ago).isoformat(),
-                             "model": "claude-fable-5-1", "input_tokens": 10, "cache_read_tokens": 400_000, "output_tokens": 50, "source": "test"})
+
+    def turn(request_id, offset):
+        db.upsert_request(conn, {"request_id": request_id, "session_id": session_id, "ts": (NOW - ago + timedelta(seconds=offset)).isoformat(),
+                                 "model": "claude-fable-5-1", "input_tokens": 10, "cache_read_tokens": 400_000 + 1000 * offset,
+                                 "output_tokens": 50, "source": "test"})
+    for index in range(len(calls)):
+        turn(f"r-{session_id}-{prompt}-{index}", index)
+    for later in range(3):
+        turn(f"r-{session_id}-{prompt}-after-{later}", len(calls) + later)
     for index, (tool, tool_input) in enumerate(calls):
         db.upsert_tool_call(conn, {
             "id": f"c-{session_id}-{prompt}-{index}", "session_id": session_id, "prompt_id": prompt,
+            "request_id": f"r-{session_id}-{prompt}-{index}",
             "ts": (NOW - ago + timedelta(seconds=index)).isoformat(), "tool": tool, "signature": signatures.signature(tool, tool_input),
             "detail": signatures.detail(tool, tool_input), "success": success, "source": "test"})
 
@@ -117,16 +126,17 @@ def test_work_that_writes_content_or_takes_prose_is_heuristic(conn):
     edit = found["Edit(<path>) → Bash(python3 -m pytest <path>)"]
     assert edit["checks"]["no_content_creation"] is False and edit["class"] == "heuristic" and "Stays with Claude" in edit["proposed_form"]
     assert "Agent(test-runner)" not in found  # a call whose argument is prose alone is nothing code could make
-    assert "subagent that returns only the failures" in found["Bash(python3 -m pytest <path>)"]["proposed_form"]
 
 
-def test_candidates_are_ranked_by_what_they_cost_per_week(conn):
+def test_candidates_are_ranked_by_their_estimated_net_saving(conn):
     for i in range(3):
         episode(conn, f"s{i}", "p1", [REDEPLOY])
     for i in range(6):
         episode(conn, f"t{i}", "p1", [("Bash", {"command": "python3 tools/sync_policies.py"})])
-    ranked = [c["signature"] for c in mining.mine(conn, PRICES, today=TODAY)]
-    assert ranked == ["Bash(python3 tools/sync_policies.py)", "mcp:workshop_deployment_redeploy_pillar(commit, pillar)"]
+    found = mining.mine(conn, PRICES, today=TODAY)
+    assert [c["weekly_value"] for c in found] == sorted((c["weekly_value"] for c in found), reverse=True)
+    # Seen twice as often, but a script Claude would still have to run: it saves nothing and is left out.
+    assert [c["signature"] for c in found] == ["mcp:workshop_deployment_redeploy_pillar(commit, pillar)"]
 
 
 def test_a_shell_signature_names_the_command_that_does_the_work():
@@ -168,7 +178,8 @@ def test_mining_again_resigns_stored_calls_and_drops_open_candidates_that_are_go
     signatures_now = {c["signature"]: c["state"] for c in db.list_candidates(conn, state=None)}
     assert "Bash(cd <path>)" not in signatures_now  # an open candidate mining no longer finds is dropped
     assert signatures_now["Bash(old but dismissed)"] == "dismissed"  # a person's decision is kept
-    assert "Bash(lws job list)" in signatures_now  # the stored calls were signed again from the command kept with them
+    signed = {row["signature"] for row in conn.execute("SELECT signature FROM tool_calls WHERE id LIKE 'old%'")}
+    assert signed == {"Bash(lws job list)"}  # the stored calls were signed again from the command kept with them
 
 
 def test_a_transcripts_tool_calls_are_grouped_by_prompt(tmp_path):
@@ -205,7 +216,8 @@ def test_mining_keeps_candidates_and_a_person_decides(usage, conn):
     for i in range(3):
         episode(conn, f"s{i}", "p1", [REDEPLOY])
     result = usage.post("/v1/jobs/usage.mine_automation", json={"job_id": "j1"}).json()["result"]
-    assert result == {"candidates": 1, "by_class": {"deterministic": 1, "hybrid": 0, "heuristic": 0}}
+    assert result["candidates"] == 1 and result["by_class"] == {"deterministic": 1, "hybrid": 0, "heuristic": 0}
+    assert result["calibration"]["bytes_per_token"] > 0  # the constants the estimates were made with
     (candidate,) = usage.get("/v1/candidates").json()
     assert candidate["state"] == "open" and candidate["schedule"]["kind"] == "recurring"
 
@@ -238,19 +250,6 @@ def test_a_schedule_is_recommended_from_how_often_it_happened_at_night_one_after
     monday = datetime(2026, 9, 28, 10, tzinfo=timezone.utc)
     weekly = mining.recommend_schedule([monday.isoformat(), (monday + timedelta(days=7)).isoformat()], slot=3)
     assert weekly["frequency"] == "weekly" and weekly["days_of_week"] == [0] and weekly["time_of_day"] == "03:30"
-
-
-def test_tokens_avoided_count_the_replacements_runs(usage, conn):
-    for i in range(3):
-        episode(conn, f"s{i}", "p1", [REDEPLOY])
-    usage.mine()
-    candidate = db.list_candidates(conn)[0]
-    assert usage.post(f"/v1/candidates/{candidate['id']}", json={"replacement": "mcp:workshop_deployment_redeploy_changed_pillars", "state": "done"}).json()["ok"]
-    for i in range(2):
-        episode(conn, f"n{i}", "p1", [("mcp__little-workshop__workshop_deployment_redeploy_changed_pillars", {})])
-    usage.mine()
-    done = db.get_candidate(conn, candidate["id"])
-    assert done["state"] == "done" and done["tokens_avoided"] == pytest.approx(2 * done["median_cost"]) and done["tokens_avoided"] > 0
 
 
 # --- REQ-000000343: A trigger creates a Job when an event happens and never one that merges, finishes or deletes ---
@@ -572,3 +571,140 @@ def test_the_new_routes_are_allowed_asked_or_little_workshops_own_and_named_in_t
     skill = claude_templates.lifecycle_skill_md("little-widget")
     assert "`workshop_requirements_sync_markers`: one call" in skill
     assert "workshop_deployment_redeploy_changed_pillars" in claude_templates.lifecycle_skill_md("little-workshop", platform=True)
+
+
+# --- REQ-000000356: A candidate is valued by what automating it would really save ---
+
+
+def _turn(conn, session_id, request_id, ago, *, read=200_000, model="claude-sonnet-5-5", out=50):
+    db.upsert_session(conn, session_id, seen=(NOW - ago).isoformat(), tag_project="little-meals")
+    db.set_attribution(conn, session_id, "little-meals", "interactive")
+    db.upsert_request(conn, {"request_id": request_id, "session_id": session_id, "ts": (NOW - ago).isoformat(), "model": model,
+                             "input_tokens": 10, "cache_read_tokens": read, "output_tokens": out, "source": "test"})
+
+
+def _call(conn, session_id, call_id, request_id, ago, tool, tool_input, *, result_bytes=40, prompt="p1"):
+    db.upsert_tool_call(conn, {"id": call_id, "session_id": session_id, "prompt_id": prompt, "request_id": request_id,
+                               "ts": (NOW - ago).isoformat(), "tool": tool, "signature": signatures.signature(tool, tool_input),
+                               "detail": signatures.detail(tool, tool_input), "result_bytes": result_bytes, "success": True, "source": "test"})
+
+
+def _mined(conn):
+    return {c["signature"]: c for c in mining.mine(conn, PRICES, today=TODAY)}
+
+
+def _replayed(conn, calls, trigger_ok):
+    replay = counterfactual.Replay(conn, PRICES)
+    return replay.occurrence(calls, counterfactual.calibrate(conn, replay), trigger_ok=trigger_ok)
+
+
+RM = ("Bash", {"command": "rm -rf build/out"})
+
+
+def test_a_single_command_claude_would_still_call_saves_nothing_and_is_no_candidate(conn):
+    """Replacing `rm -rf` with a tool still costs the turn that calls it, and adds no less to the conversation."""
+    for i in range(4):
+        _turn(conn, f"s{i}", f"r{i}", timedelta(hours=2))
+        _call(conn, f"s{i}", f"c{i}", f"r{i}", timedelta(hours=2), *RM)
+        _turn(conn, f"s{i}", f"r{i}b", timedelta(hours=1))
+    assert "Bash(rm <path>)" not in _mined(conn)
+
+
+def test_a_sequence_is_valued_by_replaying_it_and_mining_sums_the_replays(conn, monkeypatch):
+    monkeypatch.setattr(mining, "MIN_WEEKLY_SAVING", 0.0)  # small sessions: this tests the sum, not the floor
+    steps = [("Bash", {"command": "python3 tools/sync_versions.py"}), ("Bash", {"command": "bazel build //:all"}),
+             ("Bash", {"command": "lws version install-hooks"})]
+    occurrences = []
+    for i in range(3):
+        calls = []
+        for k, step in enumerate(steps):
+            ago = timedelta(hours=3, minutes=-k)
+            _turn(conn, f"s{i}", f"r{i}{k}", ago)
+            _call(conn, f"s{i}", f"c{i}{k}", f"r{i}{k}", ago, *step)
+            calls.append(dict(conn.execute("SELECT * FROM tool_calls WHERE id = ?", (f"c{i}{k}",)).fetchone()))
+        for k in range(5):
+            _turn(conn, f"s{i}", f"r{i}-{k}", timedelta(hours=2, minutes=-k))
+        occurrences.append(calls)
+    sequence = _mined(conn)["Bash(python3 tools/sync_versions.py) → Bash(bazel build <path>:all) → Bash(lws version install-hooks)"]
+    replays = [_replayed(conn, calls, trigger_ok=False) for calls in occurrences]
+    estimate = sequence["estimate"]
+    assert estimate["turns_per_occurrence"] == 3 and estimate["later_requests_per_occurrence"] == 5
+    assert estimate["net_if_called"] == pytest.approx(sum(r["called"] for r in replays) / 2 - estimate["fixed_weekly_cost"])
+    assert estimate["net_if_called_low"] == pytest.approx(sum(r["called_low"] for r in replays) / 2 - estimate["fixed_weekly_cost"])
+    assert estimate["net_if_triggered"] is None  # shell commands: no pillar Job can run them in a session's place
+    assert sequence["median_cost"] == pytest.approx(sorted(r["called"] for r in replays)[1])
+    assert estimate["net_if_called"] > 0 and estimate["net_if_called_low"] < estimate["net_if_called"]
+
+
+def test_calls_made_side_by_side_in_one_turn_save_no_turn(conn):
+    for i in range(3):
+        _turn(conn, f"s{i}", f"r{i}", timedelta(hours=2))
+        _call(conn, f"s{i}", f"a{i}", f"r{i}", timedelta(hours=2), "Bash", {"command": "lws job list"})
+        _call(conn, f"s{i}", f"b{i}", f"r{i}", timedelta(hours=2, seconds=-1), "Bash", {"command": "lws core status"})
+    assert "Bash(lws job list) → Bash(lws core status)" not in _mined(conn)
+
+
+def test_a_large_output_saves_what_later_turns_no_longer_re_read(conn, monkeypatch):
+    monkeypatch.setattr(mining, "MIN_WEEKLY_SAVING", 0.0)
+    for i in range(3):
+        _turn(conn, f"s{i}", f"r{i}", timedelta(hours=3))
+        _call(conn, f"s{i}", f"c{i}", f"r{i}", timedelta(hours=3), "Bash", {"command": "python3 -m pytest tests/unit"}, result_bytes=60_400)
+        for k in range(10):
+            _turn(conn, f"s{i}", f"r{i}-{k}", timedelta(hours=2, minutes=-k))
+    pytest_run = _mined(conn)["Bash(python3 -m pytest <path>)"]
+    assert "subagent that returns only the failures" in pytest_run["proposed_form"]
+    calibration = counterfactual.Calibration()  # fallback constants: too few turns to fit
+    read_price = PRICES["sonnet"].input * PRICES["sonnet"].cache_read / 1e6
+    per_token_later = sum([(10 * PRICES["sonnet"].input / 1e6 + 200_000 * read_price) / 200_010] * 10)
+    per_run = (60_400 - 400) / calibration.bytes_per_token * per_token_later  # 60 kB down to a 400-byte answer, re-read 10 times
+    assert pytest_run["median_cost"] == pytest.approx(per_run)
+
+
+def test_a_pillar_call_a_trigger_could_run_saves_its_whole_turn_only_if_nothing_has_to_call_it(conn, monkeypatch):
+    monkeypatch.setattr(mining, "MIN_WEEKLY_SAVING", 0.0)
+    for i in range(3):
+        _turn(conn, f"s{i}", f"r{i}", timedelta(hours=2))
+        _call(conn, f"s{i}", f"c{i}", f"r{i}", timedelta(hours=2), *REDEPLOY)
+    redeploy = _mined(conn)["mcp:workshop_deployment_redeploy_pillar(commit, pillar)"]
+    estimate = redeploy["estimate"]
+    assert estimate["net_if_called"] <= 0  # a tool Claude calls instead costs the same turn
+    turn = sum(pricing.weighted({"model": "claude-sonnet-5-5", "input_tokens": 10, "cache_read_tokens": 200_000, "output_tokens": 50}, PRICES).values())
+    assert estimate["net_if_triggered"] == pytest.approx(3 * turn / 2)  # a trigger takes the turn away altogether (no later request here)
+    assert redeploy["weekly_value"] == pytest.approx(estimate["net_if_triggered"])
+
+
+def test_no_trigger_can_take_over_a_read_or_a_decision():
+    assert mining.trigger_can_run("mcp:workshop_deployment_redeploy_pillar(commit, pillar)")
+    assert mining.trigger_can_run("mcp:workshop_requirements_create(category, description, key, project_id, title)")
+    for read in ("mcp:workshop_job_status(job_id)", "mcp:workshop_core_status()", "mcp:workshop_requirements_list(project_id)",
+                 "mcp:workshop_job_wait(job_id)"):
+        assert not mining.trigger_can_run(read), read
+    for decision in ("mcp:workshop_version_feature_finish(project_id)", "mcp:workshop_deployment_confirm(project_id)",
+                     "mcp:workshop_policy_confirm(job_id)", "mcp:workshop_project_remove(name)", "mcp:workshop_version_release_finish(project_id)",
+                     "mcp:workshop_requirements_publish(project_id, requirement_id)", "mcp:workshop_build_publish_pypi(project_id)"):
+        assert not mining.trigger_can_run(decision), decision
+    assert not mining.trigger_can_run("Bash(rm <path>)") and not mining.trigger_can_run("mcp:browser_navigate(url)")
+
+
+def test_a_few_cents_a_week_is_not_worth_listing(conn):
+    for i in range(3):
+        _turn(conn, f"s{i}", f"q{i}", timedelta(hours=2), read=1_000)  # a cheap turn: a tiny conversation
+        _call(conn, f"s{i}", f"c{i}", f"q{i}", timedelta(hours=2), *REDEPLOY)
+    assert _mined(conn) == {}
+
+
+def test_tokens_avoided_count_each_replacement_run_at_what_one_run_saves(usage, conn, monkeypatch):
+    monkeypatch.setattr(mining, "MIN_WEEKLY_SAVING", 0.0)
+    for i in range(3):
+        _turn(conn, f"s{i}", f"r{i}", timedelta(hours=3))
+        _call(conn, f"s{i}", f"c{i}", f"r{i}", timedelta(hours=3), "Bash", {"command": "python3 -m pytest tests/unit"}, result_bytes=60_400)
+        for k in range(10):
+            _turn(conn, f"s{i}", f"r{i}-{k}", timedelta(hours=2, minutes=-k))
+    usage.mine()
+    candidate = next(c for c in db.list_candidates(conn) if c["signature"] == "Bash(python3 -m pytest <path>)")
+    usage.post(f"/v1/candidates/{candidate['id']}", json={"replacement": "mcp:workshop_requirements_run_tests(", "state": "done"})
+    _call(conn, "s9", "n1", None, timedelta(minutes=5), "mcp__little-workshop__workshop_requirements_run_tests", {"project_id": "p", "suite_id": "x"})
+    _call(conn, "s9", "n2", None, timedelta(minutes=4), "mcp__little-workshop__workshop_requirements_run_tests", {"project_id": "p", "suite_id": "x"})
+    usage.mine()
+    done = db.get_candidate(conn, candidate["id"])
+    assert done["tokens_avoided"] == pytest.approx(2 * done["median_cost"]) and done["tokens_avoided"] > 0

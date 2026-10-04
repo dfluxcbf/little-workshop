@@ -1956,7 +1956,7 @@ def build_parser() -> argparse.ArgumentParser:
     u_findings.set_defaults(func=cmd_usage_findings)
     u_analyze = usage_sub.add_parser("analyze", help="Run the detectors now and measure the experiments that are due")
     u_analyze.set_defaults(func=cmd_usage_analyze)
-    u_candidates = usage_sub.add_parser("candidates", help="Work Claude repeats that code could do, ranked by weekly cost")
+    u_candidates = usage_sub.add_parser("candidates", help="Work Claude repeats that code could do, ranked by the estimated net saving")
     u_candidates.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "done", "all"])
     u_candidates.add_argument("--limit", type=int, default=20, help="How many, from the costliest (default 20)")
     u_candidates.set_defaults(func=cmd_usage_candidates)
