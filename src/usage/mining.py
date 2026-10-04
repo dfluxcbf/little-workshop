@@ -77,18 +77,19 @@ def score(key: tuple[str, ...], occurrences: list[dict]) -> dict[str, bool]:
     """The five checks for a candidate. `occurrences` are {"session_id", "calls": [...], "next": signature | None}."""
     calls = [call for occurrence in occurrences for call in occurrence["calls"]]
     judged = [call for call in calls if call.get("success") is not None]
-    followers = Counter(occurrence["next"] for occurrence in occurrences)
+    recorded = bool(judged) and len(judged) >= 0.9 * len(calls)
     return {
         # Every argument comes from repository or pillar state: a shell command or an MCP call, not prose.
         "argument_derivability": not any(_is_free_text(signature) for signature in key),
         # The same shape in several sessions, not one session's habit.
         "output_stability": len({occurrence["session_id"] for occurrence in occurrences}) >= MIN_SESSIONS,
         # The outcome is a pillar state or an exit status that code can read.
-        "checkability": bool(judged) and len(judged) >= 0.9 * len(calls) and all(
-            signature.startswith(("mcp:", "Bash(")) for signature in key),
+        "checkability": recorded and all(signature.startswith(("mcp:", "Bash(")) for signature in key),
         "no_content_creation": not any(signature.startswith(CONTENT_TOOLS) for signature in key),
-        # What follows it is one of a few things, not open-ended.
-        "bounded_branching": len(followers) <= 3 or followers.most_common(1)[0][1] >= 0.6 * len(occurrences),
+        # Each call ends in one of a few known outcomes (succeeded or failed), not something open-ended
+        # that only a reader can make sense of. What Claude did next is the session's business, not the
+        # call's: judging that ranked no real candidate deterministic (2026-10-04).
+        "bounded_branching": recorded and not any(_is_free_text(signature) for signature in key),
     }
 
 
