@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Iterator
 
-from usage import signatures
+from usage import results, signatures
 
 DEFAULT_ROOT = Path.home() / ".claude" / "projects"
 
@@ -53,6 +53,18 @@ def _lines(path: Path) -> Iterator[dict | None]:
                 yield entry if isinstance(entry, dict) else None
     except OSError:
         return
+
+
+# Raised whenever the parser learns to read something new: every stored transcript is then read once more.
+PARSER_VERSION = 2
+
+
+def _result_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(block.get("text") or "") for block in content if isinstance(block, dict))
+    return ""
 
 
 def _result_bytes(content) -> int:
@@ -124,4 +136,5 @@ def parse_transcript(path: Path) -> dict:
                     call = tool_calls[block["tool_use_id"]]
                     call["result_bytes"] = _result_bytes(block.get("content"))
                     call["success"] = not block.get("is_error")
+                    call.update(results.classify(call["tool"], _result_text(block.get("content")), bool(block.get("is_error"))))
     return {"session": session, "requests": list(requests.values()), "tool_calls": list(tool_calls.values()), "skipped": skipped}

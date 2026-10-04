@@ -233,7 +233,7 @@ def build_app(
             stat = path.stat()
         except OSError:
             return {"requests": 0, "tool_calls": 0, "skipped": 0, "read": False}
-        mark = f"{stat.st_mtime_ns}:{stat.st_size}"
+        mark = f"{stat.st_mtime_ns}:{stat.st_size}:p{transcripts.PARSER_VERSION}"
         key = f"transcript:{path}"
         with lock:
             if db.get_meta(conn, key) == mark:
@@ -535,6 +535,13 @@ def build_app(
                 return {"ok": False, "error": str(exc)}
             conn.commit()
         return {"ok": changed}
+
+    @app.get("/v1/call_outcomes")
+    def call_outcomes(signature: str | None = None, limit: int = 50) -> list[dict]:
+        """How the stored calls ended, per signature (`signature` matches its start): ok, failed, held,
+        running, cancelled or unknown, and the test counts their output printed."""
+        with lock:
+            return db.call_outcomes(conn, signature=signature or None, limit=max(1, min(limit, 500)))
 
     @app.get("/v1/experiments")
     def experiments() -> list[dict]:

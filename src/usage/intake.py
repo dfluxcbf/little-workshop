@@ -97,6 +97,8 @@ def parse_logs(payload: dict) -> dict:
                         "tool": tool, "signature": signatures.signature(tool, tool_input), "detail": signatures.detail(tool, tool_input),
                         "input_bytes": _int(attrs.get("tool_input_size_bytes")), "result_bytes": _int(attrs.get("tool_result_size_bytes")),
                         "duration_ms": _int(attrs.get("duration_ms")), "success": str(attrs.get("success")).lower() == "true",
+                        # Telemetry carries no result text: only whether the tool reported an error.
+                        "outcome": "ok" if str(attrs.get("success")).lower() == "true" else "failed",
                         "source": "otel",
                     })
     return {"sessions": list(sessions.values()), "requests": requests, "tool_calls": tool_calls, "events": events}
