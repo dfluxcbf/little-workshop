@@ -147,9 +147,36 @@ A finding is keyed by detector and project: analysis refreshes it instead of ope
 dismissed one dismissed, and resolves an open one that is no longer flagged. States: `open`, `accepted` (an
 optimization is under way), `dismissed`, `resolved`. Findings are listed by estimated saving, largest first.
 
-D3 cannot name a miss's cause (the statusline's `last_miss_cause` is not collected), and D6 counts poll calls
-against requests because telemetry does not tie a tool call to its request; where the transcript does, the
-rollup's `poll_requests` counts the requests that only polled.
+Findings are habits and configuration, not automation: each says where tokens go and what fixes it
+(`detectors.FIXED_BY`: a habit, a setting, an instruction, a hook, a route that already exists), and work a
+Job or a trigger could take over is mined separately ([Automation mining](#automation-mining)). How each saving
+is known (`detectors.SAVING_BASIS`, REQ-000000359), shown beside it on the page and in `/v1/findings`:
+
+| Basis | Detectors | What the saving is |
+|---|---|---|
+| replayed | D6, D7 | the past occurrences replayed against their own threads with the fix in place (the replay of [Automation mining](#automation-mining)) |
+| priced | D3, D4 | the recorded cost of the cache writes the fix removes |
+| rough estimate | D1, D5 | a share of a measured cost (half of what long requests re-read; half of the cold cache writes), since it depends on how habits change |
+| none | the others | not estimated |
+
+- **D6, replayed.** The polls form runs of back-to-back turns that only poll or wait, per thread (a poll in a
+  turn that also works is not waiting). Each run becomes the `workshop_job_wait` calls it needs, one per
+  120 s it lasted (the wait's default timeout), each answering like the run's largest status read; the
+  replay keeps that many of the run's turns and drops the rest, with what they added to the conversation. A
+  lone poll is already one turn and saves nothing.
+- **D7, replayed.** Each large result cut to 3,000 bytes (`FILTERED_BYTES`, about what the test-output filter
+  leaves: the last 40 lines and the failures), the bytes taken out no longer re-read by the later requests of
+  its thread up to a compaction. The evidence gives the saving per command.
+
+On this machine's store (2026-10-04, 14 days), replaying cut D6 from $10.51 to $3.10 a week on
+ethereal-lands, from $4.64 to $0.16 on little-workshop and from $1.02 to $0.14 on little-meals (most polls are
+lone turns), and priced D7 on little-workshop for the first time at $3.06 a week (large `WebFetch` and
+`workshop_requirements_suite_list` results).
+
+D3 cannot name a miss's cause (the statusline's `last_miss_cause` is not collected), and D6's polling share
+counts poll calls against requests because telemetry does not tie a tool call to its request; where the
+transcript does, the rollup's `poll_requests` counts the requests that only polled, and a telemetry-only poll
+is placed in the main thread's request before it.
 
 ### Applying an optimization
 

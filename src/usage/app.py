@@ -494,6 +494,7 @@ def build_app(
             experiments = db.list_experiments(conn)
         for row in rows:
             row["experiments"] = [e for e in experiments if e["finding_id"] == row["id"]]
+            row.update(detectors.described(row["detector"]))
         return rows
 
     @app.post("/v1/findings/{finding_id}/state")

@@ -17,7 +17,7 @@ from dashboard import job_catalog
 from registry import claude_sync, claude_templates, db as registry_db
 from registry.app import build_app as build_registry_app
 from registry.models import Project
-from usage import db, detectors, optimize, pricing
+from usage import counterfactual, db, detectors, optimize, pricing
 from usage.app import build_app
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
@@ -130,7 +130,8 @@ def test_d7_and_d8_flag_large_command_output_and_files_read_in_many_sessions(con
         call(conn, f"t{i}", f"s{i}", "Bash", {"command": "python3 -m pytest tests/unit"}, result_bytes=60_000)
         call(conn, f"d{i}", f"s{i}", "Read", {"file_path": "docs/policies/automation_policy.md"})
     d7, d8 = measured(conn, "D7"), measured(conn, "D8")
-    assert d7.flagged and d7.evidence["commands"] == [{"signature": "Bash(python3 -m pytest <path>)", "calls": 5, "average_bytes": 60_000}]
+    # Each call is its session's last request: nothing re-reads its result, so cutting it saves nothing.
+    assert d7.flagged and d7.evidence["commands"] == [{"signature": "Bash(python3 -m pytest <path>)", "calls": 5, "average_bytes": 60_000, "saving": 0.0}]
     assert d8.flagged and d8.evidence["files"] == [{"path": "docs/policies/automation_policy.md", "sessions": 5}]
 
 
@@ -495,3 +496,70 @@ def test_findings_are_readable_in_every_project_and_analysis_is_little_workshops
     assert f"{claude_templates.MCP}workshop_usage_findings" in project["allow"]
     assert f"{claude_templates.MCP}workshop_usage_analyze" in project["ask"]
     assert "Bash(lws usage findings --project-id little-widget *)" in project["allow"]
+
+
+# --- REQ-000000359: A finding says what fixes it, and its saving is replayed where the store allows ---
+
+
+def test_every_detector_says_what_fixes_it_and_none_is_automation(usage, conn):
+    assert set(detectors.FIXED_BY) == set(detectors.DETECTORS)
+    assert not any("automat" in fix for fix in detectors.FIXED_BY.values())
+    assert detectors.SAVING_BASIS["D6"] == detectors.SAVING_BASIS["D7"] == "replayed" and detectors.SAVING_BASIS["D1"] == "rough estimate"
+    for detector in ("D6", "D9"):
+        db.record_finding(conn, {"detector": detector, "project": "p", "title": "t", "metric": "m", "value": 1.0, "saving": 0.0,
+                                 "action": "a", "evidence": {}}, "2026-09-21", "2026-10-04")
+    conn.commit()
+    found = {f["detector"]: f for f in usage.get("/v1/findings").json()}
+    assert (found["D6"]["fixed_by"], found["D6"]["saving_basis"]) == ("a route that exists (workshop_job_wait)", "replayed")
+    assert (found["D9"]["fixed_by"], found["D9"]["saving_basis"]) == ("a setting (the model)", None)
+
+
+def test_d6_replays_each_run_of_polling_turns_as_the_waits_it_needs(conn):
+    session(conn, "s1")
+    for i in range(6):
+        request(conn, f"r{i}", "s1", read=100_000 + i * 1_000, ago=timedelta(minutes=30 - i))
+    call(conn, "e0", "s1", "Edit", {"file_path": "a.py"}, request_id="r0", ago=timedelta(minutes=30))
+    polls = []
+    for i in range(1, 5):  # four turns that only poll, over three minutes: two waits of 120 s
+        call(conn, f"c{i}", "s1", "mcp__little-workshop__workshop_job_status", {"job_id": "j"}, request_id=f"r{i}",
+             result_bytes=900 + i, ago=timedelta(minutes=30 - i))
+        polls.append(f"c{i}")
+    # A poll in a turn that also works is not waiting: it stays out of the run.
+    call(conn, "c5", "s1", "mcp__little-workshop__workshop_job_status", {"job_id": "j"}, request_id="r5", ago=timedelta(minutes=25))
+    call(conn, "e5", "s1", "Edit", {"file_path": "a.py"}, request_id="r5", ago=timedelta(minutes=25))
+    conn.commit()
+    m = measured(conn, "D6")
+    replay, calibration = counterfactual.prepare(conn, PRICES)
+    run = [dict(conn.execute("SELECT * FROM tool_calls WHERE id = ?", (c,)).fetchone()) for c in polls]
+    expected = replay.occurrence(run, calibration, trigger_ok=False, kept_turns=2, reply_bytes=904)["called"]
+    assert m.saving == pytest.approx(expected / 2) and m.saving > 0 and m.evidence["turns_a_wait_saves"] == 2
+
+
+def test_d6_a_lone_poll_is_already_one_turn_and_saves_nothing(conn):
+    session(conn, "s1")
+    for i in range(3):
+        request(conn, f"r{i}", "s1", ago=timedelta(minutes=10 - i))
+    call(conn, "e0", "s1", "Edit", {"file_path": "a.py"}, request_id="r0", ago=timedelta(minutes=10))
+    call(conn, "p1", "s1", "Bash", {"command": "sleep 30"}, request_id="r1", ago=timedelta(minutes=9))
+    call(conn, "e2", "s1", "Edit", {"file_path": "a.py"}, request_id="r2", ago=timedelta(minutes=8))
+    m = measured(conn, "D6")
+    assert m.evidence["polls"] == 1 and m.saving == pytest.approx(0) and m.evidence["turns_a_wait_saves"] == 0
+
+
+def test_d7_replays_each_large_result_cut_to_what_a_filter_leaves(conn):
+    session(conn, "s1")
+    contexts = [50_000, 60_000, 70_000, 80_000, 10_000, 20_000]  # the fifth request follows a compaction
+    for i, read in enumerate(contexts):
+        request(conn, f"r{i}", "s1", read=read, ago=timedelta(minutes=30 - i))
+    for i in range(5):
+        call(conn, f"t{i}", "s1", "Bash", {"command": "python3 -m pytest tests/unit"}, request_id="r0", result_bytes=60_000,
+             ago=timedelta(minutes=30))
+    conn.commit()
+    m = measured(conn, "D7")
+    # What a context token cost in each later request up to the compaction: r1 to r3.
+    later = [dict(row) for row in conn.execute("SELECT * FROM requests WHERE request_id IN ('r1', 'r2', 'r3')")]
+    per_token = sum((p["input"] + p["cache_read"] + p["cache_write"]) / (r["input_tokens"] + r["cache_read_tokens"] + r["cache_write_tokens"])
+                    for r in later for p in [pricing.weighted(r, PRICES)])
+    _, calibration = counterfactual.prepare(conn, PRICES)
+    expected = 5 * (60_000 - detectors.FILTERED_BYTES) / calibration.bytes_per_token * per_token / 2
+    assert m.saving == pytest.approx(expected) and m.evidence["commands"][0]["saving"] == pytest.approx(expected, abs=0.005)

@@ -112,11 +112,14 @@ class Replay:
             return 0.0, 0
         return thread["suffix_price"][start] - thread["suffix_price"][end], end - start
 
-    def occurrence(self, calls: list[dict], calibration: Calibration, *, trigger_ok: bool) -> dict | None:
+    def occurrence(self, calls: list[dict], calibration: Calibration, *, trigger_ok: bool, kept_turns: int = 1,
+                   reply_bytes: float = REPLY_BYTES) -> dict | None:
         """What one past occurrence cost from its first turn on, and what it would have cost replaced: by a
         tool Claude calls (`called`), or by a trigger or a schedule, with no turn at all (`triggered`, None
         when `trigger_ok` is false). The `_low` figures assume the replacement makes Claude take one more
-        turn to check on it, as a call that returns before its work is done does."""
+        turn to check on it, as a call that returns before its work is done does. A replacement that itself
+        takes several turns (`kept_turns`, as waits that each end at a timeout) keeps the occurrence's first
+        turns, each answering with `reply_bytes`."""
         first, last = self.locate(calls[0]), self.locate(calls[-1])
         if first is None or last is None or first[0] != last[0]:
             return None
@@ -130,10 +133,11 @@ class Replay:
         result_bytes = sum(c.get("result_bytes") or 0 for c in calls)
         added = calibration.footprint(sum(thread["out"][i1:ik + 1]), len(calls), result_bytes)
         reread, later = self._reread_price(thread, ik)
-        kept_turn = thread["cost"][i1]
-        dropped_turns = sum(thread["cost"][i1 + 1:ik + 1])
+        kept = min(max(kept_turns, 1), ik - i1 + 1)
+        kept_turn = sum(thread["cost"][i1:i1 + kept])
+        dropped_turns = sum(thread["cost"][i1 + kept:ik + 1])
         before = kept_turn + dropped_turns + added * reread
-        replacement = calibration.footprint(thread["out"][i1], 1, REPLY_BYTES)
+        replacement = calibration.footprint(sum(thread["out"][i1:i1 + kept]), kept, reply_bytes * kept)
         called = before - (kept_turn + replacement * reread)
         # One more turn to check on the replacement: a request like the one after the occurrence, adding a short call.
         check_turn = thread["cost"][ik + 1] if ik + 1 < n else thread["cost"][ik]
@@ -144,6 +148,16 @@ class Replay:
             "called": called, "called_low": called - check,
             "triggered": before if trigger_ok else None, "triggered_low": before - check if trigger_ok else None,
         }
+
+    def trimmed(self, call: dict, calibration: Calibration, keep_bytes: float) -> float | None:
+        """What `call` would have cost less had its result been cut to `keep_bytes` (a filtered output):
+        the tokens taken out, at what each later request paid for a context token until a compaction."""
+        where = self.locate(call)
+        if where is None:
+            return None
+        key, index = where
+        reread, _ = self._reread_price(self.threads[key], index)
+        return max((call.get("result_bytes") or 0) - keep_bytes, 0) / calibration.bytes_per_token * reread
 
 
 def _turns(conn: sqlite3.Connection, replay: Replay) -> list[dict]:
@@ -205,6 +219,11 @@ def calibrate(conn: sqlite3.Connection, replay: Replay) -> Calibration:
             "total_error": (sum(predicted) - actual) / actual if actual else None,
         }
     return fitted
+
+
+def prepare(conn: sqlite3.Connection, prices: dict[str, Price]) -> tuple[Replay, Calibration]:
+    replay = Replay(conn, prices)
+    return replay, calibrate(conn, replay)
 
 
 def method_report(conn: sqlite3.Connection, replay: Replay, calibration: Calibration) -> dict:

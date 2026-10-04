@@ -3174,6 +3174,25 @@ def test_the_claude_usage_page_lists_findings_with_their_job_and_experiments(tes
     assert "1 resolved or dismissed" in page and "/usage/findings/f2/reopen" in page
 
 
+# --- REQ-000000359: A finding says what fixes it, and its saving is replayed where the store allows ---
+
+
+def test_the_findings_say_they_are_not_automation_and_what_fixes_each(test_client, monkeypatch):
+    base = {"project": "little-meals", "state": "open", "metric": "m", "value": 1.0, "action": "a", "evidence": {},
+            "period_start": "2026-09-21", "period_end": "2026-10-04", "experiments": []}
+    findings = [{**base, "id": "f1", "detector": "D6", "title": "Turns spent polling or waiting", "saving": 4.64,
+                 "fixed_by": "a route that exists (workshop_job_wait)", "saving_basis": "replayed"},
+                {**base, "id": "f2", "detector": "D9", "title": "An expensive model does routine work", "saving": 0.0,
+                 "fixed_by": "a setting (the model)", "saving_basis": None}]
+    monkeypatch.setattr(app_module.client, "usage_summary", lambda paths, **kw: _usage_summary())
+    monkeypatch.setattr(app_module.client, "usage_doctor", lambda paths: None)
+    monkeypatch.setattr(app_module.client, "usage_findings", lambda paths, **kw: findings)
+    page = test_client.get("/usage").text
+    assert "not automation" in page and 'href="#candidates"' in page and "<th>Fixed by</th>" in page
+    assert "<td>a route that exists (workshop_job_wait)</td>" in page and "<td>$4.64</td><td>replayed</td>" in page
+    assert "<td>—</td><td>not estimated</td>" in page and "about $4.64 a week (replayed)" in page and "saving not estimated" in page
+
+
 def test_dismissing_a_finding_goes_to_the_usage_pillar(test_client, monkeypatch):
     sent = []
     monkeypatch.setattr(app_module.client, "set_usage_finding_state", lambda paths, finding_id, state: sent.append((finding_id, state)) or {"ok": True})
