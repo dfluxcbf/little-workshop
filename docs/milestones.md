@@ -19,6 +19,8 @@ same "the docs are the record, corrected as understanding improves"
 discipline this project already applies to itself); the *sequence* and
 *scope* below is the actual plan.
 
+Work asked for but not yet refined or scheduled is in [backlog.md](backlog.md).
+
 ## Overview
 
 | ID | Objective | Depends on | Status |
