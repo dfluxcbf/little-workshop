@@ -2710,9 +2710,9 @@ def build_parser() -> argparse.ArgumentParser:
     d_branches.set_defaults(func=cmd_deployment_branches)
 
     d_changed = deployment_sub.add_parser(
-        "redeploy-changed-pillars", help="Redeploy the pillars whose code changed in a commit (default HEAD against its first parent)")
+        "redeploy-changed-pillars", help="Redeploy the pillars whose code differs from a commit (default HEAD) from what they run")
     d_changed.add_argument("--commit", default=None)
-    d_changed.add_argument("--base", default=None, help="Compare against this instead of the commit's first parent")
+    d_changed.add_argument("--base", default=None, help="Compare every pillar against this commit instead of the one it runs")
     d_changed.set_defaults(func=cmd_deployment_redeploy_changed_pillars)
 
     d_redeploy = deployment_sub.add_parser("redeploy-pillar", help="Redeploy one of little-workshop's own pillars from a commit")

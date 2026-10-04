@@ -34,6 +34,8 @@ FORBIDDEN_TARGET = re.compile(
 )
 BRANCH_FINISH_TYPES = ("version.feature_finish", "version.improvement_finish", "version.hotfix_finish", "version.support_finish")
 RELEASE_FINISH_TYPES = ("version.release_finish", "version.release")
+# A template's `project_id` that means "no project": the Job is about every project, not the event's.
+ALL_PROJECTS = "*"
 EVENT_VALUE = re.compile(r"^\$event\.([A-Za-z_][\w.]*)$")
 
 SCHEMA = """
@@ -188,8 +190,9 @@ def _lookup(data: dict, path: str):
 
 
 def expand(template: JobTemplate, project_id: str | None, data: dict) -> dict:
-    """The Job a trigger creates for an event: a template without a project takes the event's, and a
-    parameter whose value is `$event.<key>` takes that value of the event."""
+    """The Job a trigger creates for an event: a template without a project takes the event's (one
+    whose project is `*` gets none: a Job about every project), and a parameter whose value is
+    `$event.<key>` takes that value of the event."""
     def fill(value):
         if isinstance(value, str):
             match = EVENT_VALUE.match(value)
@@ -200,7 +203,7 @@ def expand(template: JobTemplate, project_id: str | None, data: dict) -> dict:
             return [fill(item) for item in value]
         return value
 
-    target_project = template.project_id or project_id
+    target_project = None if template.project_id == ALL_PROJECTS else (template.project_id or project_id)
     queue_key = project_id if template.queue_key == "$event.project_id" else template.queue_key
     return {"type": template.type, "target_pillar": template.target_pillar, "project_id": target_project,
             "params": fill(template.params), "queue_key": queue_key, "depends_on": list(template.depends_on)}
@@ -246,11 +249,11 @@ DEFAULTS = (
                       "params": {}, "queue_key": "redeploy-changed-pillars"}},
     {"name": "Report which projects' Claude files differ after a finished branch",
      "on": {"event": "version.branch_finished", "filter": {"project_id": WORKSHOP}},
-     "job_template": {"type": "registry.sync_claude_files", "target_pillar": "registry", "project_id": None,
+     "job_template": {"type": "registry.sync_claude_files", "target_pillar": "registry", "project_id": ALL_PROJECTS,
                       "params": {"write": False}, "queue_key": "claude-files-sync"}},
     {"name": "Ingest a Claude session's transcript when it ends",
      "on": {"event": "claude.session_ended", "filter": {}},
-     "job_template": {"type": "usage.ingest_transcripts", "target_pillar": "usage", "project_id": None,
+     "job_template": {"type": "usage.ingest_transcripts", "target_pillar": "usage", "project_id": ALL_PROJECTS,
                       "params": {}, "queue_key": "usage"}},
 )
 

@@ -216,29 +216,47 @@ def build_app(
 
     @app.post("/v1/jobs/deployment.redeploy_changed_pillars")
     def job_redeploy_changed_pillars(request: JobRequest) -> dict:
-        """Redeploy the pillars whose code changed between `params.base` (default: the first parent of
-        `commit`, so a finished branch's merge commit gives that branch's changes) and `params.commit`
-        (default HEAD), in dependency order. One `deployment.redeploy_pillar` Job per pillar, each
+        """Redeploy the pillars whose code differs between what they run and `params.commit` (default
+        HEAD), in dependency order: each live pillar is compared with the commit this pillar last
+        deployed it at, and one it never deployed is brought in. With `params.base`, every pillar is
+        compared with that commit instead. One `deployment.redeploy_pillar` Job per pillar, each
         confirm-gated as any redeploy; nothing is redeployed when no pillar's code changed."""
         repo = workshop_repo_dir()
         commit = gitutil.run(["git", "rev-parse", request.params.get("commit") or "HEAD"], repo)
         if commit.returncode != 0:
             return {"outcome": "failed", "error": f"unknown commit: {commit.stderr.strip()}"}
         sha = commit.stdout.strip()
-        base = request.params.get("base") or f"{sha}^1"
-        diff = gitutil.run(["git", "diff", "--name-only", base, sha, "--", "src"], repo)
-        if diff.returncode != 0:
-            return {"outcome": "failed", "error": f"could not compare {base} with {sha}: {diff.stderr.strip()}"}
-        pillars = redeploy_plan.changed_pillars(diff.stdout.splitlines(), live_pillars())
+        base = request.params.get("base")
+        compared_with = base or "the commit each pillar runs"
+
+        def changed_since(reference: str, candidates: list[str]) -> list[str] | None:
+            diff = gitutil.run(["git", "diff", "--name-only", reference, sha, "--", "src"], repo)
+            return None if diff.returncode != 0 else redeploy_plan.changed_pillars(diff.stdout.splitlines(), candidates)
+
+        live = live_pillars()
+        if base:
+            pillars = changed_since(base, live)
+            if pillars is None:
+                return {"outcome": "failed", "error": f"could not compare {base} with {sha}"}
+        else:
+            pillars = []
+            for pillar in live:
+                deployed = read(db.get_pillar_deployment, pillar)
+                # Never deployed by this pillar, or at a commit git no longer knows: bring it in.
+                changed = changed_since(deployed["commit_sha"], [pillar]) if deployed else None
+                if changed is None or changed:
+                    pillars.append(pillar)
+            pillars.sort()
         if not pillars:
-            return {"outcome": "succeeded", "result": {"commit": sha, "pillars": [], "note": "no pillar's code changed"}}
+            return {"outcome": "succeeded", "result": {"commit": sha, "pillars": [], "compared_with": compared_with,
+                                                       "note": "no pillar's code changed"}}
         plan = [[{"pillar": p} for p in batch] for batch in redeploy_plan.redeploy_batches(pillars)]
         # The first batch's redeploys run inside their creation call, so the Jobs are created beside this answer.
         threading.Thread(
             target=redeploy_plan.submit_redeploy_batches, args=(create_job, pillars, sha),
             kwargs={"created_by": f"job:{request.job_id}"}, daemon=True,
         ).start()
-        return {"outcome": "succeeded", "result": {"commit": sha, "pillars": pillars, "batches": plan}}
+        return {"outcome": "succeeded", "result": {"commit": sha, "pillars": pillars, "batches": plan, "compared_with": compared_with}}
 
     @app.post("/v1/jobs/deployment.redeploy_pillar")
     def job_redeploy_pillar(request: JobRequest) -> dict:

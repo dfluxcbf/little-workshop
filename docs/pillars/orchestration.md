@@ -280,7 +280,7 @@ Trigger { id, name, on: { event, filter }, job_template, enabled }
 - **Firing.** The dispatch pump turns queued events into Jobs (`triggers.fire_pending`, under the dispatch
   lock), so a triggered Job is created like any other: `created_by` is `trigger:<id>`, the policy gate is
   attached, and a gated type whose policy fails stops in `pending_confirmation` (decision 7). A template
-  without a project takes the event's; a parameter value `$event.<key>` takes that value of the event.
+  without a project takes the event's, and one whose project is `*` gets none (a Job about every project); a parameter value `$event.<key>` takes that value of the event.
 - **Safety.** Checked when the trigger is created, never left to firing time: a template whose type merges,
   finishes, releases, removes or deletes is refused (`FORBIDDEN_TARGET`: `*_finish`, `version.release`,
   `version.stabilize`, `*.remove`, `*_delete`, `agent.finish_task`, `agent.skip_task`, confirmations,
