@@ -179,7 +179,12 @@ do it for zero tokens. Nothing is implemented from it: a person chooses.
   (`usage/signatures.py`): `mcp:workshop_deployment_redeploy_pillar(commit, pillar)`,
   `Bash(python3 -m pytest <path>)`, `Bash(python3 tools/sync_policies.py)`. File contents never reach it.
 - **Candidate**: a signature, or a run of two or three consecutive signatures, seen in at least 3 sessions or
-  at least 10 times in 14 days. Exploration alone (`Read`, `Grep`, `Glob`) is never a candidate.
+  at least 10 times in 14 days, with at least one call code could make (`mining.actionable`): an MCP call or a
+  shell command that does work. Looking around (`Read`, `Grep`, `cat`, `ls`, `git status`), writing content
+  (`Edit`, `Write`), a script written on the command line (`Bash(python3 <inline>)`: a here-document, `-c`) and
+  a `cd` are never candidates on their own. A shell signature names the first command that does work, past
+  any `cd` or `export` before it. Each mining run signs the stored shell calls again from the command kept
+  with them and drops the open candidates it no longer finds; one a person decided on is kept.
 - **Score**: five checks. *Argument derivability*: a shell command or an MCP call, not prose Claude wrote.
   *Output stability*: the same shape in at least three sessions. *Checkability*: the outcome is a pillar state
   or an exit status. *No content creation*: no `Edit` or `Write`. *Bounded branching*: what follows it is one

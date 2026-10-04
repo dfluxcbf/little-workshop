@@ -152,3 +152,16 @@ keeps the pillars Core runs, and creates one `deployment.redeploy_pillar` Job pe
 redeploying pillars by hand, one call each, after every finish; a trigger runs it after a branch finishes on
 little-workshop (`docs/pillars/orchestration.md`, "Triggers"). `lws deployment redeploy-changed-pillars`,
 `workshop_deployment_redeploy_changed_pillars`.
+
+## Redeploying Core (2026-10-04)
+
+REQ-000000351. On a real install Core is not a transient `little-workshop-core` unit like the pillars: it is
+the installed unit `little-workshop.service`, running `python -m core` from the environment `lws` is installed
+in. Redeploying `core` therefore refreshes that environment (the `refresh_cli` step) and restarts the unit,
+which reconnects to the running pillars and starts any the manifest newly names. No transient unit is
+launched, no process is stopped by name, and no confirmation window is armed: the environment never moves
+backwards, so there is nothing to roll back to. Where Core is not running as that unit (a development setup,
+the tests), it is redeployed like any other pillar.
+
+Before this, a redeploy of `core` launched a transient Core beside the installed one, and its unconfirmed
+rollback put a Core of an old version on the socket (2026-10-04).

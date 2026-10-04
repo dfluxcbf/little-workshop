@@ -28,18 +28,43 @@ def _scrub(text: str) -> str:
     return _NUMBER.sub("<n>", text)
 
 
-def bash_signature(command: str) -> str:
-    """`python3 -m pytest tests/unit -q` -> `Bash(python3 -m pytest <path>)`: the command's first
-    simple command, its leading words kept, flags after them dropped, paths and ids as placeholders."""
-    first = re.split(r"\s*(?:&&|\|\||;|\|)\s*", command.strip(), maxsplit=1)[0]
+_SEPARATOR = re.compile(r"\s*(?:&&|\|\||;|\n|\|)\s*")
+# Commands that only prepare the shell: the work is in what follows them.
+_SETUP_WORDS = ("cd", "export", "set", "source", ".", "pushd", "unset")
+INLINE = "<inline>"
+UNKNOWN_BASH = "Bash(?)"
+
+
+def _words(simple_command: str) -> list[str]:
     try:
-        words = shlex.split(first)
+        words = shlex.split(simple_command)
     except ValueError:
-        words = first.split()
+        words = simple_command.split()
     while words and re.fullmatch(r"[A-Za-z_]\w*=.*", words[0]):  # leading VAR=value assignments
         words = words[1:]
-    if words[:1] == ["cd"] and "&&" in command:  # `cd X && real command`: the real command names the work
-        return bash_signature(command.split("&&", 1)[1])
+    return words
+
+
+def bash_signature(command: str) -> str:
+    """`cd repo && python3 -m pytest tests/unit -q` -> `Bash(python3 -m pytest <path>)`: the first
+    simple command that does work (not a `cd` or an `export` before it), its leading words kept,
+    flags after them dropped, paths and ids as placeholders. A script written on the command line
+    (a here-document, `python3 -c`, `bash -c`) is `Bash(<interpreter> <inline>)`: its text is prose
+    Claude wrote, not an argument. A command that could not be read is `Bash(?)`."""
+    command = (command or "").strip()
+    if not command:
+        return UNKNOWN_BASH
+    heredoc = "<<" in command
+    segments = [segment for segment in _SEPARATOR.split(command.split("<<", 1)[0] if heredoc else command) if segment.strip()]
+    words: list[str] = []
+    for segment in segments:
+        words = _words(segment)
+        if words and words[0] not in _SETUP_WORDS:
+            break
+    if not words:
+        return UNKNOWN_BASH
+    if words[0] in _INTERPRETERS and (heredoc or any(word in ("-c", "-lc", "-e", "-") for word in words[1:3])):
+        return f"Bash({words[0]} {INLINE})"
     kept = [_scrub(word) for word in words[:_KEEP_WORDS]]
     # The script an interpreter runs names the work (`python3 tools/sync_policies.py`): it stays as written.
     if len(words) > 1 and words[0] in _INTERPRETERS and not words[1].startswith(("-", "/", "~", "..")) and words[1].endswith(_SCRIPT_SUFFIXES):
