@@ -3251,3 +3251,19 @@ def test_the_claude_usage_page_shows_tokens_per_outcome(test_client, monkeypatch
     assert "Tokens per outcome" in page and "<td>$3.50</td>" in page and "<td>$6.00</td>" in page
     row = page[page.index('id="outcomes"'):page.index('id="findings"')]
     assert row.count("<td>—</td>") == 2  # no requirement reading for that week: a dash, not a zero
+
+
+# --- REQ-000000355: The Claude usage page says what each colour is, dates its days and fits a phone ---
+
+
+def test_the_usage_tables_stack_on_a_phone_and_the_plots_get_legends_and_dates(test_client, monkeypatch):
+    monkeypatch.setattr(app_module.client, "usage_summary", lambda paths, **kw: _usage_summary())
+    monkeypatch.setattr(app_module.client, "usage_doctor", lambda paths: None)
+    page = test_client.get("/usage").text
+    assert page.count('<div class="table-scroll stack"><table>') == 3  # projects, heaviest sessions, tokens per outcome
+    script = test_client.get("/static/usage.js").text
+    assert "usage-legend" in script and "data-label" in script  # a legend per plot; column names for stacked rows
+    assert "dayMonth(d.day)" in script and "'Week of'" in script  # the weekday over its date; a week by its Monday
+    assert "card.clientWidth" in script  # drawn at the width it has, so its text stays readable on a phone
+    css = test_client.get("/static/app.css").text
+    assert ".table-scroll.stack td::before { content: attr(data-label);" in css and ".usage-swatch.dashed" in css

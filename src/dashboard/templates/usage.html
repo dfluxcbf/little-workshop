@@ -62,7 +62,7 @@
 
 <section class="card">
   <h2>Projects</h2>
-  <table>
+  <div class="table-scroll stack"><table>
     <thead><tr><th>Project</th><th>Sessions</th><th>Requests</th><th>Weighted</th><th>Avg context</th><th>Hit ratio</th><th>Long-context</th><th>Startup p50</th></tr></thead>
     <tbody>
     {% for p in summary.projects %}
@@ -73,12 +73,12 @@
       <tr><td colspan="8" class="muted">No usage stored for this week.</td></tr>
     {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 
 <section class="card">
   <h2>Heaviest sessions</h2>
-  <table>
+  <div class="table-scroll stack"><table>
     <thead><tr><th>Started</th><th>Project</th><th>Origin</th><th>Requests</th><th>Largest context</th><th>Weighted</th></tr></thead>
     <tbody>
     {% for s in summary.top_sessions %}
@@ -88,14 +88,14 @@
       <tr><td colspan="6" class="muted">No sessions this week.</td></tr>
     {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 
 <section class="card" id="outcomes">
   <h2>Tokens per outcome</h2>
   <p class="muted">What the week's work produced for what it cost: agent tasks that ran to their end, branches finished and
     requirements that turned to done. It shows whether an optimization made the work cheaper, or only shorter.</p>
-  <table>
+  <div class="table-scroll stack"><table>
     <thead><tr><th>Project</th><th>Weighted</th><th>Tasks finished</th><th>Per task</th><th>Branches finished</th><th>Per branch</th><th>Requirements done</th><th>Per requirement</th></tr></thead>
     <tbody>
     {% for o in summary.outcomes or [] %}
@@ -107,7 +107,7 @@
       <tr><td colspan="8" class="muted">No outcome recorded for this week.</td></tr>
     {% endfor %}
     </tbody>
-  </table>
+  </table></div>
 </section>
 
 <section class="card" id="findings">
@@ -120,7 +120,7 @@
       {% if f.state == 'accepted' %}<span class="pill warn">being addressed</span>{% endif %}</summary>
     <p>{{ f.metric }}: <strong>{{ "{:,.3f}".format(f.value).rstrip('0').rstrip('.') }}</strong> ({{ f.period_start }} to {{ f.period_end }})</p>
     <p>{{ f.action }}</p>
-    <pre>{{ f.evidence | tojson(indent=2) }}</pre>
+    <pre class="usage-evidence">{{ f.evidence | tojson(indent=2) }}</pre>
     {% for e in f.experiments %}
     <p class="muted">Experiment ({{ e.created_at[:10] }}, {{ e.change }}): before {{ "—" if e.before_value is none else "{:,.3f}".format(e.before_value) }},
       after {{ "not measured yet" if e.after_value is none else "{:,.3f}".format(e.after_value) }}{% if e.state != 'running' %} &middot; {{ e.state.replace('_', ' ') }}{% endif %}</p>
@@ -149,13 +149,13 @@
     candidate can become a job, a tool or a trigger: every later run of that code costs no tokens. Nothing is built until you choose.</p>
   {% for c in candidates if c.state in ('open', 'accepted') %}
   <details class="stats-table">
-    <summary><code>{{ c.signature }}</code> &middot; {{ c.class }} ({{ c.score }}/5) &middot; {{ c.occurrences }}&times; in {{ c.sessions }} session{{ '' if c.sessions == 1 else 's' }}
+    <summary><code class="usage-signature">{{ c.signature }}</code> &middot; {{ c.class }} ({{ c.score }}/5) &middot; {{ c.occurrences }}&times; in {{ c.sessions }} session{{ '' if c.sessions == 1 else 's' }}
       &middot; about ${{ "{:,.2f}".format(c.weekly_value) }} a week {% if c.state == 'accepted' %}<span class="pill warn">task started</span>{% endif %}</summary>
     <p>Proposed form: {{ c.proposed_form }}</p>
     <p class="muted">{% for name, ok in (c.checks or {}).items() %}{{ name.replace('_', ' ') }}: {{ 'yes' if ok else 'no' }}{{ '' if loop.last else ' · ' }}{% endfor %}</p>
     {% if c.schedule %}<p><strong>Schedule</strong> (recommended once it is automated): {{ c.schedule.frequency }},
       {% for d in c.schedule.days_of_week %}{{ weekdays[d] }}{{ '' if loop.last else ', ' }}{% endfor %} at {{ c.schedule.time_of_day }} &mdash; {{ c.schedule.note }}.</p>{% endif %}
-    {% if c.examples %}<ul>{% for e in c.examples %}<li class="muted">{{ e.project }}: {% for call in e.calls %}<code>{{ call }}</code>{{ '' if loop.last else ' → ' }}{% endfor %}</li>{% endfor %}</ul>{% endif %}
+    {% if c.examples %}<ul>{% for e in c.examples %}<li class="muted">{{ e.project }}: {% for call in e.calls %}<code class="usage-signature">{{ call }}</code>{{ '' if loop.last else ' → ' }}{% endfor %}</li>{% endfor %}</ul>{% endif %}
     {% if c.replacement %}<p class="muted">Replaced by <code>{{ c.replacement }}</code>: about ${{ "{:,.2f}".format(c.tokens_avoided) }} of weighted tokens avoided so far.</p>{% endif %}
     <div class="row">
       {% if c.state == 'open' %}<form class="inline" method="post" action="/usage/candidates/{{ c.id }}/automate"><button type="submit" class="primary">Make it a task</button></form>{% endif %}
