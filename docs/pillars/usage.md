@@ -244,6 +244,8 @@ All are code; none uses Claude.
 ## Proxies
 
 - Dashboard: **System → Claude usage** (`/usage`), and a link from each project card.
+  Each plot is drawn at its on-screen width with a colour legend (a comparison week dashed) and dates on its
+  x axis; on a phone each table row stacks into label and value lines (REQ-000000355).
 - MCP: `workshop_usage_summary`, `workshop_usage_findings`, `workshop_usage_candidates` (reads, every project;
   candidates come ten at a time with one example each, `limit` up to 50),
   `workshop_usage_doctor`, `workshop_usage_ingest_transcripts`, `workshop_usage_analyze`,

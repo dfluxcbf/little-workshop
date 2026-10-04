@@ -791,3 +791,9 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | REQ-000000352 | **The doctor looks for programs where the owner's sessions find them.** When the `usage.doctor` Job checks for a program, the Usage & Efficiency pillar shall look for it on the PATH of the owner's interactive shell rather than its own, and shall never pass the shell a name that is not a plain program name. | draft |
 | REQ-000000353 | **A summary includes what arrived since the last rollup.** When a summary is asked for and the last rollup is a minute old or older, the Usage & Efficiency pillar shall roll up before answering, so that a session's requests appear within a minute of arriving. | draft |
 | REQ-000000354 | **Candidates are returned a page at a time.** The Usage & Efficiency pillar shall accept a limit on the candidates it lists; the MCP tool `workshop_usage_candidates` shall return ten candidates by default and never more than fifty, each with one example; and `lws usage candidates` shall return twenty by default with a `--limit` option. | draft |
+
+## Claude usage page on a phone (2026-10-04)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000355 | **The Claude usage page says what each colour is, dates its days and fits a phone.** The Dashboard's Claude usage page shall draw each plot at the width it has on screen with a legend naming the series of each colour and marking a comparison week as dashed, shall label each day on the x axis with its weekday and its date and each week with the date of its Monday, and on a screen 680 pixels wide or narrower shall show each table row as a block of values under their column names, so that the page needs no horizontal scrolling. | draft |
