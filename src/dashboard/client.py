@@ -247,6 +247,10 @@ def usage_estimate_method(paths: Paths) -> dict | None:
     return _get(paths, "usage", "/v1/estimate_method").get("method")
 
 
+def usage_explorer(paths: Paths, *, days: int = 28) -> dict:
+    return _get(paths, "usage", "/v1/explorer", params={"days": days}, timeout=10.0)
+
+
 def usage_doctor(paths: Paths) -> dict | None:
     return _get(paths, "usage", "/v1/doctor").get("report")
 

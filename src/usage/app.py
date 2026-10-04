@@ -26,7 +26,7 @@ from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.uds_client import client_for_socket
-from usage import (attribution, counterfactual, db, detectors, doctor, intake, mining, optimize, outcomes, pricing, profile, proxy,
+from usage import (attribution, counterfactual, db, detectors, doctor, explorer, intake, mining, optimize, outcomes, pricing, profile, proxy,
                    rollup, transcripts)
 
 TICK_SECONDS = 600.0
@@ -165,6 +165,8 @@ def build_app(
                 new_calls += db.upsert_tool_call(conn, call)
             for event in parsed.get("events") or []:
                 db.add_session_event(conn, event["session_id"], event["ts"], event["name"], event["data"])
+            for event in parsed.get("transcript_events") or []:
+                db.upsert_transcript_event(conn, event)
             attribute(session["id"] for session in parsed.get("sessions") or [])
             conn.commit()
         return {"requests": new_requests, "tool_calls": new_calls}
@@ -240,7 +242,7 @@ def build_app(
                 return {"requests": 0, "tool_calls": 0, "skipped": 0, "read": False}
         parsed = transcripts.parse_transcript(path)
         added = store({"sessions": [parsed["session"]] if parsed["session"] else [], "requests": parsed["requests"],
-                       "tool_calls": parsed["tool_calls"]})
+                       "tool_calls": parsed["tool_calls"], "transcript_events": parsed["transcript_events"]})
         with lock:
             db.set_meta(conn, key, mark)
             conn.commit()
@@ -536,6 +538,12 @@ def build_app(
                 return {"ok": False, "error": str(exc)}
             conn.commit()
         return {"ok": changed}
+
+    @app.get("/v1/explorer")
+    def data_explorer(days: int = explorer.DEFAULT_DAYS) -> dict:
+        """The data explorer's cards over the last `days`: one plot each of data kept before it has a use."""
+        with lock:
+            return explorer.build(conn, days=days)
 
     @app.get("/v1/call_outcomes")
     def call_outcomes(signature: str | None = None, limit: int = 50) -> list[dict]:

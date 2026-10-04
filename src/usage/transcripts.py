@@ -56,7 +56,7 @@ def _lines(path: Path) -> Iterator[dict | None]:
 
 
 # Raised whenever the parser learns to read something new: every stored transcript is then read once more.
-PARSER_VERSION = 2
+PARSER_VERSION = 3
 
 
 def _result_text(content) -> str:
@@ -75,8 +75,46 @@ def _result_bytes(content) -> int:
     return 0
 
 
+def _rendered_bytes(rendered) -> int:
+    """The bytes an attachment puts into the conversation: its rendered blocks' content."""
+    if not isinstance(rendered, list):
+        return 0
+    return sum(len((block.get("content") if isinstance(block.get("content"), str) else json.dumps(block.get("content"))) or "")
+               for block in rendered if isinstance(block, dict))
+
+
+def _event(entry: dict) -> dict | None:
+    """The `transcript_events` row a record makes (db.py), or None: a turn's duration, a compaction, an
+    attachment rendered into the conversation (one that is not, such as a tool list or a prompt snapshot,
+    costs no context), how a prompt arrived, a tool denial, an API error."""
+    kind = name = value = None
+    data: dict = {}
+    if entry.get("type") == "system" and entry.get("subtype") == "turn_duration" and isinstance(entry.get("durationMs"), (int, float)):
+        kind, value, data = "turn", entry["durationMs"], {"messages": entry.get("messageCount")}
+    elif entry.get("type") == "system" and entry.get("subtype") == "compact_boundary":
+        meta = entry.get("compactMetadata") if isinstance(entry.get("compactMetadata"), dict) else {}
+        pre, post = meta.get("preTokens"), meta.get("postTokens")
+        kind, name = "compaction", meta.get("trigger") or "unknown"
+        value = pre - post if isinstance(pre, int) and isinstance(post, int) else None
+        data = {"pre_tokens": pre, "post_tokens": post}
+    elif entry.get("type") == "attachment" and isinstance(entry.get("rendered"), list):
+        attachment = entry.get("attachment") if isinstance(entry.get("attachment"), dict) else {}
+        kind, name, value = "insertion", attachment.get("type") or "unknown", _rendered_bytes(entry["rendered"])
+    elif entry.get("type") == "user" and entry.get("toolDenialKind"):
+        kind, name = "denial", entry["toolDenialKind"]
+    elif entry.get("type") == "user" and entry.get("promptSource"):
+        kind, name = "prompt", entry["promptSource"]
+    elif entry.get("type") == "assistant" and entry.get("isApiErrorMessage"):
+        kind, name, data = "api_error", str(entry.get("apiErrorStatus") or entry.get("error") or "unknown"), {"error": entry.get("error")}
+    if kind is None:
+        return None
+    return {"id": entry.get("uuid") or f"{entry['sessionId']}:{entry['timestamp']}:{kind}", "session_id": entry["sessionId"],
+            "ts": entry["timestamp"], "kind": kind, "name": name, "value": value, "data": data}
+
+
 def parse_transcript(path: Path) -> dict:
-    """{"session": {...} | None, "requests": [...], "tool_calls": [...], "skipped": n} for one file. A
+    """{"session": {...} | None, "requests": [...], "tool_calls": [...], "transcript_events": [...],
+    "skipped": n} for one file. A
     subagent's transcript is its own thread of the session: its requests carry the agent's name, its
     prompts are numbered apart from the main conversation's, and it says nothing about the session itself
     (its directory, version and transcript are the main transcript's)."""
@@ -84,6 +122,7 @@ def parse_transcript(path: Path) -> dict:
     session: dict | None = None
     requests: dict[str, dict] = {}
     tool_calls: dict[str, dict] = {}
+    events: list[dict] = []
     skipped = 0
     prompts = 0  # a user message that is not a tool result starts a new prompt: the episode its tool calls belong to
     for entry in _lines(path):
@@ -100,6 +139,9 @@ def parse_transcript(path: Path) -> dict:
         for key, field in (("cwd", "cwd"), ("cc_version", "version"), ("entrypoint", "entrypoint")):
             if entry.get(field) and not session.get(key) and not agent:
                 session[key] = entry[field]
+        event = _event(entry)
+        if event:
+            events.append(event)
         message = entry.get("message")
         if not isinstance(message, dict):
             continue
@@ -108,8 +150,11 @@ def parse_transcript(path: Path) -> dict:
             usage, request_id = message.get("usage"), entry.get("requestId")
             if isinstance(usage, dict) and request_id and message.get("model") != "<synthetic>":
                 creation = usage.get("cache_creation") if isinstance(usage.get("cache_creation"), dict) else None
+                details = usage.get("output_tokens_details") if isinstance(usage.get("output_tokens_details"), dict) else {}
                 if not agent:
                     session["model"] = message.get("model") or session.get("model")
+                # One request is several lines; the thinking time is on the thinking block's line only.
+                earlier = requests.get(request_id) or {}
                 requests[request_id] = {
                     "request_id": request_id, "session_id": session_id, "ts": ts, "model": message.get("model") or "",
                     "input_tokens": usage.get("input_tokens") or 0, "output_tokens": usage.get("output_tokens") or 0,
@@ -117,7 +162,9 @@ def parse_transcript(path: Path) -> dict:
                     "cache_write_tokens": usage.get("cache_creation_input_tokens") or 0,
                     "cache_write_1h_tokens": creation.get("ephemeral_1h_input_tokens") if creation else None,
                     "query_source": "subagent" if agent or entry.get("isSidechain") else "main", "source": "transcript",
-                    "agent_name": agent,
+                    "agent_name": agent, "thinking_tokens": details.get("thinking_tokens"),
+                    "thinking_ms": entry.get("thinkingDurationMs") or earlier.get("thinking_ms"),
+                    "effort": entry.get("perTurnEffort") or entry.get("effort") or earlier.get("effort"),
                 }
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
@@ -137,4 +184,5 @@ def parse_transcript(path: Path) -> dict:
                     call["result_bytes"] = _result_bytes(block.get("content"))
                     call["success"] = not block.get("is_error")
                     call.update(results.classify(call["tool"], _result_text(block.get("content")), bool(block.get("is_error"))))
-    return {"session": session, "requests": list(requests.values()), "tool_calls": list(tool_calls.values()), "skipped": skipped}
+    return {"session": session, "requests": list(requests.values()), "tool_calls": list(tool_calls.values()),
+            "transcript_events": events, "skipped": skipped}

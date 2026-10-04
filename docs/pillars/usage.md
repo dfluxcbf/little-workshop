@@ -100,9 +100,9 @@ once a hook or its transcript supplies the directory.
 
 ## Store
 
-`sessions`, `requests`, `tool_calls`, `session_events`, `plan_pressure`, `day_rollups` (day × project × origin
-× model), `run_usage`, `findings`, `experiments`, `candidates`, `branch_finishes`, `requirement_snapshots`, `doctor_reports`,
-`meta`. Requests and tool calls older than `retention_days` (120,
+`sessions`, `requests`, `tool_calls`, `session_events`, `transcript_events`, `plan_pressure`, `day_rollups` (day ×
+project × origin × model), `run_usage`, `findings`, `experiments`, `candidates`, `branch_finishes`,
+`requirement_snapshots`, `doctor_reports`, `meta`. Requests, tool calls and transcript events older than `retention_days` (120,
 never under 35) are pruned; a day's rollup stays, so the store, not the raw transcripts, is the long-term
 record (decision 4). `usage.purge_project` removes a project's rows.
 
@@ -284,6 +284,36 @@ The candidates the baseline showed (proposal §11.3) are built: `workshop_job_wa
 `deployment.redeploy_changed_pillars` with its trigger, `requirements.sync_markers`, the test-output filter and
 the policies digest.
 
+## Data explorer
+
+Data kept before it has a use, each kind plotted on one card at the bottom of the Claude usage page
+(`usage/explorer.py`, REQ-000000360, REQ-000000361). The transcript backfill keeps, besides requests and tool
+calls:
+
+- per request: its thinking tokens, its thinking time and the effort it ran at (`requests.thinking_tokens`,
+  `thinking_ms`, `effort`);
+- one `transcript_events` row per record of these kinds (keyed by the record's uuid): `turn` (a turn's total
+  duration; the transcript does not split it into model and tool time), `compaction` (its trigger and the
+  tokens before and after), `insertion` (an attachment Claude Code renders into the conversation, by type, with
+  the bytes rendered; a tool list or a prompt snapshot is not rendered and not kept), `prompt` (how a prompt
+  arrived: typed, queued while Claude worked, system, SDK), `denial` (a tool call refused, by kind) and
+  `api_error` (by status: 429 is a rate limit).
+
+A card is one function in `explorer.CARDS`, reading the store over the last 28 days (`GET /v1/explorer?days=`,
+at most 120) and returning its title, what it shows and where its data comes from, a kind (bars stacked per
+day, or lines), a unit, its series (the five largest names, the rest as "other"; a series may sit on a second
+scale at the right) and a note summing up the period. The page shows one card at a time: arrows and dots on a
+desktop, a swipe on a phone (CSS scroll-snap). Adding a card is adding a function; the page draws whatever
+it is given. The eight cards: thinking tokens by effort, compactions by trigger, how long a turn takes,
+what the harness adds to the conversation, how prompts arrive, tool calls denied, API errors beside plan
+pressure, test runs passed and failed.
+
+On this machine's transcripts (28 days to 2026-10-04): thinking was 39% of output tokens (23% at low effort,
+51% at max); 57 compactions, the median from 171k to 27k tokens; a median turn took 1.4 minutes and the
+slowest tenth over 16 minutes; the harness rendered about 770 kB a day into conversations (skill listings
+and tool-list changes the most); 42% of the prompts with a recorded source were queued while Claude was
+working; 74 tool calls were denied; 36 of 40 API errors were rate limits; 378 of 1,663 test runs failed.
+
 ## Outcomes
 
 `usage/outcomes.py` (REQ-000000350): spend alone cannot say whether an optimization made the work cheaper or
@@ -320,7 +350,8 @@ All are code; none uses Claude.
 
 - Dashboard: **System → Claude usage** (`/usage`), and a link from each project card.
   Each plot is drawn at its on-screen width with a colour legend (a comparison week dashed) and dates on its
-  x axis; on a phone each table row stacks into label and value lines (REQ-000000355).
+  x axis; on a phone each table row stacks into label and value lines (REQ-000000355). The
+  [Data explorer](#data-explorer) is its last section.
 - MCP: `workshop_usage_summary`, `workshop_usage_findings`, `workshop_usage_candidates` (reads, every project;
   candidates come ten at a time with one example each, `limit` up to 50),
   `workshop_usage_doctor`, `workshop_usage_ingest_transcripts`, `workshop_usage_analyze`,
