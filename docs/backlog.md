@@ -27,6 +27,21 @@ Any policy can be bypassed by user (not Claude). User may be able to:
 * Policies must keep track of the origination of the request.
 * Only user is allowed to bypass policies, restricted to CLI. They still get informed about policy violations. Policy violations still reflect on dashboard's statistics.
 
+## Jobs orphaned by a pillar redeploy (added 2026-10-04, not refined)
+
+A pillar redeployed while it runs a Job leaves that Job `running` for good: the process that ran it is
+gone, nothing completes it, and Orchestration still lists it as running. Seen on 2026-10-04: the gate
+check `d571d06d` (`policy.check_project`, created 17:37:37 for the finish of
+`improvement/redeploy-message-pillar-names`) was running when a "Redeploy all" from the Pillars page
+(17:39:05) restarted Policy & Compliance. The finish waited behind it for over an hour.
+`workshop_job_stop` answered "not stoppable" (a policy check cannot be stopped), and marking the check
+passed would have bypassed the policy, so the finish was stopped and started again with fresh checks.
+The orphan has no queue key, so it blocks nothing else, but it stays `running` on the Jobs page.
+
+Proposed when it was found (not refined): when Orchestration sees a pillar restart, it fails (or
+queues again) the Jobs that pillar was running before the restart, so whatever depends on them can
+go on or be held; and a policy check can be stopped.
+
 ## Claude usage: what can be worked on now (added 2026-10-04, not refined)
 
 Proposed after the first findings and automation candidates of the Usage & Efficiency pillar
