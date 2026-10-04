@@ -77,6 +77,26 @@ def test_a_signature_seen_in_three_sessions_is_a_deterministic_candidate(conn):
     assert sequence["occurrences"] == 3 and "blocking wait" in sequence["proposed_form"]
 
 
+def test_branching_is_judged_on_the_calls_outcomes_not_on_what_claude_did_next(conn):
+    """Whatever Claude does after a redeploy (another redeploy, a wait, an edit, a question) is the
+    session's business: the call itself ends in success or failure, so code can take it over. The
+    first version judged the next call and ranked no real candidate deterministic (2026-10-04)."""
+    followers = [("Bash", {"command": "git status"}), ("Edit", {"file_path": "a.py"}), STATUS, ("Read", {"file_path": "b.py"}),
+                 ("Bash", {"command": "lws core status"})]
+    for i, follower in enumerate(followers):
+        episode(conn, f"s{i}", "p1", [REDEPLOY, follower])
+    found = {c["signature"]: c for c in mining.mine(conn, PRICES, today=TODAY)}
+    single = found["mcp:workshop_deployment_redeploy_pillar(commit, pillar)"]
+    assert single["checks"]["bounded_branching"] is True and single["class"] == "deterministic"
+
+
+def test_a_call_whose_outcome_was_never_recorded_is_not_bounded(conn):
+    for i in range(3):
+        episode(conn, f"s{i}", "p1", [REDEPLOY], success=None)
+    (candidate,) = mining.mine(conn, PRICES, today=TODAY)
+    assert candidate["checks"]["bounded_branching"] is False and candidate["class"] != "deterministic"
+
+
 def test_what_happens_rarely_or_is_only_exploration_is_no_candidate(conn):
     episode(conn, "s1", "p1", [REDEPLOY])
     episode(conn, "s2", "p1", [REDEPLOY])

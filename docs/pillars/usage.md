@@ -188,8 +188,10 @@ do it for zero tokens. Nothing is implemented from it: a person chooses.
   with them and drops the open candidates it no longer finds; one a person decided on is kept.
 - **Score**: five checks. *Argument derivability*: a shell command or an MCP call, not prose Claude wrote.
   *Output stability*: the same shape in at least three sessions. *Checkability*: the outcome is a pillar state
-  or an exit status. *No content creation*: no `Edit` or `Write`. *Bounded branching*: what follows it is one
-  of a few things. All five: **deterministic** (a job, an MCP tool or a trigger). No content creation and at
+  or an exit status. *No content creation*: no `Edit` or `Write`. *Bounded branching*: each call ends in one of a few
+  known outcomes (succeeded or failed, recorded for at least 90% of the calls), not open-ended output only a
+  reader can use; what Claude did next is not judged. All five: **deterministic** (a job, an MCP tool or a
+  trigger). No content creation and at
   least three: **hybrid** (code around Claude). Otherwise **heuristic** (stays with Claude; optimize its context).
 - **Value**: the weighted tokens its occurrences cost per week, taking each call as one request of its
   session's average cost. Candidates are ranked by it.
