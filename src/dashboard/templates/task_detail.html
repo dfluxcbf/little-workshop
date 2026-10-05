@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "_peek.html" import peek_card %}
 {% from "_force_stop.html" import stop_controls %}
+{% from "_remote_control.html" import remote_control_card %}
 {% block title %}{{ run.title }} — little-workshop{% endblock %}
 {% block content %}
 <h1>{{ run.title }}</h1>
@@ -17,6 +18,7 @@
 {% if run.status == 'running' and job and job.status %}
 <div class="task-stop">{{ stop_controls(job, stop_refused, "/tasks/" ~ run.project_id ~ "/" ~ run.id) }}</div>
 {% endif %}
+{{ remote_control_card(remote_control, "/tasks/" ~ run.project_id ~ "/" ~ run.id) }}
 {% if run.status == 'awaiting_finish' %}
 <div class="row">
   <form class="inline" method="post" action="/tasks/{{ run.project_id }}/{{ run.id }}/finish"><button type="submit" class="primary">Finish</button></form>

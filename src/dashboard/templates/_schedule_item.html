@@ -1,14 +1,10 @@
-{#- The Schedule page's details panel for one item: a Job (with its task when it has one) or an occurrence
-    of a scheduled task. A fragment, loaded beside the month. -#}
+{#- The Schedule page's details of one item of a day: a Job (with its task when it has one) or an occurrence
+    of a scheduled task. A fragment, loaded into the day's panel under the item's own line (its symbol,
+    time, title and state) when the item is expanded. -#}
 {% from "_job_steps.html" import job_steps %}
 {% from "_job_subject.html" import job_subject %}
 {% if job %}
-{% set parts = job.type.split(".", 1) %}
 <div class="cal-detail">
-  <div class="dcard-top">
-    <span class="dcard-name job-type">{% if run %}{{ run.title }}{% elif parts | length > 1 %}<span class="job-ns">{{ parts[0] }}.</span>{{ parts[1] }}{% else %}{{ job.type }}{% endif %}</span>
-    <span class="cal-swatch state-{{ state }}"></span><span class="cal-state">{{ state }}</span>
-  </div>
   <div class="polcard-meta">
     <span class="chip">{{ 'task' if job.type == 'agent.run_task' else 'job' }}</span>
     {% if job.project_id %}<span class="chip">{{ job.project_id }}</span>{% endif %}
@@ -17,9 +13,12 @@
     <span class="chip">{{ job.created_at | reltime }}</span>
     {% if job.status in ("succeeded", "failed", "stopped") %}<span class="chip">took {{ job_duration(job.created_at, job.updated_at) }}</span>{% endif %}
   </div>
-  <div class="job-subjects">{{ job_subject(subjects) }}</div>
+  {% if subjects %}<div class="job-subjects">{{ job_subject(subjects) }}</div>{% endif %}
   {% if job.error %}<p class="job-error">{{ job.error }}</p>{% endif %}
-  {% if run %}<dl class="kv"><dt>Task</dt><dd>{{ run.status.replace('_', ' ') }}{% if run.branch %} on <code>{{ run.branch }}</code>{% endif %}</dd></dl>{% endif %}
+  <dl class="kv">
+    {% if run %}<dt>Task</dt><dd>{{ run.status.replace('_', ' ') }}{% if run.branch %} on <code>{{ run.branch }}</code>{% endif %}</dd>
+    {% else %}<dt>Job</dt><dd><code>{{ job.type }}</code></dd>{% endif %}
+  </dl>
   {% if job.steps %}{{ job_steps(job.id, job.steps) }}{% endif %}
   <div class="row">
     <a class="btn" href="/jobs/{{ job.id }}">Open the job</a>
@@ -30,10 +29,6 @@
 {% set t = task %}{% set tpl = task.job_template %}{% set params = tpl.params or {} %}
 {% set is_task = tpl.type == 'agent.run_task' %}
 <div class="cal-detail">
-  <div class="dcard-top">
-    <span class="dcard-name">{{ params.title if is_task and params.title else task.name }}</span>
-    <span class="cal-swatch state-{{ state }}"></span><span class="cal-state">{{ state }}</span>
-  </div>
   <div class="polcard-meta">
     <span class="chip">{{ 'task' if is_task else 'job' }}</span>
     {% if tpl.project_id %}<span class="chip">{{ tpl.project_id }}</span>{% endif %}

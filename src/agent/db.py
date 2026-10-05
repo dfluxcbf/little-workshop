@@ -158,6 +158,9 @@ def connect(path: Path) -> sqlite3.Connection:
     # exception (a raised exception), crash (a pillar process died) or unexpected (behaviour no exception names).
     if "kind" not in {row["name"] for row in conn.execute("PRAGMA table_info(incidents)")}:
         conn.execute("ALTER TABLE incidents ADD COLUMN kind TEXT NOT NULL DEFAULT 'exception'")
+    # Where a query ran (the query folder, or a project's checkout): its transcript is kept under it.
+    if "cwd" not in {row["name"] for row in conn.execute("PRAGMA table_info(query_sessions)")}:
+        conn.execute("ALTER TABLE query_sessions ADD COLUMN cwd TEXT")
     conn.commit()
     return conn
 
@@ -354,6 +357,20 @@ def record_session_stop(conn: sqlite3.Connection, session_id: str) -> None:
     conn.commit()
 
 
+def list_sessions(conn: sqlite3.Connection, agent_run_id: str) -> list[dict]:
+    """The remote-control sessions recorded for a run (or, for jobs without a run, the Job), oldest first."""
+    rows = conn.execute("SELECT * FROM remote_control_sessions WHERE agent_run_id = ? ORDER BY started_at, rowid", (agent_run_id,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def stop_open_sessions(conn: sqlite3.Connection, agent_run_id: str) -> int:
+    """Set `stopped_at` on every session of the run still without one (its Claude work ended); returns how many."""
+    open_ids = [row["id"] for row in list_sessions(conn, agent_run_id) if row["stopped_at"] is None]
+    for session_id in open_ids:
+        record_session_stop(conn, session_id)
+    return len(open_ids)
+
+
 # -- poll_cursors -----------------------------------------------------------
 
 
@@ -475,9 +492,10 @@ def list_doc_updates(conn: sqlite3.Connection, *, project_id: str | None = None,
 # -- query_sessions: the Claude session of each agent.query, against the Job that asked ----------
 
 
-def start_query_session(conn: sqlite3.Connection, *, job_id: str, session_id: str, ref: str | None = None) -> None:
-    conn.execute("INSERT INTO query_sessions (session_id, job_id, ref, started_at) VALUES (?, ?, ?, ?)",
-                 (session_id, job_id, ref, _now()))
+def start_query_session(conn: sqlite3.Connection, *, job_id: str, session_id: str, ref: str | None = None,
+                        cwd: str | None = None) -> None:
+    conn.execute("INSERT INTO query_sessions (session_id, job_id, ref, started_at, cwd) VALUES (?, ?, ?, ?, ?)",
+                 (session_id, job_id, ref, _now(), cwd))
     conn.commit()
 
 

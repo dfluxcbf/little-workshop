@@ -146,3 +146,21 @@ def test_a_run_keeps_its_description_and_an_old_database_gains_the_column(tmp_pa
     conn = db.connect(path)
     db.create_run(conn, "r1", job_id=None, project_id="p", intent="task", review_mode="manual", title="t", source={}, description="write it")
     assert db.get_run(conn, "r1")["description"] == "write it"
+
+
+# --- REQ-000000399: remote control is active from started_at until stopped_at ---
+
+
+def test_stop_open_sessions_sets_stopped_at_once_and_only_on_open_rows(conn):
+    first = db.record_session_start(conn, "run1", "p", "lws-p-run-aaaa1111")
+    db.record_session_stop(conn, first)
+    stopped_at = db.list_sessions(conn, "run1")[0]["stopped_at"]
+    second = db.record_session_start(conn, "run1", "p", "lws-p-rc-aaaa1111")
+    db.record_session_start(conn, "other", "p", "lws-p-run-bbbb2222")
+
+    assert db.stop_open_sessions(conn, "run1") == 1
+    rows = db.list_sessions(conn, "run1")
+    assert [r["id"] for r in rows] == [first, second]
+    assert rows[0]["stopped_at"] == stopped_at and rows[1]["stopped_at"] is not None
+    assert db.stop_open_sessions(conn, "run1") == 0
+    assert db.list_sessions(conn, "other")[0]["stopped_at"] is None  # another run's session is untouched

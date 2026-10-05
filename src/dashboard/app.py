@@ -61,11 +61,12 @@ GATE_POINT_VALUES = [
 # Documentation review's update job, and the Job statuses that count as "not finished yet".
 DOC_UPDATE_JOB = "agent.update_docs"
 # A backlog entry's own record of Claude's work on it (Registry & Portfolio keeps it on the entry), by kind:
-# (since, job, error) columns. Claude's answer comes within agent.query's 300s, so a mark older than
-# BACKLOG_ACTIVITY_STALE belongs to a Job that never came back.
+# (since, job, error) columns. Claude's answer comes within the 600s of an agent.query that reads the
+# project's checkout (Orchestration gives up at 630s), so a mark older than BACKLOG_ACTIVITY_STALE
+# belongs to a Job that never came back.
 BACKLOG_ACTIVITY = {"refine": ("refining_since", "refining_job", "refine_error"),
                     "prompt": ("prompting_since", "prompting_job", "prompt_error")}
-BACKLOG_ACTIVITY_STALE = timedelta(minutes=10)
+BACKLOG_ACTIVITY_STALE = timedelta(minutes=15)
 _UNFINISHED = {"refine": "the last refinement did not finish", "prompt": "the last task prompt did not finish"}
 STATISTICS_UPDATE_SECONDS = 600  # how often the running Dashboard counts new jobs, checks and incidents
 LIVE_KEEPALIVE_SECONDS = 15.0  # a comment on an idle event stream, so proxies keep it open
@@ -631,6 +632,8 @@ def build_app(paths: Paths) -> FastAPI:
         context.setdefault("message", request.query_params.get("message"))
         context.setdefault("nav_active", "")
         context.setdefault("attention_count", len(collect_attention(paths)))
+        # The user's policy bypass, warned on every page while it is TRUE.
+        context.setdefault("bypass", _try(lambda: client.policy_bypass(paths), default={}) or {})
         # The topics the page's live stream follows (static/live.js); every page follows "attention" for the banner.
         context.setdefault("live_topics", "")
         return templates.TemplateResponse(request, name, context)
@@ -1382,15 +1385,22 @@ def build_app(paths: Paths) -> FastAPI:
                        live_topics="tasks")
 
     def _task_prefill(backlog: str | None, candidate: str | None) -> tuple[dict, str | None]:
-        """What New task opens with: a backlog entry's refined entry (Launch task) or an automation
+        """What New task opens with: a backlog entry's task prompt (Launch task) or an automation
         candidate's task (Make it a task). ({} and a message, when neither can be read.)"""
         if backlog:
             entry = _try(client.backlog_get, paths, backlog)
             if entry is None:
                 return {}, "That backlog entry is no longer in the backlog."
-            return {"project": entry["project_name"], "title": entry["title"],
-                    "description": entry["refined_entry"] or entry["primary_entry"],
-                    "source": f"the backlog entry “{entry['title']}”" + ("" if entry["refined_entry"] else " (not refined yet: its primary entry)"),
+            # The task prompt is written for the task, and only it ends by having the task delete the entry;
+            # an entry without one yet gives what it has, and says so.
+            if entry["task_prompt"]:
+                description, note = entry["task_prompt"], ""
+            elif entry["refined_entry"]:
+                description, note = entry["refined_entry"], " (no task prompt yet: its refined entry)"
+            else:
+                description, note = entry["primary_entry"], " (not refined yet: its primary entry)"
+            return {"project": entry["project_name"], "title": entry["title"], "description": description,
+                    "source": f"the backlog entry “{entry['title']}”{note}",
                     "source_href": f"/backlog/{entry['project_name']}/{entry['id']}"}, None
         if candidate:
             task = _try(client.usage_candidate_task, paths, candidate)
@@ -1488,10 +1498,11 @@ def build_app(paths: Paths) -> FastAPI:
         can_retry = run.get("status") == "failed" and not _is_recurring_task(project, run.get("title"), job)
         can_dismiss = _task_group(run) == "attention" and run.get("status") in _DISMISSABLE_STATUSES
         claude_peek = _peek_of(run["job_id"]) if run.get("job_id") else None
+        remote_control = _remote_control_of(run["job_id"], project) if run.get("job_id") else None
         topics = ["tasks", *([f"job:{run['job_id']}"] if run.get("job_id") else []),
                   *([f"peek:{run['job_id']}"] if claude_peek and claude_peek.get("running") else [])]
         return _render(request, "task_detail.html", run=run, job=job, description=description, can_retry=can_retry, can_dismiss=can_dismiss,
-                       peek=claude_peek, stop_refused=request.query_params.get("refused") == "1", nav_active="tasks", live_topics=",".join(topics))
+                       peek=claude_peek, remote_control=remote_control, stop_refused=request.query_params.get("refused") == "1", nav_active="tasks", live_topics=",".join(topics))
 
     def _retryable_run(project: str, run_id: str):
         run = _try(client.agent_run, paths, project, run_id)
@@ -1661,18 +1672,18 @@ def build_app(paths: Paths) -> FastAPI:
         shown = jobs if everything else [j for j in jobs if j.get("created_by") == calendar.SCHEDULER]
         weeks = calendar.month(shown, _task_runs_of(shown), tasks, first, today, scheduled_only=not everything)
         return _render(
-            request, "schedule.html", weeks=weeks, first=first, today=today, error=error, everything=everything,
-            previous=calendar.shift_month(first, -1), following=calendar.shift_month(first, 1), per_day=calendar.PER_DAY,
+            request, "schedule.html", weeks=weeks, totals=calendar.totals(weeks), first=first, today=today, error=error, everything=everything,
+            previous=calendar.shift_month(first, -1), following=calendar.shift_month(first, 1),
             weekdays=WEEKDAYS, states=calendar.STATES, nav_active="schedule", live_topics="schedule",
         )
 
     @app.get("/schedule/item/job/{job_id}", response_class=HTMLResponse)
     def schedule_item_job(request: Request, job_id: str):
-        """The details panel of one job or task on the calendar (a fragment the page loads beside the month)."""
+        """The details of one job or task of a day (a fragment the day's panel loads when it is expanded)."""
         job = _try(client.get_job, paths, job_id)
         run = _try(client.agent_run_for_job, paths, job_id) if job and job.get("type") == "agent.run_task" else None
         return templates.TemplateResponse(request, "_schedule_item.html", {
-            "job": job, "run": run, "task": None, "at": None, "state": calendar.item_state(job, run) if job else None,
+            "job": job, "run": run, "task": None, "at": None,
             "subjects": _job_subjects(job, job.get("steps") or [], {}) if job else [],
         })
 
@@ -1812,10 +1823,11 @@ def build_app(paths: Paths) -> FastAPI:
         policies = {p["id"]: p for p in _try(lambda: client.policy_list(paths, summary=True), default=[])} if job and (job.get("type") or "").startswith("policy.") else {}
         task_run = _try(client.agent_run_for_job, paths, job_id) if job and job.get("type") == "agent.run_task" else None
         claude_peek = _peek_of(job_id) if job and job.get("type") in PEEK_JOB_TYPES else None
+        remote_control = _remote_control_of(job_id, job.get("project_id") or "") if job and job.get("type") in PEEK_JOB_TYPES else None
         topics = [f"job:{job_id}", *([f"peek:{job_id}"] if claude_peek and claude_peek.get("running") else [])]
         return _render(
             request, "job_detail.html", job=job, error=error, subjects=_job_subjects(job, job.get("steps") or [], policies) if job else [], dependencies=dependencies.get(job["id"], []) if job else [],
-            active=bool(job) and job["status"] in JOB_ACTIVE_STATUSES, task_run=task_run, peek=claude_peek,
+            active=bool(job) and job["status"] in JOB_ACTIVE_STATUSES, task_run=task_run, peek=claude_peek, remote_control=remote_control,
             stop_refused=request.query_params.get("refused") == "1", nav_active="jobs", live_topics=",".join(topics))
 
     def _peek_of(job_id: str) -> dict | None:
@@ -1825,6 +1837,34 @@ def build_app(paths: Paths) -> FastAPI:
         if not peek or not (peek.get("available") or peek.get("running")):
             return None
         return {**peek, "job_id": job_id}
+
+    def _remote_control_of(job_id: str, project_id: str) -> dict | None:
+        """Remote Control of the job's Claude session, for its page (the button, or the status). None when the
+        job has no Claude session or there is nothing to show: not running and never activated."""
+        state = _try(lambda: client.agent_remote_control(paths, job_id, project_id=project_id))
+        if not state or not (state["running"] or state["session_name"]):
+            return None
+        return {**state, "job_id": job_id, "project_id": project_id}
+
+    @app.post("/jobs/{job_id}/remote-control/{action}")
+    def job_remote_control(job_id: str, action: str, project_id: str = Form(""), next: str = Form("")):
+        """Activate remote control on the job's running Claude session (it is resumed with it, never
+        interrupted), or deactivate it (only the connection ends). Any user may."""
+        to = _local_path(next, f"/jobs/{job_id}")
+        if action not in ("activate", "deactivate"):
+            return _back(to, "Unknown remote-control action.")
+        try:
+            result = client.agent_remote_control_act(paths, job_id, action, project_id=project_id)
+        except client.RemoteControlRefused as exc:
+            live.publish(f"job:{job_id}")
+            return _back(to, f"Could not {action} remote control: {exc}")
+        except client.PillarUnavailable as exc:
+            return _back(to, f"Could not {action} remote control: {exc}")
+        live.publish(f"job:{job_id}")
+        live.publish("tasks")
+        if action == "activate":
+            return _back(to, f"Remote control is active: session {result.get('session_name')}.")
+        return _back(to, "Remote control deactivated; the job keeps running.")
 
     @app.get("/jobs/{job_id}/peek.json")
     def job_peek(job_id: str, after: int = 0):
@@ -1878,6 +1918,16 @@ def build_app(paths: Paths) -> FastAPI:
         kept = result.get("kept_for_safety", 0)
         note = f" {kept} kept because active work still depends on them." if kept else ""
         return _back("/jobs", f"Deleted {deleted} job{'' if deleted == 1 else 's'} older than {labels[hours]}.{note}")
+
+    @app.post("/policy-bypass/off")
+    def policy_bypass_off(next: str = Form("/")):
+        """The warning's button: `bypass_policies` back to FALSE at once."""
+        to = _local_path(next, "/")
+        try:
+            client.policy_bypass_off(paths)
+        except client.PillarUnavailable as exc:
+            return _back(to, f"Could not turn the policy bypass off: {exc}")
+        return _back(to, "bypass_policies is FALSE again: policies gate as usual.")
 
     @app.post("/jobs/{job_id}/gate/{action}")
     def job_gate_action(job_id: str, action: str, next: str = Form("/jobs?status=pending_confirmation")):

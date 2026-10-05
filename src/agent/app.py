@@ -27,11 +27,12 @@ from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
 from common.workspace import WORKSPACE_ID, workspace_dir
 from agent import db, peek, procs, review_store
+from agent.remote_control import RemoteControl, RemoteControlError, resolve as resolve_claude_session, status as remote_control_status
 from agent.doc_update import DocUpdateError, DocUpdateFlow
 from agent.flow import STOPPED_BY_USER, AgentFlow, AgentFlowError, intent_error
 from agent import usage_client
-from agent.launch import JOB_QUERY, launch_for
-from agent.query import query_dir, run_query
+from agent.launch import JOB_QUERY, JOB_QUERY_CHECKOUT, launch_for
+from agent.query import CHECKOUT_QUERY_TIMEOUT_SECONDS, query_dir, run_query, session_dir
 from agent.gitutil import is_dirty as gitutil_is_dirty
 from agent.session_flow import SessionError, SessionFlow, is_trusted, session_name as session_name_for
 
@@ -128,6 +129,7 @@ def build_app(
     workers: dict[str, dict] = {}
     workers_lock = threading.Lock()
     flow = flow or AgentFlow(paths=paths)
+    remote = RemoteControl(paths, flow.runner)
     session_flow = session_flow or SessionFlow(paths=paths)
     if doc_flow is None:
         doc_flow = DocUpdateFlow(paths=paths)
@@ -168,6 +170,7 @@ def build_app(
             with lock:
                 return fn(conn, *args, **kwargs)
         writer = sqlite3.connect(db_file, timeout=30)
+        writer.row_factory = sqlite3.Row
         try:
             return fn(writer, *args, **kwargs)
         finally:
@@ -216,6 +219,7 @@ def build_app(
             finally:
                 with workers_lock:
                     workers.pop(job_id, None)
+                write_apart(remote.end, run_id)  # the work ended: so does a remote control the owner activated
             if stop.is_set():
                 with lock:
                     db.update_run(conn, run_id, status=db.STOPPED, summary=STOPPED_BY_USER)
@@ -248,10 +252,24 @@ def build_app(
         prompt = request.params.get("prompt")
         if not prompt:
             return {"outcome": "failed", "error": "missing params.prompt"}
+        # A query that reads the project's checkout (a backlog entry's refinement or task prompt) runs in
+        # it and can read nothing else; any other runs in the query folder every query shares.
+        read_checkout = bool(request.params.get("read_checkout"))
+        cwd = query_dir(paths)
+        if read_checkout:
+            try:
+                project = resolve_project(paths, request.project_id)
+            except ProjectResolutionError as exc:
+                return {"outcome": "failed", "error": str(exc)}
+            cwd = Path(project["path"]).resolve()
+            if not cwd.is_dir():
+                return {"outcome": "failed", "error": f"project {request.project_id!r} has no checkout at {project['path']}"}
         timeout = request.params.get("timeout_seconds")
         kwargs = {"runner": flow.runner}
         if timeout:
             kwargs["timeout"] = float(timeout)
+        elif read_checkout:
+            kwargs["timeout"] = CHECKOUT_QUERY_TIMEOUT_SECONDS
 
         def record(usage: dict | None) -> None:
             write_apart(db.record_usage, db.USAGE_QUERY, usage, ref_id=request.job_id, project_id=request.project_id, job_id=request.job_id)
@@ -260,12 +278,13 @@ def build_app(
         # Recorded against the Job that asked (a backlog entry's refinement, a policy's authoring), so the
         # session is that Job's peek, and under what it worked on (`ref`), so its transcript can be deleted with it.
         session_id = str(uuid.uuid4())
-        write_apart(db.start_query_session, job_id=request.job_id, session_id=session_id, ref=request.params.get("ref"))
+        write_apart(db.start_query_session, job_id=request.job_id, session_id=session_id, ref=request.params.get("ref"), cwd=str(cwd))
         try:
-            result = run_query(prompt, cwd=query_dir(paths), on_usage=record, env=env, launch=launch_for(JOB_QUERY, paths),
-                               session_id=session_id, **kwargs)
+            result = run_query(prompt, cwd=cwd, on_usage=record, env=env, launch=launch_for(JOB_QUERY_CHECKOUT if read_checkout else JOB_QUERY, paths),
+                               session_id=session_id, read_only=read_checkout, **kwargs)
         finally:
             write_apart(db.finish_query_session, session_id)
+            write_apart(remote.end, request.job_id)
         if result.is_error:
             return {"outcome": "failed", "error": result.text or "claude reported an error"}
         return {"outcome": "succeeded", "result": {"text": result.text}}
@@ -360,7 +379,7 @@ def build_app(
         if queries:  # the newest session this Job asked for
             session = queries[-1]
             running, source = session["finished_at"] is None, "query"
-            path = peek.transcript_of_session(query_dir(paths), session["session_id"])
+            path = peek.transcript_of_session(session_dir(paths, session), session["session_id"])
         elif run is not None:
             running, source = run["status"] == db.RUNNING, "run"
             if run.get("session_id"):
@@ -389,9 +408,11 @@ def build_app(
         if not isinstance(ref, str) or not ref:
             raise HTTPException(status_code=422, detail="missing ref")
         sessions = read(db.query_sessions, ref=ref)
-        folder = peek.transcripts_dir(query_dir(paths))
         for session in sessions:
-            sid = session["session_id"]
+            sid, directory = session["session_id"], session_dir(paths, session)
+            # Where it was recorded, else wherever Claude put it: what the entry held must not survive it.
+            transcript = peek.transcript_of_session(directory, sid)
+            folder = transcript.parent if transcript else peek.transcripts_dir(directory)
             (folder / f"{sid}.jsonl").unlink(missing_ok=True)
             shutil.rmtree(folder / sid, ignore_errors=True)
         write_apart(db.delete_query_sessions, [s["session_id"] for s in sessions])
@@ -584,7 +605,49 @@ def build_app(
         run = read(db.get_run_by_job, job_id)
         if run is not None and run["status"] == db.RUNNING:
             write_apart(db.update_run, run["id"], status=db.STOPPED, summary=STOPPED_WITHOUT_WORKER)
+            write_apart(remote.end, run["id"])
         return {"stopped": True}
+
+    # -- Remote Control on a running Claude session -------------------------------------------
+
+    def _claude_session(job_id: str, project_id: str):
+        def project_dir_of(_paths, pid):
+            try:
+                return Path(resolve_project(paths, pid)["path"])
+            except ProjectResolutionError:
+                return None
+
+        target = read(resolve_claude_session, paths, job_id, project_id=project_id, project_dir_of=project_dir_of)
+        if target is None:
+            raise HTTPException(status_code=404, detail="no Claude session of this job")
+        return target
+
+    @app.get("/v1/remote-control/{job_id}")
+    def remote_control_of(job_id: str, project_id: str = "") -> dict:
+        """Whether the Job's Claude session may get Remote Control and what it has: {running, active, can_activate,
+        can_deactivate, already_set_up, session_name, started_at, stopped_at}. 404 for a Job without a Claude session."""
+        target = _claude_session(job_id, project_id)
+        return read(remote_control_status, target)
+
+    @app.post("/v1/remote-control/{job_id}/activate")
+    def remote_control_activate(job_id: str, project_id: str = "") -> dict:
+        """Resume the running Claude session with Remote Control, leaving the live process alone."""
+        target = _claude_session(job_id, project_id)
+        try:
+            name = write_apart(remote.activate, target)
+        except RemoteControlError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"session_name": name}
+
+    @app.post("/v1/remote-control/{job_id}/deactivate")
+    def remote_control_deactivate(job_id: str, project_id: str = "") -> dict:
+        """End the remote-control connection activation started; the job keeps running."""
+        target = _claude_session(job_id, project_id)
+        try:
+            write_apart(remote.deactivate, target)
+        except RemoteControlError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"deactivated": True}
 
     @app.post("/v1/jobs/{job_id}/stop")
     def stop_job(job_id: str, request: StopRequest | None = None) -> dict:

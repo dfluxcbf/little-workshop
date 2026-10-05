@@ -85,3 +85,16 @@ def test_parse_claude_output_skips_malformed_trailing_brace_line():
     ])
     text, is_error, raw = parse_claude_output(stdout)
     assert text == "the real one"
+
+
+# --- REQ-000000397: A query can read a project's checkout and change nothing ---
+
+
+def test_a_read_only_claude_has_only_the_tools_that_read_confined_to_its_directory():
+    argv = claude_argv("refine this", user_messages=False, minimal=True, read_only=True)
+    assert argv[:3] == ["claude", "-p", "refine this"]
+    assert "--restricted" in argv and argv[argv.index("--tools") + 1] == "Read,Grep,Glob"
+    assert "--dangerously-skip-permissions" not in argv
+    assert "--strict-mcp-config" in argv and "--disable-slash-commands" in argv
+    plain = claude_argv("refine this", user_messages=False, minimal=True)
+    assert "--dangerously-skip-permissions" in plain and "--restricted" not in plain and "--tools" not in plain

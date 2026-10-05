@@ -184,8 +184,9 @@ def _policy_app(status: int, body: dict | None = None) -> FastAPI:
 def test_cli_client_posts_the_request_to_the_policy_socket(tmp_path, monkeypatch):
     paths = Paths(config_home=tmp_path / "c", state_home=tmp_path / "s")
     patch_socket_apps(monkeypatch, cli_client, {paths.socket_path("policy"): _policy_app(200, {"blocking": []})})
+    monkeypatch.setattr(cli_client, "cli_origin", lambda: "user_cli")
     result = cli_client.policy_evaluate(paths, "p", "commit", commit={"message": "m"}, checkout="/x")
-    assert result["echo"] == {"project_id": "p", "gate_point": "commit", "commit": {"message": "m"}, "checkout": "/x"}
+    assert result["echo"] == {"project_id": "p", "gate_point": "commit", "commit": {"message": "m"}, "checkout": "/x", "origin": "user_cli"}
 
 
 @pytest.mark.parametrize("status, error, text", [
@@ -220,7 +221,7 @@ def test_mcp_tool_evaluates_through_the_policy_pillar(tmp_path, monkeypatch):
     patch_core_discovery(monkeypatch, paths, {"policy": paths.socket_path("policy")})
     patch_socket_apps(monkeypatch, mcp_client, {paths.socket_path("policy"): _policy_app(200, {"blocking": ["x"]})})
     result = tools_mod.TOOLS_BY_NAME["workshop_policy_evaluate"].handler(paths, {"project_id": "p", "gate_point": "branch_finish"})
-    assert result["blocking"] == ["x"] and result["echo"] == {"project_id": "p", "gate_point": "branch_finish"}
+    assert result["blocking"] == ["x"] and result["echo"] == {"project_id": "p", "gate_point": "branch_finish", "origin": "claude"}
     schema = tools_mod.TOOLS_BY_NAME["workshop_policy_evaluate"].input_schema
     assert "commit" not in schema["properties"]["gate_point"]["enum"]
 

@@ -3367,3 +3367,121 @@ def test_the_page_explains_how_the_estimates_are_made(test_client, monkeypatch):
     assert "How the estimates are made" in page and "2.4 bytes per token" in page and "about 97 tokens of overhead" in page
     assert "fitted on 20,693 stored turns" in page and "the newest 6,208" in page and "within 76 tokens (median, 6%)" in page
     assert "total within 0.8%" in page and "a median of 144 later requests" in page
+
+
+# --- REQ-000000398, REQ-000000399: remote control on a running Claude job's page ---
+
+
+def _rc(**overrides):
+    base = {"running": True, "active": False, "can_activate": True, "can_deactivate": False, "already_set_up": False,
+            "session_name": None, "started_at": None, "stopped_at": None}
+    base.update(overrides)
+    return base
+
+
+def _claude_job_pages(monkeypatch, *, job_status="running", run_status="running", job_type="agent.run_task", rc=None):
+    job = {**_job(1, type=job_type, status=job_status, project_id="little-meals", result=None), "steps": []}
+    run = {"id": "r1", "job_id": job["id"], "project_id": "little-meals", "title": "Do it", "status": run_status,
+           "created_at": "2026-10-04T20:00:00+00:00", "updated_at": "2026-10-04T20:00:00+00:00"}
+    monkeypatch.setattr(client, "agent_run", lambda paths, project, run_id: run)
+    monkeypatch.setattr(client, "agent_run_for_job", lambda paths, job_id: run)
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: job)
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
+    monkeypatch.setattr(client, "agent_peek", lambda paths, job_id, **kw: None)
+    monkeypatch.setattr(client, "agent_remote_control", lambda paths, job_id, project_id="": rc)
+    return job, ("/tasks/little-meals/r1", f"/jobs/{job['id']}")
+
+
+def test_a_running_claude_job_page_offers_to_activate_remote_control(test_client, monkeypatch):
+    job, urls = _claude_job_pages(monkeypatch, rc=_rc())
+    for url in urls:
+        page = test_client.get(url).text
+        assert "Activate remote-control" in page and f'action="/jobs/{job["id"]}/remote-control/activate"' in page, url
+        assert "Deactivate remote-control" not in page
+
+
+def test_a_running_job_with_an_existing_session_only_says_it_is_set_up(test_client, monkeypatch):
+    _, urls = _claude_job_pages(monkeypatch, rc=_rc(active=True, can_activate=False, already_set_up=True, session_name="lws-little-meals-run-r1abcdef",
+                                                    started_at="2026-10-05T10:00:00+00:00"))
+    for url in urls:
+        page = test_client.get(url).text
+        assert "already set up" in page and "lws-little-meals-run-r1abcdef" in page, url
+        assert "Activate remote-control" not in page and "Deactivate remote-control" not in page
+
+
+def test_after_activation_the_page_shows_status_and_name_with_no_link_url_or_qr_code(test_client, monkeypatch):
+    _, urls = _claude_job_pages(monkeypatch, rc=_rc(active=True, can_activate=False, can_deactivate=True, session_name="lws-little-meals-rc-r1abcdef",
+                                                    started_at="2026-10-05T10:00:00+00:00"))
+    for url in urls:
+        page = test_client.get(url).text
+        card = page.split('data-remote-control="', 1)[1].split("</section>", 1)[0]
+        assert card.startswith("active") and "lws-little-meals-rc-r1abcdef" in card and "Deactivate remote-control" in card
+        assert "Activate remote-control" not in card
+        assert "<a " not in card and "http" not in card and "qr" not in card.lower() and "<img" not in card and "<svg" not in card
+
+
+def test_after_deactivation_the_status_stays_as_history_and_the_button_returns_while_running(test_client, monkeypatch):
+    _, urls = _claude_job_pages(monkeypatch, rc=_rc(session_name="lws-little-meals-rc-r1abcdef", started_at="2026-10-05T10:00:00+00:00",
+                                                    stopped_at="2026-10-05T10:05:00+00:00"))
+    for url in urls:
+        page = test_client.get(url).text
+        assert "lws-little-meals-rc-r1abcdef" in page and "ended 2026-10-05 10:05:00" in page and "Activate remote-control" in page, url
+
+
+@pytest.mark.parametrize("job_status,run_status", [("pending_confirmation", "starting"), ("succeeded", "awaiting_finish"), ("failed", "failed"), ("failed", "stopped")])
+def test_a_job_that_is_not_running_has_no_button_but_keeps_its_history(test_client, monkeypatch, job_status, run_status):
+    _, urls = _claude_job_pages(monkeypatch, job_status=job_status, run_status=run_status, rc=_rc(
+        running=False, can_activate=False, session_name="lws-little-meals-rc-r1abcdef", started_at="2026-10-05T10:00:00+00:00", stopped_at="2026-10-05T10:05:00+00:00"))
+    for url in urls:
+        page = test_client.get(url).text
+        assert "Activate remote-control" not in page and "Deactivate remote-control" not in page
+        assert "lws-little-meals-rc-r1abcdef" in page and "ended" in page
+
+
+def test_a_job_that_never_ran_claude_shows_no_remote_control_section(test_client, monkeypatch):
+    for rc in (None, _rc(running=False, can_activate=False)):  # no session at all / not running and never activated
+        _, urls = _claude_job_pages(monkeypatch, job_status="succeeded", run_status="finished", rc=rc)
+        for url in urls:
+            assert "remote-control" not in test_client.get(url).text.lower().replace("data-remote-control", ""), url
+
+
+def test_a_job_that_does_not_use_claude_never_asks_for_remote_control(test_client, monkeypatch):
+    asked = []
+    job = {**_job(1, type="deployment.redeploy_pillar", status="running"), "steps": []}
+    monkeypatch.setattr(client, "get_job", lambda paths, job_id: job)
+    monkeypatch.setattr(client, "agent_remote_control", lambda *a, **kw: asked.append(a) or _rc())
+    assert "Activate remote-control" not in test_client.get(f"/jobs/{job['id']}").text and asked == []
+
+
+def test_the_lists_have_no_remote_control_button(test_client, monkeypatch):
+    _claude_job_pages(monkeypatch, rc=_rc())
+    monkeypatch.setattr(client, "agent_runs", lambda paths, project: [])
+    for url in ("/jobs", "/tasks"):
+        assert "Activate remote-control" not in test_client.get(url).text
+
+
+def test_the_remote_control_page_follows_its_job_so_the_button_goes_without_a_refresh(test_client, monkeypatch):
+    job, urls = _claude_job_pages(monkeypatch, rc=_rc())
+    for url in urls:
+        page = test_client.get(url).text
+        assert f"job:{job['id']}" in page.split('data-live="', 1)[1].split('"', 1)[0]
+        card = page.index('data-remote-control="')
+        assert page.index("data-live-region") < card < page.index("</div>", card)  # inside the page's first live region
+
+
+@pytest.mark.parametrize("action", ["activate", "deactivate"])
+def test_the_remote_control_buttons_call_the_agent_and_come_back(test_client, monkeypatch, action):
+    sent = []
+    monkeypatch.setattr(client, "agent_remote_control_act", lambda paths, job_id, act, project_id="": sent.append((job_id, act, project_id)) or {"session_name": "lws-x-rc-1"})
+    response = test_client.post(f"/jobs/j1/remote-control/{action}", data={"project_id": "little-meals", "next": "/tasks/little-meals/r1"}, follow_redirects=False)
+    assert sent == [("j1", action, "little-meals")] and response.headers["location"].startswith("/tasks/little-meals/r1?message=")
+
+
+def test_a_refused_remote_control_is_reported_and_an_unknown_action_is_ignored(test_client, monkeypatch):
+    def refuse(paths, job_id, act, project_id=""):
+        raise client.RemoteControlRefused("Claude is not running this job")
+
+    monkeypatch.setattr(client, "agent_remote_control_act", refuse)
+    location = test_client.post("/jobs/j1/remote-control/activate", follow_redirects=False).headers["location"]
+    assert location.startswith("/jobs/j1") and "not%20running" in location
+    assert "Unknown" in unquote(test_client.post("/jobs/j1/remote-control/bogus", follow_redirects=False).headers["location"])

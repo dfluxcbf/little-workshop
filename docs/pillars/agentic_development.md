@@ -164,15 +164,52 @@ or failed. Different projects run fully in parallel.
 
 ## Watching a run: Remote Control
 
-Every `agent.run_task` Job runs under Claude Code's Remote Control,
-named for the project and task so it's identifiable in the Claude app —
-this is the same mechanism `docs/pillars/policy_compliance.md`'s OQ-9
-resolution reuses for a second purpose (delivering a time-sensitive
-notification), not a coincidence: it's this pillar's own proven
-capability, called from elsewhere exactly the way "a new capability maps
-to an existing pillar's interface" already requires. The agent also gets
-the user-messaging tool, so it can ask a genuine question mid-run — which
-plan to take, which of two designs to use — instead of guessing.
+An `agent.run_task` Job's Claude is started with Claude Code's Remote Control
+by default, named `lws-<project>-run-<run id>` so it is identifiable in the
+Claude app, and an update-docs session started with its Remote Control
+option has it too; both are recorded in `remote_control_sessions`. This is
+the same mechanism `docs/pillars/policy_compliance.md`'s OQ-9 resolution
+reuses for a second purpose (delivering a time-sensitive notification), not
+a coincidence: it's this pillar's own proven capability, called from
+elsewhere exactly the way "a new capability maps to an existing pillar's
+interface" already requires. The agent also gets the user-messaging tool, so
+it can ask a genuine question mid-run — which plan to take, which of two
+designs to use — instead of guessing.
+
+### Activating Remote Control on a running Job
+
+Any Job whose Claude is running (a task, an update-docs session, an
+`agent.query` such as a backlog refinement or a policy authoring) can be taken
+over from the Claude app even when it was started without Remote Control. Its
+own page (`/tasks/<project>/<run>` and `/jobs/<id>`, never the lists) shows,
+only while Claude runs it, an **Activate remote-control** button. The agent
+(`src/agent/remote_control.py`, `/v1/remote-control/<job id>[/activate|/deactivate]`)
+then **resumes** the Job's session — `claude --resume <session id>
+--remote-control lws-<project>-rc-<id>` under `dtach`, in its own systemd scope
+(`lws-rc-<id>`), in the folder the session ran in. Remote Control is never added
+to the live process, and nothing that runs the work is stopped or restarted.
+No link, URL or QR code is captured or shown: the page shows the status and the
+session name, to be found in the Claude Code app. There is no user check.
+
+- **Existing session.** A session that already has a row in
+  `remote_control_sessions` (a task started with `--remote-control`) is reported as
+  already set up and is never duplicated. It has no deactivate control: its
+  connection cannot be dropped without ending the Claude that is working.
+- **Deactivate.** A session this button activated can be deactivated from the page;
+  that stops only its own scope and sets `stopped_at`. The Job keeps running.
+- **Active.** A session is active from `started_at` until `stopped_at`, and counts as
+  active only while its Job runs. `stopped_at` is set (`record_session_stop`,
+  `stop_open_sessions`) when the user deactivates and when the Job's Claude work
+  ends — a task's Claude exits (completed, failed, stopped), an update-docs session
+  is finalized or stopped, a query ends — which also ends an activated scope.
+  Rows are keyed by `agent_run_id`: the run's id for a task, the Job's id for any
+  other Job (the schema is unchanged).
+- **History.** After deactivation and after the Job ends, the status and name stay
+  on the page.
+- **Live.** The page follows `job:<id>`, so the button appears and disappears with the
+  Job's status without a refresh.
+- **Not covered.** Ad-hoc project sessions (`agent.session_start`) are not Jobs with a
+  page of their own; they always run with Remote Control.
 
 ## GitHub adapter: two techniques worth keeping exactly as proven
 
@@ -451,7 +488,8 @@ M18 of `docs/milestones.md` (REQ-000000320, REQ-000000321); the reasons are in
   A headless update-doc session's row comes from the result JSON that ends `.review/session.log`; a Remote
   Control session writes none. `GET /v1/runs/{project}/{run}` returns the run's summed `usage`, and
   `GET /v1/usage?project_id=&kind=&since=` lists the rows.
-- **`agent.query`.** Each query runs in `<state home>/agent-query`, the same directory every time, because
+- **`agent.query`.** Each query runs in `<state home>/agent-query`, the same directory every time (unless it
+  reads a project's checkout: "A query that reads a project's checkout" below), because
   Claude's prompt cache is scoped to the working directory; with `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, because a
   one-request call gains nothing from a 1-hour cache write; and with `--strict-mcp-config
   --disable-slash-commands`, because a text-in/text-out call uses neither MCP servers nor skills. Checked on a real query
@@ -474,6 +512,44 @@ A task run's own `model` and `max_budget_usd` (an `AgentFlow` built with them) w
 run was given is stored with its usage (`claude_usage.budget_usd`), and a run's status carries `budget_usd` and
 `budget_used`. Claude Code 2.1.289 has no `--max-turns` option, so a bound on turns is not set. The launch
 environment a run gets for attribution is described in `docs/pillars/usage.md`, "Configuration".
+
+Since 2026-10-05 the table has a fifth line, `agent.query.checkout`: not a Job type, but an `agent.query` that
+reads a project's checkout (next section), bounded at $3.00 because it reads for several turns.
+
+## A query that reads a project's checkout (2026-10-05)
+
+REQ-000000397. A backlog entry's refinement and task prompt were written from the entry's text alone, in
+the query folder, so they could not say where a change went or how that part worked. `agent.query` with
+`params.read_checkout: true` (and the Job's `project_id`) now runs Claude in that project's registered
+checkout, resolved through Registry & Portfolio and symlinks followed, where it can read and nothing else:
+
+- `claude_argv(read_only=True)` gives `--restricted --tools Read,Grep,Glob` in place of
+  `--dangerously-skip-permissions`. Only the tools that read are there; `--restricted` confines them to
+  the working directory, skips every settings file (so no hooks either) and refuses to bypass permissions,
+  which reads inside the working directory never need. The project's own instructions (`AGENTS.md`)
+  still load, so Claude knows its conventions. `--strict-mcp-config --disable-slash-commands` stay.
+  The Usage pillar's hooks live in the user's settings, so they do not run for it (`docs/pillars/usage.md`,
+  S3: its end reason and compactions go unrecorded); its run result (S1) and telemetry (S2, through the
+  launch environment) count it as before, and the daily `usage.ingest_transcripts` reads its transcript
+  in place of the session-end hook (S5). Confinement that no settings file can widen is worth that.
+- Launch defaults `agent.query.checkout` ($3.00) and a 600 s ceiling (`CHECKOUT_QUERY_TIMEOUT_SECONDS`)
+  in place of the query's $1.00 and 300 s.
+- A project that cannot be resolved, or whose checkout is not a directory, fails the query before
+  Claude starts. Any other query runs as before: policy authoring needs no checkout.
+- The session records where it ran (`query_sessions.cwd`), since Claude keeps a transcript under its
+  working directory: the peek and `forget` read it there, and `forget` deletes only that session's files
+  among the owner's own sessions of that checkout. A row from before has no `cwd` and means the query folder.
+
+Checked on real runs. With Haiku in a scratch folder: reads inside the working directory needed no
+permission, `AGENTS.md` was followed, a read outside the folder was refused, and with no Write tool
+there was nothing to create a file with. With the defaults, refining a little-workshop backlog entry in
+its checkout took 28 s, 8 turns and $0.07 (7 Grep and Read calls), and wrote a refined entry that named
+the functions involved (`src/orchestration/dispatch.py`) and kept the decisions as open questions. The
+transcript was where the session recorded it.
+
+The checkout is read as it is, on its current branch and with any uncommitted work, not as `dev`, where a
+task branches from. That is enough to know the code; a worktree at `dev` would cost one per query and the
+prompt cache.
 
 ## A task never outlives its worker (2026-10-04)
 
@@ -532,4 +608,6 @@ Since 2026-10-05 (REQ-000000386) each `agent.query` runs under a session id of i
 `backlog:<entry id>`), so the peek of that Job reads it (`source: "query"`): a backlog entry's refinement
 or task prompt, a policy's authoring (Policy & Compliance passes the Job it runs under). `POST
 /v1/query-sessions/forget {"ref"}` deletes the transcripts of every session recorded under `ref` (and its
-subagents'), and their records (REQ-000000387): what a deleted backlog entry leaves here.
+subagents'), and their records (REQ-000000387): what a deleted backlog entry leaves here. Both look under
+the directory the session ran in (`query_sessions.cwd`, a project's checkout for a query that reads it);
+`forget`, should a transcript not be there, deletes it wherever Claude put it.

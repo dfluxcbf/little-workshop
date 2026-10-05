@@ -46,6 +46,8 @@ class Job(BaseModel):
     queue_key: str | None = None
     depends_on: list[str] = Field(default_factory=list)
     created_by: str = "unknown"
+    # Where the request came from (`common.origin`): what a policy bypass is decided by.
+    origin: str = "unknown"
     result: dict[str, Any] | None = None
     error: str | None = None
     created_at: datetime = Field(default_factory=_now)
