@@ -1076,3 +1076,15 @@ it loads or is enforced, and checks the result.
   `git merge*` also denied the read-only `git merge-base`. `tools/sync_claude_files.py` drops the
   retired patterns (`claude_templates.RETIRED_RULES`) from a project's settings instead of keeping
   them as the project's own.
+
+## Reading the latest results, and policies without their scripts (2026-10-05)
+
+REQ-000000390. `GET /v1/policy_check_results` takes `latest=true`, which keeps only the newest result of
+each policy and project (picked in the store), `outcome`, which then keeps those of that outcome (a
+policy failing now, not one that failed once), and `checked_since`, the results recorded since a time.
+`GET /v1/policies?view=summary` leaves out each policy's test script. The Dashboard's attention banner,
+on every page, read the whole history (1,642 results, 1.4 MB, on 2026-10-05) and every script (118 KB of
+a 140 KB list) to show the 4 policies failing; it now reads the latest failing results and the
+summaries, its policies pages the latest results, and its statistics the results recorded since their
+last count (REQ-000000391). Without a parameter both answer as before.
+

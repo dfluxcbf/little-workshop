@@ -17,6 +17,8 @@ documents for MCP Server.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import httpx
 
 from common.paths import Paths
@@ -169,16 +171,24 @@ def list_secrets(paths: Paths, *, timeout: float = 5.0) -> list[dict]:
     return _get(paths, "registry", "/v1/secrets", timeout=timeout)
 
 
-def policy_list(paths: Paths, *, topic: str | None = None, timeout: float = 5.0) -> list[dict]:
-    return _get(paths, "policy", "/v1/policies", params={"topic": topic} if topic else None, timeout=timeout)
+def policy_list(paths: Paths, *, topic: str | None = None, summary: bool = False, timeout: float = 5.0) -> list[dict]:
+    """Every policy; a summary leaves out each one's test script (what a list of policies reads)."""
+    params = {"topic": topic, "view": "summary" if summary else None}
+    return _get(paths, "policy", "/v1/policies", params={k: v for k, v in params.items() if v is not None}, timeout=timeout)
 
 
 def policy_get(paths: Paths, policy_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "policy", f"/v1/policies/{policy_id}", timeout=timeout)
 
 
-def policy_check_results(paths: Paths, *, timeout: float = 5.0) -> list[dict]:
-    return _get(paths, "policy", "/v1/policy_check_results", timeout=timeout)
+def policy_check_results(paths: Paths, *, latest: bool = False, outcome: str | None = None, policy_id: str | None = None,
+                         checked_since: datetime | None = None, timeout: float = 5.0) -> list[dict]:
+    """Check results, oldest first: `latest` only the newest of each policy and project (with `outcome`,
+    those of that outcome), `checked_since` only those recorded since. A Policy pillar from before these
+    answers with the whole history, so a caller still folds them to the newest."""
+    params = {"latest": "true" if latest else None, "outcome": outcome, "policy_id": policy_id,
+              "checked_since": checked_since.isoformat() if checked_since else None}
+    return _get(paths, "policy", "/v1/policy_check_results", params={k: v for k, v in params.items() if v is not None}, timeout=timeout)
 
 
 def policy_drafts(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> list[dict]:

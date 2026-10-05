@@ -15,6 +15,7 @@ import subprocess
 import functools
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -791,9 +792,14 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     # -- reads ----------------------------------------------------------------
 
     @app.get("/v1/policies")
-    def list_policies(topic: str | None = None) -> list[dict]:
+    def list_policies(topic: str | None = None, view: str = "full") -> list[dict]:
+        """Every policy; `view=summary` leaves out each one's test script, which a list never shows and which
+        is most of what a policy holds (REQ-000000390)."""
         with lock:
-            return [p.model_dump(mode="json") for p in db.list_policies(conn, topic=topic)]
+            policies = [p.model_dump(mode="json") for p in db.list_policies(conn, topic=topic)]
+        if view == "summary":
+            return [{key: value for key, value in p.items() if key != "test_script"} for p in policies]
+        return policies
 
     @app.get("/v1/policies/winning")
     def get_winning_policy(topic: str, project_id: str) -> dict:
@@ -907,9 +913,21 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             return db.list_policy_projects(conn, policy_id=policy_id, project_id=project_id)
 
     @app.get("/v1/policy_check_results")
-    def list_check_results(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:
+    def list_check_results(
+        policy_id: str | None = None, project_id: str | None = None, checked_since: datetime | None = None,
+        latest: bool = False, outcome: str | None = None,
+    ) -> list[dict]:
+        """The check results, oldest first; `latest` only the newest of each policy and project (and with
+        `outcome`, those of that outcome), `checked_since` only those recorded since."""
+        if outcome is not None:
+            try:
+                CheckOutcome(outcome)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
         with lock:
-            return [r.model_dump(mode="json") for r in db.list_check_results(conn, policy_id=policy_id, project_id=project_id)]
+            results = db.list_check_results(conn, policy_id=policy_id, project_id=project_id, checked_since=checked_since,
+                                            latest=latest, outcome=outcome)
+        return [r.model_dump(mode="json") for r in results]
 
     @app.get("/v1/policy_check_results/latest")
     def get_latest_check_result(policy_id: str, project_id: str) -> dict:

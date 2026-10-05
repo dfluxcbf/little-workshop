@@ -245,7 +245,8 @@ def build_app(
             raise HTTPException(status_code=400, detail=f"each age must be 1..{MAX_CLEANUP_HOURS} hours")
         now = datetime.now(timezone.utc)
         with lock:
-            return {"prunable": {str(a): db.count_prunable_jobs(conn, now - timedelta(hours=a)) for a in ages}}
+            counts = db.count_prunable_jobs_by_age(conn, [now - timedelta(hours=a) for a in ages])
+        return {"prunable": {str(a): n for a, n in zip(ages, counts)}}
 
     @app.post("/v1/job-cleanup")
     def job_cleanup(request: JobCleanupRequest) -> dict:

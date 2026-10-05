@@ -315,18 +315,31 @@ def _row_to_result(row: sqlite3.Row) -> PolicyCheckResult:
 
 
 def list_check_results(
-    conn: sqlite3.Connection, *, policy_id: str | None = None, project_id: str | None = None
+    conn: sqlite3.Connection, *, policy_id: str | None = None, project_id: str | None = None,
+    checked_since: datetime | None = None, latest: bool = False, outcome: str | None = None,
 ) -> list[PolicyCheckResult]:
-    query = "SELECT * FROM policy_check_results WHERE 1=1"
+    """Check results, oldest first: of a policy, a project, those recorded since `checked_since`. `latest`
+    keeps only the newest result of each policy and project, and `outcome` then keeps those with it (a
+    policy failing now, not one that failed once) -- REQ-000000390."""
+    where: list[str] = []
     params: list[str] = []
-    if policy_id is not None:
-        query += " AND policy_id = ?"
-        params.append(policy_id)
-    if project_id is not None:
-        query += " AND project_id = ?"
-        params.append(project_id)
-    query += " ORDER BY checked_at"
-    rows = conn.execute(query, params).fetchall()
+    for column, value in (("policy_id", policy_id), ("project_id", project_id)):
+        if value is not None:
+            where.append(f"{column} = ?")
+            params.append(value)
+    if checked_since is not None:
+        where.append("checked_at >= ?")
+        params.append(_iso(checked_since))
+    clause = f" WHERE {' AND '.join(where)}" if where else ""
+    if latest:
+        query = ("SELECT * FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY policy_id, project_id ORDER BY checked_at DESC, rowid DESC)"
+                 f" AS newest FROM policy_check_results{clause}) WHERE newest = 1")
+    else:
+        query = f"SELECT * FROM policy_check_results{clause}"
+    if outcome is not None:
+        query += f" {'AND' if latest or where else 'WHERE'} outcome = ?"
+        params.append(outcome)
+    rows = conn.execute(query + " ORDER BY checked_at", params).fetchall()
     return [_row_to_result(row) for row in rows]
 
 

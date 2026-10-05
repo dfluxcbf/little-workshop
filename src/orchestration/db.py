@@ -526,20 +526,29 @@ def get_pipeline_run(conn: sqlite3.Connection, run_id: str) -> PipelineRun | Non
 FINISHED_STATUSES = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.STOPPED)
 
 
-def _plan_cleanup(conn: sqlite3.Connection, before: datetime) -> tuple[set[str], list[str], int]:
+def _cleanup_facts(conn: sqlite3.Connection) -> dict[str, tuple[JobStatus, datetime, list[str]]]:
+    """What a cleanup plan needs of each Job: {id: (status, last change, depends_on)}. Never its params or
+    result, which are most of what the store holds (REQ-000000389)."""
+    return {row["id"]: (JobStatus(row["status"]), _parse_iso(row["updated_at"]), json.loads(row["depends_on"]))
+            for row in conn.execute("SELECT id, status, updated_at, depends_on FROM jobs")}
+
+
+def _plan_cleanup(conn: sqlite3.Connection, before: datetime,
+                  jobs: dict[str, tuple[JobStatus, datetime, list[str]]] | None = None) -> tuple[set[str], list[str], int]:
     """(job ids to delete, pipeline run ids to delete, eligible jobs kept for safety).
 
     Only *finished* jobs last updated before `before` are eligible. Kept regardless:
     a job an unfinished job still depends on (the queue reads its status), a
     scheduled task's last job, and every job of a pipeline run that is not wholly
-    eligible — a run is removed whole or kept whole, never left partial."""
-    jobs = {job.id: job for job in list_jobs(conn)}
-    eligible = {i for i, job in jobs.items() if job.status in FINISHED_STATUSES and job.updated_at < before}
+    eligible — a run is removed whole or kept whole, never left partial. `jobs` is
+    `_cleanup_facts`, read once when several ages are planned."""
+    jobs = jobs if jobs is not None else _cleanup_facts(conn)
+    eligible = {i for i, (status, updated_at, _) in jobs.items() if status in FINISHED_STATUSES and updated_at < before}
 
     protected: set[str] = set()
-    for job in jobs.values():
-        if job.status not in FINISHED_STATUSES:
-            protected.update(job.depends_on)
+    for status, _, depends_on in jobs.values():
+        if status not in FINISHED_STATUSES:
+            protected.update(depends_on)
     for row in conn.execute("SELECT last_job_id FROM scheduled_tasks WHERE last_job_id IS NOT NULL"):
         protected.add(row["last_job_id"])
 
@@ -571,6 +580,12 @@ def _plan_cleanup(conn: sqlite3.Connection, before: datetime) -> tuple[set[str],
 
 def count_prunable_jobs(conn: sqlite3.Connection, before: datetime) -> int:
     return len(_plan_cleanup(conn, before)[0])
+
+
+def count_prunable_jobs_by_age(conn: sqlite3.Connection, befores: list[datetime]) -> list[int]:
+    """`count_prunable_jobs` for each of `befores`, the Jobs read once for all of them."""
+    jobs = _cleanup_facts(conn)
+    return [len(_plan_cleanup(conn, before, jobs)[0]) for before in befores]
 
 
 def prune_finished_jobs(conn: sqlite3.Connection, before: datetime) -> dict:

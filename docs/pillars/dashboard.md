@@ -488,12 +488,13 @@ deletes old Jobs and the plots must outlive them.
 
 - **Updating** is automatic, never asked for: on every visit of the page, every ten minutes while
   the Dashboard runs (a background thread started with the app, `STATISTICS_UPDATE_SECONDS`), and
-  before old jobs are deleted. Each time the Dashboard reads the policy check results and policies
-  (Policy & Compliance) and incidents (Agentic Development) the pillars hold, and of the Jobs
-  (Orchestration) the summaries of those changed since the last update, less ten minutes; once a day
-  it reads every Job's summary (2026-10-05, REQ-000000383). It adds each one it has not counted to its
-  day. A `seen` table remembers what was counted, so updating twice counts nothing twice; an id the
-  pillar no longer holds is forgotten, its counts stay (Jobs only by the daily read of every Job). A
+  before old jobs are deleted. Each time the Dashboard reads the policies (Policy & Compliance, without
+  their scripts) and incidents (Agentic Development) the pillars hold, the summaries of the Jobs
+  (Orchestration) changed since the last update and the policy check results recorded since then, each
+  less ten minutes; once a day it reads all the Jobs and results (2026-10-05, REQ-000000383,
+  REQ-000000391). It adds each one it has not counted to its day. A `seen` table remembers what was
+  counted, so updating twice counts nothing twice; an id the pillar no longer holds is forgotten, its
+  counts stay (Jobs and results only by the daily read of all of them). A
   test run's summary keeps its verdict counts; one from before runs answered with counts is read whole
   to tell whether a test failed. A Job is counted
   as triggered when first seen and as succeeded or failed once it has ended (a cancelled Job is
@@ -671,7 +672,11 @@ the attention banner the Jobs awaiting confirmation or running; the launch butto
 deploys and session starts; Tasks the task Jobs that may lack a run; a project's docs its active
 update-doc Jobs; Schedule the month's Jobs (the scheduler's, unless Everything is chosen); what a Job
 waits on the Jobs it names. The Jobs page reads the counts per status (`GET /v1/jobs/counts`, with the
-search for the total) and the one page it shows, newest first; Statistics read only what changed. The
+search for the total) and the one page it shows, newest first, and how many Jobs each cleanup age would
+delete without any Job's content (REQ-000000389); Statistics read only what changed. The attention banner
+reads the latest failing policy results and the policies without their scripts, the policies pages the
+latest results (REQ-000000390), and Statistics the policy results recorded since their last count
+(REQ-000000391). The
 Jobs page and a job's page show at most 20,000 characters of a Job's params or result (`JSON_SHOWN`),
 then say how much there is, and name what a summary left out; both link to `/jobs/{id}.json`, the whole
 Job.
