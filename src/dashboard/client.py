@@ -21,6 +21,7 @@ from datetime import datetime
 
 import httpx
 
+from common import origin as origins
 from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
 from common.uds_client import client_for_socket
@@ -54,6 +55,7 @@ def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
 
 
 def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
+    fields.setdefault("origin", origins.UI_JOB)  # a Job triggered through the UI: never bypassable
     socket_path = resolve_pillar_socket(paths, "orchestration", timeout=timeout)
     if socket_path is None:
         raise PillarUnavailable("orchestration daemon unreachable — Core has no socket for it registered")
@@ -189,6 +191,16 @@ def policy_check_results(paths: Paths, *, latest: bool = False, outcome: str | N
     params = {"latest": "true" if latest else None, "outcome": outcome, "policy_id": policy_id,
               "checked_since": checked_since.isoformat() if checked_since else None}
     return _get(paths, "policy", "/v1/policy_check_results", params={k: v for k, v in params.items() if v is not None}, timeout=timeout)
+
+
+def policy_bypass(paths: Paths, *, timeout: float = 3.0) -> dict:
+    """The `bypass_policies` flag: `{"bypass_policies": bool, "remaining_seconds", "expires_at", "enabled_by"}`."""
+    return _get(paths, "policy", "/v1/bypass", timeout=timeout)
+
+
+def policy_bypass_off(paths: Paths, *, timeout: float = 5.0) -> dict:
+    """The Dashboard's button: the flag back to FALSE now. It can only lower the flag, never raise it."""
+    return _send(paths, "policy", "POST", "/v1/bypass", json={"enabled": False, "origin": origins.UI_JOB, "actor": "dashboard"}, timeout=timeout)
 
 
 def policy_drafts(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> list[dict]:

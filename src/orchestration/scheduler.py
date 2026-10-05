@@ -16,6 +16,7 @@ import threading
 from contextlib import nullcontext
 from datetime import datetime
 
+from common import origin
 from orchestration import db
 from orchestration.dispatch import SocketLookup, dispatch_ready_jobs, expire_attention_steps, expire_stuck_jobs
 from orchestration.models import Job, ScheduledTask, ScheduledTaskState, ScheduleKind
@@ -37,6 +38,7 @@ def _create_job_from_template(
         queue_key=task.job_template.queue_key,
         depends_on=task.job_template.depends_on,
         created_by="scheduler",
+        origin=origin.SCHEDULED_JOB,
     )
     guard = lock if lock is not None else nullcontext()
     with guard:

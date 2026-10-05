@@ -582,17 +582,36 @@ and tasks (`dashboard/calendar.py`): their runs come from Orchestration's Job hi
 scheduler created), on the local day each was created, and what will run from the scheduled tasks — a
 once task on its day, a weekly one on each of its days from its next run on; a missed firing shows on its
 day as skipped. **Everything** (`&show=all`) adds every other job and task that ran (a branch finish alone
-creates dozens of policy checks, hence not by default); a day shows six items and "+N more", which lists
-them all in the panel. A Job deleted from the history, one cancelled before it ran and a removed
-schedule are not shown. Tasks (`agent.run_task`) and
-jobs differ in colour and shape (the item's left edge and its glyph, square for a task, round for a
-job); the state is the fill: succeeded green, failed red, running cyan, skipped grey (a stopped job, a
-skipped or stopped run), scheduled dashed (queued, or still to come). A task's state is its run's (a run
-awaiting review counts as succeeded). Choosing an item loads its details into a panel beside the
-calendar on a wide screen and under it on a phone (`/schedule/item/job/{id}`,
-`/schedule/item/scheduled/{id}?at=`): a job's checklist, error and links to the job and its task, or a
-schedule's times and template with a link to its page, where it is removed. Choosing a day lists its
-items in the panel; on a phone the month shows only the glyphs. The page follows the `schedule` topic.
+creates dozens of policy checks, hence not by default). A Job deleted from the history, one cancelled
+before it ran and a removed schedule are not shown.
+
+A day shows symbols, not items (2026-10-05): a triangle for tasks (`agent.run_task`), a circle for jobs,
+filled with the state's colour — succeeded green, failed red, running cyan (pulsing), skipped grey (a
+stopped job, a skipped or stopped run), scheduled hollow and dashed (queued, or still to come). A task's
+state is its run's (a run awaiting review counts as succeeded). A symbol is never repeated: there is one
+per kind and state, with the number of items it stands for inside when there are several (`99+` above
+99), tasks first, then jobs, each in the order succeeded, failed, running, skipped, scheduled
+(`calendar.symbols`).
+
+A day is one button and nothing on the calendar is a link: a tap anywhere on a day lists all its items in
+a panel beside the calendar on a wide screen and under it on a phone, each a line (symbol, time, title,
+state) that expands and collapses on its own, so several can be open at the same time. Expanding an item
+reads its details (`/schedule/item/job/{id}`, `/schedule/item/scheduled/{id}?at=`): a job's checklist,
+error and links to the job and its task, or a schedule's times and template with a link to its page,
+where it is removed. The day's sheet travels with the month (a `<template>` in the day), so listing a day
+reads nothing more. The page follows the `schedule` topic: when the month changes, the panel lists its
+day anew, keeping open the items that were open.
+
+The look (2026-10-05) is the Dashboard identity's — Ledger's structure, Mission Control's colours — with
+depth: a title block (the month, ‹ Today › and a Scheduled | Everything switch); the month at a glance as
+the dashboard's five stat tiles, one per state with its tasks and jobs (`calendar.totals`, the month's
+own days only), which are also the colours' legend; the days as tiles raised off a board (weekends
+tinted, past dates dimmed, days of the months around recessed, today's date a cyan pill with a glow);
+symbols lit from above with a soft shadow, a failed one with a red halo and a running one with a ping
+(succeeded green and running cyan are close, so running also moves: still, a ring, under reduced motion);
+and the day sheet: the date, how far it is from today, a pill per state with its count, and the items on
+a timeline, their details opening in a recessed well. The month that holds today opens with today
+listed; Today lists it again without reloading.
 
 ## Policy filters (2026-10-04)
 
@@ -681,3 +700,9 @@ Jobs page and a job's page show at most 20,000 characters of a Job's params or r
 then say how much there is, and name what a summary left out; both link to `/jobs/{id}.json`, the whole
 Job.
 
+## Policy bypass warning (2026-10-05)
+
+While the Policy pillar's `bypass_policies` flag is TRUE (`GET /v1/bypass`), every page shows a bar under the
+navigation: "bypass_policies is TRUE", the remaining time counting down in the browser (the page reloads when it
+reaches zero), and a "Set to FALSE now" button posting to `/policy-bypass/off`, which sets the flag back at once. The
+Dashboard never raises the flag. See `policy_compliance.md`, "Policy bypass".

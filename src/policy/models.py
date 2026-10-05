@@ -146,3 +146,7 @@ class PolicyCheckResult(BaseModel):
     # unchanged (project, policy) pair and skip re-running the sandbox
     # (docs/pillars/policy_compliance.md's "once per change" rule).
     checked_state: str = ""
+    # Where the request came from (`common.origin`), and whether the user's policy bypass is why a
+    # failing verdict did not gate. The verdict itself is recorded either way.
+    origin: str = "unknown"
+    bypassed: bool = False

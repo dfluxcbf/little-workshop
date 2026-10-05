@@ -359,3 +359,11 @@ A cleanup preview (`GET /v1/job-cleanup`) reads only each Job's id, status, last
 dependencies, once for all the ages it is asked about (REQ-000000389): with 1,792 Jobs it took 1.1 s,
 holding the lock (every Job read whole, once per age), and now takes 0.01 s.
 
+
+## A Job's origin (2026-10-05)
+
+A Job carries `origin` (`common/origin.py`: `user_cli`, `claude`, `scheduled_job`, `ui_job`, `automation`,
+`unknown`), stamped by whoever creates it and stored with it. `attach_policy_gate` passes it to the Policy pillar,
+which decides from it whether the user's policy bypass lifts the gating of the Job's checks; each check Job
+carries the `origin` and `bypassed` it was created with. A Job created by another Job (a release's children, a
+check fan-out) has origin `unknown` and is never bypassed. See `policy_compliance.md`, "Policy bypass".
