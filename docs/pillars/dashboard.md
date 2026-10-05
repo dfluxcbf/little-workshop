@@ -554,13 +554,17 @@ Claude is working on it). An entry's page (`/backlog/{project}/{entry}`) shows i
   entry**: it saves both fields, then starts `registry.backlog_refine`, which has Claude write a new
   refined entry from the primary entry, the current refined entry and the notes, and replaces it;
 - **Task prompt**, with a copy icon at its top right corner and **Generate task prompt**
-  (`registry.backlog_task_prompt`, from the refined entry alone; it ends with the instruction to delete
+  (`registry.backlog_task_prompt`, from the refined entry; it ends with the instruction to delete
   the entry once the work is done). Disabled until the entry is refined.
+
+Both have Claude read the project's checkout, which it cannot change (since 2026-10-05,
+`docs/pillars/registry_portfolio.md`, "Backlog"); the task prompt's card says so.
 
 While Claude works the buttons say so, the entry's page shows the session as it grows (its Claude
 peek), and a failed attempt's error shows until one succeeds. The entry itself records this (Registry &
-Portfolio, REQ-000000385), so the backlog pages read no Jobs; a mark older than ten minutes is shown as
-an attempt that did not finish.
+Portfolio, REQ-000000385), so the backlog pages read no Jobs; a mark older than fifteen minutes (past the
+630 s Orchestration waits for either Job; ten minutes until 2026-10-05, when Claude only had the entry's
+text) is shown as an attempt that did not finish.
 **Launch task** opens New task (`/tasks/new?backlog=<id>`) with the entry's title and its refined entry
 in the Task box (the primary entry while it is not refined). **Delete from backlog** asks first, then
 deletes the entry and everything it holds. The pages follow the `backlog` topic, so an entry refined,

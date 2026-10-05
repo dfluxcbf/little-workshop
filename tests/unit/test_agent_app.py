@@ -9,7 +9,10 @@ from fastapi.testclient import TestClient
 from agent import db
 from agent.app import build_app
 from agent.flow import AgentFlow
+from agent.launch import JOB_QUERY, JOB_QUERY_CHECKOUT, launch_for
+from agent.query import CHECKOUT_QUERY_TIMEOUT_SECONDS, query_dir
 from common.paths import Paths
+from common.registry_client import ProjectResolutionError
 from common.shell import CommandResult
 
 
@@ -389,6 +392,52 @@ def test_agent_query_never_creates_a_run_record(paths, conn):
 
     client.post("/v1/jobs/agent.query", json={"job_id": "j1", "params": {"prompt": "x"}})
     assert db.list_runs(conn, "any-project") == []
+
+
+# --- REQ-000000397: A query can read a project's checkout and change nothing ---
+
+
+def test_a_query_that_reads_the_checkout_runs_in_it_with_only_the_tools_that_read(paths, conn, tmp_path, monkeypatch):
+    checkout = tmp_path / "little-meals"
+    checkout.mkdir()
+    monkeypatch.setattr("agent.app.resolve_project", lambda paths_, project_id, **kw: {"name": project_id, "path": str(checkout)})
+    fake = FakeQueryRunner(response_text="# Refined")
+    client = TestClient(build_app(paths, conn, flow=AgentFlow(paths=paths, runner=fake)))
+
+    answer = client.post("/v1/jobs/agent.query", json={"job_id": "j1", "project_id": "little-meals",
+                                                       "params": {"prompt": "refine this", "read_checkout": True}}).json()
+    assert answer == {"outcome": "succeeded", "result": {"text": "# Refined"}}
+    call = fake.calls[0]
+    argv = call["argv"]
+    assert Path(call["cwd"]) == checkout.resolve()
+    assert "--restricted" in argv and argv[argv.index("--tools") + 1] == "Read,Grep,Glob"
+    assert "--dangerously-skip-permissions" not in argv
+    assert call["timeout"] == CHECKOUT_QUERY_TIMEOUT_SECONDS
+    budget = float(argv[argv.index("--max-budget-usd") + 1])
+    assert budget == launch_for(JOB_QUERY_CHECKOUT).max_budget_usd > launch_for(JOB_QUERY).max_budget_usd
+
+    # A query that does not ask for the checkout (a policy's authoring) runs as before.
+    client.post("/v1/jobs/agent.query", json={"job_id": "j2", "project_id": "little-meals", "params": {"prompt": "x"}})
+    assert Path(fake.calls[1]["cwd"]) == query_dir(paths) and "--restricted" not in fake.calls[1]["argv"]
+
+
+def test_a_query_that_reads_the_checkout_fails_without_one(paths, conn, tmp_path, monkeypatch):
+    fake = FakeQueryRunner()
+    client = TestClient(build_app(paths, conn, flow=AgentFlow(paths=paths, runner=fake)))
+
+    def ask(project_id):
+        return client.post("/v1/jobs/agent.query", json={"job_id": "j1", "project_id": project_id,
+                                                          "params": {"prompt": "x", "read_checkout": True}}).json()
+
+    def unregistered(paths_, project_id, **kw):
+        raise ProjectResolutionError(f"project {project_id!r} is not registered")
+
+    monkeypatch.setattr("agent.app.resolve_project", unregistered)
+    assert ask("nobody") == {"outcome": "failed", "error": "project 'nobody' is not registered"}
+    monkeypatch.setattr("agent.app.resolve_project", lambda paths_, project_id, **kw: {"name": project_id, "path": str(tmp_path / "gone")})
+    gone = ask("little-meals")
+    assert gone["outcome"] == "failed" and str(tmp_path / "gone") in gone["error"]
+    assert fake.calls == []  # Claude never started
 
 
 # -- agent.ci_check (M16 little-runner parity) ------------------------------

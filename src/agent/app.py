@@ -30,8 +30,8 @@ from agent import db, peek, procs, review_store
 from agent.doc_update import DocUpdateError, DocUpdateFlow
 from agent.flow import STOPPED_BY_USER, AgentFlow, AgentFlowError, intent_error
 from agent import usage_client
-from agent.launch import JOB_QUERY, launch_for
-from agent.query import query_dir, run_query
+from agent.launch import JOB_QUERY, JOB_QUERY_CHECKOUT, launch_for
+from agent.query import CHECKOUT_QUERY_TIMEOUT_SECONDS, query_dir, run_query, session_dir
 from agent.gitutil import is_dirty as gitutil_is_dirty
 from agent.session_flow import SessionError, SessionFlow, is_trusted, session_name as session_name_for
 
@@ -248,10 +248,24 @@ def build_app(
         prompt = request.params.get("prompt")
         if not prompt:
             return {"outcome": "failed", "error": "missing params.prompt"}
+        # A query that reads the project's checkout (a backlog entry's refinement or task prompt) runs in
+        # it and can read nothing else; any other runs in the query folder every query shares.
+        read_checkout = bool(request.params.get("read_checkout"))
+        cwd = query_dir(paths)
+        if read_checkout:
+            try:
+                project = resolve_project(paths, request.project_id)
+            except ProjectResolutionError as exc:
+                return {"outcome": "failed", "error": str(exc)}
+            cwd = Path(project["path"]).resolve()
+            if not cwd.is_dir():
+                return {"outcome": "failed", "error": f"project {request.project_id!r} has no checkout at {project['path']}"}
         timeout = request.params.get("timeout_seconds")
         kwargs = {"runner": flow.runner}
         if timeout:
             kwargs["timeout"] = float(timeout)
+        elif read_checkout:
+            kwargs["timeout"] = CHECKOUT_QUERY_TIMEOUT_SECONDS
 
         def record(usage: dict | None) -> None:
             write_apart(db.record_usage, db.USAGE_QUERY, usage, ref_id=request.job_id, project_id=request.project_id, job_id=request.job_id)
@@ -260,10 +274,10 @@ def build_app(
         # Recorded against the Job that asked (a backlog entry's refinement, a policy's authoring), so the
         # session is that Job's peek, and under what it worked on (`ref`), so its transcript can be deleted with it.
         session_id = str(uuid.uuid4())
-        write_apart(db.start_query_session, job_id=request.job_id, session_id=session_id, ref=request.params.get("ref"))
+        write_apart(db.start_query_session, job_id=request.job_id, session_id=session_id, ref=request.params.get("ref"), cwd=str(cwd))
         try:
-            result = run_query(prompt, cwd=query_dir(paths), on_usage=record, env=env, launch=launch_for(JOB_QUERY, paths),
-                               session_id=session_id, **kwargs)
+            result = run_query(prompt, cwd=cwd, on_usage=record, env=env, launch=launch_for(JOB_QUERY_CHECKOUT if read_checkout else JOB_QUERY, paths),
+                               session_id=session_id, read_only=read_checkout, **kwargs)
         finally:
             write_apart(db.finish_query_session, session_id)
         if result.is_error:
@@ -360,7 +374,7 @@ def build_app(
         if queries:  # the newest session this Job asked for
             session = queries[-1]
             running, source = session["finished_at"] is None, "query"
-            path = peek.transcript_of_session(query_dir(paths), session["session_id"])
+            path = peek.transcript_of_session(session_dir(paths, session), session["session_id"])
         elif run is not None:
             running, source = run["status"] == db.RUNNING, "run"
             if run.get("session_id"):
@@ -389,9 +403,11 @@ def build_app(
         if not isinstance(ref, str) or not ref:
             raise HTTPException(status_code=422, detail="missing ref")
         sessions = read(db.query_sessions, ref=ref)
-        folder = peek.transcripts_dir(query_dir(paths))
         for session in sessions:
-            sid = session["session_id"]
+            sid, directory = session["session_id"], session_dir(paths, session)
+            # Where it was recorded, else wherever Claude put it: what the entry held must not survive it.
+            transcript = peek.transcript_of_session(directory, sid)
+            folder = transcript.parent if transcript else peek.transcripts_dir(directory)
             (folder / f"{sid}.jsonl").unlink(missing_ok=True)
             shutil.rmtree(folder / sid, ignore_errors=True)
         write_apart(db.delete_query_sessions, [s["session_id"] for s in sessions])

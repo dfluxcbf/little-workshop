@@ -4,6 +4,7 @@ request but has not answered yet is never reported "unreachable".
 REQ-000000271."""
 
 import contextlib
+import time
 
 import httpx
 import pytest
@@ -89,8 +90,16 @@ def test_cli_client_says_a_slow_answer_is_not_unreachable(monkeypatch, tmp_path)
     from common.paths import Paths
 
     class Slow:
+        """A daemon that took the request and answers nothing in time, reads included. The post lags,
+        so `lws` reads the Job for its progress while it waits, as it does whenever the post is not
+        answered at once (a busy machine made that read fail this test, the stub having no `get`)."""
+
         def post(self, *a, **k):
+            time.sleep(0.2)
             raise httpx.ReadTimeout("slow", request=httpx.Request("POST", "http://x/v1/jobs"))
+
+        def get(self, *a, **k):
+            raise httpx.ReadTimeout("slow", request=httpx.Request("GET", "http://x/v1/jobs/j"))
 
     monkeypatch.setattr(client, "client_for_socket", lambda *a, **k: contextlib.nullcontext(Slow()))
     paths = Paths(config_home=tmp_path / "c", state_home=tmp_path / "s")
