@@ -163,18 +163,24 @@ def test_the_activity_of_an_entry_is_kept_on_the_entry():
     assert app_module.backlog_activity({}, now) == {"refine": None, "refine_error": None, "prompt": None, "prompt_error": None}
 
 
-# --- REQ-000000373: "Make it a task" opens New task ---
-
-
-def test_launch_task_fills_new_task_with_the_refined_entry(test_client, monkeypatch):
-    _backlog(monkeypatch, [_entry(refined_entry="# Weekly export\n\nExport the plan as PDF and CSV.")])
+def test_launch_task_fills_new_task_with_the_task_prompt(test_client, monkeypatch):
+    prompt = "Implement the weekly export as PDF and CSV.\n\n## When you are done\n\nDelete the entry e1 from the backlog."
+    _backlog(monkeypatch, [_entry(refined_entry="# Weekly export\n\nThe refined entry, not the task.", task_prompt=prompt)])
     monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
     page = test_client.get("/tasks/new", params={"project": "little-meals", "backlog": "e1"}).text
-    assert 'value="Weekly export"' in page and "Export the plan as PDF and CSV." in page
+    assert 'value="Weekly export"' in page and "Implement the weekly export as PDF and CSV." in page
+    assert "Delete the entry e1 from the backlog." in page and "The refined entry, not the task." not in page
     assert 'href="/backlog/little-meals/e1"' in page and '<option value="little-meals" selected' in page
-    _backlog(monkeypatch, [_entry()])  # not refined yet: its primary entry, said so
+    # With no task prompt yet, its refined entry; not refined yet, its primary entry: each said so.
+    _backlog(monkeypatch, [_entry(refined_entry="# Weekly export\n\nExport the plan as PDF and CSV.")])
+    page = test_client.get("/tasks/new", params={"backlog": "e1"}).text
+    assert "Export the plan as PDF and CSV." in page and "no task prompt yet" in page
+    _backlog(monkeypatch, [_entry()])
     page = test_client.get("/tasks/new", params={"backlog": "e1"}).text
     assert "As a PDF." in page and "not refined yet" in page
+
+
+# --- REQ-000000373: "Make it a task" opens New task ---
 
 
 def test_make_it_a_task_fills_new_task_and_starting_it_marks_the_candidate(test_client, monkeypatch, created):
