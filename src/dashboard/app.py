@@ -1385,15 +1385,22 @@ def build_app(paths: Paths) -> FastAPI:
                        live_topics="tasks")
 
     def _task_prefill(backlog: str | None, candidate: str | None) -> tuple[dict, str | None]:
-        """What New task opens with: a backlog entry's refined entry (Launch task) or an automation
+        """What New task opens with: a backlog entry's task prompt (Launch task) or an automation
         candidate's task (Make it a task). ({} and a message, when neither can be read.)"""
         if backlog:
             entry = _try(client.backlog_get, paths, backlog)
             if entry is None:
                 return {}, "That backlog entry is no longer in the backlog."
-            return {"project": entry["project_name"], "title": entry["title"],
-                    "description": entry["refined_entry"] or entry["primary_entry"],
-                    "source": f"the backlog entry “{entry['title']}”" + ("" if entry["refined_entry"] else " (not refined yet: its primary entry)"),
+            # The task prompt is written for the task, and only it ends by having the task delete the entry;
+            # an entry without one yet gives what it has, and says so.
+            if entry["task_prompt"]:
+                description, note = entry["task_prompt"], ""
+            elif entry["refined_entry"]:
+                description, note = entry["refined_entry"], " (no task prompt yet: its refined entry)"
+            else:
+                description, note = entry["primary_entry"], " (not refined yet: its primary entry)"
+            return {"project": entry["project_name"], "title": entry["title"], "description": description,
+                    "source": f"the backlog entry “{entry['title']}”{note}",
                     "source_href": f"/backlog/{entry['project_name']}/{entry['id']}"}, None
         if candidate:
             task = _try(client.usage_candidate_task, paths, candidate)

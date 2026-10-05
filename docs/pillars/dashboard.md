@@ -565,8 +565,11 @@ peek), and a failed attempt's error shows until one succeeds. The entry itself r
 Portfolio, REQ-000000385), so the backlog pages read no Jobs; a mark older than fifteen minutes (past the
 630 s Orchestration waits for either Job; ten minutes until 2026-10-05, when Claude only had the entry's
 text) is shown as an attempt that did not finish.
-**Launch task** opens New task (`/tasks/new?backlog=<id>`) with the entry's title and its refined entry
-in the Task box (the primary entry while it is not refined). **Delete from backlog** asks first, then
+**Launch task** opens New task (`/tasks/new?backlog=<id>`) with the entry's title and its task prompt
+in the Task box, the text written for the task and the only one that ends by having it delete the entry;
+while there is no task prompt yet, the refined entry, and while the entry is not refined, the primary
+entry, the form saying which (until 2026-10-05 it gave the refined entry, so a launched task never
+deleted its entry). **Delete from backlog** asks first, then
 deletes the entry and everything it holds. The pages follow the `backlog` topic, so an entry refined,
 prompted or deleted elsewhere (`lws`, an MCP tool, Claude at the end of a task) shows at once, and a
 deleted one says it is gone. The store is Registry & Portfolio's (`docs/pillars/registry_portfolio.md`,
