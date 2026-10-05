@@ -23,7 +23,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ValidationError
 
-from common import events
+from common import events, serving
 from common.job_steps import StepReporter, reporting, step
 from common.paths import Paths
 from common.incident import install_incident_reporting
@@ -107,9 +107,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
 
     @app.get("/v1/health")
     def health() -> dict:
-        with lock:
-            count = len(db.list_projects(conn, status=ProjectStatus.ACTIVE))
-        return {"ok": True, "active_projects": count}
+        with serving.held_or_busy(lock) as free:  # busy work never makes it look hung (REQ-000000409)
+            count = len(db.list_projects(conn, status=ProjectStatus.ACTIVE)) if free else None
+        return {"ok": True, "active_projects": count, **({} if free else {"busy": True})}
 
     @app.post("/v1/jobs/project.bootstrap")
     def job_bootstrap(request: JobRequest) -> dict:

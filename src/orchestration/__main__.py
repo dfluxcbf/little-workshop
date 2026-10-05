@@ -11,12 +11,13 @@ import threading
 from pathlib import Path
 
 import httpx
-import uvicorn
 
+from common import serving
 from common.paths import Paths
 from common.uds_client import client_for_socket
 from orchestration import db
 from orchestration.app import build_app
+from orchestration.dispatch import settle_interrupted_dispatches
 from orchestration.scheduler import DEFAULT_TICK_INTERVAL_SECONDS, SchedulerThread
 
 # Registry statuses that mean "this pillar is enabled and has a socket
@@ -53,6 +54,9 @@ def main() -> None:
     # One lock for every db touch, requests and the tick loop alike.
     lock = threading.Lock()
     app = build_app(conn, socket_lookup, paths, lock=lock)
+    # Before the tick loop and before serving, so no Job this process claims is taken for one whose
+    # dispatch the previous process never finished (REQ-000000403).
+    settle_interrupted_dispatches(conn, socket_lookup)
 
     # docs/milestones.md M9: one tick loop per process, started here so
     # its one-time startup check (a firing missed while little-workshop
@@ -65,11 +69,7 @@ def main() -> None:
     scheduler_thread = SchedulerThread(conn, socket_lookup, interval_seconds=tick_interval, lock=lock)
     scheduler_thread.start()
 
-    socket_path = paths.socket_path("orchestration")
-    if socket_path.exists():
-        socket_path.unlink()
-
-    uvicorn.run(app, uds=str(socket_path), log_level="info")
+    serving.serve(app, paths.socket_path("orchestration"))
 
 
 if __name__ == "__main__":

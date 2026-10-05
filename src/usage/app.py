@@ -20,7 +20,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
-from common import events
+from common import events, serving
 from common.incident import install_incident_reporting
 from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
@@ -173,9 +173,9 @@ def build_app(
 
     @app.get("/v1/health")
     def health() -> dict:
-        with lock:
-            count = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
-        return {"ok": True, "request_count": count}
+        with serving.held_or_busy(lock) as free:  # busy work never makes it look hung (REQ-000000409)
+            count = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0] if free else None
+        return {"ok": True, "request_count": count, **({} if free else {"busy": True})}
 
     # -- intake ------------------------------------------------------------------
 

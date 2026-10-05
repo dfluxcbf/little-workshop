@@ -97,49 +97,50 @@ def test_a_job_failed_for_running_too_long_is_an_unexpected_behaviour_incident(t
     conn.close()
 
 
-class _FakeSystemctl:
-    """`systemctl --user show` answers from a table that a test changes between rounds."""
+class _JournalWithOneCrash:
+    """systemd's journal as `core.journal.Journal` reads it: the agent's unit failed once and was restarted."""
 
     def __init__(self):
-        self.restarts = {}
-        self.calls = []
+        from core.journal import UnitFailure
 
+        self.pending = [UnitFailure(
+            unit="little-workshop-agent.service", invocation="r1", result="exit-code", at=datetime(2026, 10, 5, 12, 0),
+            exit_code="exited", exit_status="1",
+            process_lines=["12:00:00 Traceback (most recent call last):", "12:00:00 ValueError: bad config"],
+        )]
+
+    def failures(self, units):
+        found, self.pending = self.pending, []
+        return found
+
+    def process_lines(self, invocation, *, keep=25):
+        return []
+
+
+class _EveryUnitActive:
     def run(self, argv, timeout=None, cwd=None):
-        self.calls.append(argv)
-        if argv[:3] == ["systemctl", "--user", "show"]:
-            units = [a for a in argv[3:] if a.endswith(".service")]
-            blocks = [f"Id={u}\nNRestarts={self.restarts.get(u, 0)}" for u in units]
-            return CommandResult(0, "\n\n".join(blocks) + "\n", "")
-        if argv[:2] == ["journalctl", "--user"]:
-            return CommandResult(0, "Traceback (most recent call last):\nValueError: bad config\n", "")
         return CommandResult(0, "active\n", "")
 
 
 def test_a_pillar_systemd_restarted_after_a_failure_is_a_crash_incident(paths, monkeypatch):
     from common.manifest import Manifest, PillarEntry
+    from core.health import HealthResult
     from core.supervisor import Supervisor
 
     manifest = Manifest(pillars={"agent": PillarEntry(name="agent", enabled=True, command=["python3", "-m", "agent"]),
                                  "usage": PillarEntry(name="usage", enabled=True, command=["python3", "-m", "usage"])})
-    runner = _FakeSystemctl()
     reported = []
-    supervisor = Supervisor(paths=paths, manifest=manifest, runner=runner,
+    supervisor = Supervisor(paths=paths, manifest=manifest, runner=_EveryUnitActive(), journal=_JournalWithOneCrash(),
+                            probe=lambda *a, **kw: HealthResult(ok=True, attempts=1),
                             report=lambda target, **kw: reported.append((target, kw)))
 
-    supervisor.check_restarts()  # the first look only learns where each unit stands
-    runner.restarts["little-workshop-agent.service"] = 2
-    supervisor.check_restarts()
-    supervisor.check_restarts()  # nothing new since
+    supervisor.reconcile_once()  # systemd already restarted it: filed in the pass that finds the failure
+    supervisor.reconcile_once()  # nothing new since
 
     ((target, kw),) = reported
     assert target == paths.socket_path("agent")
     assert kw["kind"] == "crash" and kw["pillar"] == "agent" and kw["title"] == "PillarCrashed"
-    assert "restarted it 2 times" in kw["message"] and "ValueError: bad config" in kw["detail"]
-
-    # A unit started anew (a redeploy) counts from zero again: that is no crash.
-    runner.restarts["little-workshop-agent.service"] = 0
-    supervisor.check_restarts()
-    assert len(reported) == 1
+    assert "exited with status 1" in kw["message"] and "ValueError: bad config" in kw["detail"]
 
 
 def test_the_agent_keeps_an_incidents_kind(tmp_path):

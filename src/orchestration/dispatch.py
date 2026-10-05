@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,7 +18,7 @@ from common.incident import KIND_UNEXPECTED, report_problem
 from common.job_steps import ATTENTION_TIMEOUT_SECONDS
 from common.uds_client import client_for_socket
 from orchestration import steps
-from orchestration.db import get_job, insert_job, insert_job_run, list_jobs, update_job
+from orchestration.db import get_job, insert_job, insert_job_run, list_job_runs, list_jobs, update_job
 from orchestration.models import Job, JobStatus
 from orchestration.queue import cascade_dependency_failures, is_ready, ready_jobs
 
@@ -110,6 +111,12 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     # checkout (600s ceiling; the registry waits 620s for it).
     "registry.backlog_refine": 630.0,
     "registry.backlog_task_prompt": 630.0,
+    # 2026-10-05 finding, the OQ-14 class once more: a redeploy batch's Jobs are dispatched side by
+    # side, but Deployment & Servers runs them one at a time under its lock, so the last one waits for
+    # every redeploy before it (each a smoke check, a stop, a 20-try health probe and maybe a CLI
+    # refresh). With the 20s default, Dashboard, Build and Agent were requeued while still being
+    # redeployed and redeployed again, up to three times each.
+    "deployment.redeploy_pillar": 1800.0,
 }
 
 
@@ -140,6 +147,18 @@ def dispatch_timeout_for(job_type: str) -> float:
 # created it) is waiting to report on; see `wait_for_dispatch`.
 _dispatching: dict[str, threading.Event] = {}
 _dispatching_lock = threading.Lock()
+
+# A pillar that took a Job's request and did not answer within the Job type's ceiling may still be doing
+# it, and the requeued Job runs again (REQ-000000402). Each (Job type, pillar) is an incident at most
+# once an hour, however many of its Jobs time out together.
+TIMEOUT_REPORT_INTERVAL_SECONDS = 3600.0
+_timeouts_reported: dict[tuple[str, str], float] = {}
+_clock = time.monotonic
+
+INTERRUPTED_DISPATCH_REASON = (
+    "interrupted: Orchestration restarted while dispatching this Job to the {pillar} pillar, "
+    "so whether the pillar did it is unknown"
+)
 
 
 def wait_for_dispatch(job_id: str, timeout: float) -> None:
@@ -181,6 +200,7 @@ def dispatch_job(
         started_at = datetime.now(timezone.utc)
 
         status, result, error = JobStatus.RUNNING, None, None
+        took_it = dropped = False
         try:
             with client_for_socket(socket_path, timeout=timeout) as client:
                 response = client.post(
@@ -205,6 +225,19 @@ def dispatch_job(
             # so it's retried once Core reports the pillar healthy again,
             # rather than failing outright.
             status, error = JobStatus.QUEUED, f"target pillar unreachable: {exc}"
+            if isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout)):
+                # It took the request: requeued all the same, but it may still be doing it.
+                took_it = True
+                error = f"target pillar did not answer within {timeout:g}s and may still be doing it; requeued, so it may run twice"
+        except (httpx.RemoteProtocolError, httpx.ReadError):
+            # It took the request and closed the connection unanswered: it stopped (a stop cuts what
+            # still runs) or crashed mid-way. Escaping here left the Job `running` for six hours
+            # (REQ-000000407); what the pillar did is unknown, so it is not run again.
+            dropped = True
+            status, error = JobStatus.FAILED, (
+                f"the {job.target_pillar} pillar dropped the request before answering (it stopped or crashed), "
+                "so whether it did the Job is unknown"
+            )
 
         with guard:
             if lock is not None:
@@ -224,12 +257,80 @@ def dispatch_job(
                 conn, job.id, outcome=job.status.value, detail=job.error,
                 started_at=started_at, finished_at=datetime.now(timezone.utc),
             )
+        if took_it:
+            _report_dispatch_timeout(job, timeout, socket_lookup)
+        if dropped:
+            report_problem(
+                socket_lookup("agent"), pillar="orchestration", context=f"job {job.id}", kind=KIND_UNEXPECTED,
+                title="DispatchDropped",
+                message=f"{job.type} on {job.project_id or 'no project'} was sent to the {job.target_pillar} pillar, which "
+                        "closed the connection without answering (it stopped or crashed mid-way): the Job was failed, "
+                        "since whether the pillar did it is unknown. Check what it changed before running it again",
+                detail=f"job {job.id}\ntype {job.type}\nproject {job.project_id}\ntarget pillar {job.target_pillar}\n"
+                       f"created {job.created_at.isoformat()} by {job.created_by}",
+            )
         return job
     finally:
         done.set()
         with _dispatching_lock:
             if _dispatching.get(job.id) is done:
                 del _dispatching[job.id]
+
+
+def _report_dispatch_timeout(job: Job, timeout: float, socket_lookup: SocketLookup) -> None:
+    key = (job.type, job.target_pillar)
+    with _dispatching_lock:
+        last = _timeouts_reported.get(key)
+        if last is not None and _clock() - last < TIMEOUT_REPORT_INTERVAL_SECONDS:
+            return
+        _timeouts_reported[key] = _clock()
+    report_problem(
+        socket_lookup("agent"), pillar="orchestration", context=f"job {job.id}", kind=KIND_UNEXPECTED, title="DispatchTimeout",
+        message=f"{job.type} on {job.project_id or 'no project'} was sent to the {job.target_pillar} pillar, which took it "
+                f"but did not answer within {timeout:g}s: the Job was requeued and may run twice. Give {job.type} a longer "
+                f"ceiling in JOB_TYPE_TIMEOUTS (orchestration/dispatch.py), or have the pillar answer 'accepted' and call back",
+        detail=f"job {job.id}\ntype {job.type}\nproject {job.project_id}\ntarget pillar {job.target_pillar}\n"
+               f"dispatch timeout {timeout:g}s\ncreated {job.created_at.isoformat()} by {job.created_by}\n"
+               f"(other {job.type} Jobs timing out within the hour are not reported again)",
+    )
+
+
+def settle_interrupted_dispatches(
+    conn: sqlite3.Connection, socket_lookup: SocketLookup, *, now: datetime | None = None,
+) -> list[Job]:
+    """Startup, before serving (REQ-000000403). A Job is `running` from the moment a pump claims it
+    until its dispatch call returns; one its pillar accepted also has a `running` run row, kept until
+    the pillar calls back. A `running` Job without that row was claimed by the previous process, which
+    died before the pillar answered: only the 6-hour timeout would ever settle it, holding its
+    queue_key and what depends on it all that time. Fail each (whether its pillar did it is unknown,
+    so it is not run again), fail its dependants, and report them in one incident."""
+    now = now or datetime.now(timezone.utc)
+    settled: list[Job] = []
+    for job in list_jobs(conn, status=JobStatus.RUNNING):
+        runs = list_job_runs(conn, job.id)
+        if runs and runs[-1]["outcome"] == JobStatus.RUNNING.value:
+            continue  # accepted: its pillar completes it, or the running-Job timeout does
+        claimed_at = job.updated_at
+        job.status = JobStatus.FAILED
+        job.error = INTERRUPTED_DISPATCH_REASON.format(pillar=job.target_pillar)
+        update_job(conn, job)
+        insert_job_run(conn, job.id, outcome="failed", detail=job.error, started_at=claimed_at, finished_at=now)
+        settled.append(job)
+    if not settled:
+        return []
+    cascade_dependency_failures(conn)
+    count = f"{len(settled)} Job{'' if len(settled) == 1 else 's'}"
+    report_problem(
+        socket_lookup("agent"), pillar="orchestration", context="orchestration startup", kind=KIND_UNEXPECTED,
+        title="InterruptedDispatch",
+        message=f"Orchestration restarted while dispatching {count}: each was failed with the Jobs that depend on it, "
+                "since whether its pillar did it is unknown. Check what it changed before running it again",
+        detail="\n".join(
+            f"job {job.id}  {job.type}  project {job.project_id or '-'}  to {job.target_pillar}  created by {job.created_by}"
+            for job in settled
+        ),
+    )
+    return settled
 
 
 def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup, *, lock: threading.Lock | None = None) -> list[Job]:

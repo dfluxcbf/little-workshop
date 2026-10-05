@@ -46,7 +46,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from common import redeploy_plan
+from common import redeploy_plan, serving
 from common.job_steps import format_seconds
 from common.paths import Paths
 from common.incident import install_incident_reporting
@@ -70,6 +70,7 @@ BACKLOG_ACTIVITY_STALE = timedelta(minutes=15)
 _UNFINISHED = {"refine": "the last refinement did not finish", "prompt": "the last task prompt did not finish"}
 STATISTICS_UPDATE_SECONDS = 600  # how often the running Dashboard counts new jobs, checks and incidents
 LIVE_KEEPALIVE_SECONDS = 15.0  # a comment on an idle event stream, so proxies keep it open
+LIVE_STOP_CHECK_SECONDS = 1.0  # how soon an open event stream notices the Dashboard is stopping
 LIVE_MAX_TOPICS = 20
 ACTIVE_JOB_STATUSES = ("queued", "running", "pending_confirmation")
 
@@ -649,14 +650,22 @@ def build_app(paths: Paths) -> FastAPI:
             subscriber = live.HUB.subscribe(wanted, asyncio.get_running_loop())
             try:
                 yield f"retry: {int(live.RETRY_SECONDS * 1000)}\n\n"
-                while True:
+                idle = 0.0
+                # A stopping Dashboard ends its streams, which held its stop open for up to a minute;
+                # each page reconnects to the next process after `retry` (REQ-000000404).
+                while not serving.stopping.is_set():
                     try:
-                        message = await asyncio.wait_for(subscriber.queue.get(), timeout=LIVE_KEEPALIVE_SECONDS)
+                        message = await asyncio.wait_for(subscriber.queue.get(), timeout=LIVE_STOP_CHECK_SECONDS)
                     except asyncio.TimeoutError:
+                        idle += LIVE_STOP_CHECK_SECONDS
+                        if idle < LIVE_KEEPALIVE_SECONDS:
+                            continue
+                        idle = 0.0
                         if await request.is_disconnected():
                             return
                         yield ": keepalive\n\n"
                         continue
+                    idle = 0.0
                     yield f"event: update\ndata: {json.dumps(message)}\n\n"
             finally:
                 live.HUB.unsubscribe(subscriber)

@@ -530,6 +530,20 @@ probe, decoupled from how long any individual check takes; a check
 resolved by the unchanged-fingerprint skip (above) stays fully
 synchronous, since nothing there can block.
 
+**A check cut short by the pillar stopping runs again (2026-10-05,
+REQ-000000405).** The background thread dies with the process, so a
+check running when Policy & Compliance was redeployed was lost: its Job
+stayed `running` until the six-hour sweep failed it, and the branch
+finish it gated waited the whole time (2026-10-04). Its `docker run`
+client outlived the pillar, too: the stop's SIGTERM reached the
+container, whose PID 1 ignores it, and systemd killed the client 90
+seconds later while the container ran on. Now each accepted check is
+kept in `running_checks` until its Job is completed; the pillar's
+shutdown hook removes the containers of the checks still running, a run
+the stop cut gives no verdict (`SandboxInterrupted`), and at its next
+start, before serving, the pillar runs every check left in
+`running_checks` again from the start under its own Job.
+
 ## Informing the user immediately
 
 **Not yet implemented as of M12** — a real gap, not an oversight: the

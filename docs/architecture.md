@@ -48,6 +48,23 @@ is-active` plus each pillar's own health probe, reconnecting to whatever it
 finds and starting only whatever's actually missing. See `design.md`'s
 "Core's own recovery" data-flow diagram.
 
+Every outage and every abnormal end of a unit's run is an incident
+(2026-10-05): Core reads each failure systemd logged for the pillars' and
+its own units from the user journal (`core/journal.py`, from a kept
+position), gathers what it saw during the outage, and files one incident
+per outage when the pillar answers again or is faulted
+(`docs/pillars/agentic_development.md`, "Pillar outages and cut work
+become incidents"). A pillar whose unit has been active for two minutes
+but does not answer a whole probe is hung: Core stops the unit and starts
+it again (a relaunch alone is refused while the unit exists). A unit
+systemd is still starting or stopping (a redeploy) is left alone, and a
+health check never waits for its pillar's lock (busy, it says so), so
+busy work is never taken for a hang. Every pillar serves through `common/serving.py`,
+whose stop ends long-polls and live streams at once, cuts the requests
+still running after 60 seconds instead of waiting until systemd kills
+the process at 90, and tells the policy sandbox that the pillar is
+stopping (`serving.stopping`).
+
 Ten pillars, each its own process, its own SQLite file, and its own Pillar
 Interface (a small FastAPI app bound to a Unix domain socket):
 
