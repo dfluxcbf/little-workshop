@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from common import serving
 from common.incident import install_incident_reporting
 from common.paths import Paths
 from orchestration import changes, db, policy_gate, steps, triggers
@@ -149,10 +150,10 @@ def build_app(
 
     @app.get("/v1/health")
     def health() -> dict:
-        with lock:
-            queued = len(db.list_jobs(conn, status=JobStatus.QUEUED))
-            running = len(db.list_jobs(conn, status=JobStatus.RUNNING))
-        return {"ok": True, "queued_jobs": queued, "running_jobs": running}
+        with serving.held_or_busy(lock) as free:  # busy work never makes it look hung (REQ-000000409)
+            queued = len(db.list_jobs(conn, status=JobStatus.QUEUED)) if free else None
+            running = len(db.list_jobs(conn, status=JobStatus.RUNNING)) if free else None
+        return {"ok": True, "queued_jobs": queued, "running_jobs": running, **({} if free else {"busy": True})}
 
     @app.post("/v1/jobs")
     def create_job(request: CreateJobRequest) -> dict:
@@ -270,7 +271,9 @@ def build_app(
     def wait_job(job_id: str, timeout: float = WAIT_DEFAULT_SECONDS) -> dict:
         """The Job as soon as there is something to act on: it settled, it is held for a confirmation,
         or a step asks the user a question. Otherwise the Job as it is once `timeout` seconds passed.
-        One call instead of a caller's status polls, each of which costs a Claude session a turn."""
+        One call instead of a caller's status polls, each of which costs a Claude session a turn.
+        A pillar asked to stop answers at once: an open wait held Orchestration's stop until systemd
+        killed it (REQ-000000404)."""
         deadline = time.monotonic() + max(0.0, min(timeout, WAIT_MAX_SECONDS))
         while True:
             with lock:
@@ -279,7 +282,7 @@ def build_app(
                     raise HTTPException(status_code=404, detail="job not found")
                 body = payload(job)
             asks = any(s.get("state") == "attention" for s in body["steps"])
-            if job.status not in WAIT_FOR_STATUSES or asks or time.monotonic() >= deadline:
+            if job.status not in WAIT_FOR_STATUSES or asks or time.monotonic() >= deadline or serving.stopping.is_set():
                 return body
             time.sleep(WAIT_POLL_SECONDS)
 

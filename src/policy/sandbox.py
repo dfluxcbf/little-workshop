@@ -17,10 +17,12 @@ from __future__ import annotations
 import posixpath
 import re
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from common import serving
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from policy.models import CheckOutcome
 
@@ -79,6 +81,27 @@ _SKIPPED_RE = re.compile(r"(\d+) skipped")
 
 class SandboxUnavailable(Exception):
     pass
+
+
+class SandboxInterrupted(SandboxUnavailable):
+    """The pillar was asked to stop while the check ran and removed its container: no verdict."""
+
+
+# The containers of the checks this process is running, removed when it stops (REQ-000000405).
+_running: set[str] = set()
+_running_lock = threading.Lock()
+
+
+def remove_running_containers(*, runner: CommandRunner = DEFAULT_RUNNER) -> list[str]:
+    """The pillar's shutdown hook. A check's thread dies with the process, but its `docker run` client
+    does not: the stop's SIGTERM reaches the container, whose PID 1 ignores it, so the client waited
+    until systemd killed it 90s later (2026-10-04) and the container ran on. Removing the container
+    ends both at once."""
+    with _running_lock:
+        names = sorted(_running)
+    for name in names:
+        runner.run(["docker", "rm", "-f", name])
+    return names
 
 
 @dataclass
@@ -241,6 +264,8 @@ def run_policy_check(
             "--color=no",
         ]
 
+        with _running_lock:
+            _running.add(container_name)
         try:
             result = runner.run(argv, timeout=timeout)
         finally:
@@ -252,7 +277,12 @@ def run_policy_check(
             # guarantee against an orphaned container, not just a
             # convenience on the happy path.
             runner.run(["docker", "rm", "-f", container_name])
+            with _running_lock:
+                _running.discard(container_name)
 
+    if serving.stopping.is_set():
+        # Whatever the run printed, the stop may have cut it: no verdict, the check runs again.
+        raise SandboxInterrupted("the policy pillar was asked to stop while the check ran")
     if result.returncode == -1:
         raise SandboxUnavailable("policy check did not complete within its time ceiling")
     return _parse_verdict(result.stdout, result.returncode)

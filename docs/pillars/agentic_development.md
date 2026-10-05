@@ -585,11 +585,39 @@ it. `common/incident.py` adds two ways in besides the request middleware:
 - `report_problem` records an incident with no exception: Orchestration reports a Job it failed for
   running past its limit (`StuckJob`, kind unexpected), and Core reports a pillar systemd restarted after
   it failed (`PillarCrashed`, kind crash; Core compares each unit's `NRestarts` at every reconcile, and
-  the detail is the end of the pillar's journal).
+  the detail is the end of the pillar's journal). (2026-10-05: Core reads the journal instead, see below.)
 
 Confirming one starts the bug task as before, its description worded for its kind.
 `GET /v1/incidents/version` changes with every incident recorded or decided (the Dashboard's live pages
 watch it).
+
+## Pillar outages and cut work become incidents (2026-10-05)
+
+REQ-000000400 to REQ-000000403. On 2026-10-04 a redeploy killed Orchestration and Policy after their stops
+overran systemd's 90 seconds, and on 2026-10-05 the Dashboard showed pillars as crashed while a redeploy
+restarted them; neither became an incident, because `NRestarts` sees neither a unit started anew nor a
+stop that ends in SIGKILL. Where incidents come from now:
+
+- **Core, from systemd's journal** (`core/journal.py`): every run of a pillar's unit, or of Core's own
+  installed unit, that ended abnormally ("Failed with result …": an exit with a failure, a signal, a
+  core dump, the out-of-memory killer, a start or stop timeout, a crash loop). The journal is read from
+  where Core last stopped reading, a position kept in `pillars/core-journal.json` under the state
+  directory, so a failure while Core was down, Core's own crash among them, is found when it is back.
+- **Core, per outage** (`core/supervisor.py`): from the first check that finds a pillar down, or its
+  first logged failure, until it answers again or is marked faulted, Core keeps the unit's state and the
+  probe's error at each check and what each relaunch did, and then files one incident with all of it
+  and the journal's lines: `PillarCrashed`, `PillarKilled`, `PillarTimedOut`, `PillarOutOfMemory`,
+  `PillarCrashLoop` or `PillarHung` by systemd's result, `PillarFaulted` for a pillar Core gave up on, and
+  `PillarUnavailable` for an outage in which no process failed (a pillar caught while a redeploy was
+  stopping it, which the incident says). The detail ends with what the process logged last in that run,
+  its access log left out. `PillarHung` is also an outage in which Core stopped and restarted a unit that
+  had run for two minutes without answering (REQ-000000408).
+- **Version Control & Release**: a Job it had accepted that a restart cut part-way, failed at its next
+  start (`InterruptedJob`, REQ-000000410).
+- **Orchestration**: a pillar that took a Job and did not answer within the Job type's dispatch timeout
+  (`DispatchTimeout`, kind unexpected, at most once an hour per Job type and pillar: the requeued Job may
+  run twice), a pillar that dropped a Job's request unanswered (`DispatchDropped`, REQ-000000407), and
+  the Jobs a restart of Orchestration left half-dispatched, failed at its start (`InterruptedDispatch`).
 
 ## Claude peek: following a running session (2026-10-04)
 

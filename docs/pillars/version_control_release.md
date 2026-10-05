@@ -212,6 +212,18 @@ ask, a dirty tree raises and a conflict returns the `--continue`/`--abort` messa
 These jobs run on a background thread and answer the dispatch call at once only when they finish within
 `SYNC_GRACE_SECONDS`; otherwise `accepted`, completing through Orchestration's callback.
 
+## A Job cut by a restart (2026-10-05)
+
+REQ-000000410. The thread running an accepted Job (the Release job, or a finish waiting for the user's
+answer) dies with the process, and only it would have told Orchestration how the Job ended, so the Job
+stayed `running` until the six-hour sweep. The pillar now keeps each Job it answered `accepted` in
+`pillars/version-running.json` under the state directory (`version/running.py`) until it reports the end.
+At its next start, before serving, it fails each one still listed: a release or finish cut part-way may
+have left its repository mid-way (a release branch, a merge, a tag), so it is never run again on its
+own. An incident (`InterruptedJob`, kind unexpected) names the Job and says to check `lws version status`
+and its steps before running it again. A redeploy restarts Orchestration too, so the answers it does not
+take yet are tried again every 30 seconds for half an hour.
+
 
 ## Interfacing
 

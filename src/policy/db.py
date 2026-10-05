@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS policy_bypass_log (
 CREATE TABLE IF NOT EXISTS policy_seeded (
     policy_id TEXT PRIMARY KEY
 );
+
+-- A policy check whose sandbox is running: its Job was answered `accepted`, and only the thread that
+-- finishes the check calls Orchestration back. A row still here when the pillar starts is a check its
+-- stop cut short, which runs again (REQ-000000405).
+CREATE TABLE IF NOT EXISTS running_checks (
+    job_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    params TEXT NOT NULL,
+    started_at TEXT NOT NULL
+);
 """
 
 
@@ -313,6 +323,25 @@ def unseeded_policies(conn: sqlite3.Connection) -> list[Policy]:
 
 
 # -- policy check results -----------------------------------------------------
+
+
+def add_running_check(conn: sqlite3.Connection, job_id: str, project_id: str, params: dict) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO running_checks (job_id, project_id, params, started_at) VALUES (?, ?, ?, ?)",
+        (job_id, project_id, json.dumps(params), _iso(datetime.now(timezone.utc))),
+    )
+    conn.commit()
+
+
+def remove_running_check(conn: sqlite3.Connection, job_id: str) -> None:
+    conn.execute("DELETE FROM running_checks WHERE job_id = ?", (job_id,))
+    conn.commit()
+
+
+def list_running_checks(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute("SELECT * FROM running_checks ORDER BY started_at").fetchall()
+    return [{"job_id": r["job_id"], "project_id": r["project_id"], "params": json.loads(r["params"]),
+             "started_at": r["started_at"]} for r in rows]
 
 
 def insert_check_result(conn: sqlite3.Connection, result: PolicyCheckResult) -> None:

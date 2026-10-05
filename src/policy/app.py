@@ -10,11 +10,13 @@ pillar's Pillar Interface already uses.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import subprocess
 import functools
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from common.job_steps import StepReporter, done, reporting, step
+from common import serving
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.pillar_socket import resolve_pillar_socket
@@ -37,7 +40,7 @@ from policy.models import (
 )
 from policy.precedence import gating_enabled_for, resolve_winning_policy
 from policy.registry_client import RegistryReadError
-from policy.sandbox import SandboxUnavailable
+from policy.sandbox import SandboxInterrupted, SandboxUnavailable
 
 PILLAR_ITSELF = "policy"
 
@@ -161,7 +164,14 @@ class _Refused(Exception):
 
 
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
-    app = FastAPI(title="little-workshop Policy & Compliance")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # Stopping: remove the containers of the checks still running; they run again at the next
+        # start (REQ-000000405).
+        await asyncio.to_thread(sandbox.remove_running_containers)
+
+    app = FastAPI(title="little-workshop Policy & Compliance", lifespan=lifespan)
     install_incident_reporting(app, paths, pillar="policy")
     lock = threading.Lock()
 
@@ -209,9 +219,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
 
     @app.get("/v1/health")
     def health() -> dict:
-        with lock:
-            count = len(db.list_policies(conn))
-        return {"ok": True, "policy_count": count}
+        with serving.held_or_busy(lock) as free:  # busy work never makes it look hung (REQ-000000409)
+            count = len(db.list_policies(conn)) if free else None
+        return {"ok": True, "policy_count": count, **({} if free else {"busy": True})}
 
     # -- authoring pipeline: Gates 1-3 + script drafting (never saves) -------
 
@@ -735,20 +745,26 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 raise _Refused(str(exc))
             handle.detail = f"{len(mounts)} mount(s)"
 
+        def finish(**outcome) -> None:
+            with lock:
+                db.remove_running_check(conn, request.job_id)
+            _complete_orchestration_job(request.job_id, **outcome)
+
         def worker() -> None:
             with reporting(StepReporter(paths, request.job_id)):
                 try:
                     with step("run_check") as handle:
                         sandbox_result = sandbox.run_policy_check(policy.test_script, mounts)
                         handle.detail = sandbox_result.outcome.value if hasattr(sandbox_result.outcome, "value") else str(sandbox_result.outcome)
+                except SandboxInterrupted:
+                    # The pillar is stopping and removed the check's container. The Job is not over:
+                    # the check stays in running_checks and runs again at the next start.
+                    return
                 except SandboxUnavailable as exc:
                     # No verdict at all — a framework-level fault, never
                     # pending_confirmation: nothing was determined to be a
                     # violation, only that the check itself is broken.
-                    _complete_orchestration_job(
-                        request.job_id, succeeded=False, result=None,
-                        error=f"policy check did not complete: {exc}",
-                    )
+                    finish(succeeded=False, result=None, error=f"policy check did not complete: {exc}")
                     return
 
                 with step("record_result") as handle:
@@ -765,10 +781,34 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             # not_applicable verdict is success for the check itself; only an
             # unreachable dependency or the sandbox's own 30-minute ceiling is
             # a genuine Job failure (see the SandboxUnavailable branch above).
-            _complete_orchestration_job(request.job_id, succeeded=True, result=result.model_dump(mode="json"), error=None)
+            finish(succeeded=True, result=result.model_dump(mode="json"), error=None)
 
+        with lock:
+            db.add_running_check(conn, request.job_id, project_id, request.params)
         threading.Thread(target=worker, daemon=True).start()
         return {"outcome": "accepted", "result": {"dispatched": True}}
+
+    def rerun_interrupted_checks() -> list[str]:
+        """Startup, before serving (REQ-000000405): a check still in running_checks was cut short when
+        the pillar last stopped (2026-10-04: a gate check lost this way kept a branch finish waiting for
+        hours). Run it again from the start under its own Job; one that cannot run is completed as it
+        would have been answered."""
+        with lock:
+            cut = db.list_running_checks(conn)
+        for row in cut:
+            try:
+                answer = job_check_project(JobRequest(job_id=row["job_id"], project_id=row["project_id"], params=row["params"]))
+            except Exception as exc:  # one check must never keep the pillar from starting
+                answer = {"outcome": "failed", "error": f"could not run the check again after a restart: {exc}"}
+            if answer["outcome"] != "accepted":
+                with lock:
+                    db.remove_running_check(conn, row["job_id"])
+                _complete_orchestration_job(
+                    row["job_id"], succeeded=answer["outcome"] == "succeeded", result=answer.get("result"), error=answer.get("error"),
+                )
+        return [row["job_id"] for row in cut]
+
+    app.state.rerun_interrupted_checks = rerun_interrupted_checks
 
     @app.post("/v1/jobs/policy.check_all")
     @_reported

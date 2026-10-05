@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import uvicorn
-
+from common import serving
 from common.paths import Paths
 from agent import db
 from agent.app import build_app, recover_interrupted_runs, resume_doc_updates
@@ -20,11 +19,7 @@ def main() -> None:
     recover_interrupted_runs(paths, conn)
     resume_doc_updates(paths, conn, app.state.doc_flow)
 
-    socket_path = paths.socket_path("agent")
-    if socket_path.exists():
-        socket_path.unlink()
-
-    uvicorn.run(app, uds=str(socket_path), log_level="info")
+    serving.serve(app, paths.socket_path("agent"))
 
 
 if __name__ == "__main__":
