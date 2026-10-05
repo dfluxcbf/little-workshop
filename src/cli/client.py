@@ -76,20 +76,23 @@ def post_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
         ) from exc
 
 
-def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> dict:
+def list_jobs(paths: Paths, *, status: str | None = None, types: str | None = None, newest_first: bool = False,
+              limit: int | None = None, summary: bool = False, timeout: float = 5.0) -> dict:
+    """Jobs as Orchestration selects them: `status` and `types` one or several, comma-separated; a summary
+    gives each Job's brief in place of its params and result. From the database when the daemon is down."""
+    params = {"status": status, "type": types, "order": "newest" if newest_first else None, "limit": limit,
+              "view": "summary" if summary else None}
     try:
         with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
-            params = {"status": status} if status else {}
-            response = client.get("/v1/jobs", params=params)
+            response = client.get("/v1/jobs", params={key: value for key, value in params.items() if value is not None})
         response.raise_for_status()
         return {"source": "daemon", "jobs": response.json()}
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
-        from orchestration.models import JobStatus
-
         conn = orchestration_db.connect(paths.pillar_db_path("orchestration"))
-        jobs = orchestration_db.list_jobs(conn, status=JobStatus(status) if status else None)
+        jobs = orchestration_db.find_jobs(conn, statuses=status.split(",") if status else None, types=types.split(",") if types else None,
+                                          newest_first=newest_first, limit=limit, summary=summary)
         conn.close()
-        return {"source": "fallback", "jobs": [job.model_dump(mode="json") for job in jobs]}
+        return {"source": "fallback", "jobs": jobs}
 
 
 def stop_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> dict:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import httpx
 
+from common.job_steps import current_reporter
 from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
 from common.uds_client import client_for_socket
@@ -22,6 +23,10 @@ class AgentClientError(Exception):
 
 
 def query(paths: Paths, prompt: str, *, timeout: float = 300.0) -> str:
+    """Claude's answer. Asked inside a Job (the authoring pipeline runs under its Job's step reporter),
+    the session is recorded against that Job, so its page can show the session as it works."""
+    reporter = current_reporter()
+    job_id = reporter.job_id if reporter is not None else "policy-authoring"
     socket_path = resolve_pillar_socket(paths, "agent", timeout=5.0)
     if socket_path is None:
         raise AgentClientError("Agentic Development pillar is unavailable (unreachable, disabled, or faulted)")
@@ -29,7 +34,7 @@ def query(paths: Paths, prompt: str, *, timeout: float = 300.0) -> str:
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.post(
                 "/v1/jobs/agent.query",
-                json={"job_id": "policy-authoring", "params": {"prompt": prompt}},
+                json={"job_id": job_id, "params": {"prompt": prompt}},
             )
         response.raise_for_status()
         body = response.json()

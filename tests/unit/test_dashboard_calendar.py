@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from common.paths import Paths
 from dashboard import app as app_module
 from dashboard import calendar, client
+from orchestration_jobs_fake import patch_jobs
 
 
 def _job(job_id, status, at, **extra):
@@ -107,7 +108,7 @@ def test_the_schedule_page_draws_the_month_with_its_items_and_a_details_panel(te
             _job("t1", "running", _local_utc(today.year, today.month, today.day), type="agent.run_task", params={"title": "Nightly fix"},
                  created_by="scheduler"),
             _job("by-hand", "succeeded", _local_utc(today.year, today.month, today.day), type="build.run")]
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: jobs)
+    patch_jobs(monkeypatch, client, jobs)
     monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
     monkeypatch.setattr(client, "agent_runs", lambda paths, project: [])
     page = test_client.get("/schedule").text
@@ -127,7 +128,7 @@ def test_the_schedule_page_draws_the_month_with_its_items_and_a_details_panel(te
 def test_a_busy_day_shows_a_few_items_and_says_how_many_more(test_client, monkeypatch):
     today = date.today()
     jobs = [_job(f"j{n}", "succeeded", _local_utc(today.year, today.month, today.day), created_by="scheduler") for n in range(9)]
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: jobs)
+    patch_jobs(monkeypatch, client, jobs)
     monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
     page = test_client.get("/schedule").text
     assert page.count('class="cal-item kind-job state-succeeded"') == 9 and page.count(" hidden>") >= 9 - calendar.PER_DAY

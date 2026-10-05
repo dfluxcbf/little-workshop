@@ -10,7 +10,7 @@
 </form>
 <div class="policy-list" id="backlog-live" data-live-region>
   {% for e in entries %}
-  {% set act = activity.get(e.id, no_activity) %}
+  {% set act = activity[e.id] %}
   <a class="polcard" href="/backlog/{{ project }}/{{ e.id }}">
     <span class="polcard-head">
       <span class="polcard-topic">{{ e.title }}</span>

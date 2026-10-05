@@ -526,3 +526,10 @@ named by its tool, the prompt and compactions; thinking is left out. Reading sta
 half-written last line waits for the next read, `after=-1` gives only where the file ends, and a first
 read of a long transcript reads its last 4 MB. `GET /v1/runs/by-job/{job_id}` gives the run a Job
 started.
+
+Since 2026-10-05 (REQ-000000386) each `agent.query` runs under a session id of its own, recorded in
+`query_sessions` against the Job that asked (`job_id`) and what it worked on (`params.ref`, such as
+`backlog:<entry id>`), so the peek of that Job reads it (`source: "query"`): a backlog entry's refinement
+or task prompt, a policy's authoring (Policy & Compliance passes the Job it runs under). `POST
+/v1/query-sessions/forget {"ref"}` deletes the transcripts of every session recorded under `ref` (and its
+subagents'), and their records (REQ-000000387): what a deleted backlog entry leaves here.

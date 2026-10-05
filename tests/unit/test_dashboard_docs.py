@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from common.paths import Paths
 from dashboard import app as app_module
 from dashboard import client
+from orchestration_jobs_fake import patch_jobs
 
 
 @pytest.fixture
@@ -31,7 +32,7 @@ OVERVIEW = {"project_id": "little-widget", "branch": "dev", "branches": ["dev", 
 
 def _stub(monkeypatch, *, jobs=(), tasks=(), overview=OVERVIEW):
     monkeypatch.setattr(client, "docs_overview", lambda paths, project: overview)
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None, timeout=5.0: list(jobs))
+    patch_jobs(monkeypatch, client, list(jobs))
     monkeypatch.setattr(client, "scheduled_tasks", lambda paths: list(tasks))
     monkeypatch.setattr(client, "doc_updates", lambda paths, project: [])
 

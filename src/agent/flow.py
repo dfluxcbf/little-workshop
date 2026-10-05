@@ -515,13 +515,18 @@ class AgentFlow:
             db.record_ci_check(conn, project_id, pr_number=pr_number, branch=branch, sha=sha, state=db.CI_ERROR, summary=str(exc))
             raise AgentFlowError(str(exc)) from exc
 
-        results = result.get("results", [])
         ran = result.get("ran", 0)
-        failed = [r for r in results if r.get("verdict") in ("failed", "error")]
+        if "verdicts" in result:  # a run's answer is its counts and the failures worth reading
+            verdicts = result.get("verdicts") or {}
+            failed_count = sum(verdicts.get(v, 0) for v in ("failed", "error"))
+            failing = result.get("failing") or []
+        else:  # an older Requirements pillar answered with every result
+            failing = [r for r in result.get("results", []) if r.get("verdict") in ("failed", "error")]
+            failed_count = len(failing)
         if ran == 0:
             state, summary = db.CI_ERROR, "no tests ran"
-        elif failed:
-            state, summary = db.CI_FAILURE, f"{len(failed)} of {ran} tests failed"
+        elif failed_count:
+            state, summary = db.CI_FAILURE, f"{failed_count} of {ran} tests failed"
         else:
             state, summary = db.CI_SUCCESS, f"all {ran} tests passed"
 
@@ -529,4 +534,4 @@ class AgentFlow:
             self.github.post_status(github_repo, sha, state=state, context=context, description=summary)
             db.record_ci_check(conn, project_id, pr_number=pr_number, branch=branch, sha=sha, state=state, summary=summary)
             handle.detail = summary
-        return {"pr_number": pr_number, "branch": branch, "sha": sha, "state": state, "summary": summary, "ran": ran, "results": results}
+        return {"pr_number": pr_number, "branch": branch, "sha": sha, "state": state, "summary": summary, "ran": ran, "failing": failing[:50]}

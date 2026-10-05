@@ -81,7 +81,9 @@ def _core_status(paths: Paths, args: JSONDict) -> Any:
 
 
 def _job_list(paths: Paths, args: JSONDict) -> Any:
-    return client.list_jobs(paths, status=args.get("status"))
+    limit = args.get("limit", 50)
+    return client.list_jobs(paths, status=args.get("status"), types=args.get("type"),
+                            limit=limit if limit and limit > 0 else None, full=bool(args.get("full")))
 
 
 def _job_status(paths: Paths, args: JSONDict) -> Any:
@@ -914,8 +916,12 @@ def _agent_session_status(paths: Paths, args: JSONDict) -> Any:
 
 TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_core_status", "Return every pillar's enabled/active status, as Core sees it.", _schema(), _core_status),
-    ToolSpec("workshop_job_list", "List Jobs known to Orchestration, optionally filtered by status.",
-             _schema({"status": _prop("string", "queued|running|pending_confirmation|succeeded|failed|cancelled")}), _job_list),
+    ToolSpec("workshop_job_list", "List Jobs known to Orchestration, newest first, as summaries: each Job's large params and "
+             "result values are only named, under _omitted (workshop_job_status gives one Job in full).",
+             _schema({"status": _prop("string", "One or several of queued|running|pending_confirmation|succeeded|failed|cancelled|stopped, comma-separated"),
+                      "type": _prop("string", "One or several job types, comma-separated (e.g. agent.run_task)"),
+                      "limit": _prop("integer", "At most this many. Default: 50; 0 for every Job."),
+                      "full": _prop("boolean", "Whole params and results instead of summaries. Default: false.")}), _job_list),
     ToolSpec("workshop_job_status", "Get one Job's current status and result by id (to wait for it, use workshop_job_wait), with its `steps` checklist "
              "(each step's state, runtime and expected runtime; a step in state `attention` carries the "
              "question the user must answer, see workshop_job_answer).",

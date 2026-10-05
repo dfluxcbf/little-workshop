@@ -51,7 +51,8 @@ def cmd_job_create(args: argparse.Namespace) -> int:
 
 def cmd_job_list(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
-    _print(client.list_jobs(paths, status=args.status))
+    _print(client.list_jobs(paths, status=args.status, types=args.type, newest_first=True, limit=args.limit or None,
+                            summary=not args.full))
     return 0
 
 
@@ -1894,8 +1895,8 @@ def cmd_agent_session_list(args: argparse.Namespace) -> int:
 def cmd_job_queue_show(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
-        running = client.list_jobs(paths, status="running")["jobs"]
-        queued = client.list_jobs(paths, status="queued")["jobs"]
+        running = client.list_jobs(paths, status="running", summary=True)["jobs"]
+        queued = client.list_jobs(paths, status="queued", summary=True)["jobs"]
     except Exception as exc:  # noqa: BLE001 — surfaced as a plain CLI error
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -1917,7 +1918,7 @@ def cmd_job_queue_show(args: argparse.Namespace) -> int:
 def cmd_job_queue_release(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
-        running = client.list_jobs(paths, status="running")["jobs"]
+        running = client.list_jobs(paths, status="running", summary=True)["jobs"]
     except Exception as exc:  # noqa: BLE001
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -2057,8 +2058,13 @@ def build_parser() -> argparse.ArgumentParser:
     job_create.add_argument("--depends-on", action="append", default=None)
     job_create.set_defaults(func=cmd_job_create)
 
-    job_list = job_sub.add_parser("list", help="List Jobs")
-    job_list.add_argument("--status", default=None)
+    job_list = job_sub.add_parser(
+        "list", help="List Jobs, newest first, as summaries (large params and result values named under _omitted; "
+                     "`job status <id>` shows one in full)")
+    job_list.add_argument("--status", default=None, help="One or several statuses, comma-separated")
+    job_list.add_argument("--type", default=None, help="One or several job types, comma-separated")
+    job_list.add_argument("--limit", type=int, default=50, help="At most this many (default 50; 0 for every Job)")
+    job_list.add_argument("--full", action="store_true", help="Whole params and results instead of summaries")
     job_list.set_defaults(func=cmd_job_list)
 
     job_status = job_sub.add_parser("status", help="Show one Job")

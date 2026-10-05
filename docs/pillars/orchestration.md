@@ -334,3 +334,24 @@ Without `after` it answers at once with where the numbering stands. The feed liv
 5000 changes: a restart starts a new count under a new `boot`, and a caller from another boot, or too
 far behind, is told to `reset` (read again what it shows). It says that something changed, never what
 it now is: the Jobs are read as before. The Dashboard's live pages follow it.
+
+## Job summaries and filtered lists (2026-10-05)
+
+REQ-000000382. Each Job keeps a brief of its params and result (`orchestration/brief.py`), written with
+the Job into its `brief` column (and computed once, when the store opens, for Jobs written before): every
+value that is a number, a boolean, a string of up to 1000 characters, or a list or map of up to 20 short
+scalars is kept as it is; every other one (a test run's per-test results, a JUnit file posted as a param)
+is only named, under `_omitted`. On 2026-10-05 this made the list of the 1,792 Jobs held 1.7 MB instead
+of 29 MB.
+
+`GET /v1/jobs` selects and orders in the store itself. Filters: `status` and `type` (one or several,
+comma-separated), `project_id`, `created_by`, `since` / `until` (creation time, inclusive / exclusive),
+`updated_since` (last change), `ids` (comma-separated) and `q` (looked for in the type, project, pillar,
+creator and id). `order=newest` turns the order, `limit` pages it, and `view=summary` gives each Job's
+brief in place of its full params and result (with `"summary": true`, and an error cut at 2000
+characters). Without `view` a Job is whole, as before. `GET /v1/jobs/counts` answers `{status: count}`
+for the same filters: the Jobs page's status chips and totals. A list reads summaries of the Jobs it
+shows; a page that shows one Job reads it whole with `GET /v1/jobs/{id}`. `lws job list` and
+`workshop_job_list` give the 50 newest as summaries by default (`--limit 0` / `limit: 0` for every Job,
+`--full` / `full: true` for whole ones).
+

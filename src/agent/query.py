@@ -47,13 +47,15 @@ def query_dir(paths: Paths) -> Path:
 def run_query(
     prompt: str, *, cwd: Path, runner: CommandRunner = DEFAULT_RUNNER, timeout: float = DEFAULT_QUERY_TIMEOUT_SECONDS,
     on_usage: Callable[[dict | None], object] = lambda usage: None, env: dict[str, str] | None = None,
-    launch: Launch | None = None,
+    launch: Launch | None = None, session_id: str | None = None,
 ) -> QueryResult:
-    """`env` is the launch environment the Usage & Efficiency pillar gives (`usage_client.launch_env`)."""
+    """`env` is the launch environment the Usage & Efficiency pillar gives (`usage_client.launch_env`);
+    `session_id` names the session, so its transcript can be watched and later deleted."""
     extra = [f"{key}={value}" for key, value in (env or {}).items()]
     launch = launch or DEFAULTS[JOB_QUERY]
     argv = ["env", *QUERY_ENV, *extra, *claude_argv(
-        prompt, user_messages=False, minimal=True, model=launch.model, effort=launch.effort, max_budget_usd=launch.max_budget_usd)]
+        prompt, user_messages=False, minimal=True, model=launch.model, effort=launch.effort, max_budget_usd=launch.max_budget_usd,
+        session_id=session_id)]
     result = runner.run(argv, cwd=cwd, timeout=timeout)
     text, is_error, raw = parse_claude_output(result.stdout)
     on_usage(with_budget(usage_from_raw(raw), launch.max_budget_usd))

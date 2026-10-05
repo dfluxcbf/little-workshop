@@ -19,6 +19,7 @@ The hub holds no data of its own: an event says "look again", or carries the new
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from dataclasses import dataclass, field
@@ -35,13 +36,22 @@ RETRY_SECONDS = 5.0
 QUEUE_SIZE = 200
 
 # Topics whose changes Orchestration's feed does not carry, and what tells them apart.
+def pillars_version(paths: Paths) -> str:
+    """What the Pillars and Dashboard pages show of each pillar (its health, crashes and interface), as one
+    string that changes when any of it does. Core keeps it in memory, so asking is cheap."""
+    pillars = client.core_status(paths).get("pillars") or {}
+    return json.dumps({name: [entry.get("status"), entry.get("crash_count"), entry.get("interface_version")]
+                       for name, entry in sorted(pillars.items())})
+
+
 VERSION_SOURCES: dict[str, Callable[[Paths], str]] = {
     "backlog": lambda paths: client.backlog_version(paths),
     "usage": lambda paths: client.usage_version(paths),
     "incidents": lambda paths: client.incidents_version(paths),
+    "pillars": pillars_version,
 }
-# An incident appearing is also something needing attention.
-ALSO_PUBLISH = {"incidents": ("attention",)}
+# An incident appearing is also something needing attention; a pillar's health is on the Dashboard page too.
+ALSO_PUBLISH = {"incidents": ("attention",), "pillars": ("dashboard",)}
 
 _TASK_TYPES = {"agent.run_task", "agent.finish_task", "agent.skip_task", "agent.dismiss_task", "agent.confirm_incident"}
 _DASHBOARD_TYPES = {"agent.session_start", "agent.session_stop", "agent.ci_check", "project.bootstrap", "project.remove"}
@@ -64,6 +74,8 @@ def job_topics(change: dict) -> set[str]:
         topics |= {"tasks", "dashboard"}
     if job_type.startswith(("deployment.", "requirements.")) or job_type in _DASHBOARD_TYPES:
         topics.add("dashboard")
+    if job_type.startswith("deployment."):
+        topics.add("pillars")  # a redeploy changes the commit a pillar runs
     if job_type.startswith("policy."):
         topics.add("policies")
     if job_type.startswith("registry.backlog_"):
@@ -196,7 +208,7 @@ class Watchers:
     def check_versions_once(self) -> None:
         wanted = self.hub.topics()
         for topic, read in VERSION_SOURCES.items():
-            if topic not in wanted and not (topic == "incidents" and "attention" in wanted):
+            if not {topic, *ALSO_PUBLISH.get(topic, ())} & wanted:  # no page shows it: not asked
                 self._versions.pop(topic, None)
                 continue
             try:

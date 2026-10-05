@@ -292,3 +292,35 @@ def test_the_usage_plots_mark_the_day_pointed_at_and_list_every_series_value(tes
                    "'stats-cursor'", "el('div', 'stats-tip')", "shownSeries.forEach", "'Total'", "'Nothing measured'"):
         assert wiring in script, wiring
     assert "svg('title'" not in script  # the browser's slow, hover-only tooltips are gone
+
+
+# --- REQ-000000388: Pillar health updates the pages that show it ---
+
+
+def test_a_pillars_health_changing_updates_the_pillars_and_dashboard_pages(paths, monkeypatch):
+    hub = live.Hub()
+    status = {"pillars": {"agent": {"status": "healthy", "crash_count": 0, "interface_version": "v1"}}}
+    reads = []
+    monkeypatch.setattr(client, "core_status", lambda paths, **kw: reads.append(1) or json.loads(json.dumps(status)))
+    for name in ("backlog_version", "usage_version", "incidents_version"):
+        monkeypatch.setattr(client, name, lambda paths, **kw: "same")
+    watchers = live.Watchers(paths, hub)
+    watchers.check_versions_once()
+    assert reads == []  # neither page is open: Core is not asked
+    page = _Recorder(hub, ["dashboard"])
+    try:
+        watchers.check_versions_once()
+        status["pillars"]["agent"].update(status="unhealthy", crash_count=1)
+        watchers.check_versions_once()
+        assert [m["topic"] for m in page.messages()] == ["dashboard"]
+    finally:
+        page.close()
+    assert "pillars" in live.job_topics({"kind": "job", "id": "j", "type": "deployment.redeploy_pillar", "status": "succeeded"})
+
+
+def test_the_pillars_page_follows_its_stream(test_client, monkeypatch):
+    monkeypatch.setattr(client, "core_status", lambda paths, **kw: {"pillars": {"agent": {"status": "healthy", "crash_count": 0}}})
+    monkeypatch.setattr(client, "deployment_pillars", lambda paths, **kw: None)
+    monkeypatch.setattr(client, "list_secrets", lambda paths, **kw: [])
+    page = test_client.get("/pillars").text
+    assert 'data-live="pillars"' in page and 'id="pillars-live" data-live-region' in page

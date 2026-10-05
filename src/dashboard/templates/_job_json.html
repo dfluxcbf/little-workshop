@@ -1,0 +1,15 @@
+{#- A Job's params or result: at most JSON_SHOWN characters of it, and where the whole is when this is not it
+    (a long one cut here, or a listed Job's summary, which leaves its large values out). -#}
+{% macro job_json(label, value, job_id) -%}
+{% set view = json_view(value) %}
+<h4 class="job-h">{{ label }}</h4>
+<pre class="code">{{ view.text }}{% if view.cut %}
+…{% endif %}</pre>
+{% if view.cut or view.omitted %}
+<p class="muted job-json-note">
+  {%- if view.cut %}Showing the first {{ "{:,}".format(view.text | length) }} of {{ "{:,}".format(view.length) }} characters. {% endif -%}
+  {%- if view.omitted %}Left out of this list: {{ view.omitted | join(", ") }}. {% endif -%}
+  <a href="/jobs/{{ job_id }}.json">The whole job as JSON</a>
+</p>
+{% endif %}
+{%- endmacro %}

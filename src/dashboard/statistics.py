@@ -4,11 +4,12 @@ The plots outlive what they are built from: Orchestration's job cleanup
 deletes old Jobs, so the counts are kept apart from the pillars, in one small
 SQLite file under the Dashboard's own state directory. The Dashboard updates
 them by itself (on a visit of the page, every few minutes while it runs, and
-before it deletes old Jobs), so nobody has to ask. An update reads every
-Job, policy check result and incident the pillars still hold and adds the
-ones not counted yet to their day; `seen` remembers what was counted, so
-updating twice counts nothing twice, and a day whose Jobs were since deleted
-keeps its numbers.
+before it deletes old Jobs), so nobody has to ask. An update reads the
+policy check results and incidents the pillars hold, and the Jobs changed
+since the last update (as summaries; every Job once a day, which is when the
+Jobs deleted since are forgotten), and adds the ones not counted yet to
+their day; `seen` remembers what was counted, so updating twice counts
+nothing twice, and a day whose Jobs were since deleted keeps its numbers.
 
 Each table is one plot's data, one row per day (the local date the thing
 happened on):
@@ -31,7 +32,8 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from common.paths import PILLARS, Paths
@@ -138,6 +140,8 @@ def test_execution_failed(job: dict) -> bool:
     if job.get("status") != "succeeded":
         return True
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if isinstance(result.get("verdicts"), dict):  # a run's counts (and the brief of a listed Job keeps them)
+        return any(result["verdicts"].get(verdict) for verdict in FAILING_VERDICTS)
     for suite in result.get("suites") or []:
         if any((suite.get("verdicts") or {}).get(verdict) for verdict in FAILING_VERDICTS):
             return True
@@ -157,17 +161,31 @@ def _seen(conn: sqlite3.Connection, kind: str) -> dict[str, int]:
     return {row["id"]: row["settled"] for row in conn.execute("SELECT id, settled FROM seen WHERE kind = ?", (kind,))}
 
 
-def _remember(conn: sqlite3.Connection, kind: str, marks: dict[str, int], present: set[str]) -> None:
-    """Store what was counted, and forget what the pillar no longer holds (it cannot come back)."""
+def _remember(conn: sqlite3.Connection, kind: str, marks: dict[str, int], present: set[str] | None) -> None:
+    """Store what was counted, and forget what the pillar no longer holds (it cannot come back); `present`
+    None means only part of what it holds was read, which says nothing of the rest."""
     conn.executemany(
         "INSERT INTO seen (kind, id, settled) VALUES (?, ?, ?) ON CONFLICT (kind, id) DO UPDATE SET settled = excluded.settled",
         [(kind, item_id, settled) for item_id, settled in marks.items()],
     )
+    if present is None:
+        return
     gone = [item_id for item_id in _seen(conn, kind) if item_id not in present]
     conn.executemany("DELETE FROM seen WHERE kind = ? AND id = ?", [(kind, item_id) for item_id in gone])
 
 
-def _count_jobs(conn: sqlite3.Connection, jobs: list[dict], projects: set[str]) -> None:
+def _undecided(job: dict) -> bool:
+    """Whether a listed Job's summary left out what says if its tests failed (a run from before runs
+    answered with their counts kept them only in `results` or `suites`)."""
+    result = job.get("result")
+    return bool(job.get("summary")) and job.get("status") == "succeeded" and isinstance(result, dict) \
+        and "verdicts" not in result and bool({"results", "suites"} & set(result.get("_omitted") or ()))
+
+
+def _count_jobs(conn: sqlite3.Connection, jobs: list[dict], projects: set[str], *, complete: bool = True,
+                full_job: Callable[[str], dict | None] | None = None) -> None:
+    """`complete`: `jobs` is every Job Orchestration holds, so the ones not among them were deleted.
+    `full_job` reads a Job whose summary cannot say whether its tests failed."""
     seen, marks = _seen(conn, "job"), {}
     for job in jobs:
         day = _day(job.get("created_at"))
@@ -187,12 +205,13 @@ def _count_jobs(conn: sqlite3.Connection, jobs: list[dict], projects: set[str]) 
                 amounts["duration_seconds"] = max((end - start).total_seconds(), 0.0)
                 amounts["duration_count"] = 1
             if job.get("type") in TEST_JOB_TYPES:
+                judged = (full_job(job["id"]) if full_job is not None and _undecided(job) else None) or job
                 _add(conn, "test_days", {"day": day, **where},
-                     {"failed": 1} if test_execution_failed(job) else {"succeeded": 1})
+                     {"failed": 1} if test_execution_failed(judged) else {"succeeded": 1})
         if amounts:
             _add(conn, "job_days", key, amounts)
         marks[job["id"]] = int(settled)
-    _remember(conn, "job", marks, {job["id"] for job in jobs if job.get("id")})
+    _remember(conn, "job", marks, {job["id"] for job in jobs if job.get("id")} if complete else None)
 
 
 def _count_policy_results(conn: sqlite3.Connection, results: list[dict], policies: list[dict], projects: set[str]) -> None:
@@ -222,17 +241,54 @@ def _count_incidents(conn: sqlite3.Connection, incidents: list[dict], projects: 
     _remember(conn, "incident", marks, {incident["id"] for incident in incidents if incident.get("id")})
 
 
+# Jobs are read by their last change: those changed since the last read (less a margin, for a change
+# written just as the last read ran), and every Job once a day, the read that forgets the deleted ones.
+JOBS_READ_MARGIN = timedelta(minutes=10)
+JOBS_READ_ALL_EVERY = timedelta(days=1)
+
+
+def _meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+def jobs_to_read(paths: Paths, now: datetime | None = None) -> datetime | None:
+    """The last-change time from which the next update needs Jobs, or None when it reads every Job: the
+    first time, and once every JOBS_READ_ALL_EVERY."""
+    with _lock:
+        conn = _connect(paths)
+        try:
+            through, everything = _moment(_meta(conn, "jobs_read_through")), _moment(_meta(conn, "jobs_read_all_at"))
+        finally:
+            conn.close()
+    now = now or datetime.now(timezone.utc)
+    if through is None or everything is None or now - everything >= JOBS_READ_ALL_EVERY:
+        return None
+    return through - JOBS_READ_MARGIN
+
+
 def update(paths: Paths, *, projects: list[str] | None, jobs: list[dict] | None, policy_results: list[dict] | None,
-           policies: list[dict] | None, incidents: list[dict] | None, now: datetime | None = None) -> None:
+           policies: list[dict] | None, incidents: list[dict] | None, now: datetime | None = None,
+           jobs_complete: bool = True, jobs_read_at: datetime | None = None,
+           full_job: Callable[[str], dict | None] | None = None) -> None:
     """Add what is not counted yet. A source given as None (its pillar is down) is left as it was; without
-    the registered `projects` nothing can be placed, so nothing is counted until they can be read."""
+    the registered `projects` nothing can be placed, so nothing is counted until they can be read.
+    `jobs` is every Job (`jobs_complete`) or those changed since `jobs_to_read`, read at `jobs_read_at`."""
     with _lock:
         conn = _connect(paths)
         try:
             if projects is not None:
                 names = set(projects)
                 if jobs is not None:
-                    _count_jobs(conn, jobs, names)
+                    _count_jobs(conn, jobs, names, complete=jobs_complete, full_job=full_job)
+                    read_at = (jobs_read_at or now or datetime.now(timezone.utc)).isoformat()
+                    _set_meta(conn, "jobs_read_through", read_at)
+                    if jobs_complete:
+                        _set_meta(conn, "jobs_read_all_at", read_at)
                 if policy_results is not None:
                     _count_policy_results(conn, policy_results, policies or [], names)
                 if incidents is not None:
