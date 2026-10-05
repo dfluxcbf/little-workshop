@@ -324,3 +324,28 @@ def test_the_pillars_page_follows_its_stream(test_client, monkeypatch):
     monkeypatch.setattr(client, "list_secrets", lambda paths, **kw: [])
     page = test_client.get("/pillars").text
     assert 'data-live="pillars"' in page and 'id="pillars-live" data-live-region' in page
+
+
+# --- REQ-000000398: the remote-control button goes, without a refresh, when its job stops ---
+
+
+def test_a_job_stopping_tells_the_pages_that_show_its_remote_control_button(monkeypatch):
+    hub = live.Hub()
+    watchers = live.Watchers(Paths(config_home=None, state_home=None), hub)
+    task_page, job_page, other = _Recorder(hub, ["tasks", "job:j1"]), _Recorder(hub, ["job:j1"]), _Recorder(hub, ["job:j2"])
+    try:
+        bodies = iter([{"boot": "b", "seq": 1}, {"boot": "b", "seq": 2, "changes": [
+            {"kind": "job", "id": "j1", "type": "agent.run_task", "status": "failed"}]}])
+        monkeypatch.setattr(client, "orchestration_changes", lambda paths, **kw: next(bodies))
+        cursor = watchers.follow_orchestration_once(None)
+        watchers.follow_orchestration_once(cursor)
+        assert {m["topic"] for m in task_page.messages()} == {"tasks", "job:j1"}
+        assert [m["topic"] for m in job_page.messages()] == ["job:j1"] and other.messages() == []
+    finally:
+        for page in (task_page, job_page, other):
+            page.close()
+
+
+def test_a_query_job_settling_reaches_its_job_page_too():
+    assert "job:q1" in live.job_topics({"kind": "job", "id": "q1", "type": "agent.query", "status": "succeeded"})
+    assert "job:u1" in live.job_topics({"kind": "job", "id": "u1", "type": "agent.update_docs", "status": "stopped"})

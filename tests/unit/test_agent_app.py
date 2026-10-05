@@ -901,3 +901,117 @@ def test_an_existing_database_gets_the_dismissed_column(tmp_path):
     old.close()
     conn = db.connect(path)
     assert "dismissed_at" in {row["name"] for row in conn.execute("PRAGMA table_info(agent_runs)")}
+
+
+# --- REQ-000000398, REQ-000000399: remote control on a running Claude job ---
+
+
+class RCRunner:
+    """Records systemd-run/systemctl/dtach calls; nothing real starts."""
+
+    def __init__(self, ok=True):
+        self.calls, self.ok = [], ok
+
+    def run(self, argv, timeout=None, cwd=None):
+        self.calls.append((argv, cwd))
+        return CommandResult(0 if self.ok else 1, "", "boom")
+
+
+def _rc_client(paths, conn, tmp_path, monkeypatch, *, runner=None, status=db.RUNNING, session_id="11111111-aaaa"):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    monkeypatch.setattr("agent.app.resolve_project", lambda paths_, project_id, **kw: {"name": project_id, "path": str(checkout)})
+    monkeypatch.setattr("agent.remote_control.is_trusted", lambda directory: True)
+    runner = runner or RCRunner()
+    db.create_run(conn, "run00000001", job_id="j1", project_id="little-meals", intent="task", review_mode="manual", title="t", source={})
+    db.update_run(conn, "run00000001", status=status, session_id=session_id)
+    return TestClient(build_app(paths, conn, flow=AgentFlow(paths=paths, runner=runner))), runner
+
+
+def test_remote_control_of_a_running_job_without_a_session_can_be_activated(paths, conn, tmp_path, monkeypatch):
+    c, _ = _rc_client(paths, conn, tmp_path, monkeypatch)
+    state = c.get("/v1/remote-control/j1", params={"project_id": "little-meals"}).json()
+    assert state["running"] and state["can_activate"] and not state["active"] and state["session_name"] is None
+
+
+def test_a_job_without_a_claude_session_has_no_remote_control(paths, conn, tmp_path, monkeypatch):
+    c, _ = _rc_client(paths, conn, tmp_path, monkeypatch)
+    assert c.get("/v1/remote-control/nope").status_code == 404
+    assert c.post("/v1/remote-control/nope/activate").status_code == 404
+
+
+def test_activating_resumes_the_session_with_remote_control_and_never_touches_the_live_process(paths, conn, tmp_path, monkeypatch):
+    c, runner = _rc_client(paths, conn, tmp_path, monkeypatch)
+    name = c.post("/v1/remote-control/j1/activate", params={"project_id": "little-meals"}).json()["session_name"]
+    assert name == "lws-little-meals-rc-run00000"
+    launch = next(argv for argv, _ in runner.calls if argv[0] == "systemd-run")
+    assert launch[launch.index("claude"):][:5] == ["claude", "--resume", "11111111-aaaa", "--remote-control", name]
+    assert not any(a[0] in ("kill", "pkill") or a[:3] == ["systemctl", "--user", "stop"] for a, _ in runner.calls)
+    state = c.get("/v1/remote-control/j1").json()
+    assert state["active"] and state["can_deactivate"] and not state["can_activate"] and state["session_name"] == name
+    assert db.list_sessions(conn, "run00000001")[0]["stopped_at"] is None
+
+
+def test_a_second_activation_is_refused_and_creates_no_second_session(paths, conn, tmp_path, monkeypatch):
+    c, _ = _rc_client(paths, conn, tmp_path, monkeypatch)
+    c.post("/v1/remote-control/j1/activate")
+    assert c.post("/v1/remote-control/j1/activate").status_code == 409
+    assert len(db.list_sessions(conn, "run00000001")) == 1
+
+
+def test_an_existing_remote_control_session_is_shown_as_set_up_and_cannot_be_duplicated_or_dropped(paths, conn, tmp_path, monkeypatch):
+    c, runner = _rc_client(paths, conn, tmp_path, monkeypatch)
+    db.record_session_start(conn, "run00000001", "little-meals", "lws-little-meals-run-run00000")
+    state = c.get("/v1/remote-control/j1").json()
+    assert state["already_set_up"] and state["active"] and not state["can_activate"] and not state["can_deactivate"]
+    assert c.post("/v1/remote-control/j1/activate").status_code == 409
+    assert c.post("/v1/remote-control/j1/deactivate").status_code == 409  # dropping it would end the working Claude
+    assert runner.calls == [] and len(db.list_sessions(conn, "run00000001")) == 1
+
+
+def test_deactivating_stops_only_the_activated_scope_and_sets_stopped_at(paths, conn, tmp_path, monkeypatch):
+    c, runner = _rc_client(paths, conn, tmp_path, monkeypatch)
+    c.post("/v1/remote-control/j1/activate")
+    runner.calls.clear()
+    assert c.post("/v1/remote-control/j1/deactivate").json() == {"deactivated": True}
+    assert [a for a, _ in runner.calls if a[:3] == ["systemctl", "--user", "stop"]] == [["systemctl", "--user", "stop", "lws-rc-run00000001.scope"]]
+    assert not any(a[0] in ("kill", "pkill") for a, _ in runner.calls)
+    assert db.get_run(conn, "run00000001")["status"] == db.RUNNING  # the task keeps running
+    state = c.get("/v1/remote-control/j1").json()
+    assert not state["active"] and state["stopped_at"] and state["session_name"] and state["can_activate"]
+
+
+def test_a_job_that_is_not_running_offers_nothing_and_keeps_its_history(paths, conn, tmp_path, monkeypatch):
+    c, _ = _rc_client(paths, conn, tmp_path, monkeypatch, status=db.AWAITING_FINISH)
+    state = c.get("/v1/remote-control/j1").json()
+    assert not state["running"] and not state["can_activate"] and not state["active"]
+    assert c.post("/v1/remote-control/j1/activate").status_code == 409
+    db.record_session_start(conn, "run00000001", "little-meals", "lws-little-meals-run-run00000")  # never got its stopped_at
+    state = c.get("/v1/remote-control/j1").json()
+    assert not state["active"] and state["session_name"]  # history, not active: the job is not running
+
+
+def test_activation_failures_are_reported_and_record_nothing(paths, conn, tmp_path, monkeypatch):
+    c, _ = _rc_client(paths, conn, tmp_path, monkeypatch, runner=RCRunner(ok=False))
+    response = c.post("/v1/remote-control/j1/activate")
+    assert response.status_code == 409 and db.list_sessions(conn, "run00000001") == []
+
+
+def test_stopping_a_task_ends_its_activated_remote_control(paths, conn, tmp_path, monkeypatch):
+    c, runner = _rc_client(paths, conn, tmp_path, monkeypatch)
+    c.post("/v1/remote-control/j1/activate")
+    assert c.post("/v1/jobs/j1/stop", json={"type": "agent.run_task"}).json() == {"stopped": True}
+    assert db.list_sessions(conn, "run00000001")[0]["stopped_at"] is not None
+    assert any(a == ["systemctl", "--user", "stop", "lws-rc-run00000001.scope"] for a, _ in runner.calls)
+
+
+def test_a_running_query_session_can_get_remote_control_in_its_own_folder(paths, conn, tmp_path, monkeypatch):
+    c, runner = _rc_client(paths, conn, tmp_path, monkeypatch)
+    folder = tmp_path / "qfolder"
+    folder.mkdir()
+    db.start_query_session(conn, job_id="q1", session_id="22222222-bbbb", ref=None, cwd=str(folder))
+    assert c.post("/v1/remote-control/q1/activate", params={"project_id": "little-meals"}).status_code == 200
+    argv, cwd = next((a, d) for a, d in runner.calls if a[0] == "systemd-run")
+    assert "22222222-bbbb" in argv and cwd == folder and "--dangerously-skip-permissions" not in argv
+    db.finish_query_session(conn, "22222222-bbbb")
+    assert not c.get("/v1/remote-control/q1").json()["can_activate"]

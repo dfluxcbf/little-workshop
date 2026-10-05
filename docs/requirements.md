@@ -904,3 +904,10 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | REQ-000000395 | **The Dashboard warns while the policy bypass is TRUE.** WHILE bypass_policies is TRUE, the Dashboard shall show on every page a warning with the remaining time and a button that sets the flag to FALSE at once, after which the warning shall disappear. | draft |
 | REQ-000000396 | **Turning the policy bypass on and off is audited.** The Policy & Compliance pillar shall log every turning on, turning off and lapse of the bypass, and each violation it let through, with the time, the actor and the origin. | draft |
 | REQ-000000397 | **A query can read a project's checkout and change nothing.** When a Job asks for an agent.query that reads a project's checkout, the Agentic Development pillar shall run Claude in that project's registered checkout with only the tools that read files, confined to that checkout and without bypassing permissions, and shall fail the query without starting Claude when the project or its checkout cannot be found. | draft |
+
+## Remote control on a running Claude job (2026-10-05)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000398 | **The owner can activate remote control on a running Claude job.** While Claude is running a Job or task, the Dashboard shall offer on its own page an "Activate remote-control" button that resumes the Job's Claude session with remote control without stopping or interrupting the work, shall show afterwards only the remote-control status and session name, and shall remove the button without a page refresh when the Job stops. | draft |
+| REQ-000000399 | **Remote control is active from `started_at` until `stopped_at`.** When the user deactivates remote control or a Job's Claude work ends, the Agentic Development pillar shall set `stopped_at` of the Job's remote-control session, and the Dashboard shall treat a session without `stopped_at` as active only while the Job runs and keep its status as history. | draft |
