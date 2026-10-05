@@ -29,12 +29,22 @@ def parse_status(summary: str) -> str:
     return matches[-1].lower() if matches else STATUS_PARTIAL
 
 
+# The tools of a Claude that reads its working directory and changes nothing.
+READ_ONLY_TOOLS = "Read,Grep,Glob"
+
+
 def claude_argv(
     prompt: str, *, session_name: str | None = None, model: str | None = None,
     max_budget_usd: float | None = None, user_messages: bool = True, extra_args: tuple[str, ...] = (),
-    minimal: bool = False, effort: str | None = None, session_id: str | None = None,
+    minimal: bool = False, effort: str | None = None, session_id: str | None = None, read_only: bool = False,
 ) -> list[str]:
-    argv = ["claude", "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"]
+    argv = ["claude", "-p", prompt, "--output-format", "json"]
+    if read_only:
+        # Only the tools that read, confined to the working directory by `--restricted`, which also skips
+        # every settings file and refuses to bypass permissions (none is asked for: reads need none there).
+        argv += ["--restricted", "--tools", READ_ONLY_TOOLS]
+    else:
+        argv += ["--dangerously-skip-permissions"]
     # A known session id names the run's transcript (to watch it) and its processes (to stop it).
     if session_id:
         argv += ["--session-id", session_id]

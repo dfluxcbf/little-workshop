@@ -42,7 +42,7 @@
     <button type="button" class="copy-icon" data-copy="backlog-prompt" title="Copy the task prompt" data-title="Copy the task prompt" aria-label="Copy the task prompt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>
     <pre class="log-pre" id="backlog-prompt">{{ entry.task_prompt }}</pre>
   </div>
-  {% else %}<p class="muted">{{ "No task prompt yet." if entry.refined_entry else "Refine the entry first: the task prompt is written from the refined entry alone." }}</p>{% endif %}
+  {% else %}<p class="muted">{{ "No task prompt yet." if entry.refined_entry else "Refine the entry first: the task prompt is written from the refined entry." }}</p>{% endif %}
   <div class="row">
     {% if activity.prompt %}<button type="button" class="is-busy" disabled>Claude is writing the prompt…</button>
     {% else %}
@@ -51,7 +51,7 @@
     </form>
     {% endif %}
   </div>
-  <p class="muted">Written from the refined entry alone, and replaced each time. It ends by asking Claude to delete this entry from the backlog once the work is done.</p>
+  <p class="muted">Written from the refined entry, with Claude reading the project's checkout (it cannot change it), and replaced each time. It ends by asking Claude to delete this entry from the backlog once the work is done.</p>
 </section>
 
 <div class="row backlog-actions">

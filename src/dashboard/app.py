@@ -61,11 +61,12 @@ GATE_POINT_VALUES = [
 # Documentation review's update job, and the Job statuses that count as "not finished yet".
 DOC_UPDATE_JOB = "agent.update_docs"
 # A backlog entry's own record of Claude's work on it (Registry & Portfolio keeps it on the entry), by kind:
-# (since, job, error) columns. Claude's answer comes within agent.query's 300s, so a mark older than
-# BACKLOG_ACTIVITY_STALE belongs to a Job that never came back.
+# (since, job, error) columns. Claude's answer comes within the 600s of an agent.query that reads the
+# project's checkout (Orchestration gives up at 630s), so a mark older than BACKLOG_ACTIVITY_STALE
+# belongs to a Job that never came back.
 BACKLOG_ACTIVITY = {"refine": ("refining_since", "refining_job", "refine_error"),
                     "prompt": ("prompting_since", "prompting_job", "prompt_error")}
-BACKLOG_ACTIVITY_STALE = timedelta(minutes=10)
+BACKLOG_ACTIVITY_STALE = timedelta(minutes=15)
 _UNFINISHED = {"refine": "the last refinement did not finish", "prompt": "the last task prompt did not finish"}
 STATISTICS_UPDATE_SECONDS = 600  # how often the running Dashboard counts new jobs, checks and incidents
 LIVE_KEEPALIVE_SECONDS = 15.0  # a comment on an idle event stream, so proxies keep it open

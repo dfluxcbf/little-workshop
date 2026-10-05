@@ -106,9 +106,10 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     "build.run": 1860.0,
     "requirements.run_tests": 1860.0,
     "requirements.discover_tests": 330.0,
-    # A backlog entry's refinement and task prompt wait for one agent.query (300s ceiling).
-    "registry.backlog_refine": 330.0,
-    "registry.backlog_task_prompt": 330.0,
+    # A backlog entry's refinement and task prompt wait for one agent.query that reads the project's
+    # checkout (600s ceiling; the registry waits 620s for it).
+    "registry.backlog_refine": 630.0,
+    "registry.backlog_task_prompt": 630.0,
 }
 
 

@@ -38,11 +38,12 @@ def client(conn, paths):
 
 @pytest.fixture
 def claude(monkeypatch):
-    """Claude's answers, in order, and the prompts it was given."""
-    calls = {"prompts": [], "answers": []}
+    """Claude's answers, in order, the prompts it was given and whether each read the project's checkout."""
+    calls = {"prompts": [], "answers": [], "read_checkout": []}
 
-    def query(paths, prompt, *, job_id, project_id=None, ref=None, timeout=0):
+    def query(paths, prompt, *, job_id, project_id=None, ref=None, read_checkout=False, timeout=0):
         calls["prompts"].append((prompt, job_id, project_id))
+        calls["read_checkout"].append(read_checkout)
         return calls["answers"].pop(0)
 
     monkeypatch.setattr(agent_client, "query", query)
@@ -138,10 +139,19 @@ def test_refining_has_claude_write_from_the_primary_entry_the_refined_entry_and_
     assert stored["refined_entry"].endswith("Second refinement") and stored["title"] == "Weekly plan export"
 
 
+def test_claude_refines_reading_the_projects_checkout_but_takes_the_requirements_from_the_owner(client, claude):
+    entry = _add(client).json()
+    claude["answers"] = ["# Weekly plan export"]
+    client.post("/v1/jobs/registry.backlog_refine", json={"job_id": "j1", "params": {"entry_id": entry["id"]}})
+    assert claude["read_checkout"] == [True]
+    prompt = claude["prompts"][0][0]
+    assert "checkout" in prompt and "Do not invent requirements" in prompt
+
+
 def test_an_entry_deleted_while_claude_refines_it_keeps_nothing(client, claude, monkeypatch):
     entry = _add(client).json()
 
-    def query_then_delete(paths, prompt, *, job_id, project_id=None, ref=None, timeout=0):
+    def query_then_delete(paths, prompt, *, job_id, project_id=None, ref=None, read_checkout=False, timeout=0):
         client.delete(f"/v1/backlog/{entry['id']}")
         return "a refined entry nobody will see"
 
@@ -167,7 +177,7 @@ def test_refining_a_missing_entry_or_without_claude_fails_cleanly(client, monkey
 # --- REQ-000000371: Generate task prompt ---
 
 
-def test_the_task_prompt_comes_from_the_refined_entry_alone_and_ends_with_the_delete_instruction(client, claude):
+def test_the_task_prompt_comes_from_the_refined_entry_and_ends_with_the_delete_instruction(client, claude):
     entry = _add(client, "Primary words that must not reach the prompt").json()
     client.patch(f"/v1/backlog/{entry['id']}", json={"refinement_notes": "notes that must not reach it either"})
     refusal = client.post("/v1/jobs/registry.backlog_task_prompt", json={"job_id": "j0", "params": {"entry_id": entry["id"]}}).json()
@@ -180,6 +190,7 @@ def test_the_task_prompt_comes_from_the_refined_entry_alone_and_ends_with_the_de
 
     prompt = claude["prompts"][1][0]
     assert "The refined entry" in prompt and "Primary words" not in prompt and "notes that must not" not in prompt
+    assert "checkout" in prompt and claude["read_checkout"] == [True, True]  # read for the files and tests to name
     stored = client.get(f"/v1/backlog/{entry['id']}").json()["task_prompt"]
     assert stored.startswith("Implement the weekly export.")
     ending = stored.rsplit("## When you are done", 1)[1]
@@ -223,3 +234,42 @@ def test_lws_project_backlog_commands_act_on_the_named_projects_backlog(monkeypa
     assert main.main(["project", "backlog", "delete", "--project-id", "little-meals", "e1"]) == 0
     assert calls[-1][:2] == ("DELETE", "/e1")
     assert main.main(["project", "backlog", "show", "--project-id", "little-meals", "nope"]) == 1
+
+
+# --- REQ-000000397: A query can read a project's checkout and change nothing ---
+
+
+def test_the_backlog_asks_for_a_query_that_reads_the_checkout_and_waits_long_enough_for_it(paths, monkeypatch):
+    import httpx
+
+    from agent.query import CHECKOUT_QUERY_TIMEOUT_SECONDS
+    from dashboard.app import BACKLOG_ACTIVITY_STALE
+    from orchestration.dispatch import dispatch_timeout_for
+
+    sent = {}
+
+    class FakeClient:
+        def __init__(self, socket_path, timeout):
+            sent["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, path, json):
+            sent.update(json)
+            return httpx.Response(200, json={"outcome": "succeeded", "result": {"text": "ok"}}, request=httpx.Request("POST", "http://x" + path))
+
+    monkeypatch.setattr(agent_client, "resolve_pillar_socket", lambda *a, **k: "/x")
+    monkeypatch.setattr(agent_client, "client_for_socket", FakeClient)
+    assert agent_client.query(paths, "Refine", job_id="j1", project_id="little-meals", read_checkout=True) == "ok"
+    assert sent["params"]["read_checkout"] is True and sent["project_id"] == "little-meals"
+    # Each waits longer than what it waits for: Orchestration for the Job, the Job for the agent, the agent for
+    # Claude; and the Dashboard calls Claude's work on the entry unfinished only once Orchestration gave up on it.
+    assert CHECKOUT_QUERY_TIMEOUT_SECONDS < sent["timeout"] < dispatch_timeout_for("registry.backlog_refine")
+    assert dispatch_timeout_for("registry.backlog_task_prompt") == dispatch_timeout_for("registry.backlog_refine")
+    assert dispatch_timeout_for("registry.backlog_refine") < BACKLOG_ACTIVITY_STALE.total_seconds()
+    agent_client.query(paths, "A plain query", job_id="j2")
+    assert "read_checkout" not in sent["params"] and sent["timeout"] == agent_client.QUERY_TIMEOUT_SECONDS

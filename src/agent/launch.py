@@ -19,6 +19,9 @@ from common.paths import Paths
 
 LAUNCH_FILE = "launch.json"
 JOB_RUN_TASK, JOB_QUERY, JOB_UPDATE_DOCS, JOB_SESSION = "agent.run_task", "agent.query", "agent.update_docs", "agent.session"
+# Not a Job type of its own: an `agent.query` that reads a project's checkout (a backlog entry's
+# refinement and task prompt), launched apart because it reads for several turns, not one request.
+JOB_QUERY_CHECKOUT = "agent.query.checkout"
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,8 @@ DEFAULTS: dict[str, Launch] = {
     JOB_RUN_TASK: Launch(),
     # One request of text in, text out: a query that costs more than this has gone wrong.
     JOB_QUERY: Launch(max_budget_usd=1.0),
+    # Reading the code it needs takes a few turns more, each re-reading what was read before.
+    JOB_QUERY_CHECKOUT: Launch(max_budget_usd=3.0),
     JOB_UPDATE_DOCS: Launch(),
     JOB_SESSION: Launch(),
 }

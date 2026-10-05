@@ -369,7 +369,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
                 _activity(entry_id, **{since: datetime.now(timezone.utc).isoformat(), job: request.job_id, error: None})
                 with step("ask_claude") as handle:
                     text = agent_client.query(paths, prompt, job_id=request.job_id, project_id=entry["project_name"],
-                                              ref=backlog_ref(entry_id))
+                                              ref=backlog_ref(entry_id), read_checkout=True)
                     handle.detail = f"{len(text)} characters"
                 with step("save") as handle:
                     with lock:
@@ -387,13 +387,15 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
 
     @app.post("/v1/jobs/registry.backlog_refine")
     def job_backlog_refine(request: JobRequest) -> dict:
-        """Claude writes the refined entry from the primary entry, the current refined entry and the notes."""
+        """Claude writes the refined entry from the primary entry, the current refined entry and the notes,
+        reading the project's checkout."""
         return _ask_claude_for_entry(request, write="refined_entry", build_prompt=backlog.refine_prompt, finish=lambda text, entry: text,
                                      activity=REFINING)
 
     @app.post("/v1/jobs/registry.backlog_task_prompt")
     def job_backlog_task_prompt(request: JobRequest) -> dict:
-        """Claude writes the task prompt from the refined entry alone; the delete instruction is appended here."""
+        """Claude writes the task prompt from the refined entry, reading the project's checkout; the delete
+        instruction is appended here."""
         return _ask_claude_for_entry(
             request, write="task_prompt", build_prompt=backlog.task_prompt_prompt,
             finish=lambda text, entry: backlog.with_delete_instruction(text, entry["project_name"], entry["id"]), activity=PROMPTING,

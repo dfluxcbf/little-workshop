@@ -158,6 +158,9 @@ def connect(path: Path) -> sqlite3.Connection:
     # exception (a raised exception), crash (a pillar process died) or unexpected (behaviour no exception names).
     if "kind" not in {row["name"] for row in conn.execute("PRAGMA table_info(incidents)")}:
         conn.execute("ALTER TABLE incidents ADD COLUMN kind TEXT NOT NULL DEFAULT 'exception'")
+    # Where a query ran (the query folder, or a project's checkout): its transcript is kept under it.
+    if "cwd" not in {row["name"] for row in conn.execute("PRAGMA table_info(query_sessions)")}:
+        conn.execute("ALTER TABLE query_sessions ADD COLUMN cwd TEXT")
     conn.commit()
     return conn
 
@@ -475,9 +478,10 @@ def list_doc_updates(conn: sqlite3.Connection, *, project_id: str | None = None,
 # -- query_sessions: the Claude session of each agent.query, against the Job that asked ----------
 
 
-def start_query_session(conn: sqlite3.Connection, *, job_id: str, session_id: str, ref: str | None = None) -> None:
-    conn.execute("INSERT INTO query_sessions (session_id, job_id, ref, started_at) VALUES (?, ?, ?, ?)",
-                 (session_id, job_id, ref, _now()))
+def start_query_session(conn: sqlite3.Connection, *, job_id: str, session_id: str, ref: str | None = None,
+                        cwd: str | None = None) -> None:
+    conn.execute("INSERT INTO query_sessions (session_id, job_id, ref, started_at, cwd) VALUES (?, ?, ?, ?, ?)",
+                 (session_id, job_id, ref, _now(), cwd))
     conn.commit()
 
 
