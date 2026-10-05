@@ -1661,18 +1661,18 @@ def build_app(paths: Paths) -> FastAPI:
         shown = jobs if everything else [j for j in jobs if j.get("created_by") == calendar.SCHEDULER]
         weeks = calendar.month(shown, _task_runs_of(shown), tasks, first, today, scheduled_only=not everything)
         return _render(
-            request, "schedule.html", weeks=weeks, first=first, today=today, error=error, everything=everything,
-            previous=calendar.shift_month(first, -1), following=calendar.shift_month(first, 1), per_day=calendar.PER_DAY,
+            request, "schedule.html", weeks=weeks, totals=calendar.totals(weeks), first=first, today=today, error=error, everything=everything,
+            previous=calendar.shift_month(first, -1), following=calendar.shift_month(first, 1),
             weekdays=WEEKDAYS, states=calendar.STATES, nav_active="schedule", live_topics="schedule",
         )
 
     @app.get("/schedule/item/job/{job_id}", response_class=HTMLResponse)
     def schedule_item_job(request: Request, job_id: str):
-        """The details panel of one job or task on the calendar (a fragment the page loads beside the month)."""
+        """The details of one job or task of a day (a fragment the day's panel loads when it is expanded)."""
         job = _try(client.get_job, paths, job_id)
         run = _try(client.agent_run_for_job, paths, job_id) if job and job.get("type") == "agent.run_task" else None
         return templates.TemplateResponse(request, "_schedule_item.html", {
-            "job": job, "run": run, "task": None, "at": None, "state": calendar.item_state(job, run) if job else None,
+            "job": job, "run": run, "task": None, "at": None,
             "subjects": _job_subjects(job, job.get("steps") or [], {}) if job else [],
         })
 

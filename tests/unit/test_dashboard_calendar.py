@@ -51,7 +51,7 @@ def test_jobs_and_tasks_are_on_their_day_in_their_state_and_a_cancelled_one_is_n
         "job:a": ("job", "succeeded"), "job:b": ("job", "failed"), "job:c": ("job", "running"), "job:d": ("job", "skipped"),
         "job:e": ("job", "scheduled"), "job:t": ("task", "skipped"),
     }
-    assert items["job:t"]["title"] == "Export the plan" and items["job:t"]["href"] == "/tasks/little-meals/r1"
+    assert items["job:t"]["title"] == "Export the plan" and items["job:t"]["detail"] == "/schedule/item/job/t"
     assert items["job:a"]["at"].date() == date(2026, 10, 2) and items["job:a"]["detail"] == "/schedule/item/job/a"
 
 
@@ -87,7 +87,7 @@ def test_a_weekly_task_is_on_each_of_its_days_from_its_next_run_and_a_once_task_
     assert calendar.occurrences({**weekly, "state": "stopped"}, date(2026, 9, 28), date(2026, 11, 1)) == []
     items = calendar.scheduled_items([weekly, once], date(2026, 9, 28), date(2026, 11, 1))
     assert {(i["kind"], i["state"]) for i in items} == {("task", "scheduled"), ("job", "scheduled")}
-    assert items[0]["title"] == "Nightly" and items[0]["href"] == "/tasks/schedule/w"
+    assert items[0]["title"] == "Nightly" and items[0]["detail"] == "/schedule/item/scheduled/w?at=2026-10-08T03:00"
 
 
 def test_a_missed_firing_shows_as_skipped_on_its_day():
@@ -97,9 +97,45 @@ def test_a_missed_firing_shows_as_skipped_on_its_day():
     assert len(missed) == 1 and missed[0]["at"] == datetime(2026, 10, 5, 3) and "(missed)" in missed[0]["title"]
 
 
+def test_a_day_has_one_symbol_per_kind_and_state_with_how_many_items_it_stands_for():
+    entries = [{"kind": kind, "state": state} for kind, state in
+               [("job", "succeeded")] * 3 + [("task", "failed"), ("job", "scheduled")] + [("task", "succeeded")] * 2]
+    assert calendar.symbols(entries) == [  # tasks first, then jobs, each in the order of the states
+        {"kind": "task", "state": "succeeded", "count": 2}, {"kind": "task", "state": "failed", "count": 1},
+        {"kind": "job", "state": "succeeded", "count": 3}, {"kind": "job", "state": "scheduled", "count": 1},
+    ]
+    assert calendar.symbols([]) == []
+    weeks = calendar.month([_job("a", "failed", _local_utc(2026, 10, 2), created_by="scheduler")], {}, [], date(2026, 10, 1), date(2026, 10, 5))
+    (cell,) = [c for week in weeks for c in week if c["date"] == date(2026, 10, 2)]
+    assert cell["symbols"] == [{"kind": "job", "state": "failed", "count": 1}] and len(cell["entries"]) == 1
+
+
+def test_the_month_counts_its_own_items_by_state_and_kind():
+    jobs = [_job("a", "failed", _local_utc(2026, 10, 2), created_by="scheduler"),
+            _job("b", "succeeded", _local_utc(2026, 10, 2), created_by="scheduler"),
+            _job("t", "succeeded", _local_utc(2026, 10, 3), type="agent.run_task", created_by="scheduler"),
+            _job("before", "succeeded", _local_utc(2026, 9, 29), created_by="scheduler")]  # on the grid, not in the month
+    counts = calendar.totals(calendar.month(jobs, {}, [], date(2026, 10, 1), date(2026, 10, 5)))
+    assert list(counts) == list(calendar.STATES)
+    assert counts["succeeded"] == {"all": 2, "task": 1, "job": 1} and counts["failed"] == {"all": 1, "task": 0, "job": 1}
+    assert counts["running"] == {"all": 0, "task": 0, "job": 0}
+
+
 @pytest.fixture
 def test_client(tmp_path):
     return TestClient(app_module.build_app(Paths(config_home=tmp_path / "c", state_home=tmp_path / "s")))
+
+
+def _day(page: str, day: date) -> tuple[str, str]:
+    """A day of the month page: its button up to its sheet, and its sheet (the <template> the panel shows)."""
+    cell = page[page.index(f'data-day="{day.isoformat()}"'):]
+    cell = cell[:cell.index("</button>")]
+    return cell[:cell.index("<template>")], cell[cell.index("<template>"):]
+
+
+def _relative(day: date, today: date) -> str:
+    n = (day - today).days
+    return {0: "Today", 1: "Tomorrow", -1: "Yesterday"}.get(n, f"In {n} days" if n > 0 else f"{-n} days ago")
 
 
 def test_the_schedule_page_draws_the_month_with_its_items_and_a_details_panel(test_client, monkeypatch):
@@ -113,7 +149,7 @@ def test_the_schedule_page_draws_the_month_with_its_items_and_a_details_panel(te
     monkeypatch.setattr(client, "agent_runs", lambda paths, project: [])
     page = test_client.get("/schedule").text
     assert 'href="/schedule"' in page and ">Schedule<" in page  # under Actions
-    assert 'class="cal-item kind-job state-failed"' in page and 'class="cal-item kind-task state-running"' in page
+    assert 'class="cal-sym kind-job state-failed"' in page and 'class="cal-sym kind-task state-running"' in page
     assert 'data-detail="/schedule/item/job/a1"' in page and 'id="cal-panel"' in page
     for state in calendar.STATES:
         assert f"cal-swatch state-{state}" in page
@@ -122,28 +158,74 @@ def test_the_schedule_page_draws_the_month_with_its_items_and_a_details_panel(te
     everything = test_client.get("/schedule", params={"show": "all"}).text
     assert "/schedule/item/job/by-hand" in everything and "show=all" in everything
     other = test_client.get("/schedule", params={"month": "2026-02"}).text
-    assert "February 2026" in other and "?month=2026-01" in other and "?month=2026-03" in other
+    assert 'February <span class="cal-year">2026</span>' in other and "?month=2026-01" in other and "?month=2026-03" in other
 
 
-def test_a_busy_day_shows_a_few_items_and_says_how_many_more(test_client, monkeypatch):
+def test_a_task_is_a_triangle_a_job_a_circle_and_each_symbol_shows_once_with_how_many_inside(test_client, monkeypatch):
     today = date.today()
-    jobs = [_job(f"j{n}", "succeeded", _local_utc(today.year, today.month, today.day), created_by="scheduler") for n in range(9)]
+    at = _local_utc(today.year, today.month, today.day)
+    jobs = [_job(f"j{n}", "succeeded", at, created_by="scheduler") for n in range(12)]
+    jobs += [_job("t1", "failed", at, type="agent.run_task", params={"title": "Fix"}, created_by="scheduler"),
+             _job("j-failed", "failed", at, created_by="scheduler")]
     patch_jobs(monkeypatch, client, jobs)
     monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
+    monkeypatch.setattr(client, "agent_runs", lambda paths, project: [])
+    symbols, entries = _day(test_client.get("/schedule").text, today)
+    assert symbols.count("<svg") == 3  # the failed task, the twelve succeeded jobs as one, the failed job
+    assert symbols.count('<path class="cal-shape"') == 1 and symbols.count('<circle class="cal-shape"') == 2
+    assert symbols.count("<text") == 1 and '<text class="cal-n n2" x="12" y="12">12</text>' in symbols  # a lone one has no number
+    assert ": 1 task failed, 12 jobs succeeded, 1 job failed" in symbols  # what a screen reader hears
+    assert entries.count('<details class="cal-entry"') == 14
+
+
+def test_a_day_is_one_button_and_its_items_are_listed_only_in_the_panel(test_client, monkeypatch):
+    today = date.today()
+    at = _local_utc(today.year, today.month, today.day)
+    patch_jobs(monkeypatch, client, [_job("a1", "failed", at, created_by="scheduler"), _job("a2", "succeeded", at, created_by="scheduler")])
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
     page = test_client.get("/schedule").text
-    assert page.count('class="cal-item kind-job state-succeeded"') == 9 and page.count(" hidden>") >= 9 - calendar.PER_DAY
-    assert f"+{9 - calendar.PER_DAY} more" in page
+    month = page[page.index('id="schedule-live"'):page.index('id="cal-panel"')]
+    assert "<a " not in month  # nothing on the calendar is a link of its own: a tap on a day lists it
+    assert month.count('<button type="button" class="cal-day') == len(calendar.grid_days(today.replace(day=1)))
+    symbols, entries = _day(page, today)
+    assert 'data-detail="/schedule/item/job/a1"' in entries and 'data-detail="/schedule/item/job/a2"' in entries
+    assert "data-detail" not in symbols
+    assert " name=" not in entries  # no group name: each item expands on its own, several open at a time
+    assert 'class="cal-pill state-failed">failed<' in entries and 'class="cal-entry-body"' in entries
 
 
-def test_the_details_panel_shows_a_job_or_a_scheduled_run(test_client, monkeypatch):
+def test_the_month_at_a_glance_and_a_days_sheet_count_by_state(test_client, monkeypatch):
+    today = date.today()
+    at = _local_utc(today.year, today.month, today.day)
+    patch_jobs(monkeypatch, client, [_job("a1", "failed", at, created_by="scheduler"), _job("a2", "succeeded", at, created_by="scheduler"),
+                                     _job("t1", "succeeded", at, type="agent.run_task", created_by="scheduler")])
+    monkeypatch.setattr(client, "scheduled_tasks", lambda paths: [])
+    monkeypatch.setattr(client, "agent_runs", lambda paths, project: [])
+    page = test_client.get("/schedule").text
+    stats = page[page.index('id="schedule-stats"'):page.index('class="cal-layout"')]
+    assert stats.startswith('id="schedule-stats" data-live-region')  # the counts follow the month as it changes
+    succeeded = stats[stats.index("cal-stat state-succeeded"):stats.index("cal-stat state-failed")]
+    assert '<span class="stat-value">2</span>' in succeeded and 'aria-label="1 task, 1 job"' in succeeded
+    assert "cal-stat state-failed stat-fail" in stats and "cal-stat state-running is-zero" in stats
+    _, sheet = _day(page, today)
+    assert 'class="cal-pill state-succeeded">2 succeeded<' in sheet and 'class="cal-pill state-failed">1 failed<' in sheet
+    days = calendar.grid_days(today.replace(day=1))
+    for day in (days[0], today, days[-1]):
+        assert f">{_relative(day, today)}<" in _day(page, day)[1]
+    quiet = next(day for day in days if day != today)
+    assert "Nothing ran or is scheduled on this day." in _day(page, quiet)[1] and "cal-day-list" not in _day(page, quiet)[1]
+
+
+def test_an_expanded_item_shows_a_job_or_a_scheduled_run(test_client, monkeypatch):
     job = {**_job("a1", "failed", "2026-10-04T10:00:00+00:00", error="boom"), "steps": []}
     monkeypatch.setattr(client, "get_job", lambda paths, job_id: job if job_id == "a1" else None)
     panel = test_client.get("/schedule/item/job/a1").text
     assert "boom" in panel and 'href="/jobs/a1"' in panel and "failed" in panel and "<html" not in panel
+    assert "<code>build.run</code>" in panel
     assert "no longer there" in test_client.get("/schedule/item/job/zz").text
 
     task = _task("w", {"kind": "recurring", "days_of_week": [0], "time_of_day": "03:00"}, "2026-10-12T03:00:00")
     task["schedule"]["at"] = None
     monkeypatch.setattr(client, "get_scheduled_task", lambda paths, task_id: task)
     panel = test_client.get("/schedule/item/scheduled/w", params={"at": "2026-10-19T03:00"}).text
-    assert "Nightly" in panel and "2026-10-19 03:00" in panel and 'href="/tasks/schedule/w"' in panel and "Every Mon at 03:00" in panel
+    assert "weekly" in panel and "2026-10-19 03:00" in panel and 'href="/tasks/schedule/w"' in panel and "Every Mon at 03:00" in panel
