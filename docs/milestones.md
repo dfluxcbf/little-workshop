@@ -19,7 +19,11 @@ same "the docs are the record, corrected as understanding improves"
 discipline this project already applies to itself); the *sequence* and
 *scope* below is the actual plan.
 
-Work asked for but not yet refined or scheduled is in [backlog.md](backlog.md).
+Work asked for but not yet refined or scheduled is in the project's
+backlog, which Registry & Portfolio keeps
+([Backlog](pillars/registry_portfolio.md#backlog-2026-10-04)): the
+Dashboard's Backlog page, or `lws project backlog list --project-id
+little-workshop`.
 
 ## Overview
 
