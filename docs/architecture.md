@@ -281,7 +281,7 @@ creates the registry row, never the other way around.
 - **Deployment & Servers** — `servers`, `deployments`,
   `deploy_confirmations`.
 - **Agentic Development** — `agent_runs` (with each run's Claude
-  `session_id`, 2026-10-04), `remote_control_sessions`, `incidents` (with
+  `session_id`, 2026-10-04), `remote_control_sessions` (also the Job-keyed rows of docs/pillars/agentic_development.md "Activating Remote Control"), `incidents` (with
   their kind: exception, crash or unexpected behaviour).
 - **Usage & Efficiency** — `sessions`, `requests`, `tool_calls`, `session_events`, `plan_pressure`,
   `day_rollups`, `run_usage`, `doctor_reports` (`docs/pillars/usage.md`, "Store").

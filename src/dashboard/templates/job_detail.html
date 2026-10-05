@@ -5,6 +5,7 @@
 {% from "_job_subject.html" import job_subject %}
 {% from "_peek.html" import peek_card %}
 {% from "_force_stop.html" import stop_controls %}
+{% from "_remote_control.html" import remote_control_card %}
 {% block title %}{{ job.type if job else "Job" }} — little-workshop{% endblock %}
 {% block content %}
 {% if job %}
@@ -30,6 +31,8 @@
     {% if job.error %}<p class="job-error">{{ job.error }}</p>{% endif %}
     {{ stop_controls(job, stop_refused, "/jobs/" ~ job.id) }}
   </section>
+
+  {{ remote_control_card(remote_control, "/jobs/" ~ job.id) }}
 
   <section class="dcard">
     <div class="dcard-head"><span class="dcard-title">What this job does</span>

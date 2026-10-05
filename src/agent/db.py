@@ -357,6 +357,20 @@ def record_session_stop(conn: sqlite3.Connection, session_id: str) -> None:
     conn.commit()
 
 
+def list_sessions(conn: sqlite3.Connection, agent_run_id: str) -> list[dict]:
+    """The remote-control sessions recorded for a run (or, for jobs without a run, the Job), oldest first."""
+    rows = conn.execute("SELECT * FROM remote_control_sessions WHERE agent_run_id = ? ORDER BY started_at, rowid", (agent_run_id,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def stop_open_sessions(conn: sqlite3.Connection, agent_run_id: str) -> int:
+    """Set `stopped_at` on every session of the run still without one (its Claude work ended); returns how many."""
+    open_ids = [row["id"] for row in list_sessions(conn, agent_run_id) if row["stopped_at"] is None]
+    for session_id in open_ids:
+        record_session_stop(conn, session_id)
+    return len(open_ids)
+
+
 # -- poll_cursors -----------------------------------------------------------
 
 

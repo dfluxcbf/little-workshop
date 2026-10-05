@@ -340,6 +340,9 @@ class AgentFlow:
                 return stopped(branch)
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, branch, "failed", None, None, str(exc))
+        finally:
+            # Claude's work ended (completed, failed or stopped): its remote-control connection with it.
+            db.stop_open_sessions(conn, run_id)
         if should_stop():
             return stopped(branch)
 

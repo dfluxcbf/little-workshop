@@ -498,6 +498,35 @@ def agent_peek(paths: Paths, job_id: str, *, after: int = 0, limit: int = 200, t
     return _get_optional(paths, "agent", f"/v1/peek/{job_id}", params={"after": after, "limit": limit}, timeout=timeout)
 
 
+def agent_remote_control(paths: Paths, job_id: str, *, project_id: str = "") -> dict | None:
+    """Remote Control of a Job's running Claude session: {running, active, can_activate, can_deactivate,
+    already_set_up, session_name, started_at, stopped_at}. None for a Job that has no Claude session."""
+    return _get_optional(paths, "agent", f"/v1/remote-control/{job_id}", params={"project_id": project_id})
+
+
+class RemoteControlRefused(Exception):
+    """The agent refused to (de)activate remote control; the message says why."""
+
+
+def agent_remote_control_act(paths: Paths, job_id: str, action: str, *, project_id: str = "") -> dict:
+    """`action` is "activate" (resume the session with remote control) or "deactivate" (drop only that connection)."""
+    socket_path = resolve_pillar_socket(paths, "agent", timeout=30.0)
+    if socket_path is None:
+        raise PillarUnavailable("agent daemon unreachable — Core has no socket for it registered")
+    try:
+        with client_for_socket(socket_path, timeout=30.0) as client:
+            response = client.post(f"/v1/remote-control/{job_id}/{action}", params={"project_id": project_id})
+    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        raise PillarUnavailable("agent daemon unreachable") from exc
+    if response.status_code in (404, 409):
+        raise RemoteControlRefused(str(response.json().get("detail") or "refused"))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise PillarUnavailable("agent daemon refused the request") from exc
+    return response.json()
+
+
 def agent_run_for_job(paths: Paths, job_id: str) -> dict | None:
     """The task (agent run) an `agent.run_task` Job started, if it has one yet."""
     return _get_optional(paths, "agent", f"/v1/runs/by-job/{job_id}")
