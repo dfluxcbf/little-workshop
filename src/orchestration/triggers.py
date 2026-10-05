@@ -229,7 +229,7 @@ def fire_pending(conn: sqlite3.Connection, insert_job) -> list[Job]:
                 continue  # a Job this trigger created never fires it again
             if depth >= MAX_DEPTH:
                 continue
-            job = Job(**expand(trigger.job_template, event["project_id"], data), created_by=f"trigger:{trigger.id}")
+            job = Job(**expand(trigger.job_template, event["project_id"], data), created_by=f"trigger:{trigger.id}", origin="automation")
             insert_job(job)
             conn.execute("INSERT INTO trigger_jobs (job_id, trigger_id, depth) VALUES (?, ?, ?)", (job.id, trigger.id, depth + 1))
             conn.execute("UPDATE triggers SET last_fired_at = ?, last_job_id = ? WHERE id = ?", (_now(), job.id, trigger.id))

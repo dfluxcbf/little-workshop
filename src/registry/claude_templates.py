@@ -216,6 +216,7 @@ LWS_UNLISTED = (
     "build print-pip-config", "build write-pip-config", "build pip", "build print-vsix-urls",
     "deployment rollback-timeout", "deployment redeploy-pillar-worker", "deployment rollback-pillar-worker",
     "worktree provision", "worktree release", "mcp serve",
+    "bypass_policies",  # the user's alone (needs sudo); the command itself refuses Claude
 )
 
 # Why a raw command is refused, and the little-workshop route the policies gate instead. The

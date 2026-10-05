@@ -68,6 +68,14 @@
 <a class="attention-banner" id="attention-banner" href="/settings"{% if not attention_count %} hidden{% endif %}>
   <strong id="attention-count">{{ attention_count }}</strong> <span>need{{ '' if attention_count == 1 else 's' }} your attention</span>
 </a>
+{% if bypass and bypass.bypass_policies %}
+<div class="bypass-banner" id="bypass-banner" role="alert" data-remaining="{{ bypass.remaining_seconds }}">
+  <span><strong>bypass_policies is TRUE</strong> &mdash; failing policy checks from the user's terminal do not block.
+  <span id="bypass-remaining" data-testid="bypass-remaining">{{ '%d:%02d' % (bypass.remaining_seconds // 60, bypass.remaining_seconds % 60) }}</span> left.
+  Violations are still recorded and counted.</span>
+  <form method="post" action="/policy-bypass/off"><input type="hidden" name="next" value="{{ request.url.path }}"><button type="submit" class="btn" data-busy="Turning off…">Set to FALSE now</button></form>
+</div>
+{% endif %}
 <main class="content">
 {% if error %}<div class="card fail"><strong>UNREACHABLE</strong> &mdash; {{ error }}</div>{% endif %}
 {% if message %}<div class="flash">{{ message }}</div>{% endif %}
@@ -115,6 +123,18 @@
     var setView = function (v) { rows.forEach(function (r) { r.classList.toggle('tabbar-row-active', r.dataset.view === v); }); };
     bar.querySelectorAll('.tab-group').forEach(function (b) { b.addEventListener('click', function () { setView(b.dataset.open); }); });
     bar.querySelectorAll('.tab-back').forEach(function (b) { b.addEventListener('click', function () { setView('main'); }); });
+  }
+  var bypassBanner = document.getElementById('bypass-banner');
+  if (bypassBanner) {
+    var left = parseInt(bypassBanner.dataset.remaining, 10), shown = document.getElementById('bypass-remaining');
+    // A display countdown of the time the server gave, not a poll: nothing is fetched until it reaches zero.
+    var tick = function () {
+      left -= 1;
+      if (left <= 0) { location.reload(); return; }
+      shown.textContent = Math.floor(left / 60) + ':' + ('0' + (left % 60)).slice(-2);
+      setTimeout(tick, 1000);
+    };
+    setTimeout(tick, 1000);
   }
   var banner = document.getElementById('attention-banner');
   var known = null;

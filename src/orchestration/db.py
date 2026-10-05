@@ -135,6 +135,8 @@ def connect(path: Path) -> sqlite3.Connection:
 
     conn.executescript(triggers.SCHEMA)
     _add_briefs(conn)
+    if "origin" not in {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}:
+        conn.execute("ALTER TABLE jobs ADD COLUMN origin TEXT NOT NULL DEFAULT 'unknown'")
     conn.commit()
     return conn
 
@@ -171,6 +173,7 @@ def job_to_row(job: Job) -> dict:
         "queue_key": job.queue_key,
         "depends_on": json.dumps(job.depends_on),
         "created_by": job.created_by,
+        "origin": job.origin,
         "result": json.dumps(job.result) if job.result is not None else None,
         "brief": _brief_json(job.params, job.result),
         "error": job.error,
@@ -190,6 +193,7 @@ def row_to_job(row: sqlite3.Row) -> Job:
         queue_key=row["queue_key"],
         depends_on=json.loads(row["depends_on"]),
         created_by=row["created_by"],
+        origin=row["origin"],
         result=json.loads(row["result"]) if row["result"] is not None else None,
         error=row["error"],
         created_at=_parse_iso(row["created_at"]),
@@ -202,9 +206,9 @@ def insert_job(conn: sqlite3.Connection, job: Job) -> None:
     conn.execute(
         """INSERT INTO jobs
            (id, type, target_pillar, project_id, params, status, queue_key,
-            depends_on, created_by, result, brief, error, created_at, updated_at)
+            depends_on, created_by, origin, result, brief, error, created_at, updated_at)
            VALUES (:id, :type, :target_pillar, :project_id, :params, :status,
-            :queue_key, :depends_on, :created_by, :result, :brief, :error,
+            :queue_key, :depends_on, :created_by, :origin, :result, :brief, :error,
             :created_at, :updated_at)""",
         row,
     )
@@ -219,7 +223,7 @@ def update_job(conn: sqlite3.Connection, job: Job) -> None:
     conn.execute(
         """UPDATE jobs SET type=:type, target_pillar=:target_pillar,
            project_id=:project_id, params=:params, status=:status,
-           queue_key=:queue_key, depends_on=:depends_on, created_by=:created_by,
+           queue_key=:queue_key, depends_on=:depends_on, created_by=:created_by, origin=:origin,
            result=:result, brief=:brief, error=:error, updated_at=:updated_at
            WHERE id=:id""",
         row,

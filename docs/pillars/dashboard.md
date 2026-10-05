@@ -700,3 +700,9 @@ Jobs page and a job's page show at most 20,000 characters of a Job's params or r
 then say how much there is, and name what a summary left out; both link to `/jobs/{id}.json`, the whole
 Job.
 
+## Policy bypass warning (2026-10-05)
+
+While the Policy pillar's `bypass_policies` flag is TRUE (`GET /v1/bypass`), every page shows a bar under the
+navigation: "bypass_policies is TRUE", the remaining time counting down in the browser (the page reloads when it
+reaches zero), and a "Set to FALSE now" button posting to `/policy-bypass/off`, which sets the flag back at once. The
+Dashboard never raises the flag. See `policy_compliance.md`, "Policy bypass".

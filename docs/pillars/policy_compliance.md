@@ -1088,3 +1088,44 @@ a 140 KB list) to show the 4 policies failing; it now reads the latest failing r
 summaries, its policies pages the latest results, and its statistics the results recorded since their
 last count (REQ-000000391). Without a parameter both answer as before.
 
+
+
+## Policy bypass: the user's temporary exception (2026-10-05)
+
+The project owner can lift the *gating* of policies for a few minutes, from their own terminal, when a gate is in
+the way and they accept the consequence. It never hides a problem: every check still runs, is recorded, counts in
+the Dashboard's statistics and is shown to the user.
+
+- **Raising the flag.** `sudo lws bypass_policies true [--time minutes]` sets the `bypass_policies` flag for
+  `--time` minutes (default 2). Above 30 (or below 1) it is *refused* with an error rather than clamped, so the
+  user is never given a window other than the one typed. Run again while TRUE, it restarts the timer from now (it
+  neither extends nor rejects). `lws bypass_policies false` lowers it and `status` reads it; neither needs sudo,
+  since lowering the flag only makes policies stricter. The flag is a row with an expiry in the Policy pillar's own
+  database (`policy_bypass`), TRUE exactly while `expires_at` is in the future, so it lapses by itself even across
+  a restart. Under `sudo` the CLI talks to the invoking user's pillars (`SUDO_USER`'s home), and the `lws` on
+  root's `secure_path` is needed (`sudo $(which lws) ...` otherwise).
+- **Origin tracking.** Every Job (`jobs.origin`) and every `policy evaluate` request carries one origin from
+  `common/origin.py`: `user_cli`, `claude`, `scheduled_job`, `ui_job`, `automation` (event triggers) or `unknown`.
+  The client that makes the request stamps it: `lws` (`user_cli` only when stdin and stderr are a terminal and the
+  process is not inside Claude Code, else `claude` or `unknown`), the MCP server (`claude`), the Dashboard
+  (`ui_job`), the scheduler (`scheduled_job`) and triggers (`automation`). Anything not positively the user's
+  terminal is not bypassable. A policy check result records its `origin` and whether it was `bypassed`.
+- **Telling Claude from the user.** The CLI refuses `bypass_policies true` when its environment carries a Claude
+  Code marker (`CLAUDECODE`, ...) or when any ancestor process is `claude` or runs with one (which survives
+  `sudo` clearing the environment), needs root with `SUDO_USER`, and the Policy pillar independently refuses any
+  origin but `user_cli`. A terminal is required for `user_cli`, which an unattended unit or Claude's tool shell
+  lacks. Accepted limit: the origin is a client's claim over a local socket owned by the same user, so a process
+  of that user determined to forge it could; the bypass defends against honest automation and agents, not
+  against the user's own account being compromised.
+- **Effect.** `GET /v1/policies/gating-for-job` and `POST /v1/policies/evaluate` take the request's `origin`.
+  While the flag is TRUE and the origin is `user_cli`, a policy that would gate answers `gating: false,
+  bypassed: true`: the check job still runs and records `fail`, the Job is not held, and `lws policy evaluate`
+  prints the violation marked BYPASSED and exits 0. Every other origin keeps its gating, flag or not. The bypass
+  applies to every policy (none is marked non-bypassable). The decision is taken when the Job is created, so a
+  Job started inside the window is not held even if the window lapses before it dispatches.
+- **Dashboard.** While TRUE, every page shows a warning bar, "bypass_policies is TRUE", with the remaining time
+  counting down and a "Set to FALSE now" button (`POST /policy-bypass/off`), after which the bar is gone. The
+  button can only lower the flag, which is why the Dashboard needs no authentication of its own for it; raising
+  it is only possible from the terminal.
+- **Audit.** `policy_bypass_log` records each enabling (with the sudo user), disabling, lapse and every violation
+  a bypass let through; `GET /v1/bypass/log` lists it.
