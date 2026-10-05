@@ -11,6 +11,7 @@ import os
 import httpx
 
 from common.manifest import load_manifest
+from common.origin import cli_origin
 from common.paths import Paths
 from common.uds_client import client_for_socket
 from common import systemd
@@ -58,6 +59,7 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
 
 
 def post_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
+    fields.setdefault("origin", cli_origin())
     try:
         with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
             response = client.post("/v1/jobs", json=fields)
@@ -673,7 +675,7 @@ def policy_evaluate(
     """Run, now, every policy gating `gate_point` for the project, in the sandbox, and
     return each verdict. Nothing is recorded or held. Long timeout: a branch_finish
     preflight includes policies that run the project's own test suite."""
-    body: dict = {"project_id": project_id, "gate_point": gate_point}
+    body: dict = {"project_id": project_id, "gate_point": gate_point, "origin": cli_origin()}
     if commit is not None:
         body["commit"] = commit
     if checkout is not None:
@@ -696,6 +698,32 @@ def policy_evaluate(
             "the running Policy & Compliance pillar predates policy evaluate; redeploy it "
             "(workshop_deployment_redeploy_pillar policy)"
         )
+    if response.status_code != 200:
+        raise PolicyPillarUnavailable(f"Policy & Compliance answered HTTP {response.status_code}")
+    return response.json()
+
+
+def policy_bypass_status(paths: Paths, *, timeout: float = 5.0) -> dict:
+    return _policy_bypass(paths, "GET", None, timeout)
+
+
+def policy_bypass_set(paths: Paths, *, enabled: bool, minutes: int | None, actor: str, timeout: float = 5.0) -> dict:
+    """Turn the `bypass_policies` flag on (the pillar refuses any origin but the user's terminal) or off."""
+    return _policy_bypass(paths, "POST", {"enabled": enabled, "minutes": minutes, "actor": actor, "origin": cli_origin()}, timeout)
+
+
+class PolicyBypassRefused(Exception):
+    pass
+
+
+def _policy_bypass(paths: Paths, method: str, body: dict | None, timeout: float) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.request(method, "/v1/bypass", json=body)
+    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        raise PolicyPillarUnavailable("Policy & Compliance daemon unreachable -- the bypass flag lives there") from exc
+    if response.status_code in (400, 403):
+        raise PolicyBypassRefused(str(response.json().get("detail", response.text)))
     if response.status_code != 200:
         raise PolicyPillarUnavailable(f"Policy & Compliance answered HTTP {response.status_code}")
     return response.json()

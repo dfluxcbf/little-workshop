@@ -59,6 +59,7 @@ class CreateJobRequest(BaseModel):
     queue_key: str | None = None
     depends_on: list[str] = []
     created_by: str = "unknown"
+    origin: str = "unknown"
 
 
 class CompleteJobRequest(BaseModel):

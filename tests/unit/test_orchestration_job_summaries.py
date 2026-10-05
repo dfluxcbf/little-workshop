@@ -111,6 +111,7 @@ def test_jobs_written_before_briefs_existed_get_theirs_when_the_store_opens(tmp_
     old.executescript(db.SCHEMA.replace("    brief TEXT,\n", ""))
     row = db.job_to_row(Job(type="build.run", target_pillar="build", params={"target": "//:all"}, result=BIG))
     row.pop("brief")
+    row.pop("origin")
     old.execute(f"INSERT INTO jobs ({', '.join(row)}) VALUES ({', '.join('?' for _ in row)})", tuple(row.values()))
     old.commit()
     old.close()
