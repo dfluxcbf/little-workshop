@@ -15,6 +15,7 @@ import subprocess
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,11 @@ class EditBacklogEntryRequest(BaseModel):
 # not an eternal launch-time cache: a revoked/rotated token should still
 # surface here within a few minutes, not only after the next restart.
 SECRETS_CACHE_TTL_SECONDS = 300.0
+
+
+def backlog_ref(entry_id: str) -> str:
+    """What the Claude sessions working on a backlog entry are recorded under at the agent."""
+    return f"backlog:{entry_id}"
 
 
 def start_improvement_branch(paths: Paths, project_id: str, name: str) -> dict:
@@ -326,17 +332,31 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
 
     @app.delete("/v1/backlog/{entry_id}")
     def delete_backlog_entry(entry_id: str) -> dict:
+        """The entry and everything it holds, and the transcripts of the Claude sessions that worked on it
+        (`transcripts_deleted` is None when the agent could not be reached to delete them)."""
         with lock:
             if not db.delete_backlog_entry(conn, entry_id):
                 raise HTTPException(status_code=404, detail="no such backlog entry")
             backlog_changed()
-        return {"deleted": True, "id": entry_id}
+        return {"deleted": True, "id": entry_id, "transcripts_deleted": agent_client.forget(paths, backlog_ref(entry_id))}
 
-    def _ask_claude_for_entry(request: JobRequest, *, write: str, build_prompt, finish) -> dict:
+    def _activity(entry_id: str, **fields) -> None:
+        with lock:
+            if db.set_backlog_activity(conn, entry_id, **fields):
+                backlog_changed()
+
+    # The entry's activity columns of each kind of work: (since, job, error).
+    REFINING = ("refining_since", "refining_job", "refine_error")
+    PROMPTING = ("prompting_since", "prompting_job", "prompt_error")
+
+    def _ask_claude_for_entry(request: JobRequest, *, write: str, build_prompt, finish, activity: tuple[str, str, str]) -> dict:
         """Read the entry, ask Claude without holding `lock` (a minute or more), then write the answer
         into `write` — unless the entry was deleted meanwhile, which keeps nothing of the answer.
-        A refusal is raised inside its step, so the checklist shows which step failed."""
+        Meanwhile the entry says Claude is at it, since when and in which Job (`activity`), and
+        afterwards why it failed, if it did. A refusal is raised inside its step, so the checklist shows
+        which step failed."""
         entry_id = request.params.get("entry_id") or ""
+        since, job, error = activity
         try:
             with reported(request):
                 with step("read_entry") as handle:
@@ -346,32 +366,37 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
                         raise backlog.BacklogError(f"no backlog entry {entry_id!r}")
                     prompt = build_prompt(entry["project_name"], entry)
                     handle.detail = backlog.entry_title(entry)
+                _activity(entry_id, **{since: datetime.now(timezone.utc).isoformat(), job: request.job_id, error: None})
                 with step("ask_claude") as handle:
-                    text = agent_client.query(paths, prompt, job_id=request.job_id, project_id=entry["project_name"])
+                    text = agent_client.query(paths, prompt, job_id=request.job_id, project_id=entry["project_name"],
+                                              ref=backlog_ref(entry_id))
                     handle.detail = f"{len(text)} characters"
                 with step("save") as handle:
                     with lock:
                         saved = db.update_backlog_entry(conn, entry_id, **{write: finish(text, entry)})
                         if saved is not None:
+                            db.set_backlog_activity(conn, entry_id, **{since: None, job: None})
                             backlog_changed()
                     if saved is None:
                         raise backlog.BacklogError("the entry was deleted while Claude worked on it; nothing was kept")
                     handle.detail = f"replaced the {write.replace('_', ' ')}"
         except (backlog.BacklogError, agent_client.AgentClientError) as exc:
+            _activity(entry_id, **{since: None, job: None, error: str(exc)})
             return {"outcome": "failed", "error": str(exc)}
         return {"outcome": "succeeded", "result": {"entry_id": entry_id, "project": entry["project_name"], "chars": len(saved[write])}}
 
     @app.post("/v1/jobs/registry.backlog_refine")
     def job_backlog_refine(request: JobRequest) -> dict:
         """Claude writes the refined entry from the primary entry, the current refined entry and the notes."""
-        return _ask_claude_for_entry(request, write="refined_entry", build_prompt=backlog.refine_prompt, finish=lambda text, entry: text)
+        return _ask_claude_for_entry(request, write="refined_entry", build_prompt=backlog.refine_prompt, finish=lambda text, entry: text,
+                                     activity=REFINING)
 
     @app.post("/v1/jobs/registry.backlog_task_prompt")
     def job_backlog_task_prompt(request: JobRequest) -> dict:
         """Claude writes the task prompt from the refined entry alone; the delete instruction is appended here."""
         return _ask_claude_for_entry(
             request, write="task_prompt", build_prompt=backlog.task_prompt_prompt,
-            finish=lambda text, entry: backlog.with_delete_instruction(text, entry["project_name"], entry["id"]),
+            finish=lambda text, entry: backlog.with_delete_instruction(text, entry["project_name"], entry["id"]), activity=PROMPTING,
         )
 
     secrets_cache: dict[str, Any] = {"value": None, "at": 0.0}

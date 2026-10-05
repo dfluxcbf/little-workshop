@@ -183,8 +183,14 @@ while Claude works keeps nothing of the answer. Deleting an entry — from the D
 backlog delete`, `workshop_project_backlog_delete`, or Claude at the end of a task — removes the row with
 all four fields; the database overwrites deleted content (`secure_delete`) and folds its write-ahead log
 back, so no copy outlives it in the pillar's files. Removing a project removes its backlog. The Claude
-session that refined or prompted an entry keeps its own transcript under `~/.claude`, outside
-little-workshop.
+sessions that refined or prompted an entry are recorded at the agent under `backlog:<id>`; deleting the
+entry has the agent delete their transcripts too (`POST /v1/query-sessions/forget`, REQ-000000387), and
+the answer says how many (`transcripts_deleted`, None when the agent could not be reached).
+
+An entry also records what Claude is doing for it (REQ-000000385): `refining_since` / `refining_job` and
+`prompting_since` / `prompting_job` while a Job asks Claude, cleared when it ends, and `refine_error` /
+`prompt_error`, why the last attempt failed, cleared by the next one. Writing them is not an edit of the
+entry (its update time stays), and the Dashboard's backlog pages read them instead of Jobs.
 
 `lws project backlog list|show|add|delete --project-id <p>` and `workshop_project_backlog_list|get|add|delete`
 act only on the named project's backlog (an entry of another project is refused). Reading and adding are

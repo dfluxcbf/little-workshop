@@ -72,8 +72,8 @@ lws project bootstrap --name my-project --dest-dir ~/code       # new project
 lws project import --name existing-thing --path ~/code/existing-thing
 lws project list
 
-lws job list --status failed
-lws job status <job-id>
+lws job list --status failed                # the 50 newest, as summaries (--limit 0: all; --full: whole Jobs)
+lws job status <job-id>                     # one Job in full
 
 lws version feature-start --project-id my-project --name widgets
 lws version release-start --project-id my-project

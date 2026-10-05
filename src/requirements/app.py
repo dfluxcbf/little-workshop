@@ -51,6 +51,29 @@ def _require(params: dict, *names: str) -> str | None:
     return None
 
 
+# A test Job's answer names this many failing tests at most, each with this much of its detail: every
+# result is recorded in this pillar's store, and the Job carries only what a reader of it acts on.
+FAILING_SHOWN = 50
+DETAIL_SHOWN = 500
+_FAILING = ("failed", "error")
+
+
+def run_outcome(items, *, suite_names: dict[str, str] | None = None) -> dict:
+    """{ran, verdicts, failing (at most FAILING_SHOWN, details cut), failing_total} for (suite id, ParsedResult)
+    pairs; `suite_names` adds each failing test's suite."""
+    verdicts: dict[str, int] = {}
+    failing = []
+    for suite_id, item in items:
+        verdict = item.verdict.value
+        verdicts[verdict] = verdicts.get(verdict, 0) + 1
+        if verdict in _FAILING:
+            entry = {"test_name": item.test_name, "verdict": verdict, "detail": (item.detail or "")[:DETAIL_SHOWN]}
+            if suite_names:
+                entry["suite"] = suite_names.get(suite_id, suite_id)
+            failing.append(entry)
+    return {"ran": sum(verdicts.values()), "verdicts": verdicts, "failing": failing[:FAILING_SHOWN], "failing_total": len(failing)}
+
+
 class _Refused(Exception):
     """A job step that cannot go on; the route answers it as a failed outcome with this message."""
 
@@ -310,18 +333,16 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             handle.detail = f"{len(parsed)} test result(s)"
         with step("record_results") as handle:
             executed_at = datetime.now(timezone.utc)
-            recorded = []
             with lock:
                 for item in parsed:
-                    result = TestResult(
+                    db.insert_test_result(conn, TestResult(
                         id=db.new_id(), project_id=request.project_id, suite_id=suite_id,
                         test_name=item.test_name, verdict=item.verdict, detail=item.detail,
                         source="junit", executed_at=executed_at,
-                    )
-                    db.insert_test_result(conn, result)
-                    recorded.append(result.model_dump(mode="json"))
-            handle.detail = f"{len(recorded)} recorded"
-        return {"outcome": "succeeded", "result": {"imported": len(recorded), "results": recorded}}
+                    ))
+            handle.detail = f"{len(parsed)} recorded"
+        outcome = run_outcome((suite_id, item) for item in parsed)
+        return {"outcome": "succeeded", "result": {"suite_id": suite_id, "imported": outcome.pop("ran"), **outcome}}
 
     def _scopes(project_id: str, suite_ids: list[str] | None) -> tuple[dict[str, TestSuite], dict[str, set[str]]]:
         """The project's suites (all, or just `suite_ids`) and each one's scope — the
@@ -390,18 +411,15 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             handle.detail = f"{len(parsed)} test(s) ran"
         with step("record_results") as handle:
             executed_at = datetime.now(timezone.utc)
-            recorded = []
             with lock:
                 for item in parsed:
-                    result = TestResult(
+                    db.insert_test_result(conn, TestResult(
                         id=db.new_id(), project_id=request.project_id, suite_id=suite_id,
                         test_name=item.test_name, verdict=item.verdict, detail=item.detail,
                         source="pytest", executed_at=executed_at,
-                    )
-                    db.insert_test_result(conn, result)
-                    recorded.append(result.model_dump(mode="json"))
-            handle.detail = f"{len(recorded)} recorded"
-        return {"outcome": "succeeded", "result": {"ran": len(recorded), "results": recorded}}
+                    ))
+            handle.detail = f"{len(parsed)} recorded"
+        return {"outcome": "succeeded", "result": {"suite_id": suite_id, **run_outcome((suite_id, item) for item in parsed)}}
 
     def _run_suites(request: JobRequest) -> dict:
         """`suite_ids`: run just the tests those suites cover (discovered, not
@@ -442,7 +460,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                         counts[item.verdict.value] = counts.get(item.verdict.value, 0) + 1
                     summary.append({"suite_id": sid, "name": suites[sid].name, "ran": len(items), "verdicts": counts})
             handle.detail = f"results recorded for {len(summary)} suite(s)"
-        return {"outcome": "succeeded", "result": {"suites": summary}}
+        totals = run_outcome(((sid, item) for sid, items in by_suite.items() for item in items),
+                             suite_names={sid: suite.name for sid, suite in suites.items()})
+        return {"outcome": "succeeded", "result": {"suites": summary, **totals}}
 
     # -- reads ----------------------------------------------------------------
 

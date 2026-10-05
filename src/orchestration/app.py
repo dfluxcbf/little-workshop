@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from common.incident import install_incident_reporting
@@ -193,11 +193,44 @@ def build_app(
         {boot, seq, changes: [{seq, kind, id, type, project_id, status}], reset}."""
         return changes.FEED.since(after, boot=boot, timeout=timeout)
 
+    def _several(value: str | None) -> list[str] | None:
+        return [v for v in value.split(",") if v] if value else None
+
+    def _job_filters(status, type, project_id, created_by, since, until, updated_since, ids, q) -> dict:
+        statuses = _several(status)
+        try:
+            for value in statuses or ():
+                JobStatus(value)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        return {"statuses": statuses, "types": _several(type), "project_id": project_id, "created_by": created_by,
+                "since": since, "until": until, "updated_since": updated_since, "ids": _several(ids), "q": q}
+
     @app.get("/v1/jobs")
-    def list_jobs(status: str | None = None) -> list[dict]:
-        status_enum = JobStatus(status) if status else None
+    def list_jobs(
+        status: str | None = None, type: str | None = None, project_id: str | None = None, created_by: str | None = None,
+        since: datetime | None = None, until: datetime | None = None, updated_since: datetime | None = None,
+        ids: str | None = None, q: str | None = None, order: str = "oldest", limit: int | None = Query(None, ge=1),
+        view: str = "full",
+    ) -> list[dict]:
+        """Jobs, oldest first (`order=newest` turns it), at most `limit`. `status`, `type` and `ids` take several,
+        comma-separated; `q` is looked for in the type, project, pillar, creator and id; `view=summary` gives
+        each Job's brief in place of its full params and result (orchestration/brief.py): what a list shows."""
+        filters = _job_filters(status, type, project_id, created_by, since, until, updated_since, ids, q)
         with lock:
-            return [{**job.model_dump(mode="json"), "progress": steps.progress(conn, job.id)} for job in db.list_jobs(conn, status=status_enum)]
+            jobs = db.find_jobs(conn, **filters, newest_first=order == "newest", limit=limit, summary=view == "summary")
+            return [{**job, "progress": steps.progress(conn, job["id"])} for job in jobs]
+
+    @app.get("/v1/jobs/counts")
+    def count_jobs(
+        status: str | None = None, type: str | None = None, project_id: str | None = None, created_by: str | None = None,
+        since: datetime | None = None, until: datetime | None = None, updated_since: datetime | None = None,
+        ids: str | None = None, q: str | None = None,
+    ) -> dict[str, int]:
+        """{status: how many Jobs} among those the same filters as GET /v1/jobs select."""
+        filters = _job_filters(status, type, project_id, created_by, since, until, updated_since, ids, q)
+        with lock:
+            return db.count_jobs(conn, **filters)
 
     # Job history cleanup. Paths avoid `/v1/jobs/...` so they are never read as a job id.
 

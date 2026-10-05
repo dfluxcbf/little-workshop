@@ -89,7 +89,7 @@ def test_the_backlog_is_under_documentation_and_lists_each_projects_entries(test
     assert 'href="/backlog/little-meals"' in index and "1 entry" in index
     page = test_client.get("/backlog/little-meals").text
     assert 'href="/backlog/little-meals/e1"' in page and "Weekly export" in page and "Shared list" not in page
-    assert 'action="/backlog/little-meals/add"' in page and 'data-live="backlog,jobs"' in page
+    assert 'action="/backlog/little-meals/add"' in page and 'data-live="backlog"' in page
 
 
 def test_an_entry_page_shows_its_four_fields_and_every_action(test_client, monkeypatch):
@@ -140,24 +140,27 @@ def test_refine_saves_what_was_typed_then_starts_the_job_and_the_prompt_needs_a_
 
 
 def test_while_claude_works_on_an_entry_the_page_says_so_and_a_second_start_is_refused(test_client, monkeypatch, created):
-    _backlog(monkeypatch, [_entry(refined_entry="# r")])
-    _stub_jobs(monkeypatch, [_job(1, type="registry.backlog_refine", status="running", params={"entry_id": "e1"}),
-                             _job(2, type="registry.backlog_task_prompt", status="failed", params={"entry_id": "e1"}, error="agent.query failed")])
+    from datetime import datetime, timezone
+
+    _backlog(monkeypatch, [_entry(refined_entry="# r", refining_since=datetime.now(timezone.utc).isoformat(), refining_job="j1",
+                                  prompt_error="agent.query failed")])
+    monkeypatch.setattr(client, "agent_peek", lambda paths, job_id, **kw: None)
     page = test_client.get("/backlog/little-meals/e1").text
     assert "Claude is refining…" in page and "The last task prompt failed: agent.query failed" in page
     again = unquote(test_client.post("/backlog/little-meals/e1/refine", data={}, follow_redirects=False).headers["location"])
     assert "already working" in again and created == []
 
 
-def test_the_activity_of_an_entry_is_its_newest_job_of_each_kind():
-    activity = app_module.backlog_activity([
-        _job(1, type="registry.backlog_refine", status="failed", params={"entry_id": "e1"}, error="old"),
-        _job(2, type="registry.backlog_refine", status="succeeded", params={"entry_id": "e1"}),
-        _job(3, type="registry.backlog_task_prompt", status="queued", params={"entry_id": "e1"}),
-        _job(4, type="build.run", status="running", params={"entry_id": "e1"}),
-    ])
-    assert activity["e1"]["refine"] is None and activity["e1"]["refine_error"] is None
-    assert activity["e1"]["prompt"]["id"].startswith("00000003")
+def test_the_activity_of_an_entry_is_kept_on_the_entry():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 10, 5, 8, 0, tzinfo=timezone.utc)
+    fresh = {"refining_since": (now - timedelta(minutes=2)).isoformat(), "refining_job": "j1", "prompt_error": "over budget"}
+    assert app_module.backlog_activity(fresh, now) == {"refine": "j1", "refine_error": None, "prompt": None, "prompt_error": "over budget"}
+    stale = {"prompting_since": (now - timedelta(minutes=30)).isoformat(), "prompting_job": "j2"}
+    assert app_module.backlog_activity(stale, now)["prompt"] is None
+    assert app_module.backlog_activity(stale, now)["prompt_error"] == "the last task prompt did not finish"
+    assert app_module.backlog_activity({}, now) == {"refine": None, "refine_error": None, "prompt": None, "prompt_error": None}
 
 
 # --- REQ-000000373: "Make it a task" opens New task ---

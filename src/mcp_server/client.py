@@ -118,8 +118,12 @@ def answer_step(paths: Paths, job_id: str, key: str, choice: str, *, timeout: fl
     return _mutate(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/steps/{key}/answer", json={"choice": choice}, timeout=timeout)
 
 
-def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0):
-    return _get(paths, "orchestration", "/v1/jobs", params={"status": status} if status else None, timeout=timeout)
+def list_jobs(paths: Paths, *, status: str | None = None, types: str | None = None, limit: int | None = 50, full: bool = False,
+              timeout: float = 5.0):
+    """The newest Jobs first, at most `limit` (None: every one), as summaries unless `full`. (No project filter:
+    an optional `project_id` would have the scope guard insist on it, and a pillar redeploy names a pillar there.)"""
+    params = {"status": status, "type": types, "order": "newest", "limit": limit, "view": None if full else "summary"}
+    return _get(paths, "orchestration", "/v1/jobs", params={key: value for key, value in params.items() if value is not None}, timeout=timeout)
 
 
 def job_status(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:

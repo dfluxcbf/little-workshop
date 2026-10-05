@@ -403,7 +403,7 @@ def test_core_status_calls_client_core_status(paths, monkeypatch):
 def test_job_list_calls_client_list_jobs_with_status(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "list_jobs", result=[{"id": "j1"}])
     result = tools_mod.TOOLS_BY_NAME["workshop_job_list"].handler(paths, {"status": "queued"})
-    assert calls[0] == ((paths,), {"status": "queued"})
+    assert calls[0] == ((paths,), {"status": "queued", "types": None, "limit": 50, "full": False})
     assert result == [{"id": "j1"}]
 
 

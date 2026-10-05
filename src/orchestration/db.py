@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from orchestration import changes, steps
+from orchestration import brief, changes, steps
 from orchestration.models import (
     Job,
     JobStatus,
@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     depends_on TEXT NOT NULL,
     created_by TEXT NOT NULL,
     result TEXT,
+    brief TEXT,
     error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -133,8 +134,22 @@ def connect(path: Path) -> sqlite3.Connection:
     from orchestration import triggers
 
     conn.executescript(triggers.SCHEMA)
+    _add_briefs(conn)
     conn.commit()
     return conn
+
+
+def _add_briefs(conn: sqlite3.Connection) -> None:
+    """A store written before Jobs kept a brief gets the column, and every Job its brief, once."""
+    if "brief" not in {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}:
+        conn.execute("ALTER TABLE jobs ADD COLUMN brief TEXT")
+    rows = conn.execute("SELECT id, params, result FROM jobs WHERE brief IS NULL").fetchall()
+    for row in rows:
+        conn.execute("UPDATE jobs SET brief = ? WHERE id = ?", (_brief_json(json.loads(row["params"]), json.loads(row["result"]) if row["result"] else None), row["id"]))
+
+
+def _brief_json(params: dict, result: dict | None) -> str:
+    return json.dumps({"params": brief.brief(params) or {}, "result": brief.brief(result)})
 
 
 def _iso(dt: datetime) -> str:
@@ -157,6 +172,7 @@ def job_to_row(job: Job) -> dict:
         "depends_on": json.dumps(job.depends_on),
         "created_by": job.created_by,
         "result": json.dumps(job.result) if job.result is not None else None,
+        "brief": _brief_json(job.params, job.result),
         "error": job.error,
         "created_at": _iso(job.created_at),
         "updated_at": _iso(job.updated_at),
@@ -186,9 +202,9 @@ def insert_job(conn: sqlite3.Connection, job: Job) -> None:
     conn.execute(
         """INSERT INTO jobs
            (id, type, target_pillar, project_id, params, status, queue_key,
-            depends_on, created_by, result, error, created_at, updated_at)
+            depends_on, created_by, result, brief, error, created_at, updated_at)
            VALUES (:id, :type, :target_pillar, :project_id, :params, :status,
-            :queue_key, :depends_on, :created_by, :result, :error,
+            :queue_key, :depends_on, :created_by, :result, :brief, :error,
             :created_at, :updated_at)""",
         row,
     )
@@ -204,7 +220,7 @@ def update_job(conn: sqlite3.Connection, job: Job) -> None:
         """UPDATE jobs SET type=:type, target_pillar=:target_pillar,
            project_id=:project_id, params=:params, status=:status,
            queue_key=:queue_key, depends_on=:depends_on, created_by=:created_by,
-           result=:result, error=:error, updated_at=:updated_at
+           result=:result, brief=:brief, error=:error, updated_at=:updated_at
            WHERE id=:id""",
         row,
     )
@@ -219,6 +235,81 @@ def update_job(conn: sqlite3.Connection, job: Job) -> None:
 def get_job(conn: sqlite3.Connection, job_id: str) -> Job | None:
     row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
     return row_to_job(row) if row else None
+
+
+# The columns a summary reads: every one but the full params and result, which its brief stands in for.
+_SUMMARY_COLUMNS = "id, type, target_pillar, project_id, status, queue_key, depends_on, created_by, brief, error, created_at, updated_at"
+SUMMARY_ERROR_LIMIT = 2000
+
+
+# The columns a search (`q`) looks in, as the Jobs page's search box always has.
+_SEARCHED = ("type", "project_id", "target_pillar", "created_by", "id")
+
+
+def _filters(*, statuses=None, types=None, project_id: str | None = None, created_by: str | None = None,
+             since: datetime | None = None, until: datetime | None = None, updated_since: datetime | None = None,
+             ids=None, q: str | None = None) -> tuple[str, list]:
+    where, args = [], []
+    for column, values in (("status", statuses), ("type", types), ("id", ids)):
+        if values is not None:
+            values = list(values)
+            if not values:
+                return " WHERE 0", []
+            where.append(f"{column} IN ({', '.join('?' for _ in values)})")
+            args += values
+    for column, value in (("project_id", project_id), ("created_by", created_by)):
+        if value is not None:
+            where.append(f"{column} = ?")
+            args.append(value)
+    for condition, moment in (("created_at >= ?", since), ("created_at < ?", until), ("updated_at >= ?", updated_since)):
+        if moment is not None:
+            where.append(condition)
+            args.append(_iso(moment))
+    needle = (q or "").strip().lower()
+    if needle:
+        pattern = "%" + needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        where.append("(" + " OR ".join(f"lower(coalesce({column}, '')) LIKE ? ESCAPE '\\'" for column in _SEARCHED) + ")")
+        args += [pattern] * len(_SEARCHED)
+    return (f" WHERE {' AND '.join(where)}" if where else ""), args
+
+
+def count_jobs(conn: sqlite3.Connection, **filters) -> dict[str, int]:
+    """{status: how many Jobs} among those `filters` (as `find_jobs`) select."""
+    clause, args = _filters(**filters)
+    return {row["status"]: row["n"] for row in conn.execute(f"SELECT status, COUNT(*) AS n FROM jobs{clause} GROUP BY status", args)}
+
+
+def find_jobs(
+    conn: sqlite3.Connection, *, statuses=None, types=None, project_id: str | None = None, created_by: str | None = None,
+    since: datetime | None = None, until: datetime | None = None, updated_since: datetime | None = None, ids=None,
+    q: str | None = None, newest_first: bool = False, limit: int | None = None, summary: bool = False,
+) -> list[dict]:
+    """Jobs as JSON-ready dicts, oldest first (`newest_first` turns it), at most `limit`, filtered in the store
+    itself: by any of `statuses`, any of `types`, the project, the creator, creation time (`since` inclusive,
+    `until` exclusive), last change (`updated_since`), any of `ids`, and `q` found in the type, project,
+    pillar, creator or id. A summary carries the brief in place of the full params and result (`summary:
+    True`), and a long error cut."""
+    clause, args = _filters(statuses=statuses, types=types, project_id=project_id, created_by=created_by, since=since,
+                            until=until, updated_since=updated_since, ids=ids, q=q)
+    order = "DESC" if newest_first else "ASC"
+    page = ""
+    if limit is not None:
+        page = " LIMIT ?"
+        args = [*args, limit]
+    rows = conn.execute(f"SELECT {_SUMMARY_COLUMNS if summary else '*'} FROM jobs{clause} ORDER BY created_at {order}{page}", args).fetchall()
+    if not summary:
+        return [row_to_job(row).model_dump(mode="json") for row in rows]
+    found = []
+    for row in rows:
+        kept = json.loads(row["brief"]) if row["brief"] else {"params": {}, "result": None}
+        error = row["error"]
+        job = Job(id=row["id"], type=row["type"], target_pillar=row["target_pillar"], project_id=row["project_id"],
+                  params=kept.get("params") or {}, status=JobStatus(row["status"]), queue_key=row["queue_key"],
+                  depends_on=json.loads(row["depends_on"]), created_by=row["created_by"], result=kept.get("result"),
+                  error=error[:SUMMARY_ERROR_LIMIT] + "…" if error and len(error) > SUMMARY_ERROR_LIMIT else error,
+                  created_at=_parse_iso(row["created_at"]), updated_at=_parse_iso(row["updated_at"]))
+        found.append({**job.model_dump(mode="json"), "summary": True})
+    return found
 
 
 def list_jobs(conn: sqlite3.Connection, *, status: JobStatus | None = None) -> list[Job]:

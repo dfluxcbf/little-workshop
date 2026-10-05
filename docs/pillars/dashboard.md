@@ -488,10 +488,14 @@ deletes old Jobs and the plots must outlive them.
 
 - **Updating** is automatic, never asked for: on every visit of the page, every ten minutes while
   the Dashboard runs (a background thread started with the app, `STATISTICS_UPDATE_SECONDS`), and
-  before old jobs are deleted. Each time the Dashboard reads every Job (Orchestration), policy
-  check result and policy (Policy & Compliance) and incident (Agentic Development) the pillars hold, and adds each one it
-  has not counted to its day. A `seen` table remembers what was counted, so updating twice counts
-  nothing twice; an id the pillar no longer holds is forgotten, its counts stay. A Job is counted
+  before old jobs are deleted. Each time the Dashboard reads the policy check results and policies
+  (Policy & Compliance) and incidents (Agentic Development) the pillars hold, and of the Jobs
+  (Orchestration) the summaries of those changed since the last update, less ten minutes; once a day
+  it reads every Job's summary (2026-10-05, REQ-000000383). It adds each one it has not counted to its
+  day. A `seen` table remembers what was counted, so updating twice counts nothing twice; an id the
+  pillar no longer holds is forgotten, its counts stay (Jobs only by the daily read of every Job). A
+  test run's summary keeps its verdict counts; one from before runs answered with counts is read whole
+  to tell whether a test failed. A Job is counted
   as triggered when first seen and as succeeded or failed once it has ended (a cancelled Job is
   only triggered). An unreachable pillar's numbers are left as they were and the page says so.
   Deleting old jobs on the Jobs page (`POST /jobs/cleanup`) updates the statistics first, so a
@@ -552,7 +556,10 @@ Claude is working on it). An entry's page (`/backlog/{project}/{entry}`) shows i
   (`registry.backlog_task_prompt`, from the refined entry alone; it ends with the instruction to delete
   the entry once the work is done). Disabled until the entry is refined.
 
-While Claude works the buttons say so, and a failed attempt's error shows until one succeeds.
+While Claude works the buttons say so, the entry's page shows the session as it grows (its Claude
+peek), and a failed attempt's error shows until one succeeds. The entry itself records this (Registry &
+Portfolio, REQ-000000385), so the backlog pages read no Jobs; a mark older than ten minutes is shown as
+an attempt that did not finish.
 **Launch task** opens New task (`/tasks/new?backlog=<id>`) with the entry's title and its refined entry
 in the Task box (the primary entry while it is not refined). **Delete from backlog** asks first, then
 deletes the entry and everything it holds. The pages follow the `backlog` topic, so an entry refined,
@@ -630,13 +637,15 @@ what the user chose. A tab out of sight lets its stream go and catches up once w
 | Schedule | `schedule` |
 | Policies; Incidents; Settings | `policies`; `incidents`; `attention` |
 | Statistics; Claude usage | `statistics`; `usage` |
-| Backlog pages | `backlog` (and `jobs`, for Claude's work on an entry) |
+| Backlog pages | `backlog` (and an entry's peek while Claude works on it) |
+| Pillars | `pillars` (pillar health, from Core; a redeploy) |
 | every page | `attention` (the banner only) |
 
 The Dashboard learns of changes as cheaply as each pillar allows, and only while some page is open:
 Jobs, steps and scheduled tasks from Orchestration's change feed (`GET /v1/changes`, a long poll
 answered the moment something changes, `docs/pillars/orchestration.md`); the backlog, Claude usage and
-incidents from a version string each pillar serves, read every 3 seconds while a page shows them; the
+incidents from a version string each pillar serves, read every 3 seconds while a page shows them (and
+the pillars' health from Core's status, while the Pillars or Dashboard page is open, REQ-000000388); the
 Statistics store is counted again when a Job has settled, at most every 15 seconds, while that page is
 open.
 
@@ -647,7 +656,23 @@ REQ-000000380.
 A task's page and its job's page (an update-doc job's too) have a **Claude peek** card: what the session
 has done so far, read from its transcript by Agentic Development (`GET /v1/peek/{job}`,
 `docs/pillars/agentic_development.md`) — each message, each tool call with the gist of its input, and
-each failed result in red — newest at the bottom. While Claude works the card says "live" and grows as
+each failed result in red — newest at the bottom. Since 2026-10-05 (REQ-000000386) a Job that asks
+Claude a short question through the agent (a backlog entry's refinement or task prompt, a policy's
+authoring) has the card too, and so has the backlog entry Claude is working on. While Claude works the card says "live" and grows as
 the session does: the page's stream carries each new batch (topic `peek:<job>`), and a batch that does
 not follow on from what is shown is caught up from `/jobs/{id}/peek.json`. Remote Control remains the
 way to talk to a running task; the peek only shows it.
+
+## Reading only what is shown (2026-10-05)
+
+REQ-000000383. Every list of Jobs reads them as summaries (each Job's brief in place of its params and
+result, `docs/pillars/orchestration.md`, "Job summaries and filtered lists"), filtered by Orchestration:
+the attention banner the Jobs awaiting confirmation or running; the launch buttons the queued and running
+deploys and session starts; Tasks the task Jobs that may lack a run; a project's docs its active
+update-doc Jobs; Schedule the month's Jobs (the scheduler's, unless Everything is chosen); what a Job
+waits on the Jobs it names. The Jobs page reads the counts per status (`GET /v1/jobs/counts`, with the
+search for the total) and the one page it shows, newest first; Statistics read only what changed. The
+Jobs page and a job's page show at most 20,000 characters of a Job's params or result (`JSON_SHOWN`),
+then say how much there is, and name what a summary left out; both link to `/jobs/{id}.json`, the whole
+Job.
+

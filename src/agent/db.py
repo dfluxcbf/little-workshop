@@ -106,6 +106,15 @@ CREATE TABLE IF NOT EXISTS claude_usage (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS query_sessions (
+    session_id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    ref TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS query_sessions_by_job ON query_sessions (job_id, started_at);
+
 CREATE TABLE IF NOT EXISTS ci_checks (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -461,3 +470,34 @@ def list_doc_updates(conn: sqlite3.Connection, *, project_id: str | None = None,
         sql += f" AND status IN ({','.join('?' for _ in DOC_UPDATE_ACTIVE)})"
         args.extend(DOC_UPDATE_ACTIVE)
     return [_doc_update(r) for r in conn.execute(sql + " ORDER BY started_at DESC", args).fetchall()]
+
+
+# -- query_sessions: the Claude session of each agent.query, against the Job that asked ----------
+
+
+def start_query_session(conn: sqlite3.Connection, *, job_id: str, session_id: str, ref: str | None = None) -> None:
+    conn.execute("INSERT INTO query_sessions (session_id, job_id, ref, started_at) VALUES (?, ?, ?, ?)",
+                 (session_id, job_id, ref, _now()))
+    conn.commit()
+
+
+def finish_query_session(conn: sqlite3.Connection, session_id: str) -> None:
+    conn.execute("UPDATE query_sessions SET finished_at = ? WHERE session_id = ?", (_now(), session_id))
+    conn.commit()
+
+
+def query_sessions(conn: sqlite3.Connection, *, job_id: str | None = None, ref: str | None = None) -> list[dict]:
+    """Oldest first; every one, or those of a Job, or those that worked on `ref`."""
+    where, args = [], []
+    for column, value in (("job_id", job_id), ("ref", ref)):
+        if value is not None:
+            where.append(f"{column} = ?")
+            args.append(value)
+    clause = f" WHERE {' AND '.join(where)}" if where else ""
+    return [dict(row) for row in conn.execute(f"SELECT * FROM query_sessions{clause} ORDER BY started_at", args).fetchall()]
+
+
+def delete_query_sessions(conn: sqlite3.Connection, session_ids: list[str]) -> None:
+    conn.executemany("DELETE FROM query_sessions WHERE session_id = ?", [(sid,) for sid in session_ids])
+    conn.commit()
+

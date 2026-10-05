@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from common.paths import Paths
 from dashboard import app as app_module
 from dashboard import client
+from orchestration_jobs_fake import patch_jobs
 
 
 @pytest.fixture
@@ -211,7 +212,7 @@ def test_deploy_submits_the_job_without_blocking(test_client, monkeypatch):
 
 
 def _stub_in_flight_jobs(monkeypatch, jobs):
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [j for j in jobs if status is None or j["status"] == status])
+    patch_jobs(monkeypatch, client, jobs)
 
 
 def test_dashboard_card_shows_a_disabled_launching_button_while_a_deploy_is_under_way(test_client, monkeypatch):
@@ -464,10 +465,11 @@ def test_offline_page_renders(test_client):
 
 
 def test_jobs_renders_error_banner_when_orchestration_unreachable(test_client, monkeypatch):
-    def raise_unavailable(paths, status=None):
+    def raise_unavailable(paths, **kw):
         raise client.PillarUnavailable("orchestration daemon unreachable")
 
     monkeypatch.setattr(client, "list_jobs", raise_unavailable)
+    monkeypatch.setattr(client, "job_counts", raise_unavailable)
     response = test_client.get("/jobs")
     assert response.status_code == 200
     assert "UNREACHABLE" in response.text
@@ -495,14 +497,7 @@ def _job(i, **overrides):
 
 
 def _stub_jobs(monkeypatch, jobs):
-    calls = []
-
-    def fake_list_jobs(paths, status=None):
-        calls.append(status)
-        return list(jobs)
-
-    monkeypatch.setattr(client, "list_jobs", fake_list_jobs)
-    return calls
+    return patch_jobs(monkeypatch, client, list(jobs))
 
 
 def test_jobs_lists_newest_first_as_expandable_cards(test_client, monkeypatch):
@@ -540,11 +535,17 @@ def test_status_chips_carry_counts_and_the_active_one_is_marked(test_client, mon
     assert text.count('class="jobcard ') == 1 and "pill fail" in text
 
 
-def test_the_status_filter_is_applied_locally_so_counts_stay_whole(test_client, monkeypatch):
-    calls = _stub_jobs(monkeypatch, [_job(1), _job(2, status="failed")])
-    test_client.get("/jobs", params={"status": "failed"})
+# --- REQ-000000383: The Dashboard reads only what it shows ---
+
+
+def test_the_jobs_page_reads_one_page_of_summaries_and_the_counts(test_client, monkeypatch):
+    reads = _stub_jobs(monkeypatch, [_job(1), _job(2, status="failed")])
+    text = test_client.get("/jobs", params={"status": "failed", "q": "build"}).text
     # the banner's own reads (jobs awaiting confirmation, jobs with a question for the user) are separate
-    assert [c for c in calls if c not in ("pending_confirmation", "running")] == [None]
+    (page,) = [r for r in reads if r.get("status") not in ("pending_confirmation", "running")]
+    assert page == {"status": "failed", "q": "build", "summary": True, "newest_first": True, "limit": 50}
+    assert all(r["summary"] for r in reads)
+    assert re.search(r'All<span class="fchip-n">2</span>', text)  # the counts stay whole
 
 
 def test_jobs_search_matches_type_project_pillar_creator_and_id(test_client, monkeypatch):
@@ -1512,7 +1513,7 @@ def test_a_single_draft_is_worded_in_the_singular(test_client, monkeypatch):
 def _stub_attention(monkeypatch, *, policies, results, jobs, incidents=()):
     monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: policies)
     monkeypatch.setattr(client, "policy_check_results", lambda paths: results)
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: jobs if status == "pending_confirmation" else [])
+    patch_jobs(monkeypatch, client, [{"status": "pending_confirmation", **job} for job in jobs])  # the jobs awaiting confirmation
     monkeypatch.setattr(client, "list_incidents", lambda paths, status=None: list(incidents) if status == "open" else [])
 
 
@@ -1893,7 +1894,7 @@ def _task_job(job_id, project, title, status="running"):
 
 def _stub_task_pages(monkeypatch, jobs):
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: jobs)
+    patch_jobs(monkeypatch, client, jobs)
 
 
 def test_new_task_immediate_dispatches_a_job(test_client, monkeypatch):
@@ -2069,7 +2070,7 @@ def test_schedule_detail_for_the_other_page_or_a_missing_item_says_so(test_clien
 def test_tasks_list_shows_a_queued_agent_task_as_waiting(test_client, monkeypatch):
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
     monkeypatch.setattr(client, "agent_runs", lambda paths, project: [])
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [
+    patch_jobs(monkeypatch, client, [
         {"id": "j9", "type": "agent.run_task", "status": "queued", "project_id": "little-widget", "created_at": "2026-09-22T10:00:00Z", "params": {"title": "Pending thing"}},
         {"id": "j10", "type": "deployment.deploy", "status": "queued", "project_id": "little-widget", "created_at": "2026-09-22T09:00:00Z", "params": {}},
     ])
@@ -2095,7 +2096,7 @@ def test_tasks_list_groups_tasks_into_queued_running_attention_and_done(test_cli
         {"id": f"r-{status}", "job_id": f"j-{status}", "project_id": "w", "title": f"run {status}", "status": status, "created_at": _hours_ago(2)}
         for status in ("running", "awaiting_finish", "failed", "finished", "skipped")
     ])
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [
+    patch_jobs(monkeypatch, client, [
         # jobs that already have a run are shown once, as that run
         {"id": "j-running", "type": "agent.run_task", "status": "running", "project_id": "w", "params": {"title": "run running"}},
         {"id": "j-q", "type": "agent.run_task", "status": "queued", "project_id": "w", "params": {"title": "not started"}},
@@ -2123,7 +2124,7 @@ def test_tasks_list_shows_an_empty_section_as_none(test_client, monkeypatch):
     monkeypatch.setattr(client, "agent_runs", lambda paths, project: [
         {"id": "r1", "project_id": "w", "title": "done thing", "status": "finished", "created_at": "2026-09-22T10:00:00"},
     ])
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    patch_jobs(monkeypatch, client, [])
     text = test_client.get("/tasks").text
     assert "None." in _tasks_section(text, "queued") and "done thing" in _tasks_section(text, "done")
 
@@ -2870,8 +2871,8 @@ def test_a_job_card_shows_its_progress_and_flags_a_question(test_client, monkeyp
 def test_the_attention_list_names_a_running_job_with_a_question(monkeypatch):
     from dashboard import app as dashboard_app
 
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [
-        _job(1, status="running", progress={"total": 4, "done": 1, "current": "Resolve conflicts", "attention": True})] if status == "running" else [])
+    patch_jobs(monkeypatch, client, [
+        _job(1, status="running", progress={"total": 4, "done": 1, "current": "Resolve conflicts", "attention": True})])
     monkeypatch.setattr(dashboard_app, "_try", lambda fn, *a, default=None: fn(*a) if a else fn())
 
 
@@ -2931,7 +2932,7 @@ def _failed(run_id, *, hours_ago=2, **extra):
 def _tasks_page(test_client, monkeypatch, runs):
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "w", "status": "active"}])
     monkeypatch.setattr(client, "agent_runs", lambda paths, project: runs)
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [])
+    patch_jobs(monkeypatch, client, [])
     text = test_client.get("/tasks").text
     return _tasks_section(text, "attention"), _tasks_section(text, "done")
 
@@ -3018,7 +3019,7 @@ def test_the_job_page_has_a_waits_on_section(test_client, monkeypatch):
     dep = _job(1, type="policy.check_project", project_id="little-workshop", status="succeeded")
     job = _job(9, status="queued", depends_on=[dep["id"]], steps=[])
     monkeypatch.setattr(client, "get_job", lambda paths, job_id: job)
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [job, dep])
+    patch_jobs(monkeypatch, client, [job, dep])
     text = test_client.get(f"/jobs/{job['id']}").text
     assert "Waits on" in text and f'href="/jobs/{dep["id"]}"' in text and "policy.check_project · little-workshop" in text
 
@@ -3077,7 +3078,7 @@ def test_a_release_card_lists_every_version_it_moves(test_client, monkeypatch):
 def test_the_job_page_shows_what_the_job_is_about(test_client, monkeypatch):
     job = _job(1, type="version.feature_start", target_pillar="version", params={"name": "widgets"}, result={"branch": "feature/widgets"}, steps=[])
     monkeypatch.setattr(client, "get_job", lambda paths, job_id: job)
-    monkeypatch.setattr(client, "list_jobs", lambda paths, status=None: [job])
+    patch_jobs(monkeypatch, client, [job])
     assert "<code>feature/widgets</code>" in test_client.get(f"/jobs/{job['id']}").text
 
 

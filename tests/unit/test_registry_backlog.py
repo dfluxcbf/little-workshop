@@ -41,7 +41,7 @@ def claude(monkeypatch):
     """Claude's answers, in order, and the prompts it was given."""
     calls = {"prompts": [], "answers": []}
 
-    def query(paths, prompt, *, job_id, project_id=None, timeout=0):
+    def query(paths, prompt, *, job_id, project_id=None, ref=None, timeout=0):
         calls["prompts"].append((prompt, job_id, project_id))
         return calls["answers"].pop(0)
 
@@ -82,7 +82,8 @@ def test_an_entry_needs_a_registered_project_and_some_text(client):
 def test_a_deleted_entry_is_gone_with_everything_it_held(client, conn, tmp_path):
     entry = _add(client, "A very particular secret wish").json()
     client.patch(f"/v1/backlog/{entry['id']}", json={"refinement_notes": "notes that must go too"})
-    assert client.delete(f"/v1/backlog/{entry['id']}").json() == {"deleted": True, "id": entry["id"]}
+    answer = client.delete(f"/v1/backlog/{entry['id']}").json()
+    assert answer["deleted"] is True and answer["id"] == entry["id"]
     assert client.get(f"/v1/backlog/{entry['id']}").status_code == 404
     assert client.delete(f"/v1/backlog/{entry['id']}").status_code == 404
     assert conn.execute("SELECT COUNT(*) FROM backlog_entries").fetchone()[0] == 0
@@ -140,7 +141,7 @@ def test_refining_has_claude_write_from_the_primary_entry_the_refined_entry_and_
 def test_an_entry_deleted_while_claude_refines_it_keeps_nothing(client, claude, monkeypatch):
     entry = _add(client).json()
 
-    def query_then_delete(paths, prompt, *, job_id, project_id=None, timeout=0):
+    def query_then_delete(paths, prompt, *, job_id, project_id=None, ref=None, timeout=0):
         client.delete(f"/v1/backlog/{entry['id']}")
         return "a refined entry nobody will see"
 

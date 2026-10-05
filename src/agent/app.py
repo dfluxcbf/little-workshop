@@ -6,8 +6,10 @@ pillar's own split between mutations (Jobs) and reads (plain GETs).
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -255,7 +257,15 @@ def build_app(
             write_apart(db.record_usage, db.USAGE_QUERY, usage, ref_id=request.job_id, project_id=request.project_id, job_id=request.job_id)
 
         env = usage_client.launch_env(paths, project=request.project_id, job_id=request.job_id, job_type="agent.query")
-        result = run_query(prompt, cwd=query_dir(paths), on_usage=record, env=env, launch=launch_for(JOB_QUERY, paths), **kwargs)
+        # Recorded against the Job that asked (a backlog entry's refinement, a policy's authoring), so the
+        # session is that Job's peek, and under what it worked on (`ref`), so its transcript can be deleted with it.
+        session_id = str(uuid.uuid4())
+        write_apart(db.start_query_session, job_id=request.job_id, session_id=session_id, ref=request.params.get("ref"))
+        try:
+            result = run_query(prompt, cwd=query_dir(paths), on_usage=record, env=env, launch=launch_for(JOB_QUERY, paths),
+                               session_id=session_id, **kwargs)
+        finally:
+            write_apart(db.finish_query_session, session_id)
         if result.is_error:
             return {"outcome": "failed", "error": result.text or "claude reported an error"}
         return {"outcome": "succeeded", "result": {"text": result.text}}
@@ -343,10 +353,15 @@ def build_app(
         transcript after byte `after`: {available, running, source, events, next, skipped} (agent/peek.py)."""
         run = read(db.get_run_by_job, job_id)
         update = read(db.get_doc_update, job_id) if run is None else None
-        if run is None and update is None:
+        queries = read(db.query_sessions, job_id=job_id) if run is None and update is None else []
+        if run is None and update is None and not queries:
             raise HTTPException(status_code=404, detail="no Claude session of this job")
         path = None
-        if run is not None:
+        if queries:  # the newest session this Job asked for
+            session = queries[-1]
+            running, source = session["finished_at"] is None, "query"
+            path = peek.transcript_of_session(query_dir(paths), session["session_id"])
+        elif run is not None:
             running, source = run["status"] == db.RUNNING, "run"
             if run.get("session_id"):
                 try:
@@ -365,6 +380,22 @@ def build_app(
             return {"available": True, "running": running, "source": source, **peek.read_events(path, after=after, limit=max(0, min(limit, 1000)))}
         except OSError:
             return nothing  # the transcript went away meanwhile (a worktree removed): nothing to show
+
+    @app.post("/v1/query-sessions/forget")
+    def forget_query_sessions(body: dict) -> dict:
+        """Delete the transcripts of every query session that worked on `ref` (with their subagents'),
+        and their records: what a deleted backlog entry leaves of itself here."""
+        ref = body.get("ref")
+        if not isinstance(ref, str) or not ref:
+            raise HTTPException(status_code=422, detail="missing ref")
+        sessions = read(db.query_sessions, ref=ref)
+        folder = peek.transcripts_dir(query_dir(paths))
+        for session in sessions:
+            sid = session["session_id"]
+            (folder / f"{sid}.jsonl").unlink(missing_ok=True)
+            shutil.rmtree(folder / sid, ignore_errors=True)
+        write_apart(db.delete_query_sessions, [s["session_id"] for s in sessions])
+        return {"deleted": len(sessions)}
 
     @app.get("/v1/runs/{project_id}")
     def list_runs(project_id: str, status: str | None = None) -> list[dict]:

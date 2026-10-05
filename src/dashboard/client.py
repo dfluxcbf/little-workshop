@@ -93,8 +93,38 @@ def remove_scheduled_task(paths: Paths, task_id: str) -> dict:
     return _send(paths, "orchestration", "DELETE", f"/v1/scheduled_tasks/{task_id}")
 
 
-def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> list[dict]:
-    return _get(paths, "orchestration", "/v1/jobs", params={"status": status} if status else None, timeout=timeout)
+def _job_filters(status=None, types=None, project_id=None, created_by=None, since=None, until=None, updated_since=None,
+                 ids=None, q=None) -> dict:
+    """Orchestration's job filters as query params: a status or type may be one or several; times are datetimes."""
+    def several(value):
+        return ",".join([value] if isinstance(value, str) else list(value)) if value is not None else None
+
+    params = {"status": several(status), "type": several(types), "project_id": project_id, "created_by": created_by,
+              "since": since.isoformat() if since else None, "until": until.isoformat() if until else None,
+              "updated_since": updated_since.isoformat() if updated_since else None, "ids": several(ids), "q": q or None}
+    return {key: value for key, value in params.items() if value is not None}
+
+
+def list_jobs(paths: Paths, *, summary: bool = False, newest_first: bool = False, limit: int | None = None,
+              timeout: float = 5.0, **filters) -> list[dict]:
+    """Jobs as Orchestration selects them (`_job_filters`). A list reads summaries (`summary=True`: each Job's
+    brief in place of its params and result) and only the Jobs it shows; a page that shows one Job in
+    full reads it with `get_job`."""
+    if filters.get("ids") is not None and not list(filters["ids"]):
+        return []
+    params = _job_filters(**filters)
+    if summary:
+        params["view"] = "summary"
+    if newest_first:
+        params["order"] = "newest"
+    if limit is not None:
+        params["limit"] = limit
+    return _get(paths, "orchestration", "/v1/jobs", params=params or None, timeout=timeout)
+
+
+def job_counts(paths: Paths, *, timeout: float = 5.0, **filters) -> dict[str, int]:
+    """{status: how many Jobs} among those the filters select (`_job_filters`)."""
+    return _get(paths, "orchestration", "/v1/jobs/counts", params=_job_filters(**filters) or None, timeout=timeout)
 
 
 def get_job(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict | None:

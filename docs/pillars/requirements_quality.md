@@ -191,3 +191,15 @@ directory) and brings the pillar in line with them in one Job:
 
 It replaces one `workshop_requirements_create` and one `_link_suite` call per requirement.
 `lws requirements sync-markers --project-id <id>`, `workshop_requirements_sync_markers`.
+
+## A test Job's answer: counts, not every result (2026-10-05)
+
+REQ-000000384. `requirements.run_tests` and `requirements.import_junit` record every result in this
+pillar's store, as before, and answer their Job with `{suite_id, ran (imported for an import),
+verdicts: {verdict: count}, failing, failing_total}`: at most 50 failing tests (`failed` or `error`),
+each with the first 500 characters of its detail (`FAILING_SHOWN`, `DETAIL_SHOWN`). A run of several
+suites answers `{suites: [{suite_id, name, ran, verdicts}], ran, verdicts, failing, failing_total}`, each
+failing test naming its suite. Before, the answer carried every result (3,317 of them, 1.1 MB, for this
+project's unit suite), and every list of Jobs and every reader of the Job carried them too. The results
+themselves stay at `GET /v1/test_results`. Agentic Development's CI check reads the counts.
+

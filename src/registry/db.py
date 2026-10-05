@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS backlog_entries (
 CREATE INDEX IF NOT EXISTS backlog_by_project ON backlog_entries (project_name, created_at);
 """
 
+# What Claude is doing for an entry, kept on the entry so that nothing has to read Jobs to know it.
+BACKLOG_ACTIVITY = ("refining_since", "refining_job", "refine_error", "prompting_since", "prompting_job", "prompt_error")
+
 
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,6 +72,10 @@ def connect(path: Path) -> sqlite3.Connection:
     # What is deleted is overwritten, not left in free pages: a deleted backlog entry leaves no trace.
     conn.execute("PRAGMA secure_delete=ON")
     conn.executescript(SCHEMA)
+    present = {row["name"] for row in conn.execute("PRAGMA table_info(backlog_entries)")}
+    for column in BACKLOG_ACTIVITY:
+        if column not in present:
+            conn.execute(f"ALTER TABLE backlog_entries ADD COLUMN {column} TEXT")
     conn.commit()
     return conn
 
@@ -300,6 +307,18 @@ def update_backlog_entry(conn: sqlite3.Connection, entry_id: str, **fields) -> d
     changed = conn.execute(f"UPDATE backlog_entries SET {assignments} WHERE id = ?", (*values.values(), entry_id)).rowcount
     conn.commit()
     return get_backlog_entry(conn, entry_id) if changed else None
+
+
+def set_backlog_activity(conn: sqlite3.Connection, entry_id: str, **fields) -> bool:
+    """Record what Claude is doing for the entry (`BACKLOG_ACTIVITY` columns). Not an edit of the entry:
+    its update time stays. False when the entry no longer exists."""
+    unknown = set(fields) - set(BACKLOG_ACTIVITY)
+    if unknown:
+        raise ValueError(f"not a backlog activity field: {', '.join(sorted(unknown))}")
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+    changed = conn.execute(f"UPDATE backlog_entries SET {assignments} WHERE id = ?", (*fields.values(), entry_id)).rowcount
+    conn.commit()
+    return bool(changed)
 
 
 def delete_backlog_entry(conn: sqlite3.Connection, entry_id: str) -> bool:

@@ -60,8 +60,13 @@ GATE_POINT_VALUES = [
 
 # Documentation review's update job, and the Job statuses that count as "not finished yet".
 DOC_UPDATE_JOB = "agent.update_docs"
-# The backlog's two Claude jobs (Registry & Portfolio), by what they write.
-BACKLOG_JOBS = {"registry.backlog_refine": "refine", "registry.backlog_task_prompt": "prompt"}
+# A backlog entry's own record of Claude's work on it (Registry & Portfolio keeps it on the entry), by kind:
+# (since, job, error) columns. Claude's answer comes within agent.query's 300s, so a mark older than
+# BACKLOG_ACTIVITY_STALE belongs to a Job that never came back.
+BACKLOG_ACTIVITY = {"refine": ("refining_since", "refining_job", "refine_error"),
+                    "prompt": ("prompting_since", "prompting_job", "prompt_error")}
+BACKLOG_ACTIVITY_STALE = timedelta(minutes=10)
+_UNFINISHED = {"refine": "the last refinement did not finish", "prompt": "the last task prompt did not finish"}
 STATISTICS_UPDATE_SECONDS = 600  # how often the running Dashboard counts new jobs, checks and incidents
 LIVE_KEEPALIVE_SECONDS = 15.0  # a comment on an idle event stream, so proxies keep it open
 LIVE_MAX_TOPICS = 20
@@ -113,6 +118,10 @@ def _task_group(row: dict | str, now: datetime | None = None) -> str:
     return group
 
 
+# The statuses of an `agent.run_task` Job that the Tasks page may show without a run (a succeeded one never is).
+TASK_JOB_STATUSES_WITHOUT_RUN = ("queued", "running", "pending_confirmation", "failed", "cancelled", "stopped")
+
+
 def _task_rows_without_a_run(jobs: list[dict], runs: list[dict]) -> list[dict]:
     """`agent.run_task` Jobs that have no Agentic Development run yet: still queued,
     dispatched but waiting for the agent's one-task-at-a-time lock, or failed/stopped
@@ -142,12 +151,12 @@ _JOB_STATE_CLASS = {
 }
 
 
-def _job_dependencies(paths: Paths, jobs: list[dict], known: list[dict]) -> dict[str, list[dict]]:
+def _job_dependencies(paths: Paths, jobs: list[dict]) -> dict[str, list[dict]]:
     """What each job waits on, in words: {job id: [{label, state, state_class, href}]}. A dependency that is
-    a task links to the task page, any other job to its job page; `known` is every job still in history, and
-    one that has been deleted from it is shown as such, without a link."""
-    by_id = {j["id"]: j for j in known}
+    a task links to the task page, any other job to its job page; one that has been deleted from the history
+    is shown as such, without a link. Only the Jobs waited on are read."""
     wanted = {d for j in jobs for d in j.get("depends_on") or []}
+    by_id = {j["id"]: j for j in _try(lambda: client.list_jobs(paths, ids=sorted(wanted), summary=True), default=[])} if wanted else {}
     runs: dict[str, dict] = {}
     for project in {by_id[d].get("project_id") for d in wanted if d in by_id and by_id[d].get("type") == "agent.run_task"} - {None}:
         for run in _try(client.agent_runs, paths, project, default=[]):
@@ -214,24 +223,19 @@ def _job_subjects(job: dict, steps: list[dict], policies: dict[str, dict]) -> li
     return subjects
 
 
-def backlog_activity(jobs: list[dict]) -> dict[str, dict]:
-    """What Claude is doing for each backlog entry: {entry id: {"refine": the Job under way or None,
-    "prompt": ..., "refine_error": why the last one failed or None, "prompt_error": ...}}. The newest
-    Job of each kind decides: a later success clears an older failure."""
-    activity: dict[str, dict] = {}
-    for job in sorted(jobs, key=lambda j: j.get("created_at") or ""):
-        kind = BACKLOG_JOBS.get(job.get("type") or "")
-        entry_id = (job.get("params") or {}).get("entry_id")
-        if kind is None or not entry_id:
-            continue
-        slot = activity.setdefault(entry_id, {"refine": None, "prompt": None, "refine_error": None, "prompt_error": None})
-        active = job.get("status") in ACTIVE_JOB_STATUSES
-        slot[kind] = job if active else None
-        slot[f"{kind}_error"] = job.get("error") if job.get("status") == "failed" else None
+def backlog_activity(entry: dict, now: datetime | None = None) -> dict:
+    """What Claude is doing for a backlog entry, read from the entry itself: {"refine": the Job id under way
+    or None, "prompt": ..., "refine_error": why the last one failed or None, "prompt_error": ...}."""
+    now = now or datetime.now(timezone.utc)
+    activity: dict = {}
+    for kind, (since_key, job_key, error_key) in BACKLOG_ACTIVITY.items():
+        since = _parse_time(entry.get(since_key))
+        if since is not None and since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        fresh = since is not None and now - since < BACKLOG_ACTIVITY_STALE
+        activity[kind] = entry.get(job_key) if fresh and entry.get(job_key) else None
+        activity[f"{kind}_error"] = entry.get(error_key) or (_UNFINISHED[kind] if since is not None and not fresh else None)
     return activity
-
-
-NO_BACKLOG_ACTIVITY = {"refine": None, "prompt": None, "refine_error": None, "prompt_error": None}
 
 
 def demote_headings(html: str, by: int = 2) -> str:
@@ -302,11 +306,11 @@ def starting_up(paths: Paths, starting: _Starting) -> dict[str, set[str]]:
     found: dict[str, set[str]] = {}
     for kind, project in starting.snapshot():
         found.setdefault(project, set()).add(kind)
-    for status in STARTING_JOB_STATUSES:
-        for job in _try(lambda: client.list_jobs(paths, status=status), default=[]):
-            kind = STARTING_JOB_KINDS.get(job.get("type"))
-            if kind and job.get("project_id"):
-                found.setdefault(job["project_id"], set()).add(kind)
+    under_way = _try(lambda: client.list_jobs(paths, status=STARTING_JOB_STATUSES, types=list(STARTING_JOB_KINDS), summary=True), default=[])
+    for job in under_way:
+        kind = STARTING_JOB_KINDS.get(job.get("type"))
+        if kind and job.get("project_id"):
+            found.setdefault(job["project_id"], set()).add(kind)
     return found
 
 
@@ -320,8 +324,10 @@ def _back(to: str, message: str) -> RedirectResponse:
     return RedirectResponse(f"{to}{'&' if '?' in to else '?'}message={quote(message)}", status_code=303)
 
 
-# The Job types whose Claude session the agent can show as it works (the peek).
-PEEK_JOB_TYPES = ("agent.run_task", "agent.update_docs")
+# The Job types whose Claude session the agent can show as it works (the peek): a task, an update of
+# docs, and the Jobs that ask Claude for an answer (agent.query records the session against them).
+PEEK_JOB_TYPES = ("agent.run_task", "agent.update_docs", "agent.query", "registry.backlog_refine", "registry.backlog_task_prompt",
+                  "policy.author")
 
 
 # Requirements and tests share one set of verdict words, listed in the order
@@ -488,12 +494,12 @@ def collect_attention(paths: Paths) -> list[dict]:
             "detail": (result.get("detail") or "").strip()[:240], "href": f"/policies/{policy_id}",
             "since": result.get("checked_at"),
         })
-    for job in _try(lambda: client.list_jobs(paths, status="pending_confirmation"), default=[]):
+    for job in _try(lambda: client.list_jobs(paths, status="pending_confirmation", summary=True), default=[]):
         items.append({
             "kind": "confirmation", "tag": "Jobs", "job_id": job.get("id"), "project": job.get("project_id") or "", "title": f"{job['type']} awaits confirmation",
             "detail": "", "href": "/jobs?status=pending_confirmation", "since": job.get("created_at"),
         })
-    for job in _try(lambda: client.list_jobs(paths, status="running"), default=[]):
+    for job in _try(lambda: client.list_jobs(paths, status="running", summary=True), default=[]):
         if (job.get("progress") or {}).get("attention"):
             items.append({
                 "kind": "job_question", "tag": "Jobs", "job_id": job.get("id"), "project": job.get("project_id") or "",
@@ -510,10 +516,10 @@ def collect_attention(paths: Paths) -> list[dict]:
     return items
 
 
-JOB_STATUS_ORDER = ["running", "pending_confirmation", "queued", "failed", "succeeded", "cancelled"]
+JOB_STATUS_ORDER = ["running", "pending_confirmation", "queued", "failed", "succeeded", "cancelled", "stopped"]
 JOB_STATUS_LABELS = {
     "running": "Running", "pending_confirmation": "Needs confirmation", "queued": "Queued",
-    "failed": "Failed", "succeeded": "Succeeded", "cancelled": "Cancelled",
+    "failed": "Failed", "succeeded": "Succeeded", "cancelled": "Cancelled", "stopped": "Stopped",
 }
 JOB_ACTIVE_STATUSES = {"running", "queued", "pending_confirmation"}
 JOBS_PAGE_SIZE = 50
@@ -563,6 +569,19 @@ def pretty_json(value) -> str:
     return json.dumps(value, indent=2, ensure_ascii=False, default=str)
 
 
+JSON_SHOWN = 20_000  # characters of a Job's params or result a page shows; the whole is at /jobs/{id}.json
+
+
+def json_view(value, limit: int = JSON_SHOWN) -> dict:
+    """A Job's params or result as a page shows it: {text (at most `limit` characters), cut (it was longer),
+    length (of the whole), omitted (what a listed Job's summary left out, `_omitted`, or [])}."""
+    omitted = list(value.get("_omitted") or []) if isinstance(value, dict) else []
+    if omitted:
+        value = {key: item for key, item in value.items() if key != "_omitted"}
+    text = pretty_json(value)
+    return {"text": text[:limit], "cut": len(text) > limit, "length": len(text), "omitted": omitted}
+
+
 def build_app(paths: Paths) -> FastAPI:
     # No Swagger/ReDoc pages: `/docs` is the documentation-review page.
     background: list = []  # loops started with the server, each given the event that ends it
@@ -584,6 +603,7 @@ def build_app(paths: Paths) -> FastAPI:
     templates.env.globals["pillar_name"] = pillar_name
     templates.env.globals["incident_kinds"] = INCIDENT_KINDS
     templates.env.globals["job_duration"] = job_duration
+    templates.env.globals["json_view"] = json_view
     templates.env.filters["secs"] = format_seconds
     # Cache-buster for every `/static/...?v=` URL: the newest static file, so a change to
     # any of them (review.js too, not only app.css) is fetched anew rather than served
@@ -662,10 +682,14 @@ def build_app(paths: Paths) -> FastAPI:
     # -- Statistics: per-day counts of the workshop's operations, kept by the Dashboard ----
 
     def _update_statistics() -> list[str]:
-        """Count what the pillars hold now; returns the pillars that could not be read."""
+        """Count what the pillars hold now; returns the pillars that could not be read. Of the Jobs, only those
+        changed since the last count are read (as summaries), and every Job once a day, which lets the
+        count forget the Jobs deleted since (statistics.jobs_to_read)."""
+        changed_since = statistics.jobs_to_read(paths)
+        read_at = datetime.now(timezone.utc)
         sources = {
             "projects": ("registry", lambda: [project["name"] for project in client.list_projects(paths)]),
-            "jobs": ("orchestration", lambda: client.list_jobs(paths, timeout=30.0)),
+            "jobs": ("orchestration", lambda: client.list_jobs(paths, updated_since=changed_since, summary=True, timeout=30.0)),
             "policy_results": ("policy", lambda: client.policy_check_results(paths, timeout=30.0)),
             "policies": ("policy", lambda: client.policy_list(paths)),
             "incidents": ("agent", lambda: client.list_incidents(paths)),
@@ -673,7 +697,8 @@ def build_app(paths: Paths) -> FastAPI:
         fetched = {name: _try(fetch) for name, (_, fetch) in sources.items()}
         if fetched["policies"] is None:  # without the policies a result cannot be named
             fetched["policy_results"] = None
-        statistics.update(paths, **fetched)
+        statistics.update(paths, **fetched, jobs_complete=changed_since is None, jobs_read_at=read_at,
+                          full_job=lambda job_id: _try(client.get_job, paths, job_id))
         return sorted({pillar_name(pillar) for name, (pillar, _) in sources.items() if fetched[name] is None})
 
     @app.get("/statistics", response_class=HTMLResponse)
@@ -1017,7 +1042,9 @@ def build_app(paths: Paths) -> FastAPI:
         """This project's update-doc jobs that have not started or are running:
         Orchestration Jobs still queued/running, and scheduled ones."""
         entries = []
-        for job in _try(client.list_jobs, paths, default=[]):
+        active = _try(lambda: client.list_jobs(paths, types=[DOC_UPDATE_JOB], project_id=project, status=ACTIVE_JOB_STATUSES, summary=True),
+                      default=[])
+        for job in active:
             if job.get("type") == DOC_UPDATE_JOB and job.get("project_id") == project and job.get("status") in ACTIVE_JOB_STATUSES:
                 params = job.get("params") or {}
                 entries.append({"kind": "job", "id": job["id"], "branch": params.get("branch"), "status": job["status"],
@@ -1212,9 +1239,9 @@ def build_app(paths: Paths) -> FastAPI:
         except client.PillarUnavailable as exc:
             entries, error = [], str(exc)
         entries.sort(key=lambda e: e.get("updated_at") or "", reverse=True)
-        activity = backlog_activity(_try(client.list_jobs, paths, default=[]))
+        activity = {e["id"]: backlog_activity(e) for e in entries}
         return _render(request, "backlog_project.html", project=project, entries=entries, activity=activity,
-                       no_activity=NO_BACKLOG_ACTIVITY, error=error, nav_active="backlog", live_topics="backlog,jobs")
+                       error=error, nav_active="backlog", live_topics="backlog")
 
     @app.post("/backlog/{project}/add")
     def backlog_add(project: str, text: str = Form("")):
@@ -1233,10 +1260,14 @@ def build_app(paths: Paths) -> FastAPI:
             entry, error = _backlog_entry(project, entry_id), None
         except client.PillarUnavailable as exc:
             entry, error = None, str(exc)
-        activity = backlog_activity(_try(client.list_jobs, paths, default=[])).get(entry_id, NO_BACKLOG_ACTIVITY)
+        activity = backlog_activity(entry) if entry else backlog_activity({})
         refined_html = demote_headings(markdown.render_comment(entry["refined_entry"], project=project, path="")) if entry and entry["refined_entry"] else ""
+        # While Claude works on the entry, its session is shown as it grows (the Job's peek).
+        working = activity["refine"] or activity["prompt"]
+        claude_peek = _peek_of(working) if working else None
+        topics = ["backlog", *([f"peek:{working}"] if claude_peek and claude_peek.get("running") else [])]
         return _render(request, "backlog_entry.html", project=project, entry_id=entry_id, entry=entry, activity=activity,
-                       refined_html=refined_html, error=error, nav_active="backlog", live_topics="backlog,jobs")
+                       refined_html=refined_html, peek=claude_peek, error=error, nav_active="backlog", live_topics=",".join(topics))
 
     def _save_backlog_edits(project: str, entry_id: str, primary_entry: str | None, refinement_notes: str | None) -> str | None:
         """Save what the user changed in the entry's two fields; the refusal's reason, or None once saved."""
@@ -1263,7 +1294,8 @@ def build_app(paths: Paths) -> FastAPI:
 
     def _start_backlog_job(project: str, entry_id: str, kind: str, job_type: str, started: str) -> RedirectResponse:
         back = f"/backlog/{project}/{entry_id}"
-        if backlog_activity(_try(client.list_jobs, paths, default=[])).get(entry_id, NO_BACKLOG_ACTIVITY)[kind]:
+        entry = _try(_backlog_entry, project, entry_id)
+        if entry is not None and backlog_activity(entry)[kind]:
             return _back(back, "Claude is already working on it.")
         _fire_and_forget(paths, type=job_type, target_pillar="registry", project_id=project, params={"entry_id": entry_id},
                          queue_key=None, depends_on=[], created_by="dashboard")
@@ -1337,7 +1369,8 @@ def build_app(paths: Paths) -> FastAPI:
             names, error = [], str(exc)
         for name in names:
             rows += _try(client.agent_runs, paths, name, default=[])
-        rows += _task_rows_without_a_run(_try(client.list_jobs, paths, default=[]), rows)
+        task_jobs = _try(lambda: client.list_jobs(paths, types=["agent.run_task"], status=TASK_JOB_STATUSES_WITHOUT_RUN, summary=True), default=[])
+        rows += _task_rows_without_a_run(task_jobs, rows)
         rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
         task_sections = {key: [r for r in rows if _task_group(r) == key] for key, _ in TASK_GROUPS}
         return _render(request, "tasks.html", runs=rows, task_sections=task_sections, task_groups=TASK_GROUPS, error=error, nav_active="tasks",
@@ -1612,8 +1645,11 @@ def build_app(paths: Paths) -> FastAPI:
         first = calendar.month_of(month, today)
         everything = show == "all"
         error = None
+        days = calendar.grid_days(first)
+        start = datetime.combine(days[0], datetime.min.time()).astimezone()
+        end = datetime.combine(days[-1] + timedelta(days=1), datetime.min.time()).astimezone()
         try:
-            jobs = client.list_jobs(paths)
+            jobs = client.list_jobs(paths, since=start, until=end, created_by=None if everything else calendar.SCHEDULER, summary=True)
         except client.PillarUnavailable as exc:
             jobs, error = [], str(exc)
         tasks = _try(client.scheduled_tasks, paths, default=[])
@@ -1674,7 +1710,7 @@ def build_app(paths: Paths) -> FastAPI:
             request, "pillars.html", pillars=entries, error=error, nav_active="pillars",
             deployed=(deployed or {}).get("pillars", {}), repo_head=(deployed or {}).get("repo_head"),
             deployment_known=deployed is not None, commits=commits, secrets=secrets,
-            versions={c["sha"]: c["version"] for c in commits if c.get("version")},
+            versions={c["sha"]: c["version"] for c in commits if c.get("version")}, live_topics="pillars",
         )
 
     @app.post("/pillars/redeploy")
@@ -1705,33 +1741,32 @@ def build_app(paths: Paths) -> FastAPI:
 
     @app.get("/jobs", response_class=HTMLResponse)
     def jobs(request: Request, status: str | None = None, q: str | None = None, limit: int = JOBS_PAGE_SIZE):
-        try:
-            everything, error = client.list_jobs(paths), None
-        except client.PillarUnavailable as exc:
-            everything, error = [], str(exc)
-        counts = {name: 0 for name in JOB_STATUS_ORDER}
-        for job in everything:
-            counts[job["status"]] = counts.get(job["status"], 0) + 1
-        matching = [j for j in everything if not status or j["status"] == status]
-        needle = (q or "").strip().lower()
-        if needle:
-            matching = [
-                j for j in matching
-                if needle in " ".join(str(j.get(k) or "") for k in ("type", "project_id", "target_pillar", "created_by", "id")).lower()
-            ]
-        matching.sort(key=lambda j: j.get("created_at") or "", reverse=True)
+        """One page of Jobs, newest first, as summaries: Orchestration counts, searches and pages them in its
+        store, so the page reads the Jobs it shows and the counts of the rest."""
         limit = max(JOBS_PAGE_SIZE, min(limit, 1000))
-        prunable = _try(lambda: client.job_cleanup_preview(paths, [hours for hours, _ in JOB_CLEANUP_AGES]), default={}) if everything else {}
+        q = (q or "").strip()
+        try:
+            counted = client.job_counts(paths)
+            matched = client.job_counts(paths, q=q) if q else counted
+            known = not status or status in JOB_STATUS_ORDER
+            shown = client.list_jobs(paths, status=status, q=q, newest_first=True, limit=limit, summary=True) if known else []
+            error = None
+        except client.PillarUnavailable as exc:
+            counted, matched, shown, error = {}, {}, [], str(exc)
+        counts = {name: 0 for name in JOB_STATUS_ORDER}
+        counts.update(counted)
+        all_count = sum(counted.values())
+        total = matched.get(status, 0) if status else sum(matched.values())
+        prunable = _try(lambda: client.job_cleanup_preview(paths, [hours for hours, _ in JOB_CLEANUP_AGES]), default={}) if all_count else {}
         cleanup_options = [{"hours": hours, "label": label, "count": prunable.get(str(hours), 0)} for hours, label in JOB_CLEANUP_AGES]
-        shown = matching[:limit]
         job_steps = _try(lambda: client.jobs_steps(paths, [j["id"] for j in shown]), default={}) if shown else {}
-        dependencies = _job_dependencies(paths, shown, everything)
+        dependencies = _job_dependencies(paths, shown)
         policies = {p["id"]: p for p in _try(client.policy_list, paths, default=[])} if any((j.get("type") or "").startswith("policy.") for j in shown) else {}
         subjects = {j["id"]: _job_subjects(j, job_steps.get(j["id"], []), policies) for j in shown}
         task_runs = _task_runs_of(shown)
         return _render(
-            request, "jobs.html", job_steps_of=job_steps, dependencies=dependencies, subjects=subjects, task_runs=task_runs, cleanup_options=cleanup_options, jobs=shown, total=len(matching), limit=limit, next_limit=limit + JOBS_PAGE_SIZE,
-            status=status, q=q or "", all_count=len(everything),
+            request, "jobs.html", job_steps_of=job_steps, dependencies=dependencies, subjects=subjects, task_runs=task_runs, cleanup_options=cleanup_options, jobs=shown, total=total, limit=limit, next_limit=limit + JOBS_PAGE_SIZE,
+            status=status, q=q, all_count=all_count,
             counts=[(name, JOB_STATUS_LABELS.get(name, name), counts[name]) for name in [*JOB_STATUS_ORDER, *[k for k in counts if k not in JOB_STATUS_ORDER]] if counts[name]],
             active=sum(counts.get(name, 0) for name in JOB_ACTIVE_STATUSES), error=error, nav_active="jobs", live_topics="jobs")
 
@@ -1743,6 +1778,17 @@ def build_app(paths: Paths) -> FastAPI:
                 if run.get("job_id"):
                     found[run["job_id"]] = run
         return found
+
+    @app.get("/jobs/{job_id}.json")
+    def job_json(job_id: str):
+        """The whole Job, params and result uncut: where a page that shows only part of them links."""
+        try:
+            job = client.get_job(paths, job_id)
+        except client.PillarUnavailable as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=503)
+        if job is None:
+            return JSONResponse({"detail": f"no job {job_id}"}, status_code=404)
+        return job
 
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)
     def job_detail(request: Request, job_id: str):
@@ -1757,7 +1803,7 @@ def build_app(paths: Paths) -> FastAPI:
                 "jobs": [], "total": 0, "counts": [], "status": None, "q": "", "all_count": 0, "cleanup_options": [], "active": 0,
                 "next_limit": JOBS_PAGE_SIZE, "error": f"No job {job_id}.", "message": None, "nav_active": "jobs", "attention_count": 0,
             }, status_code=404)
-        dependencies = _job_dependencies(paths, [job], _try(client.list_jobs, paths, default=[])) if job else {}
+        dependencies = _job_dependencies(paths, [job]) if job else {}
         policies = {p["id"]: p for p in _try(client.policy_list, paths, default=[])} if job and (job.get("type") or "").startswith("policy.") else {}
         task_run = _try(client.agent_run_for_job, paths, job_id) if job and job.get("type") == "agent.run_task" else None
         claude_peek = _peek_of(job_id) if job and job.get("type") in PEEK_JOB_TYPES else None

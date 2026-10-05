@@ -18,14 +18,18 @@ class AgentClientError(Exception):
     pass
 
 
-def query(paths: Paths, prompt: str, *, job_id: str, project_id: str | None = None, timeout: float = QUERY_TIMEOUT_SECONDS) -> str:
-    """Claude's answer to `prompt`. `job_id` is the Job asking, so the call's usage is counted against it."""
+def query(paths: Paths, prompt: str, *, job_id: str, project_id: str | None = None, ref: str | None = None,
+          timeout: float = QUERY_TIMEOUT_SECONDS) -> str:
+    """Claude's answer to `prompt`. `job_id` is the Job asking: the call's usage is counted against it, and
+    its session can be watched as that Job's peek. `ref` names what the session worked on (a backlog
+    entry), so that `forget` can delete its transcript with it."""
     socket_path = resolve_pillar_socket(paths, "agent", timeout=5.0)
     if socket_path is None:
         raise AgentClientError("the Agentic Development pillar is unavailable (unreachable, disabled or faulted)")
+    params = {"prompt": prompt, **({"ref": ref} if ref else {})}
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.post("/v1/jobs/agent.query", json={"job_id": job_id, "project_id": project_id, "params": {"prompt": prompt}})
+            response = client.post("/v1/jobs/agent.query", json={"job_id": job_id, "project_id": project_id, "params": params})
         response.raise_for_status()
         body = response.json()
     except (httpx.HTTPError, OSError, ValueError) as exc:
@@ -36,3 +40,18 @@ def query(paths: Paths, prompt: str, *, job_id: str, project_id: str | None = No
     if not text.strip():
         raise AgentClientError("Claude answered with no text")
     return text.strip()
+
+
+def forget(paths: Paths, ref: str, *, timeout: float = 30.0) -> int | None:
+    """Have the agent delete the transcripts of every Claude session that worked on `ref`: how many it
+    deleted, or None when the agent could not be reached (nothing was deleted then)."""
+    socket_path = resolve_pillar_socket(paths, "agent", timeout=5.0)
+    if socket_path is None:
+        return None
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.post("/v1/query-sessions/forget", json={"ref": ref})
+        response.raise_for_status()
+        return int(response.json().get("deleted", 0))
+    except (httpx.HTTPError, OSError, ValueError):
+        return None

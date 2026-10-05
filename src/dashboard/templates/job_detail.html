@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_job_json.html" import job_json %}
 {% from "_job_steps.html" import job_steps %}
 {% from "_job_deps.html" import job_deps %}
 {% from "_job_subject.html" import job_subject %}
@@ -51,8 +52,8 @@
       <dt>Created</dt><dd>{{ job.created_at }}</dd>
       <dt>Updated</dt><dd>{{ job.updated_at }}</dd>
     </dl>
-    {% if job.params %}<h4 class="job-h">Params</h4><pre class="code">{{ job.params | pretty }}</pre>{% endif %}
-    {% if job.result %}<h4 class="job-h">Result</h4><pre class="code">{{ job.result | pretty }}</pre>{% endif %}
+    {% if job.params %}{{ job_json("Params", job.params, job.id) }}{% endif %}
+    {% if job.result %}{{ job_json("Result", job.result, job.id) }}{% endif %}
   </details>
 </div>
 {{ peek_card(peek) }}

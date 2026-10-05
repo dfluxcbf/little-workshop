@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Jobs — little-workshop{% endblock %}
+{% from "_job_json.html" import job_json %}
 {% from "_job_gate_actions.html" import job_gate_actions %}
 {% from "_job_steps.html" import job_steps %}
 {% from "_job_deps.html" import job_deps %}
@@ -103,8 +104,8 @@
           <dt>Updated</dt><dd>{{ j.updated_at }}</dd>
           {% if dependencies.get(j.id) %}<dt>Waits on</dt><dd>{{ job_deps(dependencies[j.id]) }}</dd>{% endif %}
         </dl>
-        {% if j.params %}<h4 class="job-h">Params</h4><pre class="code">{{ j.params | pretty }}</pre>{% endif %}
-        {% if j.result %}<h4 class="job-h">Result</h4><pre class="code">{{ j.result | pretty }}</pre>{% endif %}
+        {% if j.params %}{{ job_json("Params", j.params, j.id) }}{% endif %}
+        {% if j.result %}{{ job_json("Result", j.result, j.id) }}{% endif %}
         {% if j.error %}<h4 class="job-h">Error</h4><pre class="code err">{{ j.error }}</pre>{% endif %}
       </div>
     </details>
