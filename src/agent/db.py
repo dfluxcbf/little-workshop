@@ -128,6 +128,7 @@ AWAITING_FINISH = "awaiting_finish"
 FINISHED = "finished"
 FAILED = "failed"
 SKIPPED = "skipped"
+STOPPED = "stopped"  # stopped by the user while it ran (or after its worker was gone)
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -142,6 +143,12 @@ def connect(path: Path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE agent_runs ADD COLUMN dismissed_at TEXT")
     if "budget_usd" not in {row["name"] for row in conn.execute("PRAGMA table_info(claude_usage)")}:
         conn.execute("ALTER TABLE claude_usage ADD COLUMN budget_usd REAL")
+    # The Claude session a run works in: its transcript is what the Dashboard's peek shows.
+    if "session_id" not in {row["name"] for row in conn.execute("PRAGMA table_info(agent_runs)")}:
+        conn.execute("ALTER TABLE agent_runs ADD COLUMN session_id TEXT")
+    # exception (a raised exception), crash (a pillar process died) or unexpected (behaviour no exception names).
+    if "kind" not in {row["name"] for row in conn.execute("PRAGMA table_info(incidents)")}:
+        conn.execute("ALTER TABLE incidents ADD COLUMN kind TEXT NOT NULL DEFAULT 'exception'")
     conn.commit()
     return conn
 
@@ -187,6 +194,12 @@ def fail_interrupted_runs(conn: sqlite3.Connection, reason: str) -> list[dict]:
     for run in rows:
         update_run(conn, run["id"], status=FAILED, summary=reason)
     return rows
+
+
+def get_run_by_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
+    """The run an `agent.run_task` Job started, if it has one yet."""
+    row = conn.execute("SELECT * FROM agent_runs WHERE job_id = ? ORDER BY created_at DESC LIMIT 1", (job_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def get_run(conn: sqlite3.Connection, run_id: str) -> dict | None:
@@ -276,14 +289,18 @@ def new_incident_id() -> str:
     return uuid.uuid4().hex
 
 
+INCIDENT_KINDS = ("exception", "crash", "unexpected")
+
+
 def create_incident(
     conn: sqlite3.Connection, incident_id: str, *, project_id: str, pillar: str, context: str,
-    exception_type: str, message: str, traceback: str,
+    exception_type: str, message: str, traceback: str, kind: str = "exception",
 ) -> None:
     conn.execute(
-        """INSERT INTO incidents (id, project_id, pillar, context, exception_type, message, traceback, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)""",
-        (incident_id, project_id, pillar, context, exception_type, message, traceback, _now()),
+        """INSERT INTO incidents (id, project_id, pillar, context, exception_type, message, traceback, status, created_at, kind)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)""",
+        (incident_id, project_id, pillar, context, exception_type, message, traceback, _now(),
+         kind if kind in INCIDENT_KINDS else "exception"),
     )
     conn.commit()
 

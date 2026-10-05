@@ -474,3 +474,55 @@ A task run's own `model` and `max_budget_usd` (an `AgentFlow` built with them) w
 run was given is stored with its usage (`claude_usage.budget_usd`), and a run's status carries `budget_usd` and
 `budget_used`. Claude Code 2.1.289 has no `--max-turns` option, so a bound on turns is not set. The launch
 environment a run gets for attribution is described in `docs/pillars/usage.md`, "Configuration".
+
+## A task never outlives its worker (2026-10-04)
+
+REQ-000000363..365, found when the Usage pillar's "Automate repeated Claude work" task held
+little-workshop's queue for hours on 2026-10-04: it named the intent `improvement`, which has no prompt
+(`templates/prompts/improvement.md`), so the worker thread died on a `FileNotFoundError` before Claude
+started, and neither the run nor its Job was ever settled.
+
+- **Intents.** The intents are those with a prompt: `bug`, `docs`, `milestone`, `task`
+  (`flow.INTENTS`). `agent.run_task` refuses any other at once, before a run exists, naming them
+  (`flow.intent_error`); `AgentFlow.run_task` refuses it too. The Usage pillar's tasks use `task`.
+- **A crash ends the run.** An exception escaping the worker of `agent.run_task` marks its run failed
+  ("the task crashed: …"), reports the Job failed to Orchestration and records an incident; building the
+  prompt is part of the `run_claude` step, so its failure shows on that step.
+- **Stopping a task.** Each run gets its Claude session id up front (`--session-id`, stored as
+  `agent_runs.session_id`). Orchestration's stop of an `agent.run_task` Job (it now says the Job's type,
+  and whether the user forced it) is answered here: a live worker is told to stop and every process of
+  its Claude — the one whose command line names the session, and its descendants (`agent/procs.py`) — is
+  sent SIGTERM; the run ends `stopped` ("stopped by user"), its branch and any commits left as they are,
+  and nothing is published. A worker still waiting for the run lock starts nothing. A run whose worker is
+  gone (it crashed, or the pillar restarted) is marked `stopped` at once. An update-doc job is stopped as
+  before; anything else is "not stoppable", which a force stop overrides at Orchestration.
+
+## Incidents beyond a request's exception (2026-10-04)
+
+REQ-000000367, REQ-000000368. An incident now has a **kind**: `exception` (as before), `crash` or
+`unexpected` (behaviour no exception names); `POST /v1/incidents` takes it, and the Incidents pages show
+it. `common/incident.py` adds two ways in besides the request middleware:
+
+- `install_incident_reporting` also installs a `threading.excepthook` in the pillar's process (once): an
+  exception that escapes any background thread — a Job's worker, a scheduler loop — is reported with
+  the thread's name, then handed to the hook that was there before.
+- `report_problem` records an incident with no exception: Orchestration reports a Job it failed for
+  running past its limit (`StuckJob`, kind unexpected), and Core reports a pillar systemd restarted after
+  it failed (`PillarCrashed`, kind crash; Core compares each unit's `NRestarts` at every reconcile, and
+  the detail is the end of the pillar's journal).
+
+Confirming one starts the bug task as before, its description worded for its kind.
+`GET /v1/incidents/version` changes with every incident recorded or decided (the Dashboard's live pages
+watch it).
+
+## Claude peek: following a running session (2026-10-04)
+
+REQ-000000380. `GET /v1/peek/{job_id}?after=<byte>&limit=` reads the transcript Claude Code writes as it
+works — the run's session (`~/.claude/projects/<its directory>/<session id>.jsonl`) for an
+`agent.run_task` Job, the newest session of the worktree for an update-doc job — and answers
+`{available, running, source, events, next, skipped}` (`agent/peek.py`). Events are short: each message
+of Claude, each tool call with the gist of its input (a command, a file, a pattern), each failed result
+named by its tool, the prompt and compactions; thinking is left out. Reading starts at byte `after`, a
+half-written last line waits for the next read, `after=-1` gives only where the file ends, and a first
+read of a long transcript reads its last 4 MB. `GET /v1/runs/by-job/{job_id}` gives the run a Job
+started.

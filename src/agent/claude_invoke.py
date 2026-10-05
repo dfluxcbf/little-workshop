@@ -32,9 +32,12 @@ def parse_status(summary: str) -> str:
 def claude_argv(
     prompt: str, *, session_name: str | None = None, model: str | None = None,
     max_budget_usd: float | None = None, user_messages: bool = True, extra_args: tuple[str, ...] = (),
-    minimal: bool = False, effort: str | None = None,
+    minimal: bool = False, effort: str | None = None, session_id: str | None = None,
 ) -> list[str]:
     argv = ["claude", "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"]
+    # A known session id names the run's transcript (to watch it) and its processes (to stop it).
+    if session_id:
+        argv += ["--session-id", session_id]
     # Remote Control works in print mode: the run stays headless and
     # structured while the Claude app can watch it and answer it.
     if session_name:

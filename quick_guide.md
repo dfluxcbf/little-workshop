@@ -105,9 +105,12 @@ the daemon is down.
 A browser-facing panel view of the same state, bound to a Unix socket like
 every other pillar (no network port — put a reverse proxy or `tailscale
 serve` in front of it for real remote access, same model `little-runner`
-already used). Panels today: pillar Overview, Projects, Jobs, and a full
-Policy management screen (enable/disable, gate-point multi-select, project
-selection with per-project gating, read-only script view). Reach it locally with:
+already used). Pages: the Dashboard (one card per project), Documentation
+(doc review, each project's backlog, requirements report), Actions (tasks with
+a live peek at Claude's work, jobs with stop and force stop, a schedule
+calendar, triggers), Policies (filters, drafts, per-project gating) and System
+(pillars, incidents, statistics, Claude usage). Pages update themselves as the
+state they show changes (`docs/pillars/dashboard.md`). Reach it locally with:
 
 ```bash
 curl --unix-socket ~/.local/state/little-workshop/sockets/dashboard.sock http://x/

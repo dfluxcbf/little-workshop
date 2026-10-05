@@ -257,7 +257,7 @@ What to build:
 
 
 def automate_job(candidate: dict, project: str) -> dict:
-    """The fixed improvement task "Make it a task" starts on little-workshop for one candidate."""
+    """The fixed task on little-workshop that automates one candidate ("Make it a task" fills New task with it)."""
     checks = ", ".join(f"{name.replace('_', ' ')} {'yes' if ok else 'no'}" for name, ok in (candidate.get("checks") or {}).items())
     examples = "\n".join(f"- {example['project']}: " + " ; ".join(f"`{call}`" for call in example["calls"])
                          for example in candidate.get("examples") or []) or "- (none kept)"
@@ -274,7 +274,7 @@ def automate_job(candidate: dict, project: str) -> dict:
         proposed_form=candidate["proposed_form"], frequency=schedule.get("frequency", "weekly"),
         time_of_day=schedule.get("time_of_day", "02:00"), note=schedule.get("note", ""), examples=examples)
     return {"type": "agent.run_task", "target_pillar": "agent", "project_id": project, "queue_key": project,
-            "params": {"title": AUTOMATE_TITLE, "intent": "improvement", "review_mode": "manual", "description": description}}
+            "params": {"title": AUTOMATE_TITLE, "intent": "task", "review_mode": "manual", "description": description}}
 
 
 def tokens_avoided(conn: sqlite3.Connection, candidate: dict) -> float:

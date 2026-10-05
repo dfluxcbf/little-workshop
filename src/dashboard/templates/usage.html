@@ -40,7 +40,7 @@
   </div>
 </section>
 
-<section class="card">
+<section class="card" id="usage-week" data-live-region>
   <h2>This week</h2>
   <dl class="kv">
     <dt>Weighted tokens</dt><dd>${{ "{:,.2f}".format(summary.total.weighted) }} at list price</dd>
@@ -60,7 +60,7 @@
 {{ plot('pressure', 'Plan pressure', 'The highest 5-hour and 7-day plan usage the statusline reported each day.') }}
 {{ plot('pays', 'Does little-workshop pay for itself?', 'Weighted tokens per week spent building little-workshop against every other project. Building it pays off only if the others get cheaper.') }}
 
-<section class="card">
+<section class="card" id="usage-projects" data-live-region>
   <h2>Projects</h2>
   <div class="table-scroll stack"><table>
     <thead><tr><th>Project</th><th>Sessions</th><th>Requests</th><th>Weighted</th><th>Avg context</th><th>Hit ratio</th><th>Long-context</th><th>Startup p50</th></tr></thead>
@@ -76,7 +76,7 @@
   </table></div>
 </section>
 
-<section class="card">
+<section class="card" id="usage-sessions" data-live-region>
   <h2>Heaviest sessions</h2>
   <div class="table-scroll stack"><table>
     <thead><tr><th>Started</th><th>Project</th><th>Origin</th><th>Requests</th><th>Largest context</th><th>Weighted</th></tr></thead>
@@ -91,7 +91,7 @@
   </table></div>
 </section>
 
-<section class="card" id="outcomes">
+<section class="card" id="outcomes" data-live-region>
   <h2>Tokens per outcome</h2>
   <p class="muted">What the week's work produced for what it cost: agent tasks that ran to their end, branches finished and
     requirements that turned to done. It shows whether an optimization made the work cheaper, or only shorter.</p>
@@ -110,7 +110,7 @@
   </table></div>
 </section>
 
-<section class="card" id="findings">
+<section class="card" id="findings" data-live-region>
   <h2>Findings</h2>
   <p class="muted">What the detectors found over the last 14 days, ranked by what a fix is estimated to save per week.
     A finding is addressed by the <em>Optimize Claude usage</em> job on its project and measured again two weeks later.</p>
@@ -162,7 +162,7 @@
   {% endif %}
 </section>
 
-<section class="card" id="candidates">
+<section class="card" id="candidates" data-live-region>
   <h2>Automation candidates</h2>
   <p class="muted">Work Claude repeated with the same shape in the last 14 days, ranked by what automating it would save per week,
     estimated by replaying each past occurrence against the session it happened in: the turns it would no longer take (each
@@ -199,7 +199,7 @@
     {% if c.examples %}<ul>{% for e in c.examples %}<li class="muted">{{ e.project }}: {% for call in e.calls %}<code class="usage-signature">{{ call }}</code>{{ '' if loop.last else ' → ' }}{% endfor %}</li>{% endfor %}</ul>{% endif %}
     {% if c.replacement %}<p class="muted">Replaced by <code>{{ c.replacement }}</code>: about ${{ "{:,.2f}".format(c.tokens_avoided) }} of weighted tokens avoided so far.</p>{% endif %}
     <div class="row">
-      {% if c.state == 'open' %}<form class="inline" method="post" action="/usage/candidates/{{ c.id }}/automate"><button type="submit" class="primary">Make it a task</button></form>{% endif %}
+      {% if c.state == 'open' %}<a class="btn primary" href="/tasks/new?candidate={{ c.id }}">Make it a task</a>{% endif %}
       <form class="inline" method="post" action="/usage/candidates/{{ c.id }}/dismiss"><button type="submit">Dismiss</button></form>
     </div>
   </details>
@@ -210,7 +210,7 @@
 
 {% block usage_extra %}{% endblock %}
 
-<section class="card{{ '' if not doctor or doctor.ok else ' fail' }}">
+<section class="card{{ '' if not doctor or doctor.ok else ' fail' }}" id="usage-health" data-live-region>
   <h2>Collection health</h2>
   {% if doctor %}
   <p class="muted">Checked {{ doctor.ts[:16].replace('T', ' ') }} UTC by <code>usage.doctor</code>.</p>
@@ -246,10 +246,12 @@
     {% for card in explorer.cards %}<button type="button" data-explorer-dot="{{ loop.index0 }}" aria-label="{{ card.title }}"></button>{% endfor %}
   </div>
 </section>
-<script type="application/json" id="usage-explorer">{{ explorer | tojson }}</script>
 {% endif %}
 
+<div id="usage-live-data" data-live-region>
+{% if explorer and explorer.cards %}<script type="application/json" id="usage-explorer">{{ explorer | tojson }}</script>{% endif %}
 <script type="application/json" id="usage-data">{{ summary | tojson }}</script>
+</div>
 <script src="/static/usage.js?v={{ static_v }}"></script>
 {% else %}
 <div class="card fail">{{ error }}</div>

@@ -31,6 +31,16 @@ from agent.screenshots import Screenshotter
 from agent.version_client import VersionClientError
 
 BRANCH_TYPE_FOR_INTENT = {"milestone": "feature", "docs": "improvement", "bug": "improvement", "task": "improvement"}
+# The kinds of work a task can be: each has its prompt, `templates/prompts/<intent>.md`.
+INTENTS = tuple(sorted(BRANCH_TYPE_FOR_INTENT))
+STOPPED_BY_USER = "stopped by user"
+
+
+def intent_error(intent: str) -> str | None:
+    """Why `intent` cannot run (there is no prompt for it), or None when it can."""
+    if intent in INTENTS:
+        return None
+    return f"unknown intent {intent!r}: the intents are {', '.join(INTENTS)}"
 
 
 class AgentFlowError(RuntimeError):
@@ -175,13 +185,14 @@ class AgentFlow:
     def _invoke_claude(
         self, project_dir: Path, prompt: str, session_name: str | None, extra_args: tuple[str, ...] = (),
         on_usage: Callable[[dict | None], object] = lambda usage: None, env: dict[str, str] | None = None,
+        session_id: str | None = None,
     ) -> tuple[str, bool]:
         """`on_usage` gets what the run reported using, before a failed run raises: a failure costs tokens too."""
         chosen = launch.launch_for(launch.JOB_RUN_TASK, self.paths)
         budget = self.max_budget_usd if self.max_budget_usd is not None else chosen.max_budget_usd
         argv = claude_argv(
             prompt, session_name=session_name, model=self.model or chosen.model, effort=chosen.effort, max_budget_usd=budget,
-            user_messages=self.user_messages, extra_args=extra_args,
+            user_messages=self.user_messages, extra_args=extra_args, session_id=session_id,
         )
         result = self.runner.run(with_env(argv, env), cwd=project_dir, timeout=self.claude_timeout_seconds)
         text, is_error, raw = parse_claude_output(result.stdout)
@@ -214,7 +225,7 @@ class AgentFlow:
 
     def run_task(
         self, conn: sqlite3.Connection, project_id: str, project_dir: Path, repo_url: str | None, params: dict,
-        *, run_id: str | None = None,
+        *, run_id: str | None = None, should_stop: Callable[[], bool] = lambda: False,
     ) -> RunTaskResult:
         """`run_id` may be supplied by the caller (the Job handler
         generates it up front, before dispatching this potentially
@@ -222,11 +233,17 @@ class AgentFlow:
         back in its immediate `accepted` response).
 
         Unless `params["include_standards"]` is false, the task gets a temporary copy of
-        `shared_project_standards/` that is deleted when the task completes."""
+        `shared_project_standards/` that is deleted when the task completes.
+
+        `should_stop` is asked before Claude starts and before anything is published: once it
+        says yes, the run ends failed ("stopped by user") without going further."""
+        refusal = intent_error(params.get("intent", "task"))
+        if refusal:
+            raise AgentFlowError(refusal)
         run_id = run_id or db.new_run_id()
         standards_dir = self._standards_copy(project_id, params, run_id)
         try:
-            return self._run_task(conn, project_id, project_dir, repo_url, params, run_id, standards_dir)
+            return self._run_task(conn, project_id, project_dir, repo_url, params, run_id, standards_dir, should_stop)
         finally:
             standards.remove_copy(standards_dir)
 
@@ -243,7 +260,7 @@ class AgentFlow:
 
     def _run_task(
         self, conn: sqlite3.Connection, project_id: str, project_dir: Path, repo_url: str | None, params: dict,
-        run_id: str, standards_dir: Path | None,
+        run_id: str, standards_dir: Path | None, should_stop: Callable[[], bool] = lambda: False,
     ) -> RunTaskResult:
         title = params.get("title") or f"task for {project_id}"
         description = params.get("description", "")
@@ -266,6 +283,13 @@ class AgentFlow:
             )
 
         db.create_run(conn, run_id, job_id=job_id, project_id=project_id, intent=intent, review_mode=review_mode, title=title, source=source, description=description)
+        # Chosen here, not by Claude: it names the run's transcript (the Dashboard's peek) and its processes (a stop).
+        session_id = str(uuid.uuid4())
+        db.update_run(conn, run_id, session_id=session_id)
+
+        def stopped(branch: str | None) -> RunTaskResult:
+            db.update_run(conn, run_id, status=db.FAILED, summary=STOPPED_BY_USER)
+            return RunTaskResult(run_id, db.FAILED, branch, "failed", None, None, STOPPED_BY_USER)
 
         try:
             with step("check_checkout") as handle:
@@ -286,6 +310,8 @@ class AgentFlow:
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, None, "failed", None, None, str(exc))
 
+        if should_stop():
+            return stopped(branch)
         base_sha = gitutil.head_sha(project_dir)
         session_name = remote_control_session_name(project_id, run_id) if self.remote_control else None
         if session_name:
@@ -294,22 +320,28 @@ class AgentFlow:
         integ = cfg["integration_branch"]
         result_file = report.result_path(self.paths.state_home, project_id, run_id)
         playwright_args = self._playwright_args(run_id, bool(params.get("playwright_mcp", self.playwright_mcp)))
-        prompt = self._render_prompt(
-            project_id=project_id, project_dir=project_dir, title=title, description=description, intent=intent,
-            branch=branch, specified=resolved_spec.specified, integ=integ, result_file=result_file,
-            playwright_mcp=bool(playwright_args), standards_dir=standards_dir,
-        )
 
         try:
             with step("run_claude"):
+                # Inside the step: a prompt that cannot be built fails this step, not an unnamed moment between two.
+                prompt = self._render_prompt(
+                    project_id=project_id, project_dir=project_dir, title=title, description=description, intent=intent,
+                    branch=branch, specified=resolved_spec.specified, integ=integ, result_file=result_file,
+                    playwright_mcp=bool(playwright_args), standards_dir=standards_dir,
+                )
                 summary_text, _is_error = self._invoke_claude(
                     project_dir, prompt, session_name, playwright_args,
                     on_usage=lambda usage: db.record_usage(conn, db.USAGE_RUN, usage, ref_id=run_id, project_id=project_id, job_id=job_id),
                     env=usage_client.launch_env(self.paths, project=project_id, job_id=job_id, job_type="agent.run_task", run_id=run_id),
+                    session_id=session_id,
                 )
         except AgentFlowError as exc:
+            if should_stop():
+                return stopped(branch)
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, branch, "failed", None, None, str(exc))
+        if should_stop():
+            return stopped(branch)
 
         completion_status = parse_status(summary_text)
         agent_result = report.load_result(result_file) or report.AgentResult.from_summary(summary_text, completion_status)

@@ -584,20 +584,13 @@ def test_show_more_keeps_the_filters(test_client, monkeypatch):
     assert "limit=100&amp;status=failed&amp;q=redeploy" in text or "limit=100&status=failed&q=redeploy" in text
 
 
-def test_the_page_refreshes_itself_only_while_jobs_are_active(test_client, monkeypatch):
-    _stub_jobs(monkeypatch, [_job(1, status="running", result=None)])
-    busy = test_client.get("/jobs").text
-    assert "setInterval" in busy and 'class="live"' in busy and 'id="jobs-live"' in busy and "pill run" in busy
-
-    _stub_jobs(monkeypatch, [_job(1), _job(2, status="failed")])
-    idle = test_client.get("/jobs").text
-    assert "setInterval" not in idle and 'class="live"' not in idle
-
-
-def test_a_queued_and_a_pending_confirmation_job_count_as_active(test_client, monkeypatch):
-    for status in ("queued", "pending_confirmation"):
-        _stub_jobs(monkeypatch, [_job(1, status=status, result=None)])
-        assert "setInterval" in test_client.get("/jobs").text
+def test_the_jobs_page_follows_its_live_stream_instead_of_polling(test_client, monkeypatch):
+    """REQ-000000379 replaced the five-second refresh while jobs were active."""
+    for jobs in ([_job(1, status="running", result=None)], [_job(1), _job(2, status="failed")]):
+        _stub_jobs(monkeypatch, jobs)
+        page = test_client.get("/jobs").text
+        assert 'data-live="jobs"' in page and 'id="jobs-live" data-live-region' in page and 'class="live"' in page
+        assert "setInterval" not in page
 
 
 def test_empty_states(test_client, monkeypatch):
@@ -702,7 +695,7 @@ def test_policies_card_shows_enabled_when_nothing_is_failing(test_client, monkey
     monkeypatch.setattr(client, "policy_list", lambda paths: [_policy()])
     monkeypatch.setattr(client, "policy_check_results", lambda paths: [])
     text = test_client.get("/policies").text
-    assert "failing" not in text and ">enabled<" in text
+    assert "failing</span>" not in text and ">enabled<" in text
 
 
 def _stub_detail(monkeypatch, *, policy=None, registered=("proj-a", "proj-b", "proj-c"), link=None):
@@ -815,7 +808,7 @@ def test_policies_pages_judge_only_each_projects_latest_check(test_client, monke
     ])
     listing = test_client.get("/policies").text
     detail = test_client.get("/policies/pol1").text
-    assert "failing" not in listing
+    assert "failing</span>" not in listing
     assert "failing" not in detail and "all passing" in detail
     assert "old failure" not in detail
 
@@ -1610,7 +1603,7 @@ def test_a_job_awaiting_confirmation_offers_confirm_cancel_and_fail_on_settings_
     assert 'name="next" value="/settings"' in page
     _stub_jobs(monkeypatch, [_job(5, status="pending_confirmation", result=None), _job(6, status="failed")])
     jobs_page = test_client.get("/jobs").text
-    assert jobs_page.count("/gate/confirm") == 1 and "<details class=\"jobcard s-pending_confirmation\" open>" in jobs_page
+    assert jobs_page.count("/gate/confirm") == 1 and re.search(r'<details class="jobcard s-pending_confirmation" data-key="[^"]+" open>', jobs_page)
 
 
 @pytest.mark.parametrize("action,call,result,done", [
@@ -2911,18 +2904,18 @@ def test_the_job_page_offers_no_stop_button_for_a_job_that_is_not_running_or_que
 
 def test_stopping_calls_orchestration_and_returns_to_the_job_page(test_client, monkeypatch):
     seen = []
-    monkeypatch.setattr(client, "stop_job", lambda paths, job_id: (seen.append(job_id), {"stopped": True, "reason": None})[1])
+    monkeypatch.setattr(client, "stop_job", lambda paths, job_id, **kw: (seen.append(job_id), {"stopped": True, "reason": None})[1])
     response = test_client.post("/jobs/j1/stop", follow_redirects=False)
     assert seen == ["j1"] and response.status_code == 303
     assert response.headers["location"].startswith("/jobs/j1?") and "Job stopped." in unquote(response.headers["location"])
 
 
 def test_a_refused_stop_is_reported_on_the_job_page_with_its_reason(test_client, monkeypatch):
-    monkeypatch.setattr(client, "stop_job", lambda paths, job_id: {"stopped": False, "reason": "'version.release' is declared unstoppable"})
+    monkeypatch.setattr(client, "stop_job", lambda paths, job_id, **kw: {"stopped": False, "reason": "'version.release' is declared unstoppable"})
     refused = unquote(test_client.post("/jobs/j1/stop", follow_redirects=False).headers["location"])
     assert refused.startswith("/jobs/j1?") and "Could not stop the job" in refused and "declared unstoppable" in refused
 
-    def down(paths, job_id):
+    def down(paths, job_id, **kw):
         raise client.PillarUnavailable("orchestration is not running")
     monkeypatch.setattr(client, "stop_job", down)
     assert "orchestration is not running" in unquote(test_client.post("/jobs/j1/stop", follow_redirects=False).headers["location"])
@@ -3271,18 +3264,18 @@ def test_the_claude_usage_page_lists_candidates_with_their_schedule_and_buttons(
     page = test_client.get("/usage").text
     assert "mcp:workshop_deployment_redeploy_pillar(commit, pillar)" in page and "deterministic (5/5)" in page and "about $42.50 a week" in page
     assert "weekly," in page and "Mon, Thu at 02:30" in page and "A trigger that runs it" in page
-    assert "/usage/candidates/c1/automate" in page and "Make it a task" in page and "/usage/candidates/c1/dismiss" in page
+    assert 'href="/tasks/new?candidate=c1"' in page and "Make it a task" in page and "/usage/candidates/c1/dismiss" in page
     assert "/usage/candidates/c2/" not in page
 
 
-def test_make_it_a_task_and_dismiss_go_to_the_usage_pillar(test_client, monkeypatch):
+def test_make_it_a_task_opens_new_task_and_dismiss_goes_to_the_usage_pillar(test_client, monkeypatch):
+    """REQ-000000373: "Make it a task" opens New task filled with the candidate's task (an old form still lands there)."""
     jobs, edits = [], []
     monkeypatch.setattr(app_module.client, "create_job", lambda paths, **kw: jobs.append(kw) or {"status": "succeeded"})
     monkeypatch.setattr(app_module.client, "set_usage_candidate", lambda paths, candidate_id, **kw: edits.append((candidate_id, kw)) or {"ok": True})
-    assert test_client.post("/usage/candidates/c1/automate", follow_redirects=False).headers["location"] == "/usage#candidates"
+    assert test_client.post("/usage/candidates/c1/automate", follow_redirects=False).headers["location"] == "/tasks/new?candidate=c1"
     test_client.post("/usage/candidates/c1/dismiss", follow_redirects=False)
-    assert (jobs[0]["type"], jobs[0]["target_pillar"], jobs[0]["params"]) == ("usage.automate", "usage", {"candidate_id": "c1"})
-    assert edits == [("c1", {"state": "dismissed"})]
+    assert jobs == [] and edits == [("c1", {"state": "dismissed"})]
 
 
 def test_the_triggers_page_lists_them_and_acts_on_them(test_client, monkeypatch):

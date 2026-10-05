@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Dashboard — little-workshop{% endblock %}
+{# The project cards cost several reads each: look again at most every 4 seconds. #}
+{% block body_attrs %} data-live-gap="4000"{% endblock %}
 {% block content %}
+<div id="dash-live" data-live-region>
 {% if unhealthy %}
 <div class="card fail"><strong>{{ unhealthy|length }} pillar{{ '' if unhealthy|length == 1 else 's' }} not healthy:</strong>
   {% for n in unhealthy %}<code>{{ n }}</code> {% endfor %}&mdash; <a href="/pillars">see Pillars</a>.</div>
@@ -178,21 +181,5 @@
 </details>
 {% endfor %}
 {% endif %}
-<script>
-(function () {
-  // While something is launching or starting, reload once it has finished.
-  var waiting = Array.prototype.map.call(document.querySelectorAll('[data-starting]'), function (el) {
-    return { project: el.dataset.project, kind: el.dataset.starting };
-  });
-  if (!waiting.length) return;
-  var check = function () {
-    fetch('/starting.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
-      var done = waiting.filter(function (w) { return (d[w.project] || []).indexOf(w.kind) < 0; });
-      if (done.length) { location.replace('/?expand=' + encodeURIComponent(done[0].project) + '#' + encodeURIComponent(done[0].project)); return; }
-      setTimeout(check, 3000);
-    }).catch(function () { setTimeout(check, 6000); });
-  };
-  setTimeout(check, 3000);
-})();
-</script>
+</div>
 {% endblock %}

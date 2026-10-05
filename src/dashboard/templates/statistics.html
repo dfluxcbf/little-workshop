@@ -44,7 +44,7 @@
 {{ plot('incidents', 'Incidents', 'Incidents raised each day.') }}
 {{ plot('test-success', 'Test success ratio', 'Of the test executions each day (one job running many tests), the share in which no test failed.') }}
 
-<script type="application/json" id="stats-data">{{ stats | tojson }}</script>
+<div id="stats-live" data-live-region><script type="application/json" id="stats-data">{{ stats | tojson }}</script></div>
 <script type="application/json" id="stats-pillars">{{ pillar_names | tojson }}</script>
 <script src="/static/statistics.js?v={{ static_v }}"></script>
 {% endblock %}

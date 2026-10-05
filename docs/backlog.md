@@ -42,6 +42,9 @@ Proposed when it was found (not refined): when Orchestration sees a pillar resta
 queues again) the Jobs that pillar was running before the restart, so whatever depends on them can
 go on or be held; and a policy check can be stopped.
 
+2026-10-04: such an orphan can now be force-stopped from its job page (REQ-000000366), which settles
+it and fails what waits on it; noticing the restart by itself is still to do.
+
 ## Claude usage: what can be worked on now (added 2026-10-04, not refined)
 
 Proposed after the first findings and automation candidates of the Usage & Efficiency pillar

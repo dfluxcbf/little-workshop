@@ -182,7 +182,8 @@ is placed in the main thread's request before it.
 
 - **One project**: the catalog job *Optimize Claude usage* runs `usage.optimize` with the chosen findings.
   The pillar writes the task itself (`usage/optimize.py`: a fixed description plus a digest of the findings,
-  the same text for the same findings), creates one `agent.run_task` Job (intent `improvement`, manual review)
+  the same text for the same findings), creates one `agent.run_task` Job (intent `task`, manual review; it said
+  `improvement` until 2026-10-04, an intent the agent has no prompt for, REQ-000000362)
   on the project's queue, marks the findings accepted and records an experiment per finding.
 - **Every project**: a change every project would make the same way goes into
   `src/registry/claude_templates.py` or a policy once; the catalog job *Apply common Claude configuration*
@@ -273,8 +274,11 @@ do it for zero tokens. Nothing is implemented from it: a person chooses.
   from 02:00 with the candidates one after another every 30 minutes, so the runs do not compete with the
   owner's sessions for plan usage. It is a recommendation shown with the candidate and written into its task;
   a candidate has no Job to schedule until it is automated.
-- **Make it a task** (`usage.automate`): one fixed `agent.run_task` improvement task on little-workshop with
-  the candidate's evidence. **Dismiss** keeps it out of the list. Once the replacement exists, name it on the
+- **Make it a task** (2026-10-04, REQ-000000373): the Dashboard opens New task filled with the fixed task on
+  little-workshop for the candidate (`GET /v1/candidates/{id}/task`: title, intent `task`, manual review, and the
+  description with the candidate's evidence); the user may change it, and once it starts the Dashboard tells the
+  pillar (`POST /v1/candidates/{id}/task_started`), which marks the candidate accepted. `usage.automate` still
+  starts the same task at once. **Dismiss** keeps it out of the list. Once the replacement exists, name it on the
   candidate (`POST /v1/candidates/{id} {"replacement": "<signature prefix>", "state": "done"}`): mining then
   records **tokens avoided** as the replacement's stored runs × what one run saves when Claude calls it (the
   median of the occurrences' estimates), and detector D10 watches that Claude takes the route. A run a trigger
@@ -344,7 +348,7 @@ All are code; none uses Claude.
 | `usage.measure_experiment` | Measures one running experiment now |
 | `usage.optimize` | Starts the fixed optimization task for a project's chosen findings |
 | `usage.mine_automation` | Mines the last 14 days of tool calls into candidates; updates tokens avoided |
-| `usage.automate` | "Make it a task": starts the fixed improvement task on little-workshop for one candidate |
+| `usage.automate` | Starts the fixed task on little-workshop for one candidate at once (the Dashboard's "Make it a task" opens New task with it instead) |
 
 ## Proxies
 
@@ -372,3 +376,7 @@ Built and unit-tested; not yet running on this machine. To bring it up: add `[pi
 `usage.ingest_transcripts` and `usage.analyze` (daily), `usage.doctor` and `usage.mine_automation` (weekly),
 with `lws schedule add`. The socket-activated proxy unit has only been checked as a command line:
 its first real start is part of that deployment.
+
+`GET /v1/version` (2026-10-04, REQ-000000379) changes whenever what the Claude usage page shows can have
+changed — a request stored, a finding or a candidate added or decided — so the Dashboard's live page reads
+one string instead of the whole summary to know.

@@ -140,6 +140,22 @@ def get_project(paths: Paths, name: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "registry", f"/v1/projects/{name}", timeout=timeout)
 
 
+def backlog_list(paths: Paths, project_id: str, *, timeout: float = 5.0) -> list[dict]:
+    return _get(paths, "registry", "/v1/backlog", params={"project_name": project_id}, timeout=timeout)
+
+
+def backlog_get(paths: Paths, entry_id: str, *, timeout: float = 5.0) -> dict:
+    return _get(paths, "registry", f"/v1/backlog/{entry_id}", timeout=timeout)
+
+
+def backlog_add(paths: Paths, project_id: str, text: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "registry", "POST", "/v1/backlog", json={"project_name": project_id, "primary_entry": text}, timeout=timeout)
+
+
+def backlog_delete(paths: Paths, entry_id: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "registry", "DELETE", f"/v1/backlog/{entry_id}", timeout=timeout)
+
+
 def version_status(paths: Paths, kind: str, project_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "version", f"/v1/status/{kind}", params={"project_id": project_id}, timeout=timeout)
 

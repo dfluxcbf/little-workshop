@@ -1,0 +1,55 @@
+{#- The Schedule page's details panel for one item: a Job (with its task when it has one) or an occurrence
+    of a scheduled task. A fragment, loaded beside the month. -#}
+{% from "_job_steps.html" import job_steps %}
+{% from "_job_subject.html" import job_subject %}
+{% if job %}
+{% set parts = job.type.split(".", 1) %}
+<div class="cal-detail">
+  <div class="dcard-top">
+    <span class="dcard-name job-type">{% if run %}{{ run.title }}{% elif parts | length > 1 %}<span class="job-ns">{{ parts[0] }}.</span>{{ parts[1] }}{% else %}{{ job.type }}{% endif %}</span>
+    <span class="cal-swatch state-{{ state }}"></span><span class="cal-state">{{ state }}</span>
+  </div>
+  <div class="polcard-meta">
+    <span class="chip">{{ 'task' if job.type == 'agent.run_task' else 'job' }}</span>
+    {% if job.project_id %}<span class="chip">{{ job.project_id }}</span>{% endif %}
+    <span class="chip">{{ job.status.replace('_', ' ') }}</span>
+    <span class="chip">{{ job.created_by }}</span>
+    <span class="chip">{{ job.created_at | reltime }}</span>
+    {% if job.status in ("succeeded", "failed", "stopped") %}<span class="chip">took {{ job_duration(job.created_at, job.updated_at) }}</span>{% endif %}
+  </div>
+  <div class="job-subjects">{{ job_subject(subjects) }}</div>
+  {% if job.error %}<p class="job-error">{{ job.error }}</p>{% endif %}
+  {% if run %}<dl class="kv"><dt>Task</dt><dd>{{ run.status.replace('_', ' ') }}{% if run.branch %} on <code>{{ run.branch }}</code>{% endif %}</dd></dl>{% endif %}
+  {% if job.steps %}{{ job_steps(job.id, job.steps) }}{% endif %}
+  <div class="row">
+    <a class="btn" href="/jobs/{{ job.id }}">Open the job</a>
+    {% if run %}<a class="btn primary" href="/tasks/{{ run.project_id }}/{{ run.id }}">Open the task</a>{% endif %}
+  </div>
+</div>
+{% elif task %}
+{% set t = task %}{% set tpl = task.job_template %}{% set params = tpl.params or {} %}
+{% set is_task = tpl.type == 'agent.run_task' %}
+<div class="cal-detail">
+  <div class="dcard-top">
+    <span class="dcard-name">{{ params.title if is_task and params.title else task.name }}</span>
+    <span class="cal-swatch state-{{ state }}"></span><span class="cal-state">{{ state }}</span>
+  </div>
+  <div class="polcard-meta">
+    <span class="chip">{{ 'task' if is_task else 'job' }}</span>
+    {% if tpl.project_id %}<span class="chip">{{ tpl.project_id }}</span>{% endif %}
+    <span class="chip">{{ 'once' if task.schedule.kind == 'once' else 'weekly' }}</span>
+  </div>
+  <dl class="kv">
+    {% if at %}<dt>{{ 'Was due' if state == 'skipped' else 'Runs' }}</dt><dd>{{ at }}</dd>{% endif %}
+    <dt>When</dt><dd>{% include "_schedule_when.html" %}</dd>
+    <dt>Next run</dt><dd>{{ task.next_run_at[:16].replace('T', ' ') if task.next_run_at else '—' }}</dd>
+    {% if not is_task %}<dt>Job</dt><dd><code>{{ tpl.type }}</code></dd>{% endif %}
+    {% if is_task and params.intent %}<dt>Kind</dt><dd>{{ params.intent }}</dd>{% endif %}
+    <dt>Last run</dt><dd>{% if task.last_job_id %}<a href="/jobs/{{ task.last_job_id }}">{{ task.last_job_id[:8] }}</a>{% if last_job %} ({{ last_job.status }}){% endif %}{% else %}not run yet{% endif %}</dd>
+  </dl>
+  {% if is_task and params.description %}<pre class="log-pre cal-description">{{ params.description }}</pre>{% endif %}
+  <div class="row"><a class="btn" href="/{{ 'tasks' if is_task else 'jobs' }}/schedule/{{ task.id }}">Open the schedule (to remove it)</a></div>
+</div>
+{% else %}
+<p class="muted">It is no longer there: it was removed, or its run was deleted from the history.</p>
+{% endif %}

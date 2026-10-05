@@ -66,7 +66,8 @@ are the current state of every pillar.
   enabled policy whose latest check on a project failed, or a Job awaiting
   confirmation. `/attention` lists each item as a card linking to the
   policy or the Jobs page; `/attention.json` is the same list as data. The
-  banner re-reads the feed every 20 seconds without reloading, and once the
+  banner re-reads the feed when the page's live stream says something needing attention changed
+  ("Live pages", 2026-10-04; it used to every 20 seconds), and once the
   user taps "Alert me on this device" (browser notification permission) it
   raises a notification for each item that newly appears. A pillar that is
   down contributes nothing. This is the Dashboard half of "informing the user
@@ -74,10 +75,11 @@ are the current state of every pillar.
   are not built.
 - **Workbench additions (2026-09-21, Control merged into Dashboard 2026-09-22,
   toolbar/task/job/policy workflow overhauled 2026-09-23)**:
-  - **Navigation** is grouped (regrouped 2026-10-03). The bottom toolbar has Dashboard (standalone),
-    Documentation, Actions, Policies and System; a group button reveals its pages (Documentation:
-    Review, Report; Actions: Task list, New task, Jobs, New job; Policies: Policies, New policy;
-    System: Pillars, Incidents, Statistics, Settings) with Back returning to the main row, and the
+  - **Navigation** is grouped (regrouped 2026-10-03; Backlog and Schedule added 2026-10-04). The bottom
+    toolbar has Dashboard (standalone), Documentation, Actions, Policies and System; a group button reveals
+    its pages (Documentation: Review, Backlog, Report; Actions: Task list, New task, Jobs, New job, Schedule,
+    Triggers; Policies: Policies, New policy; System: Pillars, Incidents, Statistics, Claude usage,
+    Settings) with Back returning to the main row, and the
     group of the current page stays open. On a wide screen the top bar holds the groups and a
     sub-navigation row lists the active group's pages. Review is the documentation review (`/docs`).
     New project is reachable only as a contextual link (Dashboard's own "New project" link beside
@@ -299,9 +301,10 @@ are the current state of every pillar.
   edge is coloured by status. Tapping a card expands the id, target,
   queue, timestamps, what it waits on, and the params, result and error as
   formatted blocks. 50 jobs per page with "Show more" (filters preserved).
-  While anything is running, queued or awaiting confirmation the page marks
-  itself "live" and re-fetches its list every 5 seconds — never while a card
-  is expanded or the search box has focus. Filtering and searching are done
+  The list follows the page's live stream (2026-10-04, replacing a re-fetch
+  every 5 seconds while jobs were active): it changes as the jobs do, keeping
+  the cards that are open. An `agent.run_task` card also opens its task.
+  Filtering and searching are done
   on the full list, so the counts always describe everything.
   **Delete old jobs**: a collapsed panel above the filters. Pick an age —
   12 hours, 2 days, 1 week, 4 weeks, 8 weeks or 24 weeks, each showing how many
@@ -361,13 +364,23 @@ not started, blue running, green finished OK, red did not finish OK, yellow need
 each action's runtime (running ones count up; an action waiting for the user holds its runtime) and
 its expected runtime, and for an action waiting for the user its question with one button per
 option (`POST /jobs/{id}/steps/{key}/answer`); unanswered, the job fails after 12 hours. The page
-refreshes itself while the job is active. Each Jobs-page card shows `done/total actions` and the
+follows its live stream (topic `job:<id>`; it used to refresh itself every 2 seconds while the job was
+active). Each Jobs-page card shows `done/total actions` and the
 current action, flags a question, and links to the page; a running job with a question is also a
-card in the attention list.
+card in the attention list. An `agent.run_task` job's page links to its task (REQ-000000377).
 
 While the job is running or queued the page has a Stop job (queued: Cancel job) button, REQ-000000318:
 `POST /jobs/{id}/stop` asks Orchestration to stop it and returns to the page, which shows the reason
 when the job cannot be stopped (a declared-unstoppable type, an unreachable pillar).
+
+**Force stop** (2026-10-04, REQ-000000366): a running job's page (and its task's) has a folded
+"Force stop…" panel, opened by itself after a refused stop, that says what forcing means — the job is
+settled as stopped without its pillar's agreement, whatever the pillar was doing carries on and is not
+undone, its later outcome is ignored, the jobs waiting on it fail and its queue is released at once —
+and a Force stop button behind one more browser confirmation (`POST /jobs/{id}/stop` with `force=1`;
+Orchestration's stop with `force`, `docs/pillars/orchestration.md`). It is there for a job whose worker
+died, as the `agent.run_task` of 2026-10-04 that held little-workshop's queue for hours. `next` (a local
+path) says which page to return to.
 
 
 ## Interfacing
@@ -520,3 +533,121 @@ deletes old Jobs and the plots must outlive them.
   - Hovering or tapping a day shows its exact numbers (for a ratio, both counts); a day with
     nothing to measure is a gap in a line, not a zero. Each plot has a table view.
 
+
+## Backlog (2026-10-04)
+
+REQ-000000372, REQ-000000373.
+
+Documentation → Backlog (`/backlog`) lists every project with how many entries its backlog holds; a
+project's page (`/backlog/{project}`) has a form to add an entry, as written, and the entries as cards
+(title, the start of the primary entry, and whether it is as written, refined, has its task prompt, or
+Claude is working on it). An entry's page (`/backlog/{project}/{entry}`) shows its four fields:
+
+- **Primary entry**, editable and saved as is;
+- **Refinement notes**, editable and saved;
+- **Refined entry**, rendered from its Markdown (its headings under the page's own), with **Refine
+  entry**: it saves both fields, then starts `registry.backlog_refine`, which has Claude write a new
+  refined entry from the primary entry, the current refined entry and the notes, and replaces it;
+- **Task prompt**, with a copy icon at its top right corner and **Generate task prompt**
+  (`registry.backlog_task_prompt`, from the refined entry alone; it ends with the instruction to delete
+  the entry once the work is done). Disabled until the entry is refined.
+
+While Claude works the buttons say so, and a failed attempt's error shows until one succeeds.
+**Launch task** opens New task (`/tasks/new?backlog=<id>`) with the entry's title and its refined entry
+in the Task box (the primary entry while it is not refined). **Delete from backlog** asks first, then
+deletes the entry and everything it holds. The pages follow the `backlog` topic, so an entry refined,
+prompted or deleted elsewhere (`lws`, an MCP tool, Claude at the end of a task) shows at once, and a
+deleted one says it is gone. The store is Registry & Portfolio's (`docs/pillars/registry_portfolio.md`,
+"Backlog").
+
+**Make it a task** on an automation candidate (Claude usage page) works the same way: it opens New task
+(`/tasks/new?candidate=<id>`) filled with the candidate's task — title, kind `task`, review and the
+description the Usage pillar writes — instead of starting it at once; starting it there tells the Usage
+pillar the candidate's task has started.
+
+## Schedule (2026-10-04)
+
+REQ-000000375.
+
+Actions → Schedule (`/schedule?month=YYYY-MM`) is a month calendar, Monday first, of the scheduled jobs
+and tasks (`dashboard/calendar.py`): their runs come from Orchestration's Job history (the Jobs the
+scheduler created), on the local day each was created, and what will run from the scheduled tasks — a
+once task on its day, a weekly one on each of its days from its next run on; a missed firing shows on its
+day as skipped. **Everything** (`&show=all`) adds every other job and task that ran (a branch finish alone
+creates dozens of policy checks, hence not by default); a day shows six items and "+N more", which lists
+them all in the panel. A Job deleted from the history, one cancelled before it ran and a removed
+schedule are not shown. Tasks (`agent.run_task`) and
+jobs differ in colour and shape (the item's left edge and its glyph, square for a task, round for a
+job); the state is the fill: succeeded green, failed red, running cyan, skipped grey (a stopped job, a
+skipped or stopped run), scheduled dashed (queued, or still to come). A task's state is its run's (a run
+awaiting review counts as succeeded). Choosing an item loads its details into a panel beside the
+calendar on a wide screen and under it on a phone (`/schedule/item/job/{id}`,
+`/schedule/item/scheduled/{id}?at=`): a job's checklist, error and links to the job and its task, or a
+schedule's times and template with a link to its page, where it is removed. Choosing a day lists its
+items in the panel; on a phone the month shows only the glyphs. The page follows the `schedule` topic.
+
+## Policy filters (2026-10-04)
+
+REQ-000000376.
+
+The Policies page has a filter bar: a text matched against each policy's name and description together,
+as a glob (`*` any text, `?` one character; without either, anywhere in them; case ignored), the status
+(enabled, disabled, failing), gate points and projects governed (dropdowns of checkboxes; several match
+any of them), and "Gating on in a project". The filters combine and live in the address
+(`?q=&status=&gate=&project=&gating=1`): the server applies them to the page it sends, and the page
+applies the same rules as they change, without reloading, showing "N of M policies".
+
+## A task and its job (2026-10-04)
+
+REQ-000000377. A task's page names the Job that ran it, with its state and a link; an `agent.run_task`
+Job's page and its Jobs-page card link to its task (Agentic Development's `GET /v1/runs/by-job/{job}`).
+A running task's page has the job's Stop and Force stop.
+
+## Claude usage: pointing at a day (2026-10-04)
+
+REQ-000000374. Pointing at (or tapping) a Claude usage plot marks the day under the pointer with a
+dashed line and shows a box with that day's date and the value of every series drawn — each with its
+colour, comparison weeks included, and the total of a stacked plot — as the Statistics page does. It
+replaces the browser's tooltips on single bars and dots.
+
+## Live pages (2026-10-04)
+
+REQ-000000379.
+
+Pages no longer refresh themselves on a timer. Each page names the kinds of information it shows (its
+topics, `<body data-live>`) and keeps one server-sent event stream, `GET /live/events?topics=…`
+(`dashboard/live.py`); when one of its topics changes, `static/live.js` fetches the page once and
+replaces each `[data-live-region]` whose content differs, keeping open `<details>`, never touching a
+region the user is typing in or has edited, and never fetching more often than every 1.5 seconds (4 on
+the Dashboard, whose cards cost several reads each). Plots are drawn again from their new data, keeping
+what the user chose. A tab out of sight lets its stream go and catches up once when it is looked at.
+
+| Page | Topics |
+|---|---|
+| Dashboard | `dashboard` |
+| Jobs; a job | `jobs`; `job:<id>` (and its peek while it runs) |
+| Tasks; a task | `tasks`; plus its `job:<id>` and peek |
+| Schedule | `schedule` |
+| Policies; Incidents; Settings | `policies`; `incidents`; `attention` |
+| Statistics; Claude usage | `statistics`; `usage` |
+| Backlog pages | `backlog` (and `jobs`, for Claude's work on an entry) |
+| every page | `attention` (the banner only) |
+
+The Dashboard learns of changes as cheaply as each pillar allows, and only while some page is open:
+Jobs, steps and scheduled tasks from Orchestration's change feed (`GET /v1/changes`, a long poll
+answered the moment something changes, `docs/pillars/orchestration.md`); the backlog, Claude usage and
+incidents from a version string each pillar serves, read every 3 seconds while a page shows them; the
+Statistics store is counted again when a Job has settled, at most every 15 seconds, while that page is
+open.
+
+## Claude peek (2026-10-04)
+
+REQ-000000380.
+
+A task's page and its job's page (an update-doc job's too) have a **Claude peek** card: what the session
+has done so far, read from its transcript by Agentic Development (`GET /v1/peek/{job}`,
+`docs/pillars/agentic_development.md`) — each message, each tool call with the gist of its input, and
+each failed result in red — newest at the bottom. While Claude works the card says "live" and grows as
+the session does: the page's stream carries each new batch (topic `peek:<job>`), and a batch that does
+not follow on from what is shown is caught up from `/jobs/{id}/peek.json`. Remote Control remains the
+way to talk to a running task; the peek only shows it.

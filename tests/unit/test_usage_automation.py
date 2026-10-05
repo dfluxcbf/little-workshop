@@ -238,7 +238,7 @@ def test_make_it_a_task_starts_one_fixed_improvement_task_on_little_workshop(usa
     (job,) = usage.jobs
     assert (job["type"], job["project_id"], job["queue_key"], job["created_by"]) == ("agent.run_task", "little-workshop", "little-workshop", "usage")
     description = job["params"]["description"]
-    assert job["params"]["intent"] == "improvement" and job["params"]["review_mode"] == "manual"
+    assert job["params"]["intent"] == "task" and job["params"]["review_mode"] == "manual"
     assert "`mcp:workshop_deployment_redeploy_pillar(commit, pillar)`" in description and "deterministic (determinism score 5 of 5" in description
     assert "never a free-form job" in description and "little-meals: `agent`" in description
     assert usage.post("/v1/jobs/usage.automate", json={"job_id": "j2", "params": {"candidate_id": "nope"}}).json()["outcome"] == "failed"

@@ -5,7 +5,7 @@
 <h1>Settings</h1>
 
 <h2 class="section-label">Needs attention</h2>
-<div class="policy-list">
+<div class="policy-list" id="attention-live" data-live-region>
   {% for i in items %}
   {% set tag = i.tag or "Other" %}
   {% if i.job_id %}<div class="polcard" data-kind="{{ i.kind }}">{% else %}<a class="polcard" data-kind="{{ i.kind }}" href="{{ i.href }}">{% endif %}

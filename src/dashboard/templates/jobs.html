@@ -11,7 +11,7 @@
 <form class="jobs-search" method="get" action="/jobs" role="search">
   {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
   <input type="search" name="q" value="{{ q }}" placeholder="Search type, project, id…" aria-label="Search jobs" autocomplete="off">
-  {% if active %}<span class="live" title="Refreshing every few seconds while jobs are active"><span class="live-dot"></span>live</span>{% endif %}
+  <span class="live" title="The list changes as the jobs do"><span class="live-dot"></span>live</span>
 </form>
 
 {% if all_count %}
@@ -55,7 +55,7 @@
 </script>
 {% endif %}
 
-<div id="jobs-live">
+<div id="jobs-live" data-live-region>
   <nav class="jobs-filters" aria-label="Filter by status">
     {{ fchip("All", "/jobs" ~ ("?q=" ~ q|urlencode if q else ""), all_count, not status) }}
     {% for name, label, n in counts %}
@@ -67,7 +67,7 @@
     {% for j in jobs %}
     {% set parts = j.type.split(".", 1) %}
     {% set finished = j.status in ("succeeded", "failed", "cancelled") %}
-    <details class="jobcard s-{{ j.status }}"{{ " open" if j.status == "pending_confirmation" }}>
+    <details class="jobcard s-{{ j.status }}" data-key="{{ j.id }}"{{ " open" if j.status == "pending_confirmation" }}>
       <summary>
         <span class="job-line">
           <span class="job-type">{% if parts | length > 1 %}<span class="job-ns">{{ parts[0] }}.</span>{{ parts[1] }}{% else %}{{ j.type }}{% endif %}</span>
@@ -92,7 +92,7 @@
         {% if j.error %}<span class="job-error">{{ j.error }}</span>{% endif %}
       </summary>
       <div class="job-body">
-        <p><a class="btn" href="/jobs/{{ j.id }}">Open the job page</a></p>
+        <p><a class="btn" href="/jobs/{{ j.id }}">Open the job page</a>{% if task_runs.get(j.id) %} <a class="btn" href="/tasks/{{ task_runs[j.id].project_id }}/{{ task_runs[j.id].id }}">Open the task</a>{% endif %}</p>
         {% if j.status == "pending_confirmation" %}{{ job_gate_actions(j.id, "/jobs?status=pending_confirmation") }}{% endif %}
         {% if job_steps_of.get(j.id) %}<h4 class="job-h">Actions</h4>{{ job_steps(j.id, job_steps_of[j.id]) }}{% endif %}
         <dl class="kv">
@@ -123,24 +123,4 @@
   {% endif %}
 </div>
 
-{% if active %}
-<script>
-(function () {
-  var timer = setInterval(function () {
-    var region = document.getElementById("jobs-live");
-    var searching = document.activeElement && document.activeElement.name === "q";
-    if (!region || searching || region.querySelector("details[open]")) return;
-    fetch(location.href, { credentials: "same-origin", headers: { "X-Requested-With": "fetch" } })
-      .then(function (r) { return r.ok ? r.text() : null; })
-      .then(function (html) {
-        if (!html) return;
-        var fresh = new DOMParser().parseFromString(html, "text/html").getElementById("jobs-live");
-        if (fresh && !region.querySelector("details[open]")) region.innerHTML = fresh.innerHTML;
-      })
-      .catch(function () {});
-  }, 5000);
-  window.addEventListener("pagehide", function () { clearInterval(timer); });
-})();
-</script>
-{% endif %}
 {% endblock %}

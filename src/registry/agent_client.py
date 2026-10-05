@@ -1,0 +1,38 @@
+"""Asking Claude for text through Agentic Development's `agent.query`: a direct call from inside one
+of this pillar's own Jobs (refining a backlog entry, writing its task prompt), as Policy &
+Compliance's authoring pipeline does with its own copy of this client (no shared import between
+two pillars' `src/` trees). This pillar never runs Claude itself."""
+
+from __future__ import annotations
+
+import httpx
+
+from common.paths import Paths
+from common.pillar_socket import resolve_pillar_socket
+from common.uds_client import client_for_socket
+
+QUERY_TIMEOUT_SECONDS = 320.0  # agent.query's own ceiling is 300s
+
+
+class AgentClientError(Exception):
+    pass
+
+
+def query(paths: Paths, prompt: str, *, job_id: str, project_id: str | None = None, timeout: float = QUERY_TIMEOUT_SECONDS) -> str:
+    """Claude's answer to `prompt`. `job_id` is the Job asking, so the call's usage is counted against it."""
+    socket_path = resolve_pillar_socket(paths, "agent", timeout=5.0)
+    if socket_path is None:
+        raise AgentClientError("the Agentic Development pillar is unavailable (unreachable, disabled or faulted)")
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.post("/v1/jobs/agent.query", json={"job_id": job_id, "project_id": project_id, "params": {"prompt": prompt}})
+        response.raise_for_status()
+        body = response.json()
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        raise AgentClientError(f"agent.query unreachable: {exc}") from exc
+    if body.get("outcome") != "succeeded":
+        raise AgentClientError(f"agent.query failed: {body.get('error')}")
+    text = (body.get("result") or {}).get("text") or ""
+    if not text.strip():
+        raise AgentClientError("Claude answered with no text")
+    return text.strip()

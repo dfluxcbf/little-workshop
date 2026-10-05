@@ -58,7 +58,7 @@ _PROJECT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # Reads. Pre-allowed in any project's session.
 MCP_READ_ONLY = (
     "workshop_core_status",
-    "workshop_project_list", "workshop_project_get",
+    "workshop_project_list", "workshop_project_get", "workshop_project_backlog_list", "workshop_project_backlog_get",
     "workshop_job_list", "workshop_job_status", "workshop_job_wait",
     "workshop_version_status", "workshop_version_config", "workshop_version_issue_list",
     "workshop_version_branch_audit", "workshop_version_release_candidate_list",
@@ -87,7 +87,7 @@ MCP_ROUTINE = (
     "workshop_requirements_milestone_create", "workshop_requirements_link_suite",
     "workshop_requirements_unlink_suite", "workshop_requirements_result_record",
     "workshop_requirements_import_junit", "workshop_requirements_run_tests", "workshop_requirements_sync_markers",
-    "workshop_build_run",
+    "workshop_build_run", "workshop_project_backlog_add",
 )
 
 # Policy-gated lifecycle actions on the project. A failing policy holds them in
@@ -108,7 +108,7 @@ MCP_ASK = (
     "workshop_agent_run_task", "workshop_agent_finish_task", "workshop_agent_skip_task",
     "workshop_agent_ci_check", "workshop_agent_session_start", "workshop_agent_session_stop",
     "workshop_project_bootstrap", "workshop_project_import", "workshop_project_connect_github",
-    "workshop_project_remove",
+    "workshop_project_remove", "workshop_project_backlog_delete",
     "workshop_version_init", "workshop_version_config_add_hook", "workshop_version_config_remove_hook",
     "workshop_deployment_set_manifest", "workshop_deployment_seed_confirmation",
     "workshop_requirements_publish", "workshop_requirements_delete", "workshop_requirements_suite_delete",
@@ -163,7 +163,7 @@ LWS_READ_ONLY = (
     "deployment status", "deployment history", "deployment confirmation", "deployment branches",
     "build run-list", "build package-list",
     "agent runs", "agent run-status", "agent ci-list", "agent ci-status",
-    "usage summary", "usage findings",
+    "usage summary", "usage findings", "project backlog list", "project backlog show",
 )
 
 LWS_ROUTINE = (
@@ -174,7 +174,7 @@ LWS_ROUTINE = (
     "requirements use-case create", "requirements milestone create", "requirements link",
     "requirements unlink", "requirements result record", "requirements import-junit",
     "requirements run-tests", "requirements sync-markers",
-    "build run",
+    "build run", "project backlog add",
 )
 
 LWS_GATED = (
@@ -190,7 +190,7 @@ LWS_ASK = (
     "job stop", "job policy-confirm", "job answer",
     "schedule add", "schedule edit", "schedule remove", "schedule trigger", "schedule cancel",
     "schedule postpone", "schedule queue set",
-    "project bootstrap", "project connect-github", "project import", "project remove",
+    "project bootstrap", "project connect-github", "project import", "project remove", "project backlog delete",
     "version init", "version config-add-hook", "version config-remove-hook",
     "requirements publish", "requirements delete", "requirements suite delete", "requirements import",
     "policy projects set",

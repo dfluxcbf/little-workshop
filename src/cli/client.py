@@ -299,6 +299,25 @@ def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5
         return {"source": "fallback", "projects": [p.model_dump(mode="json") for p in projects]}
 
 
+def backlog(paths: Paths, method: str, path: str = "", *, params: dict | None = None, json: dict | None = None,
+            timeout: float = 10.0):
+    """A call to Registry & Portfolio's backlog (`/v1/backlog...`). A refusal (no such entry, an empty
+    one) raises DaemonUnavailable with the pillar's own reason, as an outage does: either way the
+    command has nothing to show."""
+    try:
+        with client_for_socket(paths.socket_path("registry"), timeout=timeout) as client:
+            response = client.request(method, f"/v1/backlog{path}", params=params or {}, json=json)
+    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        raise DaemonUnavailable(f"the Registry & Portfolio daemon is unreachable: {exc}") from exc
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail", response.text)
+        except ValueError:
+            detail = response.text
+        raise DaemonUnavailable(f"the backlog refused it: {detail}")
+    return response.json()
+
+
 class VersionPillarUnavailable(Exception):
     pass
 

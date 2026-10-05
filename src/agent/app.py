@@ -18,14 +18,15 @@ from pydantic import BaseModel
 
 from common.job_steps import StepReporter, reporting
 from common.paths import Paths
-from common.incident import install_incident_reporting
+# `report_crash`: the route handler below is itself called report_incident.
+from common.incident import install_incident_reporting, report_incident as report_crash
 from common.pillar_socket import resolve_pillar_socket
 from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
 from common.workspace import WORKSPACE_ID, workspace_dir
-from agent import db, review_store
+from agent import db, peek, procs, review_store
 from agent.doc_update import DocUpdateError, DocUpdateFlow
-from agent.flow import AgentFlow, AgentFlowError
+from agent.flow import STOPPED_BY_USER, AgentFlow, AgentFlowError, intent_error
 from agent import usage_client
 from agent.launch import JOB_QUERY, launch_for
 from agent.query import query_dir, run_query
@@ -102,13 +103,28 @@ class JobRequest(BaseModel):
     params: dict[str, Any] = {}
 
 
+class StopRequest(BaseModel):
+    """What Orchestration says about the Job it asks to stop: its type, and whether the user forced it."""
+
+    type: str | None = None
+    force: bool = False
+
+
+STOPPED_WITHOUT_WORKER = "stopped by user: its worker was no longer running"
+
+
 def build_app(
     paths: Paths, conn: sqlite3.Connection, flow: AgentFlow | None = None, session_flow: SessionFlow | None = None,
-    doc_flow: DocUpdateFlow | None = None,
+    doc_flow: DocUpdateFlow | None = None, kill_session=None,
 ) -> FastAPI:
+    """`kill_session(session_id)` ends a running task's Claude and everything it runs (procs.py by default)."""
     app = FastAPI(title="little-workshop Agentic Development")
     install_incident_reporting(app, paths, pillar="agent")
     lock = threading.Lock()
+    kill_session = kill_session or procs.terminate_session
+    # The `agent.run_task` workers of this process: job id -> {"thread", "run_id", "stop" (an Event)}.
+    workers: dict[str, dict] = {}
+    workers_lock = threading.Lock()
     flow = flow or AgentFlow(paths=paths)
     session_flow = session_flow or SessionFlow(paths=paths)
     if doc_flow is None:
@@ -168,16 +184,41 @@ def build_app(
         except ProjectResolutionError as exc:
             return {"outcome": "failed", "error": str(exc)}
 
+        refusal = intent_error(params.get("intent", "task"))
+        if refusal:
+            return {"outcome": "failed", "error": refusal}
+
         params = dict(params)
         params.setdefault("job_id", job_id)
         project_dir = Path(project["path"])
         repo_url = project.get("repo_url")
         run_id = db.new_run_id()
+        stop = threading.Event()
 
         def worker() -> None:
-            with reported(job_id), lock:
-                result = flow.run_task(conn, project_id, project_dir, repo_url, params, run_id=run_id)
-            if result.status == db.FAILED:
+            try:
+                with reported(job_id), lock:
+                    if stop.is_set():  # stopped while it waited for the run lock: no run was ever started
+                        _complete_orchestration_job(paths, job_id, succeeded=False, result=None, error=STOPPED_BY_USER)
+                        return
+                    result = flow.run_task(conn, project_id, project_dir, repo_url, params, run_id=run_id, should_stop=stop.is_set)
+            except Exception as exc:  # noqa: BLE001 - a crash must never leave the run and its Job running
+                error = f"the task crashed: {type(exc).__name__}: {exc}"
+                with lock:
+                    if db.get_run(conn, run_id) is not None:
+                        db.update_run(conn, run_id, status=db.FAILED, summary=error)
+                report_crash(paths, project_id="little-workshop", pillar="agent",
+                             context=f"agent.run_task worker of job {job_id} ({project_id})", exc=exc)
+                _complete_orchestration_job(paths, job_id, succeeded=False, result=None, error=error)
+                return
+            finally:
+                with workers_lock:
+                    workers.pop(job_id, None)
+            if stop.is_set():
+                with lock:
+                    db.update_run(conn, run_id, status=db.STOPPED, summary=STOPPED_BY_USER)
+                _complete_orchestration_job(paths, job_id, succeeded=False, result=None, error=STOPPED_BY_USER)
+            elif result.status == db.FAILED:
                 _complete_orchestration_job(paths, job_id, succeeded=False, result=None, error=result.error)
             else:
                 _complete_orchestration_job(
@@ -188,7 +229,10 @@ def build_app(
                     },
                 )
 
-        threading.Thread(target=worker, daemon=True).start()
+        thread = threading.Thread(target=worker, daemon=True, name=f"agent.run_task {job_id[:8]}")
+        with workers_lock:
+            workers[job_id] = {"thread": thread, "run_id": run_id, "stop": stop}
+        thread.start()
         return {"outcome": "accepted", "result": {"dispatched": True, "run_id": run_id}}
 
     @app.post("/v1/jobs/agent.run_task")
@@ -284,6 +328,43 @@ def build_app(
 
         threading.Thread(target=worker, daemon=True).start()
         return {"outcome": "accepted", "result": {"dispatched": True}}
+
+    @app.get("/v1/runs/by-job/{job_id}")
+    def run_of_job(job_id: str) -> dict:
+        """The run an `agent.run_task` Job started (declared before the per-project routes below)."""
+        run = read(db.get_run_by_job, job_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="this job has no run")
+        return run
+
+    @app.get("/v1/peek/{job_id}")
+    def peek_at(job_id: str, after: int = 0, limit: int = peek.DEFAULT_LIMIT) -> dict:
+        """What the Claude of a task (`agent.run_task`) or an update-doc job has done so far, read from its
+        transcript after byte `after`: {available, running, source, events, next, skipped} (agent/peek.py)."""
+        run = read(db.get_run_by_job, job_id)
+        update = read(db.get_doc_update, job_id) if run is None else None
+        if run is None and update is None:
+            raise HTTPException(status_code=404, detail="no Claude session of this job")
+        path = None
+        if run is not None:
+            running, source = run["status"] == db.RUNNING, "run"
+            if run.get("session_id"):
+                try:
+                    project_dir = Path(resolve_project(paths, run["project_id"])["path"])
+                except ProjectResolutionError:
+                    project_dir = Path("/nonexistent")
+                path = peek.transcript_of_session(project_dir, run["session_id"])
+        else:
+            running, source = update["status"] in (db.DOC_UPDATE_STARTING, db.DOC_UPDATE_RUNNING), "doc_update"
+            if update.get("worktree_path"):
+                path = peek.newest_transcript(Path(update["worktree_path"]))
+        nothing = {"available": False, "running": running, "source": source, "events": [], "next": 0, "skipped": 0}
+        if path is None:
+            return nothing
+        try:
+            return {"available": True, "running": running, "source": source, **peek.read_events(path, after=after, limit=max(0, min(limit, 1000)))}
+        except OSError:
+            return nothing  # the transcript went away meanwhile (a worktree removed): nothing to show
 
     @app.get("/v1/runs/{project_id}")
     def list_runs(project_id: str, status: str | None = None) -> list[dict]:
@@ -457,12 +538,35 @@ def build_app(
         threading.Thread(target=launch, daemon=True).start()
         return {"outcome": "accepted", "result": {"dispatched": True, "comments": len(comments)}}
 
+    def _stop_task(job_id: str) -> dict:
+        """Stop an `agent.run_task` Job. A live worker is told to stop and its Claude, with everything
+        it runs, is terminated; the worker then ends the run as stopped. A run whose worker is gone (it
+        crashed, or this process restarted) is marked stopped here and now."""
+        with workers_lock:
+            entry = workers.get(job_id)
+        if entry is not None and entry["thread"].is_alive():
+            entry["stop"].set()
+            run = read(db.get_run, entry["run_id"])
+            if run is not None and run.get("session_id"):
+                kill_session(run["session_id"])
+            return {"stopped": True}
+        run = read(db.get_run_by_job, job_id)
+        if run is not None and run["status"] == db.RUNNING:
+            write_apart(db.update_run, run["id"], status=db.STOPPED, summary=STOPPED_WITHOUT_WORKER)
+        return {"stopped": True}
+
     @app.post("/v1/jobs/{job_id}/stop")
-    def stop_job(job_id: str) -> dict:
-        """Orchestration's `stop` probe. Only an update-doc job can be stopped:
-        its session is killed and its worktree removed with every change in it."""
+    def stop_job(job_id: str, request: StopRequest | None = None) -> dict:
+        """Orchestration's `stop` probe. An update-doc job has its session killed and its worktree
+        removed with every change in it; a task (`agent.run_task`) is stopped by `_stop_task`.
+        Anything else is not stoppable here."""
+        request = request or StopRequest()
         update = read(db.get_doc_update, job_id)
         if update is None:
+            with workers_lock:
+                known_task = job_id in workers
+            if known_task or request.type == "agent.run_task" or read(db.get_run_by_job, job_id) is not None:
+                return _stop_task(job_id)
             return {"stopped": False, "reason": "not stoppable"}
         try:
             project_dir = Path(resolve_project(paths, update["project_id"])["path"])
@@ -483,17 +587,25 @@ def build_app(
         if missing:
             raise HTTPException(status_code=422, detail=f"missing: {', '.join(missing)}")
         incident_id = db.new_incident_id()
-        with lock:
-            db.create_incident(
-                conn, incident_id, project_id=body["project_id"], pillar=body["pillar"],
-                context=body.get("context", ""), exception_type=body["exception_type"],
-                message=body.get("message", ""), traceback=body.get("traceback", ""),
-            )
+        # Not under `lock`: a task run holds it for an hour, and a crash report must not wait for it.
+        write_apart(
+            db.create_incident, incident_id, project_id=body["project_id"], pillar=body["pillar"],
+            context=body.get("context", ""), exception_type=body["exception_type"],
+            message=body.get("message", ""), traceback=body.get("traceback", ""), kind=body.get("kind") or "exception",
+        )
         return {"id": incident_id}
 
     @app.get("/v1/incidents")
     def list_incidents(status: str | None = None) -> list[dict]:
         return read(db.list_incidents, status=status)
+
+    @app.get("/v1/incidents/version")
+    def incidents_version() -> dict:
+        """Changes whenever an incident is recorded or decided: a watcher's one cheap read."""
+        def version(c):
+            row = c.execute("SELECT COUNT(*), COALESCE(MAX(created_at), ''), COALESCE(MAX(decided_at), '') FROM incidents").fetchone()
+            return ":".join(str(value) for value in tuple(row))
+        return {"version": read(version)}
 
     @app.get("/v1/incidents/{incident_id}")
     def get_incident(incident_id: str) -> dict:
@@ -515,10 +627,14 @@ def build_app(
             return {"outcome": "failed", "error": f"incident already {incident['status']}"}
         review_mode = request.params.get("review_mode", "auto_approve")
         title = f"Fix: {incident['exception_type']} in {incident['pillar']}"
-        description = (
-            f"An unhandled {incident['exception_type']} was raised in the {incident['pillar']} pillar "
-            f"({incident['context']}): {incident['message']}\n\nTraceback:\n{incident['traceback']}"
-        )
+        kind = incident.get("kind") or "exception"
+        if kind == "crash":
+            what, detail = f"The {incident['pillar']} pillar crashed ({incident['context']})", "Its log before the restart"
+        elif kind == "unexpected":
+            what, detail = f"Unexpected behaviour ({incident['exception_type']}) in the {incident['pillar']} pillar ({incident['context']})", "Details"
+        else:
+            what, detail = f"An unhandled {incident['exception_type']} was raised in the {incident['pillar']} pillar ({incident['context']})", "Traceback"
+        description = f"{what}: {incident['message']}\n\n{detail}:\n{incident['traceback']}"
         result = _dispatch_run_task(incident["project_id"], request.job_id, {
             "title": title, "description": description, "intent": "bug", "review_mode": review_mode,
         })

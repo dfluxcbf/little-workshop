@@ -1,8 +1,10 @@
 // The Claude usage page: one week of per-day plots, with the weeks it is compared to drawn as
 // dashed lines on the same graph. Everything is drawn from the summary the page embeds.
 // Each plot is drawn at the width it has on screen (so its text stays readable on a phone),
-// with dates on the x axis and a legend saying what each colour is. The data explorer at the bottom
-// draws the cards the usage pillar compiles, one in view at a time.
+// with dates on the x axis and a legend saying what each colour is. Pointing at (or tapping) a plot
+// marks the day under the pointer and shows every series' value that day, as the Statistics page
+// does. The data explorer at the bottom draws the cards the usage pillar compiles, one in view at a time.
+// When the page's live stream brings new numbers (static/live.js), everything is drawn again from them.
 (function () {
   'use strict';
   var data = JSON.parse(document.getElementById('usage-data').textContent);
@@ -147,7 +149,7 @@
       root.appendChild(text);
     });
 
-    var entries = [];
+    var entries = [], shownSeries = [];
     if (plot.stack) {
       var barWidth = Math.min((width - LEFT - rightMargin) / n * 0.6, 48);
       plot.labels.forEach(function (label, i) {
@@ -155,30 +157,34 @@
         series.forEach(function (s, k) {
           var v = s.values[i] || 0;
           if (!v) return;
-          var rect = svg('rect', { x: x(i) - barWidth / 2, y: y(base + v), width: barWidth, height: Math.max(y(base) - y(base + v), 0.5),
-                                   style: 'fill:' + COLORS[k % COLORS.length] });
-          rect.appendChild(svg('title', {}, label.join(' ') + ', ' + s.name + ': ' + plot.format(v)));
-          root.appendChild(rect);
+          root.appendChild(svg('rect', { x: x(i) - barWidth / 2, y: y(base + v), width: barWidth, height: Math.max(y(base) - y(base + v), 0.5),
+                                         style: 'fill:' + COLORS[k % COLORS.length] }));
           base += v;
         });
       });
-      series.forEach(function (s, k) { entries.push({ name: s.name, color: COLORS[k % COLORS.length], bar: true }); });
+      series.forEach(function (s, k) {
+        entries.push({ name: s.name, color: COLORS[k % COLORS.length], bar: true });
+        shownSeries.push({ name: s.name, color: COLORS[k % COLORS.length], values: s.values, format: plot.format });
+      });
     } else {
       series.forEach(function (s, k) {
         root.appendChild(line(s, COLORS[k % COLORS.length], false, y, plot.format));
         entries.push({ name: s.name, color: COLORS[k % COLORS.length] });
+        shownSeries.push({ name: s.name, color: COLORS[k % COLORS.length], values: s.values, format: plot.format });
       });
     }
     dashed.forEach(function (s, k) {
       var color = plot.stack ? 'var(--ink-soft)' : COLORS[(k + 1) % COLORS.length];
       root.appendChild(line(s, color, true, y, plot.format));
       entries.push({ name: s.name, color: color, dashed: true });
+      shownSeries.push({ name: s.name, color: color, values: s.values, format: plot.format, dashed: true });
     });
     if (right) {
       right.series.forEach(function (s, k) {
         var color = COLORS[(series.length + k) % COLORS.length];
         root.appendChild(line(s, color, false, yRight, right.format));
         entries.push({ name: s.name + ' (right scale)', color: color });
+        shownSeries.push({ name: s.name, color: color, values: s.values, format: right.format });
       });
     }
     function line(s, color, dash, y, format) {
@@ -187,15 +193,55 @@
       s.values.forEach(function (v, i) {
         if (v == null) return;
         path += (path ? 'L' : 'M') + x(i) + ' ' + y(v);
-        var dot = svg('circle', { cx: x(i), cy: y(v), r: 3, style: 'fill:' + color });
-        dot.appendChild(svg('title', {}, plot.labels[i].join(' ') + ', ' + s.name + ': ' + format(v)));
-        group.appendChild(dot);
+        group.appendChild(svg('circle', { cx: x(i), cy: y(v), r: 3, style: 'fill:' + color }));
       });
       group.insertBefore(svg('path', { d: path, style: 'fill:none;stroke:' + color + ';stroke-width:2' + (dash ? ';stroke-dasharray:5 4' : '') }),
                          group.firstChild);
       return group;
     }
+    // Pointing at a plot: a line marks the day under the pointer and a box gives that day's numbers.
+    var cursor = svg('line', { y1: TOP, y2: HEIGHT - BOTTOM, 'class': 'stats-cursor', visibility: 'hidden' });
+    root.appendChild(cursor);
+    var tip = el('div', 'stats-tip');
+    tip.hidden = true;
+    var slot = (width - LEFT - rightMargin) / n;
+    var show = function (event) {
+      var box = root.getBoundingClientRect();
+      var scale = box.width ? width / box.width : 1;
+      var i = Math.min(Math.max(Math.floor(((event.clientX - box.left) * scale - LEFT) / slot), 0), n - 1);
+      cursor.setAttribute('x1', x(i)); cursor.setAttribute('x2', x(i)); cursor.setAttribute('visibility', 'visible');
+      tip.textContent = '';
+      tip.appendChild(el('span', 'stats-tip-day', plot.labels[i].join(' ')));
+      var any = false, total = 0;
+      shownSeries.forEach(function (s) {
+        var v = s.values[i];
+        if (v == null) return;
+        any = true;
+        if (plot.stack && !s.dashed) total += v;
+        var row = el('span', 'usage-tip-row');
+        var swatch = el('span', 'usage-swatch' + (s.dashed ? ' dashed' : '') + (plot.stack && !s.dashed ? ' bar' : ''));
+        swatch.style.setProperty('--swatch', s.color);
+        row.appendChild(swatch);
+        row.appendChild(el('span', 'usage-tip-name', s.name));
+        row.appendChild(el('strong', null, s.format(v)));
+        tip.appendChild(row);
+      });
+      if (plot.stack && any) {
+        var sum = el('span', 'usage-tip-row usage-tip-total');
+        sum.appendChild(el('span', 'usage-tip-name', 'Total'));
+        sum.appendChild(el('strong', null, plot.format(total)));
+        tip.appendChild(sum);
+      }
+      if (!any) tip.appendChild(el('strong', null, 'Nothing measured'));
+      tip.hidden = false;
+      var left = x(i) / scale - tip.offsetWidth / 2;
+      tip.style.left = Math.min(Math.max(left, 0), Math.max(box.width - tip.offsetWidth, 0)) + 'px';
+    };
+    root.addEventListener('pointermove', show);
+    root.addEventListener('pointerdown', show);
+    root.addEventListener('pointerleave', function () { tip.hidden = true; cursor.setAttribute('visibility', 'hidden'); });
     card.appendChild(root);
+    card.appendChild(tip);
     legend(card, entries);
   }
 
@@ -250,15 +296,28 @@
     });
   });
   // Each cell carries its column's name, which a phone shows beside the value when a row is stacked.
-  document.querySelectorAll('.table-scroll.stack table').forEach(function (table) {
-    var names = Array.prototype.map.call(table.querySelectorAll('thead th'), function (th) { return th.textContent; });
-    table.querySelectorAll('tbody tr').forEach(function (row) {
-      Array.prototype.forEach.call(row.children, function (cell, i) {
-        if (!cell.hasAttribute('colspan') && names[i]) cell.setAttribute('data-label', names[i]);
+  function labelTables() {
+    document.querySelectorAll('.table-scroll.stack table').forEach(function (table) {
+      var names = Array.prototype.map.call(table.querySelectorAll('thead th'), function (th) { return th.textContent; });
+      table.querySelectorAll('tbody tr').forEach(function (row) {
+        Array.prototype.forEach.call(row.children, function (cell, i) {
+          if (!cell.hasAttribute('colspan') && names[i]) cell.setAttribute('data-label', names[i]);
+        });
       });
     });
-  });
+  }
+  labelTables();
   var resizing;
   window.addEventListener('resize', function () { clearTimeout(resizing); resizing = setTimeout(drawAll, 150); });
+  document.addEventListener('live:replaced', function () {
+    data = JSON.parse(document.getElementById('usage-data').textContent);
+    var fresh = document.getElementById('usage-explorer');
+    explorer = fresh ? JSON.parse(fresh.textContent) : null;
+    document.querySelectorAll('#usage-compare button').forEach(function (button) {
+      button.classList.toggle('primary', !!compare[button.getAttribute('data-compare')]);
+    });
+    labelTables();
+    drawAll();
+  });
   drawAll();
 })();

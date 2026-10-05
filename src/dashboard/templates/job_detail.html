@@ -2,11 +2,13 @@
 {% from "_job_steps.html" import job_steps %}
 {% from "_job_deps.html" import job_deps %}
 {% from "_job_subject.html" import job_subject %}
+{% from "_peek.html" import peek_card %}
+{% from "_force_stop.html" import stop_controls %}
 {% block title %}{{ job.type if job else "Job" }} — little-workshop{% endblock %}
 {% block content %}
 {% if job %}
 {% set parts = job.type.split(".", 1) %}
-<div id="job-live" data-active="{{ 1 if active else 0 }}">
+<div id="job-live" data-live-region data-active="{{ 1 if active else 0 }}">
   <section class="dcard summary">
     <div class="dcard-top">
       <span class="dcard-name job-type">{% if parts | length > 1 %}<span class="job-ns">{{ parts[0] }}.</span>{{ parts[1] }}{% else %}{{ job.type }}{% endif %}</span>
@@ -21,14 +23,11 @@
       <span class="chip">{{ job.created_at | reltime }}</span>
       <span class="chip">{{ job.created_by }}</span>
       <code class="chip">{{ job.id }}</code>
+      {% if task_run %}<a class="chip chip-link" href="/tasks/{{ task_run.project_id }}/{{ task_run.id }}">Task: {{ task_run.title }} &rarr;</a>{% endif %}
     </div>
     <div class="job-subjects">{{ job_subject(subjects) }}</div>
     {% if job.error %}<p class="job-error">{{ job.error }}</p>{% endif %}
-    {% if job.status in ("running", "queued") %}
-    <form method="post" action="/jobs/{{ job.id }}/stop" class="job-stop" onsubmit="return confirm('{{ "Stop this running job?" if job.status == "running" else "Cancel this queued job?" }}')">
-      <button type="submit" class="btn danger">{{ "Stop job" if job.status == "running" else "Cancel job" }}</button>
-    </form>
-    {% endif %}
+    {{ stop_controls(job, stop_refused, "/jobs/" ~ job.id) }}
   </section>
 
   <section class="dcard">
@@ -56,6 +55,7 @@
     {% if job.result %}<h4 class="job-h">Result</h4><pre class="code">{{ job.result | pretty }}</pre>{% endif %}
   </details>
 </div>
+{{ peek_card(peek) }}
 <p><a href="/jobs">&larr; All jobs</a></p>
 
 <script>
@@ -77,25 +77,8 @@
       if (rt) rt.textContent = fmt(base + (Date.now() - loaded) / 1000);
     });
   }, 250);
-  var region = document.getElementById("job-live");
-  if (!region || region.dataset.active !== "1") return;
-  var timer = setInterval(function () {
-    if (document.activeElement && document.activeElement.closest && document.activeElement.closest(".step-ask")) return;
-    fetch(location.href, { credentials: "same-origin", headers: { "X-Requested-With": "fetch" } })
-      .then(function (r) { return r.ok ? r.text() : null; })
-      .then(function (html) {
-        if (!html) return;
-        var fresh = new DOMParser().parseFromString(html, "text/html").getElementById("job-live");
-        if (!fresh) return;
-        var open = region.querySelector("details.collapsible[open]");
-        region.innerHTML = fresh.innerHTML;
-        if (open) { var d = region.querySelector("details.collapsible"); if (d) d.open = true; }
-        loaded = Date.now();
-        if (fresh.dataset.active !== "1") clearInterval(timer);
-      })
-      .catch(function () {});
-  }, 2000);
-  window.addEventListener("pagehide", function () { clearInterval(timer); });
+  // The checklist itself is replaced by the page's live stream (static/live.js) when the job moves.
+  document.addEventListener("live:replaced", function () { loaded = Date.now(); });
 })();
 </script>
 {% elif error %}
