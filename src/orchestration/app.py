@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from common.incident import install_incident_reporting
 from common.paths import Paths
-from orchestration import db, policy_gate, steps, triggers
+from orchestration import changes, db, policy_gate, steps, triggers
 from orchestration.dispatch import SocketLookup, complete_job, dispatch_ready_jobs, dispatch_timeout_for, stop_job, wait_for_dispatch
 from orchestration.models import (
     Job,
@@ -65,6 +65,15 @@ class CompleteJobRequest(BaseModel):
     succeeded: bool
     result: dict[str, Any] | None = None
     error: str | None = None
+
+
+class StopJobRequest(BaseModel):
+    # The user's own decision, taken on the Dashboard after a warning: settle the Job whatever its pillar says.
+    force: bool = False
+
+
+# A Job in one of these states has settled: a completion reported for it afterwards changes nothing.
+SETTLED_STATUSES = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.STOPPED)
 
 
 class StepReportRequest(BaseModel):
@@ -177,6 +186,13 @@ def build_app(
             found = {job_id: db.get_job(conn, job_id) for job_id in wanted}
             return {job_id: steps.list_steps(conn, job) for job_id, job in found.items() if job is not None}
 
+    @app.get("/v1/changes")
+    def changes_since(after: int | None = None, boot: str | None = None, timeout: float = 0.0) -> dict:
+        """The changes of Jobs, their steps and scheduled tasks numbered after `after`, waiting up to
+        `timeout` seconds (at most 30) for the first: the Dashboard's live pages follow this.
+        {boot, seq, changes: [{seq, kind, id, type, project_id, status}], reset}."""
+        return changes.FEED.since(after, boot=boot, timeout=timeout)
+
     @app.get("/v1/jobs")
     def list_jobs(status: str | None = None) -> list[dict]:
         status_enum = JobStatus(status) if status else None
@@ -263,6 +279,10 @@ def build_app(
             job = db.get_job(conn, job_id)
             if job is None:
                 raise HTTPException(status_code=404, detail="job not found")
+            if job.status in SETTLED_STATUSES:
+                # Stopped (perhaps forced), timed out or cancelled meanwhile: that outcome stands, and what
+                # waited on the Job has already been failed accordingly.
+                return {**job.model_dump(mode="json"), "ignored": True}
             completed = complete_job(
                 conn, job, succeeded=request.succeeded, result=request.result, error=request.error
             )
@@ -270,12 +290,12 @@ def build_app(
         return completed.model_dump(mode="json")
 
     @app.post("/v1/jobs/{job_id}/stop")
-    def stop(job_id: str) -> dict:
+    def stop(job_id: str, request: StopJobRequest | None = None) -> dict:
         with lock:
             job = db.get_job(conn, job_id)
             if job is None:
                 raise HTTPException(status_code=404, detail="job not found")
-        result = stop_job(conn, job, socket_lookup, lock=lock)
+        result = stop_job(conn, job, socket_lookup, lock=lock, force=bool(request and request.force))
         dispatch_ready_jobs(conn, socket_lookup, lock=lock)  # a stopped Job frees its queue_key
         return result
 

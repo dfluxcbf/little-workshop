@@ -208,6 +208,33 @@ def _project_get(paths: Paths, args: JSONDict) -> Any:
     return client.get_project(paths, args["name"])
 
 
+def _backlog_entry_of(paths: Paths, args: JSONDict) -> JSONDict:
+    """The entry, refused unless it is in the named project's backlog (a session acts on its own project only)."""
+    entry = client.backlog_get(paths, args["entry_id"])
+    if entry.get("project_name") != args["project_id"]:
+        raise ValueError(f"backlog entry {args['entry_id']} is not in {args['project_id']}'s backlog")
+    return entry
+
+
+def _backlog_list(paths: Paths, args: JSONDict) -> Any:
+    return [{"id": e["id"], "title": e["title"], "refined": bool(e["refined_entry"]), "task_prompt": bool(e["task_prompt"]),
+             "updated_at": e["updated_at"]} for e in client.backlog_list(paths, args["project_id"])]
+
+
+def _backlog_get(paths: Paths, args: JSONDict) -> Any:
+    return _backlog_entry_of(paths, args)
+
+
+def _backlog_add(paths: Paths, args: JSONDict) -> Any:
+    entry = client.backlog_add(paths, args["project_id"], args["text"])
+    return {"id": entry["id"], "title": entry["title"], "project": entry["project_name"]}
+
+
+def _backlog_delete(paths: Paths, args: JSONDict) -> Any:
+    _backlog_entry_of(paths, args)
+    return client.backlog_delete(paths, args["entry_id"])
+
+
 # ---------------------------------------------------------------------------
 # Version Control & Release
 # ---------------------------------------------------------------------------
@@ -998,6 +1025,18 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"status": _prop("string", "Filter by status, e.g. active.")}), _project_list),
     ToolSpec("workshop_project_get", "Get one registered project's full record by name.",
              _schema({"name": _prop("string", "The project's name.")}, ["name"]), _project_get),
+    ToolSpec("workshop_project_backlog_list", "List a project's backlog: each entry's id, title, and whether it has been "
+             "refined and has a task prompt.", _schema({"project_id": _PROJECT_ID}, ["project_id"]), _backlog_list),
+    ToolSpec("workshop_project_backlog_get", "Read one backlog entry: its primary entry (as the owner wrote it), refinement "
+             "notes, refined entry and task prompt.",
+             _schema({"project_id": _PROJECT_ID, "entry_id": _prop("string", "The backlog entry's id.")}, ["project_id", "entry_id"]), _backlog_get),
+    ToolSpec("workshop_project_backlog_add", "Add an entry to a project's backlog, as written: something to build or fix later. "
+             "The owner refines it on the Dashboard (Documentation, Backlog).",
+             _schema({"project_id": _PROJECT_ID, "text": _prop("string", "The entry, as the owner asked for it.")}, ["project_id", "text"]),
+             _backlog_add),
+    ToolSpec("workshop_project_backlog_delete", "Delete a backlog entry and everything it holds. A task prompt made from "
+             "an entry asks for this once its work is done, so the entry is not done twice.",
+             _schema({"project_id": _PROJECT_ID, "entry_id": _prop("string", "The backlog entry's id.")}, ["project_id", "entry_id"]), _backlog_delete),
 
     ToolSpec("workshop_version_init", "Initialize a repository for lvx-managed Gitflow.",
              _schema({"project_id": _PROJECT_ID, "production_branch": _prop("string", "main or master; auto-detected if omitted."),

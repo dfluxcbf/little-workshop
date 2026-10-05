@@ -210,6 +210,9 @@ def _touch(conn: sqlite3.Connection, job: Job, now: datetime) -> None:
     conn.execute("UPDATE jobs SET updated_at = ? WHERE id = ?", (_iso(now), job.id))
     conn.commit()
     job.updated_at = now
+    from orchestration import changes
+
+    changes.note_job(job, kind="step")
 
 
 def answer(conn: sqlite3.Connection, job: Job, key: str, choice: str, *, now: datetime | None = None) -> dict:

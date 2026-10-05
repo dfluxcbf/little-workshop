@@ -157,3 +157,35 @@ checkout and written by `registry/claude_sync.py`; `tools/sync_claude_files.py` 
 
 `.claude/settings.json` is merged: the generated permission table, hooks and plugins, plus every entry the
 project added. The Dashboard's catalog job *Apply common Claude configuration* runs it.
+
+## Backlog (2026-10-04)
+
+REQ-000000369..371. Each registered project has a backlog: what its owner wants built or fixed, kept
+before it becomes a task (`registry/backlog.py`, table `backlog_entries`). An entry holds:
+
+- the **primary entry**, as the owner first wrote it (editable);
+- the owner's **refinement notes** (editable);
+- one **refined entry**, written by Claude and replaced at every refinement;
+- one **task prompt**, written by Claude and replaced at every generation;
+
+with when each changed. Reads and edits are direct calls: `GET/POST /v1/backlog` (`project_name`),
+`GET/PATCH/DELETE /v1/backlog/{id}`, and `GET /v1/backlog/version`, which changes with every addition,
+edit and deletion (the Dashboard's live pages watch it). Two Jobs ask Claude, through Agentic
+Development's `agent.query` (this pillar runs no Claude itself), without holding the pillar's lock:
+
+- `registry.backlog_refine` — from the primary entry, the current refined entry and the notes;
+- `registry.backlog_task_prompt` — from the refined entry alone; the instruction to delete the entry
+  once the work is done (`lws project backlog delete --project-id <p> <id>`, or the MCP tool
+  `workshop_project_backlog_delete`) is appended here, word for word.
+
+Each is refused for a missing entry (and the prompt for an entry not refined yet), and an entry deleted
+while Claude works keeps nothing of the answer. Deleting an entry — from the Dashboard, `lws project
+backlog delete`, `workshop_project_backlog_delete`, or Claude at the end of a task — removes the row with
+all four fields; the database overwrites deleted content (`secure_delete`) and folds its write-ahead log
+back, so no copy outlives it in the pillar's files. Removing a project removes its backlog. The Claude
+session that refined or prompted an entry keeps its own transcript under `~/.claude`, outside
+little-workshop.
+
+`lws project backlog list|show|add|delete --project-id <p>` and `workshop_project_backlog_list|get|add|delete`
+act only on the named project's backlog (an entry of another project is refused). Reading and adding are
+pre-allowed in a project's session; deleting asks, being irreversible.

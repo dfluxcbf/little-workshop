@@ -269,7 +269,8 @@ creates the registry row, never the other way around.
   resolving a project-set-scoped policy's targets — it doesn't own that
   table (moved this round; see Registry & Portfolio's entry below).
 - **Registry & Portfolio** — `projects` (incl. the super-repo container
-  row), `project_sets`, `tickets`.
+  row), `project_sets`, `tickets`, `backlog_entries` (2026-10-04: each
+  project's backlog, `docs/pillars/registry_portfolio.md`).
 - **Requirements & Quality** — `requirements`, `test_suites`,
   `test_results`, `use_cases`, `milestones`.
 - **Version Control & Release** — no persistent DB beyond a small cache;
@@ -279,7 +280,9 @@ creates the registry row, never the other way around.
   `build_runs`.
 - **Deployment & Servers** — `servers`, `deployments`,
   `deploy_confirmations`.
-- **Agentic Development** — `agent_runs`, `remote_control_sessions`.
+- **Agentic Development** — `agent_runs` (with each run's Claude
+  `session_id`, 2026-10-04), `remote_control_sessions`, `incidents` (with
+  their kind: exception, crash or unexpected behaviour).
 - **Usage & Efficiency** — `sessions`, `requests`, `tool_calls`, `session_events`, `plan_pressure`,
   `day_rollups`, `run_usage`, `doctor_reports` (`docs/pillars/usage.md`, "Store").
 - **Dashboard**, **MCP Server** — no persistent storage of their own.

@@ -262,7 +262,7 @@ def test_the_optimize_job_starts_one_fixed_agent_task_with_the_findings_digest(u
     (job,) = usage.jobs
     assert (job["type"], job["target_pillar"], job["project_id"], job["queue_key"], job["created_by"]) == ("agent.run_task", "agent", "little-meals", "little-meals", "usage")
     params = job["params"]
-    assert params["intent"] == "improvement" and params["review_mode"] == "manual" and params["title"] == "Optimize Claude usage"
+    assert params["intent"] == "task" and params["review_mode"] == "manual" and params["title"] == "Optimize Claude usage"
     assert "### D1: Long sessions re-read a large context" in params["description"] and '"requests_over_200k": 1' in params["description"]
     assert "Never edit what little-workshop generates" in params["description"]
 

@@ -13,6 +13,7 @@ from typing import Callable
 
 import httpx
 
+from common.incident import KIND_UNEXPECTED, report_problem
 from common.job_steps import ATTENTION_TIMEOUT_SECONDS
 from common.uds_client import client_for_socket
 from orchestration import steps
@@ -105,6 +106,9 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     "build.run": 1860.0,
     "requirements.run_tests": 1860.0,
     "requirements.discover_tests": 330.0,
+    # A backlog entry's refinement and task prompt wait for one agent.query (300s ceiling).
+    "registry.backlog_refine": 330.0,
+    "registry.backlog_task_prompt": 330.0,
 }
 
 
@@ -303,13 +307,19 @@ def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup, *
 
 def stop_job(
     conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 10.0, lock: threading.Lock | None = None,
+    force: bool = False,
 ) -> dict:
     """`docs/milestones.md` M9's `stop`: interrupt a Job that is
     currently *running* — scheduled-originated or not. Never raises;
     every outcome (already settled, declared unstoppable, target
     unreachable, target genuinely stopped it, target says it can't) is a
     plain `{"stopped": bool, "reason": str | None}` the caller can show
-    directly."""
+    directly.
+
+    `force` is the user's decision to settle the Job whatever its pillar says (the Dashboard asks
+    first and warns what it means): the pillar is still asked, so it can clean up what it can,
+    and then the Job is `stopped` all the same, its dependants failed and its queue key free.
+    Whatever the pillar was doing may carry on; its outcome is no longer recorded."""
     if job.status == JobStatus.QUEUED:
         # Not dispatched yet: nothing to interrupt, so stopping it cancels it.
         with lock if lock is not None else nullcontext():
@@ -332,34 +342,45 @@ def stop_job(
     if job.status != JobStatus.RUNNING:
         return {"stopped": False, "reason": f"job is {job.status.value}, not running"}
 
-    if job.type in DECLARED_UNSTOPPABLE_JOB_TYPES:
-        return {"stopped": False, "reason": f"{job.type!r} is declared unstoppable"}
+    refusal = _ask_pillar_to_stop(job, socket_lookup, timeout=timeout, force=force)
+    if refusal is None:
+        _settle_stopped(conn, job, "stopped by user", lock=lock)
+        return {"stopped": True, "reason": None}
+    if not force:
+        return {"stopped": False, "reason": refusal}
+    _settle_stopped(conn, job, f"force-stopped by user (the pillar said: {refusal})", lock=lock)
+    return {"stopped": True, "reason": None, "forced": True}
 
+
+def _ask_pillar_to_stop(job: Job, socket_lookup: SocketLookup, *, timeout: float, force: bool) -> str | None:
+    """None once the target pillar has stopped the Job, else why it has not."""
+    if job.type in DECLARED_UNSTOPPABLE_JOB_TYPES:
+        return f"{job.type!r} is declared unstoppable"
     socket_path = socket_lookup(job.target_pillar)
     if socket_path is None:
-        return {"stopped": False, "reason": "target pillar unreachable"}
-
+        return "target pillar unreachable"
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.post(f"/v1/jobs/{job.id}/stop")
+            response = client.post(f"/v1/jobs/{job.id}/stop", json={"type": job.type, "force": force})
     except (httpx.ConnectError, httpx.TimeoutException, OSError):
-        return {"stopped": False, "reason": "target pillar unreachable"}
-
+        return "target pillar unreachable"
     if response.status_code == 200 and response.json().get("stopped"):
-        with lock if lock is not None else nullcontext():  # `lock`: not held by the caller, db work only
-            job.status = JobStatus.STOPPED
-            job.error = "stopped by user"
-            update_job(conn, job)
-            insert_job_run(
-                conn, job.id, outcome="stopped", detail=job.error,
-                started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
-            )
-        return {"stopped": True, "reason": None}
-
-    reason = "not stoppable"
+        return None
     if response.status_code == 200:
-        reason = response.json().get("reason", reason)
-    return {"stopped": False, "reason": reason}
+        return response.json().get("reason") or "not stoppable"
+    return "not stoppable"
+
+
+def _settle_stopped(conn: sqlite3.Connection, job: Job, error: str, *, lock: threading.Lock | None) -> None:
+    with lock if lock is not None else nullcontext():  # `lock`: not held by the caller, db work only
+        job.status = JobStatus.STOPPED
+        job.error = error
+        update_job(conn, job)
+        insert_job_run(
+            conn, job.id, outcome="stopped", detail=job.error,
+            started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+        )
+        cascade_dependency_failures(conn)  # nothing waits for a stopped Job: it can never succeed
 
 
 def expire_stuck_jobs(
@@ -382,16 +403,27 @@ def expire_stuck_jobs(
     expired: list[Job] = []
     for job in stale:
         stop_job(conn, job, socket_lookup, lock=lock)  # best effort: most pillars say "not stoppable"
+        hours = running_timeout_for(job.type, max_age).total_seconds() / 3600
         with guard:
             current = get_job(conn, job.id)
             if current is None:
                 continue
-            if current.status == JobStatus.RUNNING:
+            timed_out = current.status == JobStatus.RUNNING
+            if timed_out:
                 current.status = JobStatus.FAILED
-                current.error = f"timed out: still running after {running_timeout_for(job.type, max_age).total_seconds() / 3600:g} hours"
+                current.error = f"timed out: still running after {hours:g} hours"
                 update_job(conn, current)
                 insert_job_run(conn, current.id, outcome="failed", detail=current.error, started_at=job.updated_at, finished_at=now)
             expired.append(current)
+        if timed_out:
+            # A Job is never meant to run this long: its worker died or never called back. Someone should look.
+            report_problem(
+                socket_lookup("agent"), pillar="orchestration", context=f"job {job.id}", kind=KIND_UNEXPECTED, title="StuckJob",
+                message=f"{job.type} on {job.project_id or 'no project'} was still running after {hours:g} hours "
+                        f"(since {job.updated_at.isoformat()}) and was failed",
+                detail=f"job {job.id}\ntype {job.type}\nproject {job.project_id}\ntarget pillar {job.target_pillar}\n"
+                       f"created {job.created_at.isoformat()} by {job.created_by}\nlast change {job.updated_at.isoformat()}",
+            )
     if expired:
         with guard:
             cascade_dependency_failures(conn)

@@ -38,6 +38,34 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 INTEGRATION = ROOT / "tests" / "integration"
 
+# These tests start and stop pillars under the live `little-workshop-<pillar>.service` unit names, so
+# on a host where the live install runs they would stop it (2026-09-21, and on 2026-10-05 through the
+# weekly Release job's test run). They are then not collected at all — a skip would be recorded as a
+# result and mark every requirement of the "Unit tests" suite not done — unless the run says it knows.
+BESIDE_LIVE_ENV = "LITTLE_WORKSHOP_INTEGRATION_BESIDE_LIVE"
+
+
+def live_pillar_units(run=subprocess.run) -> list[str]:
+    """The live install's units active on this host: the very ones these tests' fixtures stop and start.
+    None found (no systemd, no such unit) means there is nothing to stop."""
+    try:
+        result = run(["systemctl", "--user", "list-units", "little-workshop-*.service", "--state=active", "--no-legend", "--plain"],
+                     capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.split()[0] for line in (result.stdout or "").splitlines() if line.strip()]
+
+
+def units_in_the_way(environ, units: list[str]) -> list[str]:
+    """The live units that keep this suite from being collected; none when the run opts in."""
+    return [] if environ.get(BESIDE_LIVE_ENV) == "1" else list(units)
+
+
+def left_out_reason(units: list[str]) -> str:
+    return (f"tests/integration was not collected: the live install is running ({', '.join(units)}), and these tests "
+            f"stop and start those very units. Run tests/unit here, or the integration tests on a host without the live "
+            f"install; {BESIDE_LIVE_ENV}=1 runs them anyway.")
+
 for path in (SRC, INTEGRATION):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))

@@ -3,8 +3,10 @@
 {% block content %}
 <h1>New task</h1>
 <p class="lede">Hands a task to Claude on the chosen project: a real branch, a change report, and your review before anything is finished. Choose whether it starts right away or on a schedule.</p>
+{% if prefill and prefill.source %}<p class="flash">Filled in from <a href="{{ prefill.source_href }}">{{ prefill.source }}</a>: read it, change it if you like, then start it.</p>{% endif %}
 <div class="panel" style="padding:18px 20px">
 <form method="post" action="/tasks/new" id="task-form">
+  {% if prefill and prefill.candidate_id %}<input type="hidden" name="candidate_id" value="{{ prefill.candidate_id }}">{% endif %}
   {% include "_task_fields.html" %}
   <label for="when">When</label>
   <select name="when" id="when">

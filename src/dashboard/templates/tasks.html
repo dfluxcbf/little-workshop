@@ -3,6 +3,7 @@
 {% block content %}
 <h1>Tasks</h1>
 <p class="lede">Every task Claude has been given on any project &mdash; queued, running, needing your attention, or done. A failed task asks for attention until you move it to done, or for a week. Start one from <a href="/tasks/new">New task</a>.</p>
+<div id="tasks-live" data-live-region>
 {% if not runs %}
 <p class="muted">No task has run yet.</p>
 {% else %}
@@ -38,4 +39,5 @@
 </section>
 {% endfor %}
 {% endif %}
+</div>
 {% endblock %}

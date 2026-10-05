@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from common import events
@@ -447,7 +447,8 @@ def build_app(
 
     @app.post("/v1/jobs/usage.automate")
     def job_automate(request: JobRequest) -> dict:
-        """"Make it a task": start the fixed improvement task on little-workshop for one candidate."""
+        """Start the fixed task on little-workshop for one candidate at once (the Dashboard's "Make it a task" opens
+        New task with it instead, see `candidate_task`)."""
         with lock:
             candidate = db.get_candidate(conn, request.params.get("candidate_id") or "")
         if candidate is None or candidate["state"] not in (db.CANDIDATE_OPEN, db.CANDIDATE_ACCEPTED):
@@ -524,6 +525,38 @@ def build_app(
         with lock:
             stored = db.get_meta(conn, METHOD_KEY)
         return {"method": json.loads(stored) if stored else None}
+
+    @app.get("/v1/version")
+    def data_version() -> dict:
+        """Changes whenever what the Claude usage page shows can have changed (a request stored, a finding or
+        candidate added or decided): one cheap read for a watcher, instead of the whole summary."""
+        with lock:
+            row = conn.execute(
+                "SELECT (SELECT COALESCE(MAX(rowid), 0) FROM requests), (SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at), '') FROM findings), "
+                "(SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at), '') FROM candidates)").fetchone()
+        return {"version": ":".join(str(value) for value in row)}
+
+    @app.get("/v1/candidates/{candidate_id}/task")
+    def candidate_task(candidate_id: str) -> dict:
+        """The task "Make it a task" fills New task with (the Dashboard), without starting anything:
+        the user reads it, may change it, and starts it there."""
+        with lock:
+            candidate = db.get_candidate(conn, candidate_id)
+        if candidate is None or candidate["state"] not in (db.CANDIDATE_OPEN, db.CANDIDATE_ACCEPTED):
+            raise HTTPException(status_code=404, detail="no open candidate with that id")
+        template = mining.automate_job(candidate, rollup.WORKSHOP_PROJECT)
+        return {"project_id": template["project_id"], **template["params"]}
+
+    @app.post("/v1/candidates/{candidate_id}/task_started")
+    def candidate_task_started(candidate_id: str, body: dict) -> dict:
+        """The task made from this candidate has started (its Job is `body["job_id"]`): the candidate is accepted."""
+        with lock:
+            candidate = db.get_candidate(conn, candidate_id)
+            if candidate is None or candidate["state"] not in (db.CANDIDATE_OPEN, db.CANDIDATE_ACCEPTED):
+                return {"ok": False, "error": "no open candidate with that id"}
+            db.update_candidate(conn, candidate_id, state=db.CANDIDATE_ACCEPTED)
+            conn.commit()
+        return {"ok": True, "job_id": body.get("job_id")}
 
     @app.post("/v1/candidates/{candidate_id}")
     def edit_candidate(candidate_id: str, body: dict) -> dict:

@@ -51,6 +51,6 @@ def task_job(project: str, findings: list[dict]) -> dict:
     """The one Orchestration Job the optimization runs: an agent task on a branch, reviewed by a human."""
     return {
         "type": "agent.run_task", "target_pillar": "agent", "project_id": project, "queue_key": project,
-        "params": {"title": TITLE, "intent": "improvement", "review_mode": "manual", "include_standards": False,
+        "params": {"title": TITLE, "intent": "task", "review_mode": "manual", "include_standards": False,
                    "description": DESCRIPTION.format(digest=digest(findings))},
     }

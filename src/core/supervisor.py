@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from common import systemd
+from common.incident import KIND_CRASH, report_problem
 from common.manifest import Manifest
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
@@ -33,6 +34,10 @@ class Supervisor:
     registry: Registry = field(default_factory=Registry)
     runner: CommandRunner = DEFAULT_RUNNER
     probe: Callable[..., HealthResult] = probe_health
+    # How a crash is reported: common.incident.report_problem's signature (the agent's socket first).
+    report: Callable[..., None] = report_problem
+    # Each pillar unit's systemd restart count when last looked at (see check_restarts).
+    _restarts_seen: dict[str, int] = field(default_factory=dict, init=False, repr=False)
 
     def _probe(self, pillar: str) -> HealthResult:
         return self.probe(
@@ -133,10 +138,42 @@ class Supervisor:
         self.registry.set(entry_out)
         return entry_out
 
+    def check_restarts(self) -> None:
+        """systemd restarts a pillar that exits with a failure (`Restart=on-failure`) within a second,
+        usually before Core ever sees it down: the unit's `NRestarts` is the only trace of the crash.
+        A count higher than at the last look is recorded as an incident of kind crash, with the end of
+        the pillar's log. The first look only learns the counts, and a unit started anew (a redeploy)
+        counts from zero again, which is no crash."""
+        units = {systemd.unit_name(name): name for name, entry in self.manifest.pillars.items() if entry.enabled and entry.command}
+        if not units:
+            return
+        result = self.runner.run(["systemctl", "--user", "show", *units, "-p", "Id", "-p", "NRestarts"])
+        if not result.ok:
+            return
+        for block in result.stdout.split("\n\n"):
+            fields = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+            name = units.get(fields.get("Id", ""))
+            if name is None or not fields.get("NRestarts", "").isdigit():
+                continue
+            restarts, seen = int(fields["NRestarts"]), self._restarts_seen.get(name)
+            self._restarts_seen[name] = restarts
+            if seen is None or restarts <= seen:
+                continue
+            unit = systemd.unit_name(name)
+            log = self.runner.run(["journalctl", "--user", "-u", unit, "-n", "60", "--no-pager", "-o", "cat"])
+            times = restarts - seen
+            self.report(
+                self.paths.socket_path("agent"), pillar=name, context=f"systemd unit {unit}", kind=KIND_CRASH, title="PillarCrashed",
+                message=f"the {name} pillar failed and systemd restarted it {times} time{'' if times == 1 else 's'}",
+                detail=log.stdout if log.ok else "",
+            )
+
     def reconcile_once(self) -> None:
         """Meant to be called on a roughly-1-minute cadence: re-checks every
         enabled, non-faulted, installed pillar and relaunches anything
-        found down."""
+        found down, and records the crashes systemd recovered from by
+        itself since the last call (`check_restarts`)."""
+        self.check_restarts()
         for name, entry in self.manifest.pillars.items():
             if not entry.enabled or entry.command is None:
                 continue

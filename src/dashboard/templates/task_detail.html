@@ -1,15 +1,22 @@
 {% extends "base.html" %}
+{% from "_peek.html" import peek_card %}
+{% from "_force_stop.html" import stop_controls %}
 {% block title %}{{ run.title }} — little-workshop{% endblock %}
 {% block content %}
 <h1>{{ run.title }}</h1>
 <p class="lede"><a href="/tasks">&larr; Tasks</a> &middot; {{ run.project_id }}</p>
+<div id="task-live" data-live-region>
 <dl class="kv">
-  <dt>Status</dt><dd><span class="pill {{ 'warn' if run.status == 'awaiting_finish' else ('ok' if run.status in ('running', 'finished') else ('fail' if run.status == 'failed' else 'idle')) }}">{{ run.status.replace('_', ' ') }}</span></dd>
+  <dt>Status</dt><dd><span class="pill {{ 'warn' if run.status == 'awaiting_finish' else ('ok' if run.status in ('running', 'finished') else ('fail' if run.status in ('failed', 'stopped') else 'idle')) }}">{{ run.status.replace('_', ' ') }}</span></dd>
+  <dt>Job</dt><dd>{% if run.job_id %}<a href="/jobs/{{ run.job_id }}">{{ run.job_id[:8] }}</a>{% if job and job.status %} <span class="pill {{ {'succeeded': 'ok', 'failed': 'fail', 'running': 'run', 'pending_confirmation': 'warn'}.get(job.status, 'idle') }}">{{ job.status.replace('_', ' ') }}</span>{% elif not job %} <span class="muted">(no longer in the job history)</span>{% endif %}{% else %}&mdash;{% endif %}</dd>
   <dt>Branch</dt><dd>{% if run.branch %}<code>{{ run.branch }}</code>{% else %}&mdash;{% endif %}</dd>
   <dt>Result</dt><dd>{{ run.completion_status or '—' }}</dd>
   {% if run.pr_url %}<dt>Pull request</dt><dd><a href="{{ run.pr_url }}" target="_blank" rel="noopener">{{ run.pr_url }}</a></dd>{% endif %}
   {% if run.usage %}<dt>Claude usage</dt><dd>{{ "{:,}".format(run.usage.input_tokens + run.usage.cache_read_tokens + run.usage.cache_write_tokens) }} tokens in ({{ "{:,}".format(run.usage.cache_read_tokens) }} from cache), {{ "{:,}".format(run.usage.output_tokens) }} out, {{ run.usage.num_turns }} turn(s), about ${{ "%.2f"|format(run.usage.cost_usd) }} at list price{% if run.usage.budget_usd %} ({{ "%.0f"|format(run.usage.budget_used * 100) }}% of its ${{ "%.2f"|format(run.usage.budget_usd) }} budget){% endif %}</dd>{% endif %}
 </dl>
+{% if run.status == 'running' and job and job.status %}
+<div class="task-stop">{{ stop_controls(job, stop_refused, "/tasks/" ~ run.project_id ~ "/" ~ run.id) }}</div>
+{% endif %}
 {% if run.status == 'awaiting_finish' %}
 <div class="row">
   <form class="inline" method="post" action="/tasks/{{ run.project_id }}/{{ run.id }}/finish"><button type="submit" class="primary">Finish</button></form>
@@ -22,23 +29,14 @@
   {% if can_dismiss %}<form class="inline" method="post" action="/tasks/{{ run.project_id }}/{{ run.id }}/dismiss"><button type="submit">Move to done</button></form>{% endif %}
 </div>
 {% endif %}
+</div>
 {% if description %}<section>
-  <h2>Description <button type="button" class="copy-btn" data-copy="task-description">Copy</button></h2>
+  <h2>Description <button type="button" class="copy-btn" data-copy="task-description"><span class="copy-label">Copy</span></button></h2>
   <pre class="log-pre" id="task-description">{{ description }}</pre>
 </section>{% endif %}
+{{ peek_card(peek) }}
+<div id="task-results" data-live-region>
 {% if run.summary %}<section><h2>Summary</h2><pre class="log-pre">{{ run.summary }}</pre></section>{% endif %}
 {% if run.report %}<section><h2>Change report</h2><pre class="log-pre">{{ run.report }}</pre></section>{% endif %}
-<script>
-document.querySelectorAll('[data-copy]').forEach(function (b) {
-  b.addEventListener('click', function () {
-    var text = document.getElementById(b.dataset.copy).textContent;
-    var done = function (ok) { var t = b.textContent; b.textContent = ok ? 'Copied' : 'Copy failed'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
-    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); }); return; }
-    var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.select();
-    var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
-    ta.remove(); done(ok);
-  });
-});
-</script>
+</div>
 {% endblock %}

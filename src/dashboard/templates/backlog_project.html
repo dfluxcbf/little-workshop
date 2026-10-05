@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Backlog of {{ project }} — little-workshop{% endblock %}
+{% block content %}
+<h1>{{ project }}</h1>
+<p class="lede"><a href="/backlog">&larr; Backlog</a> &middot; something to build or fix later, written as it comes to mind: refine it into a task when it is time.</p>
+<form class="panel backlog-add" method="post" action="/backlog/{{ project }}/add">
+  <label for="backlog-text">New entry</label>
+  <textarea name="text" id="backlog-text" rows="4" placeholder="What should be built or fixed? Write it as it comes: refining comes later." required></textarea>
+  <div class="row"><button type="submit" class="primary" data-busy="Adding…">Add to the backlog</button></div>
+</form>
+<div class="policy-list" id="backlog-live" data-live-region>
+  {% for e in entries %}
+  {% set act = activity.get(e.id, no_activity) %}
+  <a class="polcard" href="/backlog/{{ project }}/{{ e.id }}">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ e.title }}</span>
+      {% if act.refine %}<span class="pill run">refining…</span>
+      {% elif act.prompt %}<span class="pill run">writing the prompt…</span>
+      {% elif e.task_prompt %}<span class="pill ok">task prompt ready</span>
+      {% elif e.refined_entry %}<span class="pill ok">refined</span>
+      {% else %}<span class="pill idle">as written</span>{% endif %}
+    </span>
+    <span class="polcard-ears">{{ e.primary_entry | truncate(220) }}</span>
+    <span class="polcard-meta">
+      <span class="chip">updated {{ e.updated_at | reltime }}</span>
+      {% if e.refinement_notes %}<span class="chip">notes</span>{% endif %}
+      {% if act.refine_error or act.prompt_error %}<span class="chip chip-fail">Claude failed: see the entry</span>{% endif %}
+    </span>
+  </a>
+  {% else %}
+  {% if not error %}<p class="muted">Nothing in {{ project }}'s backlog.</p>{% endif %}
+  {% endfor %}
+</div>
+{% endblock %}

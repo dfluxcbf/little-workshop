@@ -339,6 +339,59 @@ def cmd_project_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _backlog_entry_of(paths: Paths, project_id: str, entry_id: str) -> dict:
+    """The entry, refused unless it is in this project's backlog (a session may act on its own project only)."""
+    entry = client.backlog(paths, "GET", f"/{entry_id}")
+    if entry.get("project_name") != project_id:
+        raise client.DaemonUnavailable(f"backlog entry {entry_id} is not in {project_id}'s backlog")
+    return entry
+
+
+def cmd_project_backlog_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        entries = client.backlog(paths, "GET", params={"project_name": args.project_id})
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print([{"id": e["id"], "title": e["title"], "refined": bool(e["refined_entry"]), "task_prompt": bool(e["task_prompt"]),
+             "updated_at": e["updated_at"]} for e in entries])
+    return 0
+
+
+def cmd_project_backlog_show(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _print(_backlog_entry_of(paths, args.project_id, args.entry_id))
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_project_backlog_add(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    text = sys.stdin.read() if args.text == "-" else args.text
+    try:
+        entry = client.backlog(paths, "POST", json={"project_name": args.project_id, "primary_entry": text})
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print({"id": entry["id"], "title": entry["title"], "project": entry["project_name"]})
+    return 0
+
+
+def cmd_project_backlog_delete(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _backlog_entry_of(paths, args.project_id, args.entry_id)
+        _print(client.backlog(paths, "DELETE", f"/{args.entry_id}"))
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 # A branch finish merges, tags and back-merges for real; the client's plain 30s wait is too short for it.
 VERSION_FINISH_TIMEOUT_SECONDS = 120.0
 
@@ -2153,6 +2206,24 @@ def build_parser() -> argparse.ArgumentParser:
     project_remove = project_sub.add_parser("remove", help="Remove a registered project")
     project_remove.add_argument("name")
     project_remove.set_defaults(func=cmd_project_remove)
+
+    project_backlog = project_sub.add_parser("backlog", help="A project's backlog: entries to refine into tasks")
+    backlog_sub = project_backlog.add_subparsers(dest="backlog_command", required=True)
+    backlog_list = backlog_sub.add_parser("list", help="List the project's backlog entries")
+    backlog_list.add_argument("--project-id", required=True)
+    backlog_list.set_defaults(func=cmd_project_backlog_list)
+    backlog_show = backlog_sub.add_parser("show", help="Show one entry: primary entry, notes, refined entry, task prompt")
+    backlog_show.add_argument("--project-id", required=True)
+    backlog_show.add_argument("entry_id")
+    backlog_show.set_defaults(func=cmd_project_backlog_show)
+    backlog_add = backlog_sub.add_parser("add", help="Add an entry, as written (its primary entry)")
+    backlog_add.add_argument("--project-id", required=True)
+    backlog_add.add_argument("text", help="The entry's text, or - to read it from standard input")
+    backlog_add.set_defaults(func=cmd_project_backlog_add)
+    backlog_delete = backlog_sub.add_parser("delete", help="Delete an entry and everything it holds")
+    backlog_delete.add_argument("--project-id", required=True)
+    backlog_delete.add_argument("entry_id")
+    backlog_delete.set_defaults(func=cmd_project_backlog_delete)
 
     version = subparsers.add_parser("version", help="Version Control & Release commands")
     version_sub = version.add_subparsers(dest="version_command", required=True)

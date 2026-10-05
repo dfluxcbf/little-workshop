@@ -1,8 +1,11 @@
 // The Statistics page: one shared time period (picked on the calendar) and six plots, each
-// filtered on its own. Everything is drawn from the per-day rows the page embeds; nothing is fetched.
+// filtered on its own. Everything is drawn from the per-day rows the page embeds; when the page's
+// live stream brings new rows (static/live.js), the plots and the calendar are drawn again from them,
+// keeping the period, project or pillar, and the jobs and policies chosen.
 (function () {
   'use strict';
   var data = JSON.parse(document.getElementById('stats-data').textContent);
+  var ROWS = { 'job-count': 'jobs', 'job-success': 'jobs', 'policy-fail': 'policies', 'job-duration': 'jobs', incidents: 'incidents', 'test-success': 'tests' };
   var pillarNames = JSON.parse(document.getElementById('stats-pillars').textContent);
   var SVG = 'http://www.w3.org/2000/svg';
   var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -268,7 +271,11 @@
 
   // -- the calendar: pick two days; a day is brighter the more jobs it had, within the month shown ----
   var activity = {};
-  data.jobs.forEach(function (r) { activity[r.day] = (activity[r.day] || 0) + r.triggered; });
+  function countActivity() {
+    activity = {};
+    data.jobs.forEach(function (r) { activity[r.day] = (activity[r.day] || 0) + r.triggered; });
+  }
+  countActivity();
   var cal = document.getElementById('stats-calendar');
   var shownMonth = parse(period.to); shownMonth.setDate(1);
   var pending = null;  // the first of the two days, once picked
@@ -326,4 +333,12 @@
   drawAll();
   var resizing;
   window.addEventListener('resize', function () { clearTimeout(resizing); resizing = setTimeout(drawAll, 150); });
+  document.addEventListener('live:replaced', function (e) {
+    if (!e.target || e.target.id !== 'stats-live') return;
+    data = JSON.parse(document.getElementById('stats-data').textContent);
+    plots.forEach(function (plot) { plot.rows = data[ROWS[plot.id]]; });
+    countActivity();
+    drawCalendar();
+    drawAll();
+  });
 })();

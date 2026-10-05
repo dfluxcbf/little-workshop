@@ -365,9 +365,10 @@ def doc_updates(paths: Paths, project_id: str) -> list[dict]:
     return _get(paths, "agent", f"/v1/doc_updates/{project_id}")
 
 
-def stop_job(paths: Paths, job_id: str) -> dict:
-    """Stop a running Job, or cancel one still queued: {stopped, reason}."""
-    return _send(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/stop")
+def stop_job(paths: Paths, job_id: str, *, force: bool = False) -> dict:
+    """Stop a running Job, or cancel one still queued: {stopped, reason}. `force` settles it as stopped
+    whatever its pillar answers (the user decided, after the page warned what that means)."""
+    return _send(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/stop", json={"force": True} if force else None)
 
 
 def confirm_gated_job(paths: Paths, job_id: str) -> dict:
@@ -382,3 +383,69 @@ def fail_gated_job(paths: Paths, job_id: str) -> dict:
 
 def edit_scheduled_task(paths: Paths, task_id: str, **fields) -> dict:
     return _send(paths, "orchestration", "PATCH", f"/v1/scheduled_tasks/{task_id}", json=fields)
+
+
+# -- backlog (Registry & Portfolio) ---------------------------------------------
+
+
+def backlog_list(paths: Paths, project: str | None = None) -> list[dict]:
+    return _get(paths, "registry", "/v1/backlog", params={"project_name": project} if project else None)
+
+
+def backlog_get(paths: Paths, entry_id: str) -> dict | None:
+    return _get_optional(paths, "registry", f"/v1/backlog/{entry_id}")
+
+
+def backlog_version(paths: Paths, *, timeout: float = 3.0) -> str:
+    return _get(paths, "registry", "/v1/backlog/version", timeout=timeout)["version"]
+
+
+def backlog_add(paths: Paths, project: str, text: str) -> dict:
+    """Refused (4xx, `Refused`) for an empty entry or an unregistered project."""
+    return _call(paths, "registry", "POST", "/v1/backlog", json={"project_name": project, "primary_entry": text}).json()
+
+
+def backlog_edit(paths: Paths, entry_id: str, **fields) -> dict:
+    return _call(paths, "registry", "PATCH", f"/v1/backlog/{entry_id}", json=fields).json()
+
+
+def backlog_delete(paths: Paths, entry_id: str) -> dict:
+    return _call(paths, "registry", "DELETE", f"/v1/backlog/{entry_id}").json()
+
+
+def usage_candidate_task(paths: Paths, candidate_id: str) -> dict | None:
+    """The task "Make it a task" fills New task with: {project_id, title, intent, review_mode, description}."""
+    return _get_optional(paths, "usage", f"/v1/candidates/{candidate_id}/task", timeout=10.0)
+
+
+def usage_candidate_task_started(paths: Paths, candidate_id: str, job_id: str | None) -> dict:
+    return _send(paths, "usage", "POST", f"/v1/candidates/{candidate_id}/task_started", json={"job_id": job_id})
+
+
+# -- what the live pages watch (dashboard/live.py) --------------------------------
+
+
+def orchestration_changes(paths: Paths, *, after: int | None, boot: str | None, timeout: float = 0.0) -> dict:
+    """Orchestration's change feed: {boot, seq, changes, reset}, waiting up to `timeout` seconds for a change."""
+    params = {"timeout": timeout, **({"after": after} if after is not None else {}), **({"boot": boot} if boot else {})}
+    return _get(paths, "orchestration", "/v1/changes", params=params, timeout=timeout + 10.0)
+
+
+def usage_version(paths: Paths, *, timeout: float = 3.0) -> str:
+    return _get(paths, "usage", "/v1/version", timeout=timeout)["version"]
+
+
+def incidents_version(paths: Paths, *, timeout: float = 3.0) -> str:
+    return _get(paths, "agent", "/v1/incidents/version", timeout=timeout)["version"]
+
+
+def agent_peek(paths: Paths, job_id: str, *, after: int = 0, limit: int = 200, timeout: float = 5.0) -> dict | None:
+    """What a task's (or an update-doc job's) Claude has done so far, from its transcript: {available, running,
+    events, next, skipped}; `after` is where the caller's copy ends (-1: only where it ends now). None for a Job
+    the agent has no session for."""
+    return _get_optional(paths, "agent", f"/v1/peek/{job_id}", params={"after": after, "limit": limit}, timeout=timeout)
+
+
+def agent_run_for_job(paths: Paths, job_id: str) -> dict | None:
+    """The task (agent run) an `agent.run_task` Job started, if it has one yet."""
+    return _get_optional(paths, "agent", f"/v1/runs/by-job/{job_id}")

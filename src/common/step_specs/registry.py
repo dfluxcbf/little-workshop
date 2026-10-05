@@ -29,4 +29,14 @@ STEPS: dict[str, tuple[StepSpec, ...]] = {
         StepSpec("purge_registry", "Delete the project's registry records"),
         StepSpec("purge_files", "Delete the project's files directory"),
     ),
+    "registry.backlog_refine": (
+        StepSpec("read_entry", "Read the backlog entry"),
+        StepSpec("ask_claude", "Have Claude write the refined entry"),
+        StepSpec("save", "Replace the entry's refined entry"),
+    ),
+    "registry.backlog_task_prompt": (
+        StepSpec("read_entry", "Read the backlog entry and its refined entry"),
+        StepSpec("ask_claude", "Have Claude write the task prompt"),
+        StepSpec("save", "Replace the entry's task prompt, ending with the instruction to delete the entry"),
+    ),
 }

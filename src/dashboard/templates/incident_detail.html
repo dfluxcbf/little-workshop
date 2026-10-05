@@ -2,6 +2,7 @@
 {% block title %}{{ incident.exception_type if incident else "Incident" }} — little-workshop{% endblock %}
 {% block content %}
 {% if incident %}
+<div id="incident-live" data-live-region>
 <section class="dcard summary">
   <div class="dcard-top">
     <span class="dcard-name">{{ incident.exception_type }} in {{ incident.pillar }}</span>
@@ -9,6 +10,7 @@
   </div>
   <p class="dcard-ears">{{ incident.message }}</p>
   <div class="polcard-meta">
+    <span class="chip kind-{{ incident.kind or 'exception' }}">{{ incident_kinds.get(incident.kind or 'exception', incident.kind) }}</span>
     <span class="chip">{{ incident.project_id }}</span>
     <span class="chip">{{ incident.context }}</span>
     <span class="chip">{{ incident.created_at | reltime }}</span>
@@ -20,7 +22,7 @@
 
 <details class="dcard collapsible" open>
   <summary class="dcard-head">
-    <span class="dcard-title">Traceback</span>
+    <span class="dcard-title">{{ {'crash': 'Log before the restart', 'unexpected': 'Details'}.get(incident.kind, 'Traceback') }}</span>
     <span class="dcard-note">{{ incident.traceback.splitlines() | length }} lines</span>
   </summary>
   <pre class="code">{{ incident.traceback }}</pre>
@@ -41,6 +43,7 @@
   </form>
 </section>
 {% endif %}
+</div>
 {% else %}
 <p class="muted">Incident not found.</p>
 {% endif %}

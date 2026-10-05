@@ -2,8 +2,10 @@
 and `/v1/jobs/project.remove` follow the Job-dispatch convention every
 target pillar's endpoint uses (docs/design.md's dispatch diagram:
 `POST /v1/jobs/<type>`); everything else is a direct read/write call for
-the registry itself — `projects`/`project_sets`/`tickets` bookkeeping
-doesn't need a Job's audit trail the way a real operation does.
+the registry itself — `projects`/`project_sets`/`tickets`/backlog
+bookkeeping doesn't need a Job's audit trail the way a real operation
+does. The two backlog actions that ask Claude (refine an entry, write its
+task prompt) are Jobs: they take a minute, and their progress shows.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +28,7 @@ from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.pillar_socket import resolve_pillar_socket
 from common.uds_client import client_for_socket
-from registry import claude_sync, db, github, gitops, version_client
+from registry import agent_client, backlog, claude_sync, db, github, gitops, version_client
 from registry.bootstrap import BootstrapError, bootstrap_project
 from registry.connect_github import ConnectGitHubError, connect_github
 from registry.import_ import ProjectImportError, import_project
@@ -47,6 +50,16 @@ class CreateProjectSetRequest(BaseModel):
 class CreateTicketRequest(BaseModel):
     project_name: str
     title: str
+
+
+class CreateBacklogEntryRequest(BaseModel):
+    project_name: str
+    primary_entry: str
+
+
+class EditBacklogEntryRequest(BaseModel):
+    primary_entry: str | None = None
+    refinement_notes: str | None = None
 
 
 # github_token_status() shells out to `gh` twice, including one real
@@ -258,6 +271,108 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
     def list_tickets(project_name: str | None = None) -> list[dict]:
         with lock:
             return [t.model_dump(mode="json") for t in db.list_tickets(conn, project_name=project_name)]
+
+    # -- backlog: a project's entries, refined with Claude into tasks (registry/backlog.py) ---------------
+
+    # Changes every time an entry is added, edited or deleted, so a watcher (the Dashboard's live pages)
+    # can tell something changed with one cheap call; a restart starts a new count under a new boot id.
+    backlog_version = {"boot": uuid.uuid4().hex[:8], "count": 0}
+
+    def backlog_changed() -> None:
+        backlog_version["count"] += 1
+
+    def entry_view(entry: dict) -> dict:
+        return {**entry, "title": backlog.entry_title(entry)}
+
+    @app.get("/v1/backlog")
+    def list_backlog(project_name: str | None = None) -> list[dict]:
+        with lock:
+            return [entry_view(e) for e in db.list_backlog_entries(conn, project_name=project_name)]
+
+    @app.get("/v1/backlog/version")
+    def get_backlog_version() -> dict:
+        return {"version": f"{backlog_version['boot']}:{backlog_version['count']}"}
+
+    @app.post("/v1/backlog")
+    def add_backlog_entry(request: CreateBacklogEntryRequest) -> dict:
+        if not request.primary_entry.strip():
+            raise HTTPException(status_code=422, detail="the entry is empty")
+        with lock:
+            if db.get_project(conn, request.project_name) is None:
+                raise HTTPException(status_code=404, detail=f"project {request.project_name!r} is not registered")
+            entry = db.insert_backlog_entry(conn, db.new_backlog_id(), request.project_name, request.primary_entry.strip())
+            backlog_changed()
+        return entry_view(entry)
+
+    @app.get("/v1/backlog/{entry_id}")
+    def get_backlog_entry(entry_id: str) -> dict:
+        with lock:
+            entry = db.get_backlog_entry(conn, entry_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="no such backlog entry")
+        return entry_view(entry)
+
+    @app.patch("/v1/backlog/{entry_id}")
+    def edit_backlog_entry(entry_id: str, request: EditBacklogEntryRequest) -> dict:
+        fields = request.model_dump(exclude_none=True)
+        if "primary_entry" in fields and not fields["primary_entry"].strip():
+            raise HTTPException(status_code=422, detail="the primary entry cannot be empty")
+        with lock:
+            entry = db.update_backlog_entry(conn, entry_id, **fields) if fields else db.get_backlog_entry(conn, entry_id)
+            if entry is None:
+                raise HTTPException(status_code=404, detail="no such backlog entry")
+            backlog_changed()
+        return entry_view(entry)
+
+    @app.delete("/v1/backlog/{entry_id}")
+    def delete_backlog_entry(entry_id: str) -> dict:
+        with lock:
+            if not db.delete_backlog_entry(conn, entry_id):
+                raise HTTPException(status_code=404, detail="no such backlog entry")
+            backlog_changed()
+        return {"deleted": True, "id": entry_id}
+
+    def _ask_claude_for_entry(request: JobRequest, *, write: str, build_prompt, finish) -> dict:
+        """Read the entry, ask Claude without holding `lock` (a minute or more), then write the answer
+        into `write` — unless the entry was deleted meanwhile, which keeps nothing of the answer.
+        A refusal is raised inside its step, so the checklist shows which step failed."""
+        entry_id = request.params.get("entry_id") or ""
+        try:
+            with reported(request):
+                with step("read_entry") as handle:
+                    with lock:
+                        entry = db.get_backlog_entry(conn, entry_id)
+                    if entry is None:
+                        raise backlog.BacklogError(f"no backlog entry {entry_id!r}")
+                    prompt = build_prompt(entry["project_name"], entry)
+                    handle.detail = backlog.entry_title(entry)
+                with step("ask_claude") as handle:
+                    text = agent_client.query(paths, prompt, job_id=request.job_id, project_id=entry["project_name"])
+                    handle.detail = f"{len(text)} characters"
+                with step("save") as handle:
+                    with lock:
+                        saved = db.update_backlog_entry(conn, entry_id, **{write: finish(text, entry)})
+                        if saved is not None:
+                            backlog_changed()
+                    if saved is None:
+                        raise backlog.BacklogError("the entry was deleted while Claude worked on it; nothing was kept")
+                    handle.detail = f"replaced the {write.replace('_', ' ')}"
+        except (backlog.BacklogError, agent_client.AgentClientError) as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        return {"outcome": "succeeded", "result": {"entry_id": entry_id, "project": entry["project_name"], "chars": len(saved[write])}}
+
+    @app.post("/v1/jobs/registry.backlog_refine")
+    def job_backlog_refine(request: JobRequest) -> dict:
+        """Claude writes the refined entry from the primary entry, the current refined entry and the notes."""
+        return _ask_claude_for_entry(request, write="refined_entry", build_prompt=backlog.refine_prompt, finish=lambda text, entry: text)
+
+    @app.post("/v1/jobs/registry.backlog_task_prompt")
+    def job_backlog_task_prompt(request: JobRequest) -> dict:
+        """Claude writes the task prompt from the refined entry alone; the delete instruction is appended here."""
+        return _ask_claude_for_entry(
+            request, write="task_prompt", build_prompt=backlog.task_prompt_prompt,
+            finish=lambda text, entry: backlog.with_delete_instruction(text, entry["project_name"], entry["id"]),
+        )
 
     secrets_cache: dict[str, Any] = {"value": None, "at": 0.0}
 

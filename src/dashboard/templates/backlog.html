@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Backlog — little-workshop{% endblock %}
+{% block content %}
+<h1>Backlog</h1>
+<p class="lede">What each project's owner wants built or fixed, as they wrote it, refined with Claude into a task when it is time.</p>
+<div class="report-list" id="backlog-live" data-live-region>
+  {% for p in projects %}
+  <a class="card linkcard" href="/backlog/{{ p.name }}"><span class="proj-name">{{ p.name }}</span>
+    <span class="muted">{{ p.count }} entr{{ 'y' if p.count == 1 else 'ies' }}</span></a>
+  {% else %}
+  {% if not error %}<p class="muted">No projects registered.</p>{% endif %}
+  {% endfor %}
+</div>
+{% endblock %}

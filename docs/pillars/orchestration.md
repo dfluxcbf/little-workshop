@@ -310,3 +310,27 @@ usual, and so is every Job that runs only code.
 - With the usage pillar switched off, unreachable, or without a reading, nothing is held.
 - The scheduler thread now pumps the queue on every tick (ten minutes), so a held Job starts once the window
   has room again without waiting for another request, and so does a Job a trigger queued.
+
+## Force stop, and completions after a Job settled (2026-10-04)
+
+REQ-000000366. `POST /v1/jobs/{id}/stop` takes `{"force": true}`, sent only by the Dashboard after it
+warned the user. The target pillar is still asked (it is now told the Job's `type` and `force`, so a
+pillar can clean up what it can — Agentic Development stops a task's Claude), and then, whatever it
+answered (refused, unreachable, or declared unstoppable, which is not even asked), the Job is settled
+`stopped` with the error "force-stopped by user (the pillar said: …)". Every stop — forced or not —
+fails the queued Jobs that wait on a stopped Job (`cascade_dependency_failures` now counts `stopped`,
+which used to leave them waiting forever) and dispatches what its queue key held. A completion reported
+for a Job that has already settled (succeeded, failed, cancelled, stopped) is answered `ignored` and
+changes nothing: the user's stop, a timeout or a cancel stands. A Job failed for running past its time
+limit is also recorded as an incident of kind "unexpected behaviour" (`StuckJob`).
+
+## Change feed (2026-10-04)
+
+REQ-000000378. Every change of a Job, a Job step or a scheduled task (and a cleanup of old Jobs) is
+numbered as it is written (`orchestration/changes.py`), with the Job's type, project and status.
+`GET /v1/changes?after=<n>&boot=<id>&timeout=<s>` answers with the changes numbered after `n` as soon as
+there is one, or with none once `timeout` seconds (at most 30) passed: `{boot, seq, changes, reset}`.
+Without `after` it answers at once with where the numbering stands. The feed lives in memory, the last
+5000 changes: a restart starts a new count under a new `boot`, and a caller from another boot, or too
+far behind, is told to `reset` (read again what it shows). It says that something changed, never what
+it now is: the Jobs are read as before. The Dashboard's live pages follow it.

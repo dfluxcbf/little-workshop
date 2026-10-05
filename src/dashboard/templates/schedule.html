@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Schedule — little-workshop{% endblock %}
+{% block body_attrs %} class="page-wide"{% endblock %}
+{% block content %}
+{% set show = '&show=all' if everything else '' %}
+<div class="cal-head">
+  <a class="btn ghost" href="/schedule?month={{ previous.strftime('%Y-%m') }}{{ show }}" aria-label="Previous month">&lsaquo;</a>
+  <h1>{{ first.strftime('%B %Y') }}</h1>
+  <a class="btn ghost" href="/schedule?month={{ following.strftime('%Y-%m') }}{{ show }}" aria-label="Next month">&rsaquo;</a>
+  {% if first != today.replace(day=1) %}<a class="btn" href="/schedule{{ '?show=all' if everything }}">This month</a>{% endif %}
+  <nav class="cal-show" aria-label="What to show">
+    <a class="fchip{{ ' on' if not everything }}" href="/schedule?month={{ first.strftime('%Y-%m') }}">Scheduled</a>
+    <a class="fchip{{ ' on' if everything }}" href="/schedule?month={{ first.strftime('%Y-%m') }}&amp;show=all">Everything</a>
+  </nav>
+</div>
+<p class="muted cal-about">{{ "Every job and task that ran, runs or is scheduled." if everything else "The runs of scheduled jobs and tasks, and when they will run next." }}</p>
+<ul class="cal-legend" aria-label="Legend">
+  <li><span class="cal-item kind-task state-succeeded legend"><span class="cal-glyph"></span></span>Task</li>
+  <li><span class="cal-item kind-job state-succeeded legend"><span class="cal-glyph"></span></span>Job</li>
+  {% for s in states %}<li><span class="cal-swatch state-{{ s }}"></span>{{ s }}</li>{% endfor %}
+</ul>
+<div class="cal-layout">
+  <div class="cal" id="schedule-live" data-live-region>
+    <div class="cal-dow">{% for d in weekdays %}<span>{{ d }}</span>{% endfor %}</div>
+    {% for week in weeks %}
+    <div class="cal-week">
+      {% for cell in week %}
+      <div class="cal-day{{ ' out' if not cell.in_month }}{{ ' today' if cell.today }}" data-day="{{ cell.date.isoformat() }}">
+        <button type="button" class="cal-date" data-day-button="{{ cell.date.isoformat() }}"
+                aria-label="{{ cell.date.strftime('%A %d %B') }}: {{ cell['entries'] | length }} item{{ '' if cell['entries'] | length == 1 else 's' }}">{{ cell.date.day }}</button>
+        <div class="cal-items">
+          {% for item in cell['entries'] %}
+          <a class="cal-item kind-{{ item.kind }} state-{{ item.state }}" href="{{ item.href }}" data-detail="{{ item.detail }}" data-key="{{ item.key }}"
+             title="{{ item.at.strftime('%H:%M') }} · {{ item.title }} · {{ item.kind }}, {{ item.state }}"{% if loop.index > per_day %} hidden{% endif %}>
+            <span class="cal-glyph" aria-hidden="true"></span><span class="cal-time">{{ item.at.strftime('%H:%M') }}</span><span class="cal-title">{{ item.title }}</span>
+          </a>
+          {% endfor %}
+          {% if cell['entries'] | length > per_day %}<button type="button" class="cal-more" data-day-button="{{ cell.date.isoformat() }}">+{{ cell['entries'] | length - per_day }} more</button>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+  <aside class="cal-panel dcard" id="cal-panel" aria-live="polite">
+    <p class="muted">Choose a day, or a job or task in it, to see its details here.</p>
+  </aside>
+</div>
+<script>
+(function () {
+  'use strict';
+  var panel = document.getElementById('cal-panel');
+  var current = null;  // what the panel shows: {kind: 'item', url, key} or {kind: 'day', key}
+  var narrow = window.matchMedia('(max-width: 899px)');
+  function mark() {
+    document.querySelectorAll('#schedule-live .selected').forEach(function (el) { el.classList.remove('selected'); });
+    if (!current) return;
+    var selector = current.kind === 'item' ? '#schedule-live [data-key="' + CSS.escape(current.key) + '"]' : '#schedule-live [data-day="' + current.key + '"]';
+    var el = document.querySelector(selector);
+    if (el) el.classList.add('selected');
+  }
+  function reveal() { if (narrow.matches) panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  function load(url, key, quietly) {
+    current = { kind: 'item', url: url, key: key };
+    mark();
+    fetch(url, { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.text() : '<p class="muted">It is no longer there.</p>'; })
+      .then(function (html) { if (current && current.url === url) panel.innerHTML = html; })
+      .catch(function () { panel.innerHTML = '<p class="muted">Could not load it.</p>'; });
+    if (!quietly) reveal();
+  }
+  function showDay(day, quietly) {
+    current = { kind: 'day', key: day };
+    mark();
+    var cell = document.querySelector('#schedule-live [data-day="' + day + '"]');
+    var items = cell ? cell.querySelectorAll('.cal-item') : [];
+    panel.textContent = '';
+    var heading = document.createElement('h2');
+    var date = new Date(day + 'T00:00:00');
+    heading.textContent = date.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+    panel.appendChild(heading);
+    if (!items.length) {
+      var none = document.createElement('p'); none.className = 'muted'; none.textContent = 'Nothing ran or is scheduled on this day.';
+      panel.appendChild(none);
+    } else {
+      var list = document.createElement('div'); list.className = 'cal-day-list';
+      items.forEach(function (item) { var copy = item.cloneNode(true); copy.hidden = false; copy.classList.add('wide'); copy.classList.remove('selected'); list.appendChild(copy); });
+      panel.appendChild(list);
+    }
+    if (!quietly) reveal();
+  }
+  document.addEventListener('click', function (e) {
+    var item = e.target.closest && e.target.closest('.cal-item[data-detail]');
+    if (item && (item.closest('#schedule-live') || item.closest('#cal-panel'))) {
+      if (e.metaKey || e.ctrlKey || e.shiftKey) return;  // open the full page as asked
+      e.preventDefault();
+      load(item.dataset.detail, item.dataset.key);
+      return;
+    }
+    var day = e.target.closest && e.target.closest('[data-day-button]');
+    if (day) showDay(day.dataset.dayButton);
+  });
+  // The month changed under the page (a job moved, a schedule changed): show the panel's subject anew.
+  document.addEventListener('live:replaced', function (e) {
+    if (!e.target || e.target.id !== 'schedule-live' || !current) return;
+    if (current.kind === 'day') showDay(current.key, true); else load(current.url, current.key, true);
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ entry.title if entry else "Backlog entry" }} — little-workshop{% endblock %}
+{% block content %}
+<p class="lede"><a href="/backlog/{{ project }}">&larr; Backlog of {{ project }}</a></p>
+<div id="backlog-live" class="backlog-entry" data-live-region>
+{% if entry %}
+<h1>{{ entry.title }}</h1>
+<p class="muted">Added {{ entry.created_at | reltime }} &middot; updated {{ entry.updated_at | reltime }}</p>
+
+<form method="post" action="/backlog/{{ project }}/{{ entry.id }}/save" class="backlog-form">
+  <section class="dcard">
+    <div class="dcard-head"><span class="dcard-title">Primary entry</span><span class="dcard-note">as first written</span></div>
+    <textarea name="primary_entry" rows="6" aria-label="Primary entry" required>{{ entry.primary_entry }}</textarea>
+    <div class="row"><button type="submit" data-busy="Saving…">Save</button></div>
+  </section>
+
+  <section class="dcard">
+    <div class="dcard-head"><span class="dcard-title">Refinement notes</span><span class="dcard-note">for the next refinement</span></div>
+    <textarea name="refinement_notes" rows="4" aria-label="Refinement notes" placeholder="What to change, add, drop or clarify when Claude refines the entry.">{{ entry.refinement_notes }}</textarea>
+    <div class="row">
+      <button type="submit" data-busy="Saving…">Save</button>
+      {% if activity.refine %}<button type="button" class="primary is-busy" disabled>Claude is refining…</button>
+      {% else %}<button type="submit" class="primary" formaction="/backlog/{{ project }}/{{ entry.id }}/refine" data-busy="Starting…">Refine entry</button>{% endif %}
+    </div>
+    <p class="muted">Refining saves both fields, then has Claude write the refined entry from the primary entry, the current refined entry and these notes. It replaces the refined entry below.</p>
+  </section>
+</form>
+
+<section class="dcard">
+  <div class="dcard-head"><span class="dcard-title">Refined entry</span>{% if entry.refined_at %}<span class="dcard-note">{{ entry.refined_at | reltime }}</span>{% endif %}</div>
+  {% if activity.refine_error %}<p class="job-error">The last refinement failed: {{ activity.refine_error }}</p>{% endif %}
+  {% if refined_html %}<div class="markdown backlog-refined">{{ refined_html | safe }}</div>
+  {% else %}<p class="muted">Not refined yet.</p>{% endif %}
+</section>
+
+<section class="dcard">
+  <div class="dcard-head"><span class="dcard-title">Task prompt</span>{% if entry.prompt_at %}<span class="dcard-note">{{ entry.prompt_at | reltime }}</span>{% endif %}</div>
+  {% if activity.prompt_error %}<p class="job-error">The last task prompt failed: {{ activity.prompt_error }}</p>{% endif %}
+  {% if entry.task_prompt %}
+  <div class="copy-box">
+    <button type="button" class="copy-icon" data-copy="backlog-prompt" title="Copy the task prompt" data-title="Copy the task prompt" aria-label="Copy the task prompt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>
+    <pre class="log-pre" id="backlog-prompt">{{ entry.task_prompt }}</pre>
+  </div>
+  {% else %}<p class="muted">{{ "No task prompt yet." if entry.refined_entry else "Refine the entry first: the task prompt is written from the refined entry alone." }}</p>{% endif %}
+  <div class="row">
+    {% if activity.prompt %}<button type="button" class="is-busy" disabled>Claude is writing the prompt…</button>
+    {% else %}
+    <form class="inline" method="post" action="/backlog/{{ project }}/{{ entry.id }}/prompt">
+      <button type="submit" data-busy="Starting…"{% if not entry.refined_entry %} disabled{% endif %}>Generate task prompt</button>
+    </form>
+    {% endif %}
+  </div>
+  <p class="muted">Written from the refined entry alone, and replaced each time. It ends by asking Claude to delete this entry from the backlog once the work is done.</p>
+</section>
+
+<div class="row backlog-actions">
+  <a class="btn primary" href="/tasks/new?project={{ project }}&amp;backlog={{ entry.id }}">Launch task</a>
+  <form class="inline" method="post" action="/backlog/{{ project }}/{{ entry.id }}/delete">
+    <button type="submit" class="danger" data-busy="Deleting…" data-confirm="Delete this entry from the backlog? Nothing of it is kept: its primary entry, notes, refined entry and task prompt are all deleted.">Delete from backlog</button>
+  </form>
+</div>
+<p class="muted">Launch task opens New task with the refined entry in its Task box (the primary entry while it is not refined yet).</p>
+{% elif not error %}
+<p class="muted">This entry is no longer in the backlog: it was deleted, with everything it held.</p>
+{% endif %}
+</div>
+{% endblock %}

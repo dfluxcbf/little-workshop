@@ -1143,3 +1143,30 @@ def test_no_tool_can_approve_a_draft():
     assert not [n for n in tools_mod.TOOLS_BY_NAME if "approve" in n]
     for spec in tools_mod.TOOLS.values() if isinstance(tools_mod.TOOLS, dict) else tools_mod.TOOLS:
         assert "approve_draft" not in spec.description
+
+
+# --- REQ-000000369: Each project has a backlog ---
+
+
+def test_backlog_tools_list_get_add_and_delete_within_the_named_project(paths, monkeypatch):
+    entry = {"id": "e1", "project_name": "little-meals", "title": "Export", "refined_entry": "r", "task_prompt": "",
+             "updated_at": "2026-10-04T20:00:00+00:00", "primary_entry": "Export"}
+    _fake_client_call(monkeypatch, "backlog_list", result=[entry])
+    listed = tools_mod.TOOLS_BY_NAME["workshop_project_backlog_list"].handler(paths, {"project_id": "little-meals"})
+    assert listed == [{"id": "e1", "title": "Export", "refined": True, "task_prompt": False, "updated_at": entry["updated_at"]}]
+
+    _fake_client_call(monkeypatch, "backlog_get", result=entry)
+    assert tools_mod.TOOLS_BY_NAME["workshop_project_backlog_get"].handler(paths, {"project_id": "little-meals", "entry_id": "e1"}) == entry
+    with pytest.raises(ValueError, match="not in little-home's backlog"):
+        tools_mod.TOOLS_BY_NAME["workshop_project_backlog_get"].handler(paths, {"project_id": "little-home", "entry_id": "e1"})
+
+    added = _fake_client_call(monkeypatch, "backlog_add", result=entry)
+    assert tools_mod.TOOLS_BY_NAME["workshop_project_backlog_add"].handler(paths, {"project_id": "little-meals", "text": "Export"}) == {
+        "id": "e1", "title": "Export", "project": "little-meals"}
+    assert added[0][0] == (paths, "little-meals", "Export")
+
+    deleted = _fake_client_call(monkeypatch, "backlog_delete", result={"deleted": True, "id": "e1"})
+    with pytest.raises(ValueError):
+        tools_mod.TOOLS_BY_NAME["workshop_project_backlog_delete"].handler(paths, {"project_id": "little-home", "entry_id": "e1"})
+    assert deleted == []  # another project's entry is never deleted
+    assert tools_mod.TOOLS_BY_NAME["workshop_project_backlog_delete"].handler(paths, {"project_id": "little-meals", "entry_id": "e1"})["deleted"]

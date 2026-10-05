@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from orchestration import steps
+from orchestration import changes, steps
 from orchestration.models import (
     Job,
     JobStatus,
@@ -194,6 +194,7 @@ def insert_job(conn: sqlite3.Connection, job: Job) -> None:
     )
     conn.commit()
     steps.init_steps(conn, job)
+    changes.note_job(job)
 
 
 def update_job(conn: sqlite3.Connection, job: Job) -> None:
@@ -209,6 +210,7 @@ def update_job(conn: sqlite3.Connection, job: Job) -> None:
     )
     conn.commit()
     steps.on_job_updated(conn, job)
+    changes.note_job(job)
     from orchestration import triggers
 
     triggers.on_job_updated(conn, job)
@@ -358,6 +360,7 @@ def insert_scheduled_task(conn: sqlite3.Connection, task: ScheduledTask) -> None
         row,
     )
     conn.commit()
+    changes.FEED.note("scheduled_task", task.id)
 
 
 def update_scheduled_task(conn: sqlite3.Connection, task: ScheduledTask) -> None:
@@ -371,6 +374,7 @@ def update_scheduled_task(conn: sqlite3.Connection, task: ScheduledTask) -> None
         row,
     )
     conn.commit()
+    changes.FEED.note("scheduled_task", task.id)
 
 
 def get_scheduled_task(conn: sqlite3.Connection, task_id: str) -> ScheduledTask | None:
@@ -393,6 +397,7 @@ def list_scheduled_tasks(
 def delete_scheduled_task(conn: sqlite3.Connection, task_id: str) -> None:
     conn.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
     conn.commit()
+    changes.FEED.note("scheduled_task", task_id)
 
 
 def get_queue_capacity(conn: sqlite3.Connection, queue_key: str) -> int:
@@ -484,4 +489,6 @@ def prune_finished_jobs(conn: sqlite3.Connection, before: datetime) -> dict:
     conn.executemany("DELETE FROM jobs WHERE id = ?", [(i,) for i in to_delete])
     conn.executemany("DELETE FROM pipeline_runs WHERE id = ?", [(i,) for i in runs_to_delete])
     conn.commit()
+    if to_delete:
+        changes.FEED.note("jobs_deleted", "", count=len(to_delete))
     return {"deleted": len(to_delete), "pipeline_runs_deleted": len(runs_to_delete), "kept_for_safety": kept}
