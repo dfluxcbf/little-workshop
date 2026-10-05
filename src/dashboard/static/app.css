@@ -532,6 +532,16 @@ details.section-panel > summary::-webkit-details-marker { display: none; }
 }
 .attention-banner[hidden] { display: none; }
 
+.bypass-banner {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px;
+  padding: 10px 16px;
+  background: var(--warn-soft, var(--fail-soft));
+  border-bottom: 2px solid var(--warn, var(--fail));
+  color: var(--ink);
+  font-size: 14px;
+}
+.bypass-banner form { margin: 0; }
+
 /* --- bottom tab bar (phone) / hidden on desktop ------------------------- */
 
 nav.tabbar {

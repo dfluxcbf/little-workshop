@@ -631,6 +631,8 @@ def build_app(paths: Paths) -> FastAPI:
         context.setdefault("message", request.query_params.get("message"))
         context.setdefault("nav_active", "")
         context.setdefault("attention_count", len(collect_attention(paths)))
+        # The user's policy bypass, warned on every page while it is TRUE.
+        context.setdefault("bypass", _try(lambda: client.policy_bypass(paths), default={}) or {})
         # The topics the page's live stream follows (static/live.js); every page follows "attention" for the banner.
         context.setdefault("live_topics", "")
         return templates.TemplateResponse(request, name, context)
@@ -1878,6 +1880,16 @@ def build_app(paths: Paths) -> FastAPI:
         kept = result.get("kept_for_safety", 0)
         note = f" {kept} kept because active work still depends on them." if kept else ""
         return _back("/jobs", f"Deleted {deleted} job{'' if deleted == 1 else 's'} older than {labels[hours]}.{note}")
+
+    @app.post("/policy-bypass/off")
+    def policy_bypass_off(next: str = Form("/")):
+        """The warning's button: `bypass_policies` back to FALSE at once."""
+        to = _local_path(next, "/")
+        try:
+            client.policy_bypass_off(paths)
+        except client.PillarUnavailable as exc:
+            return _back(to, f"Could not turn the policy bypass off: {exc}")
+        return _back(to, "bypass_policies is FALSE again: policies gate as usual.")
 
     @app.post("/jobs/{job_id}/gate/{action}")
     def job_gate_action(job_id: str, action: str, next: str = Form("/jobs?status=pending_confirmation")):

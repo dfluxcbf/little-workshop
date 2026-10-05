@@ -29,7 +29,8 @@ from common.incident import install_incident_reporting
 from common.pillar_socket import resolve_pillar_socket
 from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
-from policy import agent_client, db, gates, registry_client, sandbox
+from common import origin as origins
+from policy import agent_client, bypass, db, gates, registry_client, sandbox
 from policy.agent_client import AgentClientError
 from policy.models import (
     CheckOutcome, CreatedBy, DraftStatus, GatePoint, Policy, PolicyCheckResult, PolicyDraft, PolicyProject, ScopeLevel,
@@ -64,6 +65,15 @@ class EvaluateRequest(BaseModel):
     # The checkout to judge when it is not the registered one (a git worktree an agent or a
     # session commits in). Accepted only if it shares the registered checkout's repository.
     checkout: str | None = None
+    # Where the request came from (`common.origin`); only the user's terminal CLI can be bypassed.
+    origin: str = "unknown"
+
+
+class BypassRequest(BaseModel):
+    enabled: bool
+    minutes: int | None = None
+    origin: str = "unknown"
+    actor: str = ""
 
 
 # A script judging a pending commit finds it here (the sandbox's `/policy/input`):
@@ -684,6 +694,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             policy_id = request.params["policy_id"]
             project_id = request.project_id
             force = bool(request.params.get("force"))
+            check_origin = origins.normalize(request.params.get("origin"))
+            check_bypassed = bool(request.params.get("bypassed"))
             with lock:
                 policy = db.get_policy(conn, policy_id)
             if policy is None:
@@ -706,7 +718,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                     reused = PolicyCheckResult(
                         id=db.new_id(), policy_id=policy_id, project_id=project_id,
                         outcome=previous.outcome, detail=previous.detail, job_id=request.job_id,
-                        checked_state=current_state,
+                        checked_state=current_state, origin=check_origin,
+                        bypassed=check_bypassed and previous.outcome == CheckOutcome.FAIL,
                     )
                     with lock:
                         db.insert_check_result(conn, reused)
@@ -742,7 +755,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                     result = PolicyCheckResult(
                         id=db.new_id(), policy_id=policy_id, project_id=project_id,
                         outcome=sandbox_result.outcome, detail=sandbox_result.detail, job_id=request.job_id,
-                        checked_state=current_state,
+                        checked_state=current_state, origin=check_origin,
+                        bypassed=check_bypassed and sandbox_result.outcome == CheckOutcome.FAIL,
                     )
                     with lock:
                         db.insert_check_result(conn, result)
@@ -821,16 +835,44 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         return winners
 
     @app.get("/v1/policies/gating-for-job")
-    def get_gating_for_job(project_id: str, categories: str) -> list[dict]:
+    def get_gating_for_job(project_id: str, categories: str, origin: str = "unknown") -> list[dict]:
         """Every currently-winning policy, for this project, whose own
         `gate_points` intersects the requested categories — Orchestration's
         own entry point for "which policies, if any, apply to this Job."
         Each carries `gating`: whether a failure may hold the Job. With
         gating off for this project the check is still returned so it runs
-        (for analysis) — it just cannot block."""
+        (for analysis) — it just cannot block. While the user's policy bypass is on, a request whose `origin`
+        is the user's terminal CLI is likewise checked but not gated, and says so (`bypassed`); any other
+        origin keeps its gating."""
         requested = {GatePoint(c) for c in categories.split(",") if c}
-        return [{**winner.model_dump(mode="json"), "gating": gating}
+        origin = origins.normalize(origin)
+        with lock:
+            bypassing = bypass.bypasses(conn, origin)
+        return [{**winner.model_dump(mode="json"), "gating": gating and not bypassing, "bypassed": gating and bypassing}
                 for winner, gating in _gating_winners(project_id, requested)]
+
+    @app.get("/v1/bypass")
+    def get_bypass() -> dict:
+        """The `bypass_policies` flag, with the time left while it is TRUE."""
+        with lock:
+            return bypass.status(conn)
+
+    @app.post("/v1/bypass")
+    def set_bypass(request: BypassRequest) -> dict:
+        """Turn the flag on (only for the user's terminal CLI, `sudo lws bypass_policies true`) or back off."""
+        origin = origins.normalize(request.origin)
+        with lock:
+            if not request.enabled:
+                return bypass.disable(conn, origin=origin, actor=request.actor or origin)
+            try:
+                return bypass.enable(conn, minutes=request.minutes, origin=origin, actor=request.actor)
+            except bypass.BypassRefused as exc:
+                raise HTTPException(status_code=403 if origin != origins.USER_CLI else 400, detail=str(exc))
+
+    @app.get("/v1/bypass/log")
+    def get_bypass_log(limit: int = 50) -> list[dict]:
+        with lock:
+            return bypass.log_entries(conn, limit)
 
     @app.post("/v1/policies/evaluate")
     def evaluate(request: EvaluateRequest) -> dict:
@@ -862,8 +904,13 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         except ProjectResolutionError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
+        origin = origins.normalize(request.origin)
+        with lock:
+            bypassing = bypass.bypasses(conn, origin)
+
         def run_one(winner: Policy, gating: bool) -> dict:
-            entry = {"policy_id": winner.id, "topic": winner.topic, "ears_text": winner.ears_text, "gating": gating}
+            entry = {"policy_id": winner.id, "topic": winner.topic, "ears_text": winner.ears_text, "gating": gating and not bypassing,
+                     "bypassed": gating and bypassing}
             try:
                 mounts = _mounts_for_policy(winner, request.project_id, checkout)
                 verdict = sandbox.run_policy_check(winner.test_script, mounts, env=env, inputs=inputs)
@@ -874,11 +921,17 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         winners = _gating_winners(request.project_id, {gate_point})
         with ThreadPoolExecutor(max_workers=EVALUATE_WORKERS) as pool:
             results = list(pool.map(lambda pair: run_one(*pair), winners))
+        bypassed = [r["topic"] for r in results if r["outcome"] == CheckOutcome.FAIL.value and r["bypassed"]]
+        if bypassed:
+            with lock:
+                bypass.record_violation(conn, origin=origin, detail=f"{request.project_id} {gate_point.value}: {', '.join(bypassed)}")
         return {
             "project_id": request.project_id,
             "gate_point": gate_point.value,
+            "origin": origin,
             "results": results,
             "blocking": [r["topic"] for r in results if r["outcome"] == CheckOutcome.FAIL.value and r["gating"]],
+            "bypassed": bypassed,
             "errors": [r["topic"] for r in results if r["outcome"] == "error"],
         }
 

@@ -19,6 +19,7 @@ import time
 
 import httpx
 
+from common import origin as origins
 from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
 from common.uds_client import client_for_socket
@@ -81,6 +82,7 @@ def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
 
 
 def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
+    fields.setdefault("origin", origins.CLAUDE)  # the MCP server serves Claude: never bypassable
     socket_path = resolve_pillar_socket(paths, "orchestration", timeout=timeout)
     if socket_path is None:
         raise PillarUnavailable("orchestration daemon unreachable — Core has no socket for it registered")
@@ -264,7 +266,7 @@ def policy_evaluate(paths: Paths, project_id: str, gate_point: str, *, timeout: 
     """Run the policies gating `gate_point` for the project now, unrecorded. Long timeout: a
     branch_finish preflight includes policies that run the project's own test suite."""
     return _mutate(paths, "policy", "POST", "/v1/policies/evaluate",
-                   json={"project_id": project_id, "gate_point": gate_point}, timeout=timeout)
+                   json={"project_id": project_id, "gate_point": gate_point, "origin": origins.CLAUDE}, timeout=timeout)
 
 
 def usage_summary(paths: Paths, *, project: str | None = None, week: str | None = None, origin: str | None = None,

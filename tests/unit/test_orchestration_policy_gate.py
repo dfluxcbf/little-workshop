@@ -78,7 +78,7 @@ def test_resolve_gating_policies_parses_a_real_response(monkeypatch):
 
     socket_lookup = _policy_socket_lookup(app, monkeypatch)
     assert policy_gate.resolve_gating_policies(socket_lookup, "proj-a", {"server_launch"}) == [
-        {"id": "pol1", "gating": True}, {"id": "pol2", "gating": False},
+        {"id": "pol1", "gating": True, "bypassed": False}, {"id": "pol2", "gating": False, "bypassed": False},
     ]
 
 
@@ -101,7 +101,7 @@ def test_a_response_without_a_gating_flag_defaults_to_gating_on(monkeypatch):
         return [{"id": "pol1"}]
 
     socket_lookup = _policy_socket_lookup(app, monkeypatch)
-    assert policy_gate.resolve_gating_policies(socket_lookup, "proj-a", {"server_launch"}) == [{"id": "pol1", "gating": True}]
+    assert policy_gate.resolve_gating_policies(socket_lookup, "proj-a", {"server_launch"}) == [{"id": "pol1", "gating": True, "bypassed": False}]
 
 
 def test_attach_policy_gate_is_a_noop_for_an_uncategorized_job_type(conn):
@@ -148,7 +148,7 @@ def test_attach_policy_gate_creates_a_real_check_dependency(conn, monkeypatch):
     check_job = db.get_job(conn, job.depends_on[0])
     assert check_job.type == "policy.check_project"
     assert check_job.target_pillar == "policy"
-    assert check_job.params == {"policy_id": "pol1", "gating": True}
+    assert check_job.params == {"policy_id": "pol1", "gating": True, "bypassed": False, "origin": "unknown"}
     # persisted, not just held on the in-memory object
     assert db.get_job(conn, job.id).depends_on == job.depends_on
 
@@ -234,7 +234,7 @@ def test_verify_after_completion_creates_a_real_check_job_after_a_real_bootstrap
     assert created[0].type == "policy.check_project"
     assert created[0].target_pillar == "policy"
     assert created[0].project_id == "proj-a"
-    assert created[0].params == {"policy_id": "pol1", "gating": True}
+    assert created[0].params == {"policy_id": "pol1", "gating": True, "origin": "unknown"}
     assert created[0].depends_on == []  # fire-and-forget, never wired back
 
 
