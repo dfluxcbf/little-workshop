@@ -5,10 +5,10 @@ deletes old Jobs, so the counts are kept apart from the pillars, in one small
 SQLite file under the Dashboard's own state directory. The Dashboard updates
 them by itself (on a visit of the page, every few minutes while it runs, and
 before it deletes old Jobs), so nobody has to ask. An update reads the
-policy check results and incidents the pillars hold, and the Jobs changed
-since the last update (as summaries; every Job once a day, which is when the
-Jobs deleted since are forgotten), and adds the ones not counted yet to
-their day; `seen` remembers what was counted, so updating twice counts
+incidents the pillars hold, and the Jobs changed and policy check results
+recorded since the last update (Jobs as summaries; all of them once a day,
+which is when what was deleted since is forgotten), and adds the ones not
+counted yet to their day; `seen` remembers what was counted, so updating twice counts
 nothing twice, and a day whose Jobs were since deleted keeps its numbers.
 
 Each table is one plot's data, one row per day (the local date the thing
@@ -214,7 +214,8 @@ def _count_jobs(conn: sqlite3.Connection, jobs: list[dict], projects: set[str], 
     _remember(conn, "job", marks, {job["id"] for job in jobs if job.get("id")} if complete else None)
 
 
-def _count_policy_results(conn: sqlite3.Connection, results: list[dict], policies: list[dict], projects: set[str]) -> None:
+def _count_policy_results(conn: sqlite3.Connection, results: list[dict], policies: list[dict], projects: set[str], *,
+                          complete: bool = True) -> None:
     by_id = {policy["id"]: policy for policy in policies}
     seen, marks = _seen(conn, "policy_result"), {}
     columns = {"pass": "passed", "fail": "failed", "not_applicable": "not_applicable"}
@@ -227,7 +228,7 @@ def _count_policy_results(conn: sqlite3.Connection, results: list[dict], policie
                **_where(projects, result.get("project_id"), "policy")}
         _add(conn, "policy_days", key, {column: 1})
         marks[result["id"]] = 1
-    _remember(conn, "policy_result", marks, {result["id"] for result in results if result.get("id")})
+    _remember(conn, "policy_result", marks, {result["id"] for result in results if result.get("id")} if complete else None)
 
 
 def _count_incidents(conn: sqlite3.Connection, incidents: list[dict], projects: set[str]) -> None:
@@ -241,10 +242,12 @@ def _count_incidents(conn: sqlite3.Connection, incidents: list[dict], projects: 
     _remember(conn, "incident", marks, {incident["id"] for incident in incidents if incident.get("id")})
 
 
-# Jobs are read by their last change: those changed since the last read (less a margin, for a change
-# written just as the last read ran), and every Job once a day, the read that forgets the deleted ones.
-JOBS_READ_MARGIN = timedelta(minutes=10)
-JOBS_READ_ALL_EVERY = timedelta(days=1)
+# Jobs and policy check results are read by time: those changed (Jobs) or recorded (results) since the last
+# read, less a margin for a write that landed just as it ran, and all of them once a day, the read that
+# forgets what the pillars no longer hold.
+READ_MARGIN = timedelta(minutes=10)
+READ_ALL_EVERY = timedelta(days=1)
+READ_BY_TIME = ("jobs", "policy_results")
 
 
 def _meta(conn: sqlite3.Connection, key: str) -> str | None:
@@ -256,41 +259,48 @@ def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, value))
 
 
-def jobs_to_read(paths: Paths, now: datetime | None = None) -> datetime | None:
-    """The last-change time from which the next update needs Jobs, or None when it reads every Job: the
-    first time, and once every JOBS_READ_ALL_EVERY."""
+def to_read(paths: Paths, now: datetime | None = None) -> dict[str, datetime | None]:
+    """{source: the time from which the next update needs it} for each of READ_BY_TIME, None for one it
+    reads all of: the first time, and once every READ_ALL_EVERY."""
     with _lock:
         conn = _connect(paths)
         try:
-            through, everything = _moment(_meta(conn, "jobs_read_through")), _moment(_meta(conn, "jobs_read_all_at"))
+            marks = {kind: (_moment(_meta(conn, f"{kind}_read_through")), _moment(_meta(conn, f"{kind}_read_all_at")))
+                     for kind in READ_BY_TIME}
         finally:
             conn.close()
     now = now or datetime.now(timezone.utc)
-    if through is None or everything is None or now - everything >= JOBS_READ_ALL_EVERY:
-        return None
-    return through - JOBS_READ_MARGIN
+    return {kind: None if through is None or everything is None or now - everything >= READ_ALL_EVERY else through - READ_MARGIN
+            for kind, (through, everything) in marks.items()}
 
 
 def update(paths: Paths, *, projects: list[str] | None, jobs: list[dict] | None, policy_results: list[dict] | None,
            policies: list[dict] | None, incidents: list[dict] | None, now: datetime | None = None,
-           jobs_complete: bool = True, jobs_read_at: datetime | None = None,
+           since: dict[str, datetime | None] | None = None, read_at: datetime | None = None,
            full_job: Callable[[str], dict | None] | None = None) -> None:
     """Add what is not counted yet. A source given as None (its pillar is down) is left as it was; without
     the registered `projects` nothing can be placed, so nothing is counted until they can be read.
-    `jobs` is every Job (`jobs_complete`) or those changed since `jobs_to_read`, read at `jobs_read_at`."""
+    `since` is what `to_read` gave for this read: a source read since a time is not all its pillar holds
+    (so nothing of it is forgotten); `read_at` is when the read began."""
+    since = since or {}
+    stamp_read = (read_at or now or datetime.now(timezone.utc)).isoformat()
+
+    def read_marks(kind: str) -> None:
+        _set_meta(conn, f"{kind}_read_through", stamp_read)
+        if since.get(kind) is None:
+            _set_meta(conn, f"{kind}_read_all_at", stamp_read)
+
     with _lock:
         conn = _connect(paths)
         try:
             if projects is not None:
                 names = set(projects)
                 if jobs is not None:
-                    _count_jobs(conn, jobs, names, complete=jobs_complete, full_job=full_job)
-                    read_at = (jobs_read_at or now or datetime.now(timezone.utc)).isoformat()
-                    _set_meta(conn, "jobs_read_through", read_at)
-                    if jobs_complete:
-                        _set_meta(conn, "jobs_read_all_at", read_at)
+                    _count_jobs(conn, jobs, names, complete=since.get("jobs") is None, full_job=full_job)
+                    read_marks("jobs")
                 if policy_results is not None:
-                    _count_policy_results(conn, policy_results, policies or [], names)
+                    _count_policy_results(conn, policy_results, policies or [], names, complete=since.get("policy_results") is None)
+                    read_marks("policy_results")
                 if incidents is not None:
                     _count_incidents(conn, incidents, names)
             stamp = (now or datetime.now(timezone.utc)).isoformat()

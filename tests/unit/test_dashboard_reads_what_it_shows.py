@@ -102,20 +102,20 @@ def test_the_banner_the_launch_buttons_tasks_and_doc_updates_read_small_filtered
 
 def test_statistics_read_only_the_jobs_changed_since_the_last_count(paths, monkeypatch):
     now = datetime(2026, 10, 5, 8, 0, tzinfo=timezone.utc)
-    assert statistics.jobs_to_read(paths, now) is None  # never counted: every Job
+    assert statistics.to_read(paths, now)["jobs"] is None  # never counted: every Job
     first = [_job(1, status="running", result=None)]
     statistics.update(paths, projects=["little-meals"], jobs=first, policy_results=[], policies=[], incidents=[],
-                      jobs_complete=True, jobs_read_at=now)
-    since = statistics.jobs_to_read(paths, now + timedelta(minutes=10))
-    assert since == now - statistics.JOBS_READ_MARGIN
+                      since=statistics.to_read(paths, now), read_at=now)
+    since = statistics.to_read(paths, now + timedelta(minutes=10))
+    assert since["jobs"] == now - statistics.READ_MARGIN
     # The next count reads the one Job that changed: it settled. Nothing is forgotten by a partial read.
     statistics.update(paths, projects=["little-meals"], jobs=[_job(1, status="succeeded")], policy_results=[], policies=[],
-                      incidents=[], jobs_complete=False, jobs_read_at=now + timedelta(minutes=10))
+                      incidents=[], since=since, read_at=now + timedelta(minutes=10))
     statistics.update(paths, projects=["little-meals"], jobs=[], policy_results=[], policies=[], incidents=[],
-                      jobs_complete=False, jobs_read_at=now + timedelta(minutes=20))
+                      since=statistics.to_read(paths, now + timedelta(minutes=20)), read_at=now + timedelta(minutes=20))
     (row,) = statistics.load(paths)["jobs"]
     assert (row["triggered"], row["succeeded"]) == (1, 1)
-    assert statistics.jobs_to_read(paths, now + timedelta(days=1, minutes=1)) is None  # once a day, every Job again
+    assert statistics.to_read(paths, now + timedelta(days=1, minutes=1))["jobs"] is None  # once a day, every Job again
 
 
 def test_a_summary_that_cannot_say_whether_tests_failed_is_read_in_full(paths):
@@ -131,8 +131,8 @@ def test_a_summary_that_cannot_say_whether_tests_failed_is_read_in_full(paths):
 
 def test_the_dashboards_statistics_update_asks_for_changed_jobs_after_its_first_count(paths, monkeypatch):
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-meals"}])
-    monkeypatch.setattr(client, "policy_check_results", lambda paths, timeout=5.0: [])
-    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [])
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [])
     monkeypatch.setattr(client, "list_incidents", lambda paths, status=None: [])
     reads = patch_jobs(monkeypatch, client, [_job(1)])
     test = TestClient(app_module.build_app(paths))

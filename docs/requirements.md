@@ -885,3 +885,11 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | REQ-000000386 | **Claude's short answers can be watched too.** While Claude answers an agent.query that a Job asked for, the Agentic Development pillar shall record the session against that Job so that the peek of that Job shows it (a backlog entry's refinement or task prompt, a policy's authoring), and the Dashboard shall show it on the job's page and on the backlog entry being refined, as it grows. | draft |
 | REQ-000000387 | **A deleted entry's Claude transcripts go with it.** When a backlog entry is deleted, the Registry & Portfolio pillar shall have the Agentic Development pillar delete the transcripts of every Claude session that worked on it, so that nothing of the entry is kept. | draft |
 | REQ-000000388 | **Pillar health updates the pages that show it.** When a pillar's health changes, the Dashboard shall update its Dashboard and Pillars pages as it updates its other live pages. | draft |
+
+## Reading only what is shown: attention and cleanup (2026-10-05)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000389 | **A cleanup count reads no Job's content.** When the Dashboard asks how many Jobs each cleanup age would delete, the Orchestration pillar shall count them from each Job's status, last change and dependencies, read once for every age, and never read a Job's params or result for it. | draft |
+| REQ-000000390 | **The latest policy results are read, not their history.** The Policy & Compliance pillar shall list, when asked, only the latest check result of each policy and project (optionally only the failing ones) and policies without their test scripts, so that the Dashboard's attention banner and policy pages read only the results and policies they show. | draft |
+| REQ-000000391 | **Statistics read only new policy results.** The Dashboard shall read for its statistics only the policy check results recorded since its last count, and every one of them once a day. | draft |

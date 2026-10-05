@@ -289,8 +289,8 @@ def test_the_policy_filters_combine(filters, expected):
 
 
 def test_the_policies_page_applies_the_filters_in_its_address(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [dict(p) for p in POLICIES])
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [dict(p) for p in POLICIES])
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [])
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-meals", "status": "active"}])
     page = test_client.get("/policies", params=[("q", "*commit*"), ("gate", "commit"), ("project", "little-home")]).text
     shown = {m.group(1): not m.group(2) for m in re.finditer(r'data-policy="(p\d)"[^>]*?( hidden)?>', page, re.S)}
@@ -302,7 +302,7 @@ def test_the_policies_page_applies_the_filters_in_its_address(test_client, monke
 
 
 def test_the_policies_page_filters_as_the_user_types_with_the_same_glob(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [dict(p) for p in POLICIES])
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [dict(p) for p in POLICIES])
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [])
     page = test_client.get("/policies").text
     assert "function globRegex" in page and "history.replaceState" in page and "addEventListener('input', apply)" in page

@@ -476,7 +476,7 @@ def test_jobs_renders_error_banner_when_orchestration_unreachable(test_client, m
 
 
 def test_policies_renders_error_banner_when_policy_unreachable(test_client, monkeypatch):
-    def raise_unavailable(paths):
+    def raise_unavailable(paths, **kw):
         raise client.PillarUnavailable("policy daemon unreachable")
 
     monkeypatch.setattr(client, "policy_list", raise_unavailable)
@@ -641,14 +641,14 @@ def _policy(**overrides):
 
 
 def test_policies_hides_the_gating_chip_when_nothing_is_gating_on(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths: [
+    monkeypatch.setattr(client, "policy_list", lambda paths, **kw: [
         _policy(projects=[{"project_id": "proj-a", "gating_enabled": False}, {"project_id": "proj-b", "gating_enabled": False}]),
     ])
     assert "gating on" not in test_client.get("/policies").text
 
 
 def test_policies_renders_one_card_per_policy_with_chips(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths: [
+    monkeypatch.setattr(client, "policy_list", lambda paths, **kw: [
         _policy(),
         _policy(id="pol2", topic="keep-docs", ears_text="docs shall exist", enabled=False, gate_points=[],
                 created_by="user", projects=[{"project_id": "little-widget", "gating_enabled": True}]),
@@ -668,20 +668,20 @@ def test_policies_renders_one_card_per_policy_with_chips(test_client, monkeypatc
 
 
 def test_policies_with_no_projects_selected_says_zero(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths: [_policy(projects=[])])
+    monkeypatch.setattr(client, "policy_list", lambda paths, **kw: [_policy(projects=[])])
     assert "0 projects" in test_client.get("/policies").text
 
 
 def test_policies_empty_state(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, **kw: [])
     assert "No policies authored yet." in test_client.get("/policies").text
 
 
 def test_policies_card_shows_failing_count_from_associated_projects_only(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths: [
+    monkeypatch.setattr(client, "policy_list", lambda paths, **kw: [
         _policy(projects=[{"project_id": "proj-a", "gating_enabled": True}, {"project_id": "proj-b", "gating_enabled": True}]),
     ])
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: [
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [
         {"policy_id": "pol1", "project_id": "proj-a", "outcome": "fail", "detail": "boom", "checked_at": "2026-09-23T10:00:00Z"},
         {"policy_id": "pol1", "project_id": "proj-b", "outcome": "pass", "detail": "", "checked_at": "2026-09-23T10:00:00Z"},
         # Not associated with pol1's own projects list -- must not inflate the count.
@@ -693,8 +693,8 @@ def test_policies_card_shows_failing_count_from_associated_projects_only(test_cl
 
 
 def test_policies_card_shows_enabled_when_nothing_is_failing(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths: [_policy()])
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, **kw: [_policy()])
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [])
     text = test_client.get("/policies").text
     assert "failing</span>" not in text and ">enabled<" in text
 
@@ -746,7 +746,7 @@ def test_policy_detail_panels_are_collapsible_in_order(test_client, monkeypatch)
 
 def test_policy_detail_status_panel_shows_pass_fail_and_stdout_on_failure(test_client, monkeypatch):
     _stub_detail(monkeypatch)
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: [
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [
         {"policy_id": "0123456789abcdef", "project_id": "proj-a", "outcome": "fail",
          "detail": "AssertionError: boom", "checked_at": "2026-09-23T10:00:00Z"},
         {"policy_id": "0123456789abcdef", "project_id": "proj-b", "outcome": "pass",
@@ -761,7 +761,7 @@ def test_policy_detail_status_panel_shows_pass_fail_and_stdout_on_failure(test_c
 
 def test_policy_detail_status_panel_says_all_passing_when_nothing_fails(test_client, monkeypatch):
     _stub_detail(monkeypatch)
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: [
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [
         {"policy_id": "0123456789abcdef", "project_id": "proj-a", "outcome": "pass", "detail": "", "checked_at": "2026-09-23T10:00:00Z"},
         {"policy_id": "0123456789abcdef", "project_id": "proj-b", "outcome": "pass", "detail": "", "checked_at": "2026-09-23T10:00:00Z"},
     ])
@@ -773,14 +773,14 @@ def test_policy_detail_status_panel_says_all_passing_when_nothing_fails(test_cli
 
 def test_policy_detail_status_panel_survives_no_check_results_yet(test_client, monkeypatch):
     _stub_detail(monkeypatch)
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: [])
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [])
     text = test_client.get("/policies/pol1").text
     assert "no data yet" in text
 
 
 def test_policy_detail_status_panel_lists_every_associated_project_and_only_those(test_client, monkeypatch):
     _stub_detail(monkeypatch)  # associated: proj-a, proj-b; proj-c is registered but not associated
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: [
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [
         {"policy_id": "0123456789abcdef", "project_id": "proj-a", "outcome": "fail",
          "detail": "AssertionError: proj-a broke", "checked_at": "2026-09-23T10:00:00Z"},
         {"policy_id": "0123456789abcdef", "project_id": "proj-c", "outcome": "fail",
@@ -797,11 +797,11 @@ def test_policy_detail_status_panel_lists_every_associated_project_and_only_thos
 
 
 def test_policies_pages_judge_only_each_projects_latest_check(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths: [
+    monkeypatch.setattr(client, "policy_list", lambda paths, **kw: [
         _policy(id="0123456789abcdef", projects=[{"project_id": "proj-a", "gating_enabled": True}]),
     ])
     _stub_detail(monkeypatch, policy={"projects": [{"project_id": "proj-a", "gating_enabled": True}]})
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: [  # oldest first
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [  # oldest first
         {"policy_id": "0123456789abcdef", "project_id": "proj-a", "outcome": "fail",
          "detail": "AssertionError: old failure", "checked_at": "2026-09-22T10:00:00Z"},
         {"policy_id": "0123456789abcdef", "project_id": "proj-a", "outcome": "pass",
@@ -1067,20 +1067,20 @@ def _stub_drafts(monkeypatch, drafts):
 
 
 def test_policies_page_announces_drafts_awaiting_approval(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, **kw: [])
     _stub_drafts(monkeypatch, [_draft_row(id="d1"), _draft_row(id="d2", topic="b"), _draft_row(id="d3", topic="c", status="rejected")])
     text = test_client.get("/policies").text
     assert 'href="/policies/drafts"' in text and "2</span>" in text and "policies awaiting your approval" in text
 
 
 def test_policies_page_has_no_banner_when_nothing_is_pending(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, **kw: [])
     _stub_drafts(monkeypatch, [])
     assert "awaiting your approval" not in test_client.get("/policies").text
 
 
 def test_policies_page_survives_the_draft_lookup_failing(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, **kw: [])
 
     def down(paths, status=None):
         raise client.PillarUnavailable("policy down")
@@ -1511,8 +1511,8 @@ def test_a_single_draft_is_worded_in_the_singular(test_client, monkeypatch):
 
 
 def _stub_attention(monkeypatch, *, policies, results, jobs, incidents=()):
-    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: policies)
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: results)
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: policies)
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: results)
     patch_jobs(monkeypatch, client, [{"status": "pending_confirmation", **job} for job in jobs])  # the jobs awaiting confirmation
     monkeypatch.setattr(client, "list_incidents", lambda paths, status=None: list(incidents) if status == "open" else [])
 
@@ -1655,7 +1655,7 @@ def test_an_unknown_pillar_is_shown_as_given():
 
 
 def test_bottom_toolbar_groups_related_pages_under_one_button(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [])
     monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
     text = test_client.get("/policies").text
     bar = text[text.index('<nav class="tabbar"'):]
@@ -1680,7 +1680,7 @@ def test_bottom_toolbar_groups_related_pages_under_one_button(test_client, monke
 
 
 def test_the_group_of_the_current_page_is_open_and_highlighted(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [])
     monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
     text = test_client.get("/policies").text
     assert re.search(r'class="tabbar-row tabbar-row-active" data-view="policies"', text)
@@ -3031,7 +3031,7 @@ def _step(key, detail, state="succeeded"):
 
 def test_a_policy_job_card_shows_which_policy_it_runs(test_client, monkeypatch):
     _stub_jobs(monkeypatch, [_job(1, type="policy.check_project", target_pillar="policy", project_id="little-workshop", params={"policy_id": "p1"}, result=None)])
-    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [
         {"id": "p1", "topic": "commit-bumps-version", "ears_text": "When a commit is made, VERSION shall rise."}])
     text = test_client.get("/jobs").text
     assert '<b>commit-bumps-version</b>' in text and "When a commit is made, VERSION shall rise." in text
@@ -3039,7 +3039,7 @@ def test_a_policy_job_card_shows_which_policy_it_runs(test_client, monkeypatch):
 
 def test_a_policy_job_without_an_id_shows_the_policy_in_its_params(test_client, monkeypatch):
     _stub_jobs(monkeypatch, [_job(1, type="policy.author", target_pillar="policy", params={"topic": "new-rule", "ears_text": "The system shall x."}, result=None)])
-    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [])
     text = test_client.get("/jobs").text
     assert "<b>new-rule</b>" in text and "The system shall x." in text
 

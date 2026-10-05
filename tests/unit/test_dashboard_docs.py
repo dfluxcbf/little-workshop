@@ -20,8 +20,8 @@ from orchestration_jobs_fake import patch_jobs
 @pytest.fixture
 def test_client(tmp_path, monkeypatch):
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-widget", "status": "active"}])
-    monkeypatch.setattr(client, "policy_check_results", lambda paths: [])
-    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None: [])
+    monkeypatch.setattr(client, "policy_check_results", lambda paths, **kw: [])
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [])
     monkeypatch.setattr(client, "list_incidents", lambda paths, status=None: [])
     return TestClient(app_module.build_app(Paths(config_home=tmp_path / "c", state_home=tmp_path / "s")))
 

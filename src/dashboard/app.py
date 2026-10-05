@@ -422,15 +422,21 @@ def pillar_name(identifier: str) -> str:
     return PILLAR_NAMES.get(identifier, identifier)
 
 
-def _latest_policy_results(paths: Paths) -> dict[tuple[str, str], dict]:
+def _latest_policy_results(paths: Paths, *, failing: bool = False, policy_id: str | None = None) -> dict[tuple[str, str], dict]:
     """{(policy_id, project_id): latest recorded check result}, across every
-    policy and project that has ever been checked. Shared by collect_attention
+    policy and project that has ever been checked (or of one policy; with
+    `failing`, only those whose latest result failed). Shared by collect_attention
     and both policies pages so "what's currently failing" is computed the
-    same way everywhere."""
+    same way everywhere. Policy & Compliance picks the latest itself
+    (REQ-000000390); the fold below is what keeps an older pillar, which
+    answers with the whole history, giving the same answer."""
+    results = _try(lambda: client.policy_check_results(paths, latest=True, outcome="fail" if failing else None, policy_id=policy_id),
+                   default=[])
     latest: dict[tuple[str, str], dict] = {}
-    for result in _try(client.policy_check_results, paths, default=[]):  # oldest first
-        latest[(result["policy_id"], result["project_id"])] = result
-    return latest
+    for result in results:  # oldest first
+        if policy_id is None or result["policy_id"] == policy_id:
+            latest[(result["policy_id"], result["project_id"])] = result
+    return {key: result for key, result in latest.items() if result["outcome"] == "fail"} if failing else latest
 
 
 def _policy_associated_projects(policy: dict) -> set[str]:
@@ -473,8 +479,8 @@ def collect_attention(paths: Paths) -> list[dict]:
     for a confirmation. Both are read live from their owning pillar; a pillar
     that is down contributes nothing."""
     items: list[dict] = []
-    policies = {p["id"]: p for p in _try(client.policy_list, paths, default=[])}
-    latest = _latest_policy_results(paths)
+    policies = {p["id"]: p for p in _try(lambda: client.policy_list(paths, summary=True), default=[])}
+    latest = _latest_policy_results(paths, failing=True)
     for (policy_id, project), result in latest.items():
         policy = policies.get(policy_id)
         if not (result["outcome"] == "fail" and policy and policy.get("enabled", True)):
@@ -682,23 +688,22 @@ def build_app(paths: Paths) -> FastAPI:
     # -- Statistics: per-day counts of the workshop's operations, kept by the Dashboard ----
 
     def _update_statistics() -> list[str]:
-        """Count what the pillars hold now; returns the pillars that could not be read. Of the Jobs, only those
-        changed since the last count are read (as summaries), and every Job once a day, which lets the
-        count forget the Jobs deleted since (statistics.jobs_to_read)."""
-        changed_since = statistics.jobs_to_read(paths)
+        """Count what the pillars hold now; returns the pillars that could not be read. Of the Jobs and policy
+        check results, only those changed or recorded since the last count are read (Jobs as summaries),
+        and all of them once a day, which lets the count forget what was deleted since (statistics.to_read)."""
+        since = statistics.to_read(paths)
         read_at = datetime.now(timezone.utc)
         sources = {
             "projects": ("registry", lambda: [project["name"] for project in client.list_projects(paths)]),
-            "jobs": ("orchestration", lambda: client.list_jobs(paths, updated_since=changed_since, summary=True, timeout=30.0)),
-            "policy_results": ("policy", lambda: client.policy_check_results(paths, timeout=30.0)),
-            "policies": ("policy", lambda: client.policy_list(paths)),
+            "jobs": ("orchestration", lambda: client.list_jobs(paths, updated_since=since["jobs"], summary=True, timeout=30.0)),
+            "policy_results": ("policy", lambda: client.policy_check_results(paths, checked_since=since["policy_results"], timeout=30.0)),
+            "policies": ("policy", lambda: client.policy_list(paths, summary=True)),
             "incidents": ("agent", lambda: client.list_incidents(paths)),
         }
         fetched = {name: _try(fetch) for name, (_, fetch) in sources.items()}
         if fetched["policies"] is None:  # without the policies a result cannot be named
             fetched["policy_results"] = None
-        statistics.update(paths, **fetched, jobs_complete=changed_since is None, jobs_read_at=read_at,
-                          full_job=lambda job_id: _try(client.get_job, paths, job_id))
+        statistics.update(paths, **fetched, since=since, read_at=read_at, full_job=lambda job_id: _try(client.get_job, paths, job_id))
         return sorted({pillar_name(pillar) for name, (pillar, _) in sources.items() if fetched[name] is None})
 
     @app.get("/statistics", response_class=HTMLResponse)
@@ -1761,7 +1766,7 @@ def build_app(paths: Paths) -> FastAPI:
         cleanup_options = [{"hours": hours, "label": label, "count": prunable.get(str(hours), 0)} for hours, label in JOB_CLEANUP_AGES]
         job_steps = _try(lambda: client.jobs_steps(paths, [j["id"] for j in shown]), default={}) if shown else {}
         dependencies = _job_dependencies(paths, shown)
-        policies = {p["id"]: p for p in _try(client.policy_list, paths, default=[])} if any((j.get("type") or "").startswith("policy.") for j in shown) else {}
+        policies = {p["id"]: p for p in _try(lambda: client.policy_list(paths, summary=True), default=[])} if any((j.get("type") or "").startswith("policy.") for j in shown) else {}
         subjects = {j["id"]: _job_subjects(j, job_steps.get(j["id"], []), policies) for j in shown}
         task_runs = _task_runs_of(shown)
         return _render(
@@ -1804,7 +1809,7 @@ def build_app(paths: Paths) -> FastAPI:
                 "next_limit": JOBS_PAGE_SIZE, "error": f"No job {job_id}.", "message": None, "nav_active": "jobs", "attention_count": 0,
             }, status_code=404)
         dependencies = _job_dependencies(paths, [job]) if job else {}
-        policies = {p["id"]: p for p in _try(client.policy_list, paths, default=[])} if job and (job.get("type") or "").startswith("policy.") else {}
+        policies = {p["id"]: p for p in _try(lambda: client.policy_list(paths, summary=True), default=[])} if job and (job.get("type") or "").startswith("policy.") else {}
         task_run = _try(client.agent_run_for_job, paths, job_id) if job and job.get("type") == "agent.run_task" else None
         claude_peek = _peek_of(job_id) if job and job.get("type") in PEEK_JOB_TYPES else None
         topics = [f"job:{job_id}", *([f"peek:{job_id}"] if claude_peek and claude_peek.get("running") else [])]
@@ -1901,7 +1906,7 @@ def build_app(paths: Paths) -> FastAPI:
         project: list[str] = Query(default=[]), gating: str = "",
     ):
         try:
-            rows, error = client.policy_list(paths), None
+            rows, error = client.policy_list(paths, summary=True), None
         except client.PillarUnavailable as exc:
             rows, error = [], str(exc)
         pending = _try(lambda: client.policy_drafts(paths, status="pending"), default=[])
@@ -2086,7 +2091,7 @@ def build_app(paths: Paths) -> FastAPI:
                  "registered": n in registered}
                 for n in sorted(names)
             ]
-            latest = _latest_policy_results(paths)
+            latest = _latest_policy_results(paths, policy_id=policy["id"])
             for name in sorted(selected):
                 result = latest.get((policy["id"], name))
                 outcome = result.get("outcome") if result else None
