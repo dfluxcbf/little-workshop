@@ -5,17 +5,18 @@ the scheduler created), or every Job when asked — so a Job deleted from the hi
 calendar too, and one cancelled before it ran never appears; what will run comes from the scheduled
 tasks, a weekly one on each of its days from its next run on. Each item is a task (`agent.run_task`)
 or a job, in one of five states: succeeded, failed, running, skipped (stopped, or a run the user
-skipped) and scheduled (queued, or still to come). Times are the host's local time, as schedules are."""
+skipped) and scheduled (queued, or still to come). A day shows one symbol per kind and state, with
+how many of its items it stands for. Times are the host's local time, as schedules are."""
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime, time, timedelta
 
 STATES = ("succeeded", "failed", "running", "skipped", "scheduled")
 KINDS = ("task", "job")
 TASK_TYPE = "agent.run_task"
 SCHEDULER = "scheduler"  # a Job's `created_by` when a scheduled task created it
-PER_DAY = 6  # items a day shows; the rest are a "+N more" away
 
 _RUN_STATE = {"running": "running", "awaiting_finish": "succeeded", "finished": "succeeded", "failed": "failed",
               "skipped": "skipped", "stopped": "skipped", "cancelled": "skipped"}
@@ -87,7 +88,6 @@ def job_items(jobs: list[dict], runs_by_job: dict[str, dict], start: date, end: 
         items.append({
             "key": f"job:{job['id']}", "kind": "task" if is_task else "job", "state": item_state(job, run), "at": at,
             "title": title, "type": job.get("type"), "project": job.get("project_id") or "",
-            "href": f"/tasks/{run['project_id']}/{run['id']}" if run else f"/jobs/{job['id']}",
             "detail": f"/schedule/item/job/{job['id']}",
         })
     return items
@@ -129,7 +129,6 @@ def scheduled_items(tasks: list[dict], start: date, end: date) -> list[dict]:
                 "key": f"scheduled:{task['id']}:{at.isoformat(timespec='minutes')}", "kind": "task" if is_task else "job",
                 "state": "scheduled", "at": at, "title": title or task.get("name") or template.get("type") or "scheduled",
                 "type": template.get("type"), "project": template.get("project_id") or "",
-                "href": f"/{'tasks' if is_task else 'jobs'}/schedule/{task['id']}",
                 "detail": f"/schedule/item/scheduled/{task['id']}?at={at.isoformat(timespec='minutes')}",
             })
         missed = _naive(task.get("missed_run_at"))
@@ -137,19 +136,38 @@ def scheduled_items(tasks: list[dict], start: date, end: date) -> list[dict]:
             items.append({
                 "key": f"missed:{task['id']}", "kind": "task" if is_task else "job", "state": "skipped", "at": missed,
                 "title": f"{title or task.get('name') or 'scheduled'} (missed)", "type": template.get("type"),
-                "project": template.get("project_id") or "", "href": f"/{'tasks' if is_task else 'jobs'}/schedule/{task['id']}",
+                "project": template.get("project_id") or "",
                 "detail": f"/schedule/item/scheduled/{task['id']}?at={missed.isoformat(timespec='minutes')}",
             })
     return items
 
 
+def symbols(entries: list[dict]) -> list[dict]:
+    """A day's symbols: one per kind and state among its items, with how many items it stands for;
+    tasks first, then jobs, each in the order of STATES."""
+    counts = Counter((entry["kind"], entry["state"]) for entry in entries)
+    return [{"kind": kind, "state": state, "count": counts[kind, state]}
+            for kind in KINDS for state in STATES if counts[kind, state]]
+
+
+def totals(weeks: list[list[dict]]) -> dict[str, dict[str, int]]:
+    """How many of the month's own items (not the days around it) are in each state: {state: {all, task, job}}."""
+    counts = {state: {"all": 0, **dict.fromkeys(KINDS, 0)} for state in STATES}
+    for cell in (c for week in weeks for c in week if c["in_month"]):
+        for symbol in cell["symbols"]:
+            counts[symbol["state"]][symbol["kind"]] += symbol["count"]
+            counts[symbol["state"]]["all"] += symbol["count"]
+    return counts
+
+
 def month(jobs: list[dict], runs_by_job: dict[str, dict], tasks: list[dict], first: date, today: date,
           *, scheduled_only: bool = True) -> list[list[dict]]:
-    """The month's grid, week by week: [{date, in_month, today, entries (its items, sorted by time)}]."""
+    """The month's grid, week by week: [{date, in_month, today, entries (its items, sorted by time), symbols}]."""
     days = grid_days(first)
     items = job_items(jobs, runs_by_job, days[0], days[-1], scheduled_only=scheduled_only) + scheduled_items(tasks, days[0], days[-1])
     by_day: dict[date, list[dict]] = {}
     for item in sorted(items, key=lambda i: i["at"]):
         by_day.setdefault(item["at"].date(), []).append(item)
-    cells = [{"date": d, "in_month": d.month == first.month, "today": d == today, "entries": by_day.get(d, [])} for d in days]
+    cells = [{"date": d, "in_month": d.month == first.month, "today": d == today, "entries": by_day.get(d, []),
+              "symbols": symbols(by_day.get(d, []))} for d in days]
     return [cells[n:n + 7] for n in range(0, len(cells), 7)]
