@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent import db
-from agent.flow import AgentFlow, AgentFlowError
+from agent.flow import STOPPED_BY_USER, AgentFlow, AgentFlowError
 from agent.github_adapter import GitHubAdapter
 from agent.version_client import VersionClientError
 from common.paths import Paths
@@ -574,6 +574,37 @@ def test_run_task_records_remote_control_session_when_enabled(paths, conn, tmp_p
     rows = conn.execute("SELECT * FROM remote_control_sessions WHERE agent_run_id = ?", (result.run_id,)).fetchall()
     assert len(rows) == 1
     assert rows[0]["session_name"].startswith("lws-little-meals-run-")
+
+
+def _setup_run(paths, conn, tmp_path, monkeypatch, runner):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    return repo, AgentFlow(paths=paths, runner=runner, remote_control=True)
+
+
+# REQ-000000399: stopped_at is set when the run's Claude work ends, whichever way it ends.
+def test_run_task_sets_stopped_at_of_its_remote_control_session_when_claude_completes(paths, conn, tmp_path, monkeypatch):
+    repo, flow = _setup_run(paths, conn, tmp_path, monkeypatch, WritingClaudeRunner())
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new", "branch_type": "improvement"}})
+    assert result.status == db.AWAITING_FINISH
+    assert [r["stopped_at"] is not None for r in db.list_sessions(conn, result.run_id)] == [True]
+
+
+def test_run_task_sets_stopped_at_of_its_remote_control_session_when_claude_fails(paths, conn, tmp_path, monkeypatch):
+    repo, flow = _setup_run(paths, conn, tmp_path, monkeypatch, WritingClaudeRunner(claude_ok=False))
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new", "branch_type": "improvement"}})
+    assert result.status == db.FAILED
+    assert [r["stopped_at"] is not None for r in db.list_sessions(conn, result.run_id)] == [True]
+
+
+def test_run_task_sets_stopped_at_of_its_remote_control_session_when_stopped(paths, conn, tmp_path, monkeypatch):
+    runner = WritingClaudeRunner()
+    repo, flow = _setup_run(paths, conn, tmp_path, monkeypatch, runner)
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new", "branch_type": "improvement"}},
+                           should_stop=lambda: any(call[0] == "claude" for call in runner.calls))  # stopped once Claude ran
+    assert result.status == db.FAILED and db.get_run(conn, result.run_id)["summary"] == STOPPED_BY_USER
+    assert [r["stopped_at"] is not None for r in db.list_sessions(conn, result.run_id)] == [True]
 
 
 def test_run_task_invokes_screenshotter_when_deployment_manifest_given(paths, conn, tmp_path, monkeypatch):

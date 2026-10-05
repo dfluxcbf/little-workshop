@@ -164,15 +164,52 @@ or failed. Different projects run fully in parallel.
 
 ## Watching a run: Remote Control
 
-Every `agent.run_task` Job runs under Claude Code's Remote Control,
-named for the project and task so it's identifiable in the Claude app —
-this is the same mechanism `docs/pillars/policy_compliance.md`'s OQ-9
-resolution reuses for a second purpose (delivering a time-sensitive
-notification), not a coincidence: it's this pillar's own proven
-capability, called from elsewhere exactly the way "a new capability maps
-to an existing pillar's interface" already requires. The agent also gets
-the user-messaging tool, so it can ask a genuine question mid-run — which
-plan to take, which of two designs to use — instead of guessing.
+An `agent.run_task` Job's Claude is started with Claude Code's Remote Control
+by default, named `lws-<project>-run-<run id>` so it is identifiable in the
+Claude app, and an update-docs session started with its Remote Control
+option has it too; both are recorded in `remote_control_sessions`. This is
+the same mechanism `docs/pillars/policy_compliance.md`'s OQ-9 resolution
+reuses for a second purpose (delivering a time-sensitive notification), not
+a coincidence: it's this pillar's own proven capability, called from
+elsewhere exactly the way "a new capability maps to an existing pillar's
+interface" already requires. The agent also gets the user-messaging tool, so
+it can ask a genuine question mid-run — which plan to take, which of two
+designs to use — instead of guessing.
+
+### Activating Remote Control on a running Job
+
+Any Job whose Claude is running (a task, an update-docs session, an
+`agent.query` such as a backlog refinement or a policy authoring) can be taken
+over from the Claude app even when it was started without Remote Control. Its
+own page (`/tasks/<project>/<run>` and `/jobs/<id>`, never the lists) shows,
+only while Claude runs it, an **Activate remote-control** button. The agent
+(`src/agent/remote_control.py`, `/v1/remote-control/<job id>[/activate|/deactivate]`)
+then **resumes** the Job's session — `claude --resume <session id>
+--remote-control lws-<project>-rc-<id>` under `dtach`, in its own systemd scope
+(`lws-rc-<id>`), in the folder the session ran in. Remote Control is never added
+to the live process, and nothing that runs the work is stopped or restarted.
+No link, URL or QR code is captured or shown: the page shows the status and the
+session name, to be found in the Claude Code app. There is no user check.
+
+- **Existing session.** A session that already has a row in
+  `remote_control_sessions` (a task started with `--remote-control`) is reported as
+  already set up and is never duplicated. It has no deactivate control: its
+  connection cannot be dropped without ending the Claude that is working.
+- **Deactivate.** A session this button activated can be deactivated from the page;
+  that stops only its own scope and sets `stopped_at`. The Job keeps running.
+- **Active.** A session is active from `started_at` until `stopped_at`, and counts as
+  active only while its Job runs. `stopped_at` is set (`record_session_stop`,
+  `stop_open_sessions`) when the user deactivates and when the Job's Claude work
+  ends — a task's Claude exits (completed, failed, stopped), an update-docs session
+  is finalized or stopped, a query ends — which also ends an activated scope.
+  Rows are keyed by `agent_run_id`: the run's id for a task, the Job's id for any
+  other Job (the schema is unchanged).
+- **History.** After deactivation and after the Job ends, the status and name stay
+  on the page.
+- **Live.** The page follows `job:<id>`, so the button appears and disappears with the
+  Job's status without a refresh.
+- **Not covered.** Ad-hoc project sessions (`agent.session_start`) are not Jobs with a
+  page of their own; they always run with Remote Control.
 
 ## GitHub adapter: two techniques worth keeping exactly as proven
 

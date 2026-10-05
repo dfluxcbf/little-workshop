@@ -55,6 +55,7 @@ from agent import usage_client
 from agent.launch import JOB_UPDATE_DOCS, launch_for
 from agent.claude_invoke import model_args, parse_claude_output, setenv_args, usage_from_raw
 from agent.session_flow import is_trusted
+from agent.remote_control import RemoteControl
 
 JOB_FILE = ".review/update-doc-job.json"
 RESULT_FILE = ".review/update-doc-result.json"
@@ -224,6 +225,8 @@ class DocUpdateFlow:
                         stopped = False
                         db.update_doc_update(conn, job_id, status=db.DOC_UPDATE_RUNNING, unit=unit, session_name=name,
                                              worktree_id=worktree_id, worktree_path=str(worktree), base_sha=base_sha)
+                        if name:  # a session that has remote control from its start: shown on the job's page
+                            db.record_session_start(conn, job_id, project_id, name)
                 if stopped:
                     self._stop_session(unit)
                     self._discard_worktree(project_dir, project_id, worktree_id, worktree)
@@ -234,6 +237,7 @@ class DocUpdateFlow:
             review_store.release_job(project_dir, job_id)
             self._discard_worktree(project_dir, project_id, worktree_id, worktree)
             self._db(conn, db.update_doc_update, job_id, status=db.DOC_UPDATE_FAILED, error=str(exc))
+            self._end_remote_control(conn, job_id)
             self.on_complete(job_id, False, None, str(exc))
             return
         self.watch(conn, job_id, project_dir)
@@ -336,6 +340,10 @@ class DocUpdateFlow:
 
     # -- finishing ----------------------------------------------------------
 
+    def _end_remote_control(self, conn: sqlite3.Connection, job_id: str) -> None:
+        """The session's work ended: set `stopped_at` on its remote control and end one the owner activated."""
+        self._db(conn, RemoteControl(self.paths, self.runner).end, job_id)
+
     def _stop_session(self, unit: str | None) -> None:
         if unit and self.session_alive(unit):
             self.runner.run(["systemctl", "--user", "stop", unit])
@@ -419,6 +427,7 @@ class DocUpdateFlow:
         _report("wait_session", SUCCEEDED, "the session signalled it was done" if signalled else "the session went idle")
         _report("finalize", RUNNING)
         self._stop_session(update["unit"])
+        self._end_remote_control(conn, job_id)
         self._record_usage(conn, update, worktree)
         try:
             result = json.loads((worktree / RESULT_FILE).read_text(encoding="utf-8")) if (worktree / RESULT_FILE).exists() else None
@@ -462,6 +471,7 @@ class DocUpdateFlow:
             return False
         self._db(conn, db.update_doc_update, job_id, status=db.DOC_UPDATE_STOPPED, error="stopped by user")
         self._stop_session(update["unit"])
+        self._end_remote_control(conn, job_id)
         if project_dir is not None:
             review_store.release_job(project_dir, job_id)
         self._discard_worktree(project_dir, update["project_id"], update["worktree_id"], Path(update["worktree_path"]) if update["worktree_path"] else None)

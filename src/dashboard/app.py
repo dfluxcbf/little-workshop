@@ -1498,10 +1498,11 @@ def build_app(paths: Paths) -> FastAPI:
         can_retry = run.get("status") == "failed" and not _is_recurring_task(project, run.get("title"), job)
         can_dismiss = _task_group(run) == "attention" and run.get("status") in _DISMISSABLE_STATUSES
         claude_peek = _peek_of(run["job_id"]) if run.get("job_id") else None
+        remote_control = _remote_control_of(run["job_id"], project) if run.get("job_id") else None
         topics = ["tasks", *([f"job:{run['job_id']}"] if run.get("job_id") else []),
                   *([f"peek:{run['job_id']}"] if claude_peek and claude_peek.get("running") else [])]
         return _render(request, "task_detail.html", run=run, job=job, description=description, can_retry=can_retry, can_dismiss=can_dismiss,
-                       peek=claude_peek, stop_refused=request.query_params.get("refused") == "1", nav_active="tasks", live_topics=",".join(topics))
+                       peek=claude_peek, remote_control=remote_control, stop_refused=request.query_params.get("refused") == "1", nav_active="tasks", live_topics=",".join(topics))
 
     def _retryable_run(project: str, run_id: str):
         run = _try(client.agent_run, paths, project, run_id)
@@ -1822,10 +1823,11 @@ def build_app(paths: Paths) -> FastAPI:
         policies = {p["id"]: p for p in _try(lambda: client.policy_list(paths, summary=True), default=[])} if job and (job.get("type") or "").startswith("policy.") else {}
         task_run = _try(client.agent_run_for_job, paths, job_id) if job and job.get("type") == "agent.run_task" else None
         claude_peek = _peek_of(job_id) if job and job.get("type") in PEEK_JOB_TYPES else None
+        remote_control = _remote_control_of(job_id, job.get("project_id") or "") if job and job.get("type") in PEEK_JOB_TYPES else None
         topics = [f"job:{job_id}", *([f"peek:{job_id}"] if claude_peek and claude_peek.get("running") else [])]
         return _render(
             request, "job_detail.html", job=job, error=error, subjects=_job_subjects(job, job.get("steps") or [], policies) if job else [], dependencies=dependencies.get(job["id"], []) if job else [],
-            active=bool(job) and job["status"] in JOB_ACTIVE_STATUSES, task_run=task_run, peek=claude_peek,
+            active=bool(job) and job["status"] in JOB_ACTIVE_STATUSES, task_run=task_run, peek=claude_peek, remote_control=remote_control,
             stop_refused=request.query_params.get("refused") == "1", nav_active="jobs", live_topics=",".join(topics))
 
     def _peek_of(job_id: str) -> dict | None:
@@ -1835,6 +1837,34 @@ def build_app(paths: Paths) -> FastAPI:
         if not peek or not (peek.get("available") or peek.get("running")):
             return None
         return {**peek, "job_id": job_id}
+
+    def _remote_control_of(job_id: str, project_id: str) -> dict | None:
+        """Remote Control of the job's Claude session, for its page (the button, or the status). None when the
+        job has no Claude session or there is nothing to show: not running and never activated."""
+        state = _try(lambda: client.agent_remote_control(paths, job_id, project_id=project_id))
+        if not state or not (state["running"] or state["session_name"]):
+            return None
+        return {**state, "job_id": job_id, "project_id": project_id}
+
+    @app.post("/jobs/{job_id}/remote-control/{action}")
+    def job_remote_control(job_id: str, action: str, project_id: str = Form(""), next: str = Form("")):
+        """Activate remote control on the job's running Claude session (it is resumed with it, never
+        interrupted), or deactivate it (only the connection ends). Any user may."""
+        to = _local_path(next, f"/jobs/{job_id}")
+        if action not in ("activate", "deactivate"):
+            return _back(to, "Unknown remote-control action.")
+        try:
+            result = client.agent_remote_control_act(paths, job_id, action, project_id=project_id)
+        except client.RemoteControlRefused as exc:
+            live.publish(f"job:{job_id}")
+            return _back(to, f"Could not {action} remote control: {exc}")
+        except client.PillarUnavailable as exc:
+            return _back(to, f"Could not {action} remote control: {exc}")
+        live.publish(f"job:{job_id}")
+        live.publish("tasks")
+        if action == "activate":
+            return _back(to, f"Remote control is active: session {result.get('session_name')}.")
+        return _back(to, "Remote control deactivated; the job keeps running.")
 
     @app.get("/jobs/{job_id}/peek.json")
     def job_peek(job_id: str, after: int = 0):
