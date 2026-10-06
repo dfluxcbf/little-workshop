@@ -60,7 +60,8 @@ def run(conn: sqlite3.Connection, paths: Paths, *, runner: CommandRunner = DEFAU
                              "redeploy the usage pillar: it starts the loopback proxy"))
         try:
             report = profile.plan(settings_path or profile.default_settings_path(), int(port),
-                                  paths.pillar_config_dir(proxy.PILLAR) / profile.STATUSLINE_FILE)
+                                  paths.pillar_config_dir(proxy.PILLAR) / profile.STATUSLINE_FILE,
+                                  status_mod=profile.StatusMod(paths.socket_path("dashboard"), config["dashboard_url"]))
             missing = ", ".join(change["setting"] for change in report["changes"])
             checks.append(_check("user_profile", report["in_place"], "in place" if report["in_place"] else f"differs: {missing}",
                                  "run the 'Configure Claude telemetry' job (usage.configure_claude with apply)"))

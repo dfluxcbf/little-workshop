@@ -71,6 +71,9 @@
     if (region && e.target.matches('input:not([type=search]), textarea')) region.dataset.dirty = '1';
   });
 
+  // A page whose content moves with the clock (the status page's last-2-hours windows) asks for a look itself.
+  window.liveRefresh = schedule;
+
   if (!window.EventSource) return;
   var source = null;
 

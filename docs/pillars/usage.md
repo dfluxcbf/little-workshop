@@ -70,7 +70,7 @@ proxies, and the transcript backfill still covers every session.
 |---|---|---|
 | User | `~/.claude/settings.json` | `usage.configure_claude` (`usage/profile.py`) |
 | Launch | the environment of each Claude little-workshop starts | Agentic Development, from `GET /v1/config` (`agent/usage_client.py`) |
-| Pillar | `<config>/usage/config.json` (`intake_port`, `retention_days`, `plan_pressure_hold_percent`), `pricing.json` | the owner |
+| Pillar | `<config>/usage/config.json` (`intake_port`, `retention_days`, `plan_pressure_hold_percent`, `dashboard_url`), `pricing.json` | the owner |
 
 - **User profile**: the telemetry environment (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, the `OTEL_*` exporter
   variables for http/json to the intake, `OTEL_LOG_TOOL_DETAILS=1`), the four session hooks, a generated
@@ -79,6 +79,22 @@ proxies, and the transcript backfill still covers every session.
   `apply: true` it copies the settings file beside itself, then writes. It keeps every entry of the owner's,
   leaves a statusline of the owner's own and a longer retention alone, and replaces only its own hooks. The
   MCP tool and the `lws` command always prompt.
+- **Session title** (REQ-000000413, REQ-000000415): the profile copies `usage/session_title.py` to
+  `<config>/usage/session_title.py` and runs it on SessionStart and UserPromptSubmit. In a checkout whose top holds
+  a `VERSION` file it names the session `<project> · <VERSION> · <branch>` (the project is the checkout's
+  directory, a submodule's module name), only when the branch or the version differs from what it last applied to
+  that session (`~/.local/state/little-workshop/session-titles/<session>.json`), so a name given in between stays
+  until the next change. Hooks run in every session, the Windows app's WSL sessions included.
+- **Status mod** (REQ-000000414, REQ-000000415): the profile writes the plugin `src/usage/claude_mod/` to
+  `~/.claude/skills/little-workshop-status/`, which every terminal session loads by itself, with the Dashboard's
+  socket and `dashboard_url` (default `http://localhost:8790`) written in. It reads `GET /status.json` for the
+  checkout's project every 30 seconds and when a turn ends, while a surface draws the session. A message from the
+  phone (or the web) opens its pane, `/ws` anywhere: on the phone a line of icons, each left out at zero (🟢/⚪
+  server, ⚙️ running jobs, ❗ a task needs attention, ❌ failed jobs, ⏰ due within the hour, ⛔ a failing policy,
+  🔥 incidents, 💀 dead pillars, ❔ a pillar not answering); in the terminal every topic with links to the
+  Dashboard; in the Windows app a band above the prompt, once its WSL sessions load plugins (they do not yet: the
+  Windows app shows the status page instead, `docs/pillars/dashboard.md`). `tools/test_claude_mod.py` validates and
+  tests it with the `claude` CLI.
 - **Launch environment**: task runs, queries, doc updates and project sessions get the same telemetry
   variables plus `OTEL_RESOURCE_ATTRIBUTES=lws.project=…,lws.job=…,lws.job_type=…,lws.run=…`. With the pillar
   off or unreachable the run starts unchanged.

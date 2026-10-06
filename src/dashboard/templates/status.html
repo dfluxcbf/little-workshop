@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ project_id }} status — little-workshop{% endblock %}
+{#- The status Claude Code shows (REQ-000000412): the phone gets these topics as icons, only when not zero; this
+    page has every one of them, zeros included, for the Windows app's Browser pane and any other browser. -#}
+{% macro tile(t) -%}
+<a class="stat-tile st-tile tone-{{ t.tone }}" href="{{ t.href }}">
+  <span class="stat-label"><span class="st-icon" aria-hidden="true">{{ t.icon }}</span>{{ t.label }}{% if t.window %} <span class="st-window">{{ t.window }}</span>{% endif %}</span>
+  <span class="stat-value">{{ '?' if t.count is none else t.count }}{% if t.of is not none and t.count is not none %}<span class="stat-total"> of {{ t.of }}</span>{% endif %}</span>
+</a>
+{%- endmacro %}
+{% macro panel(t) -%}
+<section class="panel st-panel tone-{{ t.tone }}" aria-labelledby="st-{{ t.key }}">
+  <header class="st-panel-head">
+    <h3 id="st-{{ t.key }}"><span class="st-icon" aria-hidden="true">{{ t.icon }}</span>{{ t.label }}{% if t.window %} <span class="st-window">{{ t.window }}</span>{% endif %}</h3>
+    <span class="pill {{ t.tone if t.tone in ('run', 'warn', 'fail') else 'idle' }}">{{ 'unknown' if t.count is none else t.count }}</span>
+  </header>
+  {% if t['items'] %}
+  <ul class="st-items">
+    {% for item in t['items'] %}
+    <li>
+      <a href="{{ item.href or t.href }}">{{ item.title or item.id }}</a>
+      {% if item.status %}<span class="st-meta">{{ item.status | replace('_', ' ') }}</span>{% endif %}
+      {% if item.crash_count %}<span class="st-meta">{{ item.crash_count }} crash{{ 'es' if item.crash_count != 1 }}</span>{% endif %}
+      {% if item.project and item.project != project_id %}<span class="st-meta">{{ item.project }}</span>{% endif %}
+      {% if item.at %}<span class="st-meta">{{ ('at ' ~ item.at[11:16]) if t.key == 'scheduled' else (item.at | reltime) }}</span>{% endif %}
+      {% if item.error %}<p class="st-detail">{{ item.error }}</p>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% if t.count and t.count > t['items'] | length %}<p class="st-empty">and {{ t.count - t['items'] | length }} more: <a href="{{ t.href }}">see them all</a></p>{% endif %}
+  {% else %}
+  <p class="st-empty">Unknown: its pillar did not answer.</p>
+  {% endif %}
+</section>
+{%- endmacro %}
+{% block content %}
+<header class="st-top">
+  <div class="st-top-text">
+    <p class="st-kicker">Status</p>
+    <h1 class="st-h">{{ project_id }}</h1>
+    <p class="st-about">What Claude Code shows of this project, and of little-workshop across every project. The phone shows the same topics as icons, only those that are not zero.</p>
+  </div>
+</header>
+<div id="status-live" data-live-region>
+  {% if status.unavailable %}<p class="st-note">Not answering: {{ status.unavailable | join(', ') }}. What they hold shows as unknown.</p>{% endif %}
+  {% if project_topics %}
+  <h2 class="section-label">This project</h2>
+  <section class="st-grid" aria-label="{{ project_id }} at a glance">
+    {% set server = status.server %}
+    {% set server_tone = 'idle' if server is none else ('unknown' if not server.known else ('ok' if server.running else 'idle')) %}
+    <a class="stat-tile st-tile tone-{{ server_tone }}" href="/">
+      <span class="stat-label"><span class="st-icon" aria-hidden="true">{{ '🟢' if server and server.running else '⚪' }}</span>Server</span>
+      <span class="stat-value st-word">{{ 'None' if server is none else ('?' if not server.known else ('Running' if server.running else 'Stopped')) }}</span>
+    </a>
+    {% for t in project_topics %}{{ tile(t) }}{% endfor %}
+  </section>
+  {#- A topic at zero has said all it has on its tile: only those with something behind them get a panel. -#}
+  {% set shown = project_topics | selectattr('count', 'ne', 0) | list %}
+  {% if shown %}
+  <div class="st-panels">
+    {% for t in shown %}{{ panel(t) }}{% endfor %}
+  </div>
+  {% else %}
+  <p class="st-calm">Nothing runs, waits or failed for {{ project_id }}, and every policy passes.</p>
+  {% endif %}
+  {% else %}
+  <p class="st-note">little-workshop knows no project called {{ project_id }}: only the workshop's status follows.</p>
+  {% endif %}
+  <h2 class="section-label">little-workshop · every project</h2>
+  <section class="st-grid" aria-label="little-workshop at a glance">
+    {% for t in workshop_topics %}{{ tile(t) }}{% endfor %}
+  </section>
+  {% set shown = workshop_topics | selectattr('count', 'ne', 0) | list %}
+  {% if shown %}
+  <div class="st-panels">
+    {% for t in shown %}{{ panel(t) }}{% endfor %}
+  </div>
+  {% else %}
+  <p class="st-calm">No incident in the last {{ (status.incidents or {}).hours or 2 }} h, and every pillar is up.</p>
+  {% endif %}
+  <p class="st-read">Read {{ status.generated_at | reltime }}.</p>
+</div>
+<script>
+  // The page follows its topics live; its windows (the last 2 hours, the next hour) also move with the clock.
+  setInterval(function () { if (!document.hidden && window.liveRefresh) window.liveRefresh(); }, 60000);
+</script>
+{% endblock %}

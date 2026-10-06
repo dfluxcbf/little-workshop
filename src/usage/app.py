@@ -143,6 +143,9 @@ def build_app(
     def statusline_path() -> Path:
         return paths.pillar_config_dir(proxy.PILLAR) / profile.STATUSLINE_FILE
 
+    def status_mod() -> profile.StatusMod:
+        return profile.StatusMod(paths.socket_path("dashboard"), proxy.load_config(paths)["dashboard_url"])
+
     def attribute(session_ids) -> None:
         """Call with `lock` held."""
         registry = known_projects()
@@ -392,8 +395,8 @@ def build_app(
         try:
             port = proxy.intake_port(paths)
             if request.params.get("apply") is True:
-                return {"outcome": "succeeded", "result": profile.apply(target, port, statusline_path())}
-            return {"outcome": "succeeded", "result": {**profile.plan(target, port, statusline_path()), "applied": False}}
+                return {"outcome": "succeeded", "result": profile.apply(target, port, statusline_path(), status_mod=status_mod())}
+            return {"outcome": "succeeded", "result": {**profile.plan(target, port, statusline_path(), status_mod=status_mod()), "applied": False}}
         except (OSError, ValueError, RuntimeError) as exc:
             return {"outcome": "failed", "error": str(exc)}
 

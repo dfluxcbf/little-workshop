@@ -445,6 +445,29 @@ def _policy_associated_projects(policy: dict) -> set[str]:
     return {p["project_id"] for p in policy.get("projects", [])}
 
 
+def _failing_checks(policies: list[dict], latest: dict[tuple[str, str], dict]) -> list[tuple[dict, str, dict]]:
+    """(policy, project, latest result) for every enabled policy whose latest check on a project still
+    associated with it failed: what "a policy is failing" means on the attention list and in the status."""
+    by_id = {p["id"]: p for p in policies}
+    failing = []
+    for (policy_id, project), result in latest.items():
+        policy = by_id.get(policy_id)
+        if not (result["outcome"] == "fail" and policy and policy.get("enabled", True)):
+            continue
+        # A stale result from before the project was removed from this
+        # policy's own `projects` list (policy.set_projects) must not keep
+        # showing up forever -- 2026-09-22's finding: disassociating
+        # back-merge-no-ff from little-home/little-meals/little-mindcheck
+        # (a category error for apps that don't implement gitflow themselves)
+        # left their old fail results still in the history table, and this
+        # function never checked current association at all.
+        associated = _policy_associated_projects(policy)
+        if associated and project not in associated:
+            continue
+        failing.append((policy, project, result))
+    return failing
+
+
 POLICY_STATUS_FILTERS = (("", "Any status"), ("enabled", "Enabled"), ("disabled", "Disabled"), ("failing", "Failing"))
 
 
@@ -481,25 +504,11 @@ def collect_attention(paths: Paths) -> list[dict]:
     for a confirmation. Both are read live from their owning pillar; a pillar
     that is down contributes nothing."""
     items: list[dict] = []
-    policies = {p["id"]: p for p in _try(lambda: client.policy_list(paths, summary=True), default=[])}
-    latest = _latest_policy_results(paths, failing=True)
-    for (policy_id, project), result in latest.items():
-        policy = policies.get(policy_id)
-        if not (result["outcome"] == "fail" and policy and policy.get("enabled", True)):
-            continue
-        # A stale result from before the project was removed from this
-        # policy's own `projects` list (policy.set_projects) must not keep
-        # showing up forever -- 2026-09-22's finding: disassociating
-        # back-merge-no-ff from little-home/little-meals/little-mindcheck
-        # (a category error for apps that don't implement gitflow themselves)
-        # left their old fail results still in the history table, and this
-        # function never checked current association at all.
-        associated = _policy_associated_projects(policy)
-        if associated and project not in associated:
-            continue
+    policies = _try(lambda: client.policy_list(paths, summary=True), default=[])
+    for policy, project, result in _failing_checks(policies, _latest_policy_results(paths, failing=True)):
         items.append({
             "kind": "policy", "tag": "Policies", "project": project, "title": f"{policy['topic']} is failing",
-            "detail": (result.get("detail") or "").strip()[:240], "href": f"/policies/{policy_id}",
+            "detail": (result.get("detail") or "").strip()[:240], "href": f"/policies/{policy['id']}",
             "since": result.get("checked_at"),
         })
     for job in _try(lambda: client.list_jobs(paths, status="pending_confirmation", summary=True), default=[]):
@@ -522,6 +531,172 @@ def collect_attention(paths: Paths) -> list[dict]:
             "since": incident.get("created_at"),
         })
     return items
+
+
+# -- The status Claude Code shows of a project and of the workshop (REQ-000000411) -------------------------
+
+STATUS_FAILED_JOB_HOURS = 2  # a failed Job counts for this long after it failed
+STATUS_INCIDENT_HOURS = 2  # an open incident counts for this long after it was recorded
+STATUS_SCHEDULE_HOURS = 1  # a scheduled task counts once it is due within this long
+DEAD_PILLAR_STATUSES = ("crashed", "faulted")
+STATUS_ITEMS = 20  # items listed per topic; the counts stay exact up to STATUS_READ_LIMIT
+STATUS_READ_LIMIT = 100
+
+
+def _status_topic(items: list[dict] | None, **extra) -> dict:
+    """One topic of the status: how many there are and the first of them; a `count` of None says its pillar
+    did not answer, which a reader shows as unknown rather than as none."""
+    if items is None:
+        return {"count": None, "items": [], **extra}
+    return {"count": len(items), "items": items[:STATUS_ITEMS], **extra}
+
+
+def _status_job(job: dict, *, at: str) -> dict:
+    title = (job.get("params") or {}).get("title") or job.get("type")
+    return {"id": job["id"], "type": job.get("type"), "title": title, "at": job.get(at), "progress": job.get("progress"),
+            "error": (job.get("error") or "").strip()[:240] or None, "href": f"/jobs/{job['id']}"}
+
+
+def collect_status(paths: Paths, project_id: str | None, *, now: datetime | None = None) -> dict:
+    """What Claude Code shows of the workshop: for the project a session works in, its server (None when it
+    has none), its running Jobs, its tasks that need attention (the Tasks page's group), its Jobs failed in
+    the last STATUS_FAILED_JOB_HOURS, its scheduled tasks due within STATUS_SCHEDULE_HOURS and its failing
+    policies; across every project, the open incidents of the last STATUS_INCIDENT_HOURS and the pillars Core
+    sees crashed or faulted. Each read is a filtered one on the owning pillar, all of them at once; a pillar
+    that does not answer is listed in `unavailable` and its topics have a `count` of None. A project the
+    Registry does not know (or none) gets only the workshop's topics."""
+    now = now or datetime.now(timezone.utc)
+    unavailable: set[str] = set()
+
+    def read(pillar: str, fn, *args, **kwargs):
+        try:
+            return fn(paths, *args, **kwargs)
+        except client.PillarUnavailable:
+            unavailable.add(pillar)
+            return None
+
+    def project_reads() -> dict:
+        names = read("registry", client.list_projects)
+        if not project_id or names is None or project_id not in {p.get("name") for p in names}:
+            return {}
+        failed_since = now - timedelta(hours=STATUS_FAILED_JOB_HOURS)
+        calls = {
+            "server": ("deployment", client.deployment_status_optional, (project_id,), {}),
+            "running": ("orchestration", client.list_jobs, (), {"status": "running", "project_id": project_id, "summary": True,
+                                                                  "newest_first": True, "limit": STATUS_READ_LIMIT}),
+            "runs": ("agent", client.agent_runs, (project_id,), {}),
+            "task_jobs": ("orchestration", client.list_jobs, (), {"types": ["agent.run_task"], "status": TASK_JOB_STATUSES_WITHOUT_RUN,
+                                                                    "project_id": project_id, "summary": True}),
+            "failed": ("orchestration", client.list_jobs, (), {"status": "failed", "project_id": project_id, "updated_since": failed_since,
+                                                                 "summary": True, "newest_first": True, "limit": STATUS_READ_LIMIT}),
+            "scheduled": ("orchestration", client.scheduled_tasks, (), {}),
+            "policies": ("policy", client.policy_list, (), {"summary": True}),
+        }
+        with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+            futures = {key: pool.submit(read, pillar, fn, *args, **kwargs) for key, (pillar, fn, args, kwargs) in calls.items()}
+            return {key: future.result() for key, future in futures.items()}
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        project_future = pool.submit(project_reads)
+        incidents_future = pool.submit(read, "agent", client.list_incidents, status="open")
+        core_future = pool.submit(read, "core", client.core_status)
+        reads, incidents, core = project_future.result(), incidents_future.result(), core_future.result()
+
+    status: dict = {"project": project_id if reads else None, "generated_at": now.isoformat()}
+    if reads:
+        server = reads["server"]
+        status["server"] = None if server is None and "deployment" not in unavailable else {
+            "known": server is not None, "running": bool(server and server.get("unit") == "active"),
+            "listening": bool(server and server.get("listening")), "unit": (server or {}).get("unit")}
+        status["running"] = _status_topic(None if reads["running"] is None else [_status_job(j, at="created_at") for j in reads["running"]])
+
+        runs, task_jobs = reads["runs"], reads["task_jobs"]
+        attention = None
+        if runs is not None and task_jobs is not None:
+            rows = runs + _task_rows_without_a_run(task_jobs, runs)
+            attention = [{"id": r["id"], "title": r.get("title"), "status": r["status"], "at": r.get("updated_at") or r.get("created_at"),
+                          "href": f"/jobs/{r['id']}" if r.get("job_only") else f"/tasks/{project_id}/{r['id']}"}
+                         for r in sorted(rows, key=lambda r: r.get("updated_at") or r.get("created_at") or "", reverse=True)
+                         if _task_group(r, now) == "attention"]
+        status["tasks_attention"] = _status_topic(attention)
+
+        failed = reads["failed"]
+        status["failed_jobs"] = _status_topic(None if failed is None else [_status_job(j, at="updated_at") for j in failed],
+                                              hours=STATUS_FAILED_JOB_HOURS)
+
+        scheduled = None
+        if reads["scheduled"] is not None:
+            local_now = now.astimezone().replace(tzinfo=None)  # Orchestration keeps `next_run_at` in local time
+            scheduled = []
+            for task in reads["scheduled"]:
+                due = _parse_time(task.get("next_run_at"))
+                if task.get("state") != "active" or (task.get("job_template") or {}).get("project_id") != project_id or due is None:
+                    continue
+                due = due.astimezone().replace(tzinfo=None) if due.tzinfo else due
+                if timedelta(minutes=-1) <= due - local_now <= timedelta(hours=STATUS_SCHEDULE_HOURS):
+                    scheduled.append({"id": task["id"], "title": task.get("name"), "at": task.get("next_run_at"),
+                                      "href": f"/schedule/item/scheduled/{task['id']}"})
+            scheduled.sort(key=lambda item: item["at"] or "")
+        status["scheduled"] = _status_topic(scheduled, hours=STATUS_SCHEDULE_HOURS)
+
+        failing = None
+        if reads["policies"] is not None:
+            failing = [{"id": policy["id"], "title": policy.get("topic"), "detail": (result.get("detail") or "").strip()[:240] or None,
+                        "at": result.get("checked_at"), "href": f"/policies/{policy['id']}"}
+                       for policy, project, result in _failing_checks(reads["policies"], _latest_policy_results(paths, failing=True))
+                       if project == project_id]
+        status["policies"] = _status_topic(failing)
+
+    recent = None
+    if incidents is not None:
+        since = now - timedelta(hours=STATUS_INCIDENT_HOURS)
+        recent = []
+        for incident in incidents:
+            at = _parse_time(incident.get("created_at"))
+            if at is not None and (at if at.tzinfo else at.replace(tzinfo=timezone.utc)) >= since:
+                recent.append({"id": incident["id"], "title": f"{incident.get('exception_type')} in {incident.get('pillar')}",
+                               "project": incident.get("project_id"), "at": incident.get("created_at"), "href": f"/incidents/{incident['id']}"})
+        recent.sort(key=lambda item: item["at"] or "", reverse=True)
+    status["incidents"] = _status_topic(recent, hours=STATUS_INCIDENT_HOURS)
+
+    dead, watched = None, None
+    if core is not None:
+        pillars = core.get("pillars") or {}
+        watched = sum(1 for p in pillars.values() if p.get("status") != "disabled")
+        dead = [{"id": name, "title": name, "status": p.get("status"), "crash_count": p.get("crash_count", 0)}
+                for name, p in sorted(pillars.items()) if p.get("status") in DEAD_PILLAR_STATUSES]
+    status["dead_pillars"] = _status_topic(dead, of=watched)
+    status["unavailable"] = sorted(unavailable)
+    return status
+
+
+# The status page's topics (REQ-000000412), with the icons the status mod draws on the phone:
+# (key, icon, label, the page that lists them in full, what a count above zero says: run | warn | fail).
+STATUS_PROJECT_TOPICS = (
+    ("running", "⚙️", "Running jobs", "/jobs?status=running&q={project}", "run"),
+    ("tasks_attention", "❗", "Tasks needing attention", "/tasks", "warn"),
+    ("failed_jobs", "❌", "Failed jobs", "/jobs?status=failed&q={project}", "fail"),
+    ("scheduled", "⏰", "Scheduled", "/schedule", "run"),
+    ("policies", "⛔", "Failing policies", "/policies?status=failing&project={project}", "fail"),
+)
+STATUS_WORKSHOP_TOPICS = (
+    ("incidents", "🔥", "Incidents", "/incidents", "fail"),
+    ("dead_pillars", "💀", "Dead pillars", "/pillars", "fail"),
+)
+# What the page follows live; its time windows also move by the clock, so it looks again every minute too.
+STATUS_LIVE_TOPICS = "jobs,tasks,schedule,policies,incidents,pillars"
+
+
+def _status_topics(status: dict, project_id: str) -> tuple[list[dict], list[dict]]:
+    """The page's tiles and panels: each topic of `status` with its icon, label, window and link."""
+    def topic(key, icon, label, href, tone):
+        data = status.get(key) or {"count": None, "items": []}
+        window = f"last {data['hours']} h" if key in ("failed_jobs", "incidents") else f"next {data['hours']} h" if key == "scheduled" else None
+        count = data["count"]
+        return {"key": key, "icon": icon, "label": label, "window": window, "count": count, "of": data.get("of"),
+                "items": data["items"], "href": href.format(project=project_id), "tone": tone if count else ("idle" if count == 0 else "unknown")}
+    project = [topic(*spec) for spec in STATUS_PROJECT_TOPICS] if status.get("project") else []
+    return project, [topic(*spec) for spec in STATUS_WORKSHOP_TOPICS]
 
 
 JOB_STATUS_ORDER = ["running", "pending_confirmation", "queued", "failed", "succeeded", "cancelled", "stopped"]
@@ -687,6 +862,21 @@ def build_app(paths: Paths) -> FastAPI:
     def attention_json() -> dict:
         items = collect_attention(paths)
         return {"count": len(items), "items": items}
+
+    @app.get("/status.json")
+    def status_json(project: str = "") -> dict:
+        """What Claude Code shows of a project and of the workshop (REQ-000000411): the little-workshop status
+        mod reads it for the phone, the status page for the Windows app."""
+        return collect_status(paths, project or None)
+
+    @app.get("/status/{project_id}", response_class=HTMLResponse)
+    def status_page(request: Request, project_id: str):
+        """The same topics in detail, every count shown, zeros too (REQ-000000412): opened beside the chat in the
+        Windows app's Browser pane, and anywhere else a browser reaches the Dashboard."""
+        status = collect_status(paths, project_id)
+        project_topics, workshop_topics = _status_topics(status, project_id)
+        return _render(request, "status.html", status=status, project_id=project_id, project_topics=project_topics,
+                       workshop_topics=workshop_topics, live_topics=STATUS_LIVE_TOPICS)
 
     @app.get("/starting.json")
     def starting_json() -> dict:
