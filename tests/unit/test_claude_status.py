@@ -132,6 +132,19 @@ def test_the_status_reads_the_jobs_filtered_by_their_owner(paths, monkeypatch):
     assert len(failed) == 1 and failed[0]["updated_since"] == NOW - timedelta(hours=2)
 
 
+def test_the_status_carries_the_latest_test_run_of_the_project(paths, monkeypatch):
+    _stub(monkeypatch, jobs=[
+        {"id": "t1", "type": "requirements.run_tests", "project_id": PROJECT, "status": "succeeded", "created_at": ago(days=2), "updated_at": ago(days=2),
+         "result": {"ran": 10, "verdicts": {"passed": 10}, "failing_total": 0}},
+        {"id": "t2", "type": "requirements.run_tests", "project_id": PROJECT, "status": "succeeded", "created_at": ago(hours=2), "updated_at": ago(hours=1),
+         "result": {"ran": 12, "verdicts": {"passed": 11, "failed": 1}, "failing_total": 1}},
+    ])
+    assert app_module.collect_status(paths, PROJECT, now=NOW)["tests"] == {
+        "known": True, "status": "succeeded", "ran": 12, "passed": 11, "failed": 1, "at": ago(hours=1), "href": "/jobs/t2"}
+    _stub(monkeypatch)
+    assert app_module.collect_status(paths, PROJECT, now=NOW)["tests"] is None
+
+
 def test_a_project_the_registry_does_not_know_gets_only_the_workshop(paths, monkeypatch):
     _busy(monkeypatch)
     status = app_module.collect_status(paths, "nope", now=NOW)

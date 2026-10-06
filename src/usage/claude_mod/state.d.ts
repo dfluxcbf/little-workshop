@@ -14,6 +14,9 @@ export type Item = {
 // A topic of the Dashboard's /status.json: `count` null when its pillar did not answer.
 export type Topic = { count: number | null; items: Item[]; hours?: number; of?: number | null }
 
+// The project's latest recorded test run (null when it never ran; known false when Orchestration did not answer).
+export type Tests = { known: boolean; status?: string; ran?: number | null; passed?: number; failed?: number; at?: string | null; href?: string }
+
 export type Status = {
   project?: string | null
   generated_at?: string
@@ -23,6 +26,7 @@ export type Status = {
   failed_jobs?: Topic
   scheduled?: Topic
   policies?: Topic
+  tests?: Tests | null
   incidents?: Topic
   dead_pillars?: Topic
   unavailable?: string[]

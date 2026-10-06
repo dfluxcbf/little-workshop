@@ -3,7 +3,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Status } from '../types'
-import { ICONS, compact, lines } from './register'
+import { ICONS, compact, lines, report } from './register'
 
 const quiet: Status = {
   project: 'little-meals',
@@ -101,7 +101,9 @@ test('the card draws the icons on the phone and every topic with links elsewhere
     opened.push(e.id)
     return { value: { isPlaced: true } }
   })
-  await $.command.run({ command: 'ws', args: '' })
+  const answer = await $.command.run({ command: 'ws', args: '' })
+  expect(answer.text?.split('\n')[0]).toBe('📦 little-meals · v0.10.6 · dev')
+  expect(answer.text).toContain('── little-workshop ──')
   expect(fetched).toEqual(['http://dashboard/status.json?project=little-meals'])
   expect(opened).toEqual(['workshop'])
   const phone = await $.ui.mount({ ...PANE, surface: 'mobile' })
@@ -113,4 +115,33 @@ test('the card draws the icons on the phone and every topic with links elsewhere
     expect((await ui.findAll({ type: 'Link' })).length).toBeGreaterThan(0)
     await ui.unmount()
   }
+})
+
+const NOW = Date.parse('2026-10-06T12:00:00Z')
+const here = { project: 'little-meals', version: '0.10.6', branch: 'dev' }
+
+test('the report names the checkout, the server, the tests and only the topics with something in them', () => {
+  const tests = { known: true, status: 'succeeded', ran: 120, passed: 120, failed: 0, at: '2026-10-06T10:00:00Z' }
+  expect(report({ ...quiet, tests }, here, NOW).split('\n')).toEqual([
+    '📦 little-meals · v0.10.6 · dev',
+    `${ICONS.serverDown} Server stopped`,
+    '✅ Tests: 120 passed · 2 h ago',
+    `${ICONS.running} Nothing running`,
+    '🛡️ Policies passing',
+    '── little-workshop ──',
+    '🟢 All 10 pillars up',
+    '🧯 No incidents (last 2 h)',
+  ])
+  const text = report({ ...busy, tests: { ...tests, passed: 117, failed: 3 } }, here, NOW)
+  expect(text).toContain('🔴 Tests: 3 failing of 120 · 2 h ago')
+  expect(text).toContain(`${ICONS.tasks} Needs you: refactor and 2 more`)
+  expect(text).toContain(`${ICONS.failed} Failed (last 2 h): deploy`)
+  expect(text).toContain(`${ICONS.scheduled} Next hour: nightly and 1 more`)
+  expect(text).toContain(`${ICONS.dead} Pillars down: policy and 1 more (8/10 up)`)
+})
+
+test('the report says what it cannot know and when little-workshop is down', () => {
+  expect(report({ ...quiet, server: null, tests: null }, null, NOW)).toContain('▫️ No server')
+  expect(report({ ...quiet, tests: { known: false } }, here, NOW)).toContain(`${ICONS.unknown} Tests: unknown`)
+  expect(report({ error: 'little-workshop is not answering' }, here, NOW)).toBe(`${ICONS.offline} little-workshop is not answering`)
 })

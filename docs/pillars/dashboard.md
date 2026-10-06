@@ -721,7 +721,7 @@ REQ-000000411, REQ-000000412. What a Claude session shows of the workshop, read 
 - `GET /status.json?project=<id>` (`collect_status`): for the project, its server (`null` without a deployment
   manifest), its running Jobs, its tasks in the Tasks page's "Needs attention" group, its Jobs failed in the last
   2 hours, its active scheduled tasks due within the next hour and its failing policies (as the attention list
-  decides it, `_failing_checks`); across every project, the open incidents of the last 2 hours and the pillars Core
+  decides it, `_failing_checks`) and its latest recorded test run (`tests`, whenever it ran); across every project, the open incidents of the last 2 hours and the pillars Core
   sees `crashed` or `faulted`. Each topic is `{count, items}` (the first 20), read filtered from its owner, all reads
   at once; a pillar that does not answer is listed in `unavailable` and its topics' `count` is `null`. A project the
   Registry does not know gets the workshop's topics alone. The status mod reads it every 30 seconds per session that
