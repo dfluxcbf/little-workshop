@@ -108,6 +108,64 @@ export function compact(s: Status | null): string {
   return parts.length > 0 ? parts.join('  ') : '✓'
 }
 
+function ago(iso: string | null | undefined, now: number): string {
+  if (!iso) return ''
+  const at = Date.parse(/[zZ]|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`)
+  if (Number.isNaN(at)) return ''
+  const minutes = Math.max(0, Math.round((now - at) / 60_000))
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} min ago`
+  if (minutes < 48 * 60) return `${Math.round(minutes / 60)} h ago`
+  return `${Math.round(minutes / 1440)} d ago`
+}
+
+function names(topic: Topic | undefined, more = 3): string {
+  const items = topic?.items ?? []
+  const shown = items.slice(0, more).map(item => item.title ?? item.id)
+  const rest = (topic?.count ?? 0) - shown.length
+  return shown.join(', ') + (rest > 0 ? ` and ${rest} more` : '')
+}
+
+// What /ws answers: the project's state and the workshop's, a few lines read at a glance.
+export function report(s: Status | null, c: Checkout | null, now: number): string {
+  if (s === null) return 'Reading little-workshop…'
+  if (s.error !== undefined) return `${ICONS.offline} ${s.error}`
+  const out: string[] = []
+  const line = (icon: string, text: string) => out.push(`${icon} ${text}`)
+  const unknown = (topic: Topic | undefined) => topic === undefined || topic.count === null
+  if (c !== null) out.push(`📦 ${c.project} · v${c.version} · ${c.branch}`)
+  else if (s.project != null) out.push(`📦 ${s.project}`)
+  if (s.project != null) {
+    if (s.server == null) line('▫️', 'No server')
+    else if (!s.server.known) line(ICONS.unknown, 'Server: unknown')
+    else line(s.server.running ? ICONS.serverUp : ICONS.serverDown, s.server.running ? 'Server running' : 'Server stopped')
+    const t = s.tests
+    if (t == null) line('🧪', 'Tests: never run')
+    else if (!t.known) line(ICONS.unknown, 'Tests: unknown')
+    else if (t.status !== 'succeeded') line('🧪', `Tests: last run ${t.status} · ${ago(t.at, now)}`)
+    else if ((t.failed ?? 0) > 0) line('🔴', `Tests: ${t.failed} failing of ${t.ran} · ${ago(t.at, now)}`)
+    else line('✅', `Tests: ${t.passed} passed · ${ago(t.at, now)}`)
+    const r = s.running, a = s.tasks_attention, f = s.failed_jobs, sc = s.scheduled, p = s.policies
+    if (unknown(r)) line(ICONS.unknown, 'Running: unknown')
+    else line(ICONS.running, r!.count ? `Running: ${names(r)}` : 'Nothing running')
+    if (unknown(a)) line(ICONS.unknown, 'Tasks: unknown')
+    else if (a!.count) line(ICONS.tasks, `Needs you: ${names(a)}`)
+    if (unknown(f)) line(ICONS.unknown, 'Failed jobs: unknown')
+    else if (f!.count) line(ICONS.failed, `Failed (last ${f!.hours ?? 2} h): ${names(f)}`)
+    if (unknown(sc)) line(ICONS.unknown, 'Schedule: unknown')
+    else if (sc!.count) line(ICONS.scheduled, `Next hour: ${names(sc)}`)
+    if (unknown(p)) line(ICONS.unknown, 'Policies: unknown')
+    else line(p!.count ? ICONS.policies : '🛡️', p!.count ? `Policies failing: ${names(p)}` : 'Policies passing')
+  }
+  out.push('── little-workshop ──')
+  const d = s.dead_pillars, i = s.incidents
+  if (unknown(d)) line(ICONS.unknown, 'Pillars: unknown')
+  else line(d!.count ? ICONS.dead : '🟢', d!.count ? `Pillars down: ${names(d)} (${(d!.of ?? 0) - d!.count!}/${d!.of} up)` : `All ${d!.of} pillars up`)
+  if (unknown(i)) line(ICONS.unknown, 'Incidents: unknown')
+  else line(i!.count ? ICONS.incidents : '🧯', i!.count ? `Incidents (last ${i!.hours ?? 2} h): ${names(i)}` : `No incidents (last ${i!.hours ?? 2} h)`)
+  return out.join('\n')
+}
+
 type Line = { key: string; icon: string; label: string; value: string; topic?: Topic }
 
 // The detailed view's lines: every topic, zeros included.
@@ -154,19 +212,12 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // A message from the phone (or the web) opens the card: an asked pane is placed at any width. Whatever goes
-  // wrong here, the message itself always goes through.
-  on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind === 'bridge' && !(await $.ui.panes()).some(pane => pane.id === PANE)) {
-      await $.ui.open({ id: PANE, title: TITLE })
-    }
-    return next(e)
-  }).catch(($, e, next) => next(e))
-
   on('command.run', { command: 'ws' }, async $ => {
     await refresh($)
-    await $.ui.open({ id: PANE, title: TITLE })
-    return {}
+    // The phone draws no plugin pane but shows a command's text: a short status report answers /ws everywhere,
+    // and the terminal also gets the detailed pane.
+    void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+    return { text: report(await read($, status), await read($, checkout), Date.now()) }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

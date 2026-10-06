@@ -591,6 +591,8 @@ def collect_status(paths: Paths, project_id: str | None, *, now: datetime | None
                                                                  "summary": True, "newest_first": True, "limit": STATUS_READ_LIMIT}),
             "scheduled": ("orchestration", client.scheduled_tasks, (), {}),
             "policies": ("policy", client.policy_list, (), {"summary": True}),
+            "tests": ("orchestration", client.list_jobs, (), {"types": ["requirements.run_tests"], "project_id": project_id,
+                                                                "summary": True, "newest_first": True, "limit": 1}),
         }
         with ThreadPoolExecutor(max_workers=len(calls)) as pool:
             futures = {key: pool.submit(read, pillar, fn, *args, **kwargs) for key, (pillar, fn, args, kwargs) in calls.items()}
@@ -646,6 +648,19 @@ def collect_status(paths: Paths, project_id: str | None, *, now: datetime | None
                        for policy, project, result in _failing_checks(reads["policies"], _latest_policy_results(paths, failing=True))
                        if project == project_id]
         status["policies"] = _status_topic(failing)
+
+        # The project's latest recorded test run, whenever it was: what "do the tests pass" means here.
+        tests = reads["tests"]
+        if tests is None:
+            status["tests"] = {"known": False}
+        elif not tests:
+            status["tests"] = None
+        else:
+            run = tests[0]
+            result = run.get("result") or {}
+            verdicts = result.get("verdicts") or {}
+            status["tests"] = {"known": True, "status": run.get("status"), "ran": result.get("ran"), "passed": verdicts.get("passed", 0),
+                               "failed": result.get("failing_total", 0), "at": run.get("updated_at"), "href": f"/jobs/{run['id']}"}
 
     recent = None
     if incidents is not None:

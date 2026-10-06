@@ -88,13 +88,13 @@ proxies, and the transcript backfill still covers every session.
 - **Status mod** (REQ-000000414, REQ-000000415): the profile writes the plugin `src/usage/claude_mod/` to
   `~/.claude/skills/little-workshop-status/`, which every terminal session loads by itself, with the Dashboard's
   socket and `dashboard_url` (default `http://localhost:8790`) written in. It reads `GET /status.json` for the
-  checkout's project every 30 seconds and when a turn ends, while a surface draws the session. A message from the
-  phone (or the web) opens its pane, `/ws` anywhere: on the phone a line of icons, each left out at zero (🟢/⚪
-  server, ⚙️ running jobs, ❗ a task needs attention, ❌ failed jobs, ⏰ due within the hour, ⛔ a failing policy,
-  🔥 incidents, 💀 dead pillars, ❔ a pillar not answering); in the terminal every topic with links to the
-  Dashboard; in the Windows app a band above the prompt, once its WSL sessions load plugins (they do not yet: the
-  Windows app shows the status page instead, `docs/pillars/dashboard.md`). `tools/test_claude_mod.py` validates and
-  tests it with the `claude` CLI.
+  checkout's project every 30 seconds and when a turn ends, while a surface draws the session. `/ws` answers on every
+  surface, the phone included, with a short status report: 📦 project · version · branch, the server, the latest test
+  run, what runs, then only what needs you (❗ tasks, ❌ jobs failed in 2 h, ⏰ due within the hour), the policies,
+  and the workshop's pillars and incidents of 2 h. The phone app draws no plugin pane (2026-10-06), so the report is
+  its view; in the terminal `/ws` also opens a pane with every topic and links to the Dashboard. The Windows app's
+  WSL sessions load no plugins: it shows the status page instead (`docs/pillars/dashboard.md`).
+  `tools/test_claude_mod.py` validates and tests it with the `claude` CLI.
 - **Launch environment**: task runs, queries, doc updates and project sessions get the same telemetry
   variables plus `OTEL_RESOURCE_ATTRIBUTES=lws.project=…,lws.job=…,lws.job_type=…,lws.run=…`. With the pillar
   off or unreachable the run starts unchanged.
