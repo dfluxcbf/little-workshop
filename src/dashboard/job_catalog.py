@@ -183,8 +183,9 @@ CATALOG: tuple[JobSpec, ...] = (
     ),
     JobSpec(
         key="configure_claude_telemetry", label="Configure Claude telemetry",
-        description=("Shows what the Claude usage profile would change in ~/.claude/settings.json: the telemetry "
-                     "environment, the session hooks, the statusline and the transcript retention."),
+        description=("Shows what the Claude profile would change in ~/.claude: the telemetry environment, the session "
+                     "hooks (the session title among them), the statusline, the transcript retention and the "
+                     "little-workshop status mod."),
         make=_configure_claude_telemetry, projects=(WORKSHOP_PROJECT,),
         args=(JobArg("apply", "Write the profile", "flag",
                      help="Keeps a backup of the settings file and every entry of your own. Unticked: a dry run."),),

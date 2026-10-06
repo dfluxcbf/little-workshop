@@ -713,3 +713,21 @@ While the Policy pillar's `bypass_policies` flag is TRUE (`GET /v1/bypass`), eve
 navigation: "bypass_policies is TRUE", the remaining time counting down in the browser (the page reloads when it
 reaches zero), and a "Set to FALSE now" button posting to `/policy-bypass/off`, which sets the flag back at once. The
 Dashboard never raises the flag. See `policy_compliance.md`, "Policy bypass".
+
+## Status for Claude Code (2026-10-06)
+
+REQ-000000411, REQ-000000412. What a Claude session shows of the workshop, read from the Dashboard:
+
+- `GET /status.json?project=<id>` (`collect_status`): for the project, its server (`null` without a deployment
+  manifest), its running Jobs, its tasks in the Tasks page's "Needs attention" group, its Jobs failed in the last
+  2 hours, its active scheduled tasks due within the next hour and its failing policies (as the attention list
+  decides it, `_failing_checks`); across every project, the open incidents of the last 2 hours and the pillars Core
+  sees `crashed` or `faulted`. Each topic is `{count, items}` (the first 20), read filtered from its owner, all reads
+  at once; a pillar that does not answer is listed in `unavailable` and its topics' `count` is `null`. A project the
+  Registry does not know gets the workshop's topics alone. The status mod reads it every 30 seconds per session that
+  something draws (`docs/pillars/usage.md`, "Configuration").
+- `GET /status/<project>`: the same topics in detail for the Windows app's Browser pane (Ctrl+Shift+B, then this URL
+  on the Dashboard's address) and any browser: a tile per topic with its count, zeros included, then a panel listing
+  what is behind each count above zero, linked to its page; a group with nothing to list says so in one line. It
+  follows the jobs, tasks, schedule, policies, incidents and pillars topics live and looks again every minute, since
+  its windows move with the clock (`window.liveRefresh` in `static/live.js`). The icons are the phone's.
