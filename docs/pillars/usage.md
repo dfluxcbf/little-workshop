@@ -89,9 +89,10 @@ proxies, and the transcript backfill still covers every session.
   `~/.claude/skills/little-workshop-status/`, which every terminal session loads by itself, with the Dashboard's
   socket and `dashboard_url` (default `http://localhost:8790`) written in. It reads `GET /status.json` for the
   checkout's project every 30 seconds and when a turn ends, while a surface draws the session. `/ws` answers on every
-  surface, the phone included, with a short status report: 📦 project · version · branch, the server, the latest test
-  run, what runs, then only what needs you (❗ tasks, ❌ jobs failed in 2 h, ⏰ due within the hour), the policies,
-  and the workshop's pillars and incidents of 2 h. The phone app draws no plugin pane (2026-10-06), so the report is
+  surface, the phone included, with a short status report, one labelled line each: project, branch, version, server, the latest
+  test run and the running jobs, then only when there are any the tasks needing you, the jobs failed in 2 h and those
+  due within the hour, then the policies and the workshop's pillars and incidents of 2 h; each topic has its count
+  and its items listed under it. The phone app draws no plugin pane (2026-10-06), so the report is
   its view; in the terminal `/ws` also opens a pane with every topic and links to the Dashboard. The Windows app's
   WSL sessions load no plugins: it shows the status page instead (`docs/pillars/dashboard.md`).
   `tools/test_claude_mod.py` validates and tests it with the `claude` CLI.

@@ -119,50 +119,58 @@ function ago(iso: string | null | undefined, now: number): string {
   return `${Math.round(minutes / 1440)} d ago`
 }
 
-function names(topic: Topic | undefined, more = 3): string {
+const BULLET = '   • '
+
+// A topic's items as list lines under its heading, the ones /status.json did not list counted at the end.
+function listed(topic: Topic | undefined): string[] {
   const items = topic?.items ?? []
-  const shown = items.slice(0, more).map(item => item.title ?? item.id)
-  const rest = (topic?.count ?? 0) - shown.length
-  return shown.join(', ') + (rest > 0 ? ` and ${rest} more` : '')
+  const out = items.map(item => `${BULLET}${item.title ?? item.id}`)
+  const rest = (topic?.count ?? 0) - items.length
+  return rest > 0 ? [...out, `${BULLET}and ${rest} more`] : out
 }
 
-// What /ws answers: the project's state and the workshop's, a few lines read at a glance.
+// What /ws answers: the project's state and the workshop's, a few lines read at a glance, each with its count.
 export function report(s: Status | null, c: Checkout | null, now: number): string {
   if (s === null) return 'Reading little-workshop…'
   if (s.error !== undefined) return `${ICONS.offline} ${s.error}`
   const out: string[] = []
   const line = (icon: string, text: string) => out.push(`${icon} ${text}`)
-  const unknown = (topic: Topic | undefined) => topic === undefined || topic.count === null
-  if (c !== null) out.push(`📦 ${c.project} · v${c.version} · ${c.branch}`)
-  else if (s.project != null) out.push(`📦 ${s.project}`)
+  const known = (topic: Topic | undefined): topic is Topic & { count: number } => topic !== undefined && topic.count !== null
+  // A heading with its count and its items listed under it; `always` shows it at zero too.
+  const topic = (icon: string, label: string, t: Topic | undefined, always: boolean) => {
+    if (!known(t)) return line(ICONS.unknown, `${label}: unknown`)
+    if (t.count === 0 && !always) return
+    line(icon, `${label}: ${t.count}`)
+    out.push(...listed(t))
+  }
+  const project = c?.project ?? s.project
+  if (project != null) line('📦', `Project: ${project}`)
+  if (c !== null) {
+    line('🌿', `Branch: ${c.branch}`)
+    line('🏷️', `Version: ${c.version}`)
+  }
   if (s.project != null) {
-    if (s.server == null) line('▫️', 'No server')
+    if (s.server == null) line('▫️', 'Server: none')
     else if (!s.server.known) line(ICONS.unknown, 'Server: unknown')
-    else line(s.server.running ? ICONS.serverUp : ICONS.serverDown, s.server.running ? 'Server running' : 'Server stopped')
+    else line(s.server.running ? ICONS.serverUp : ICONS.serverDown, `Server: ${s.server.running ? 'running' : 'stopped'}`)
     const t = s.tests
     if (t == null) line('🧪', 'Tests: never run')
     else if (!t.known) line(ICONS.unknown, 'Tests: unknown')
-    else if (t.status !== 'succeeded') line('🧪', `Tests: last run ${t.status} · ${ago(t.at, now)}`)
-    else if ((t.failed ?? 0) > 0) line('🔴', `Tests: ${t.failed} failing of ${t.ran} · ${ago(t.at, now)}`)
-    else line('✅', `Tests: ${t.passed} passed · ${ago(t.at, now)}`)
-    const r = s.running, a = s.tasks_attention, f = s.failed_jobs, sc = s.scheduled, p = s.policies
-    if (unknown(r)) line(ICONS.unknown, 'Running: unknown')
-    else line(ICONS.running, r!.count ? `Running: ${names(r)}` : 'Nothing running')
-    if (unknown(a)) line(ICONS.unknown, 'Tasks: unknown')
-    else if (a!.count) line(ICONS.tasks, `Needs you: ${names(a)}`)
-    if (unknown(f)) line(ICONS.unknown, 'Failed jobs: unknown')
-    else if (f!.count) line(ICONS.failed, `Failed (last ${f!.hours ?? 2} h): ${names(f)}`)
-    if (unknown(sc)) line(ICONS.unknown, 'Schedule: unknown')
-    else if (sc!.count) line(ICONS.scheduled, `Next hour: ${names(sc)}`)
-    if (unknown(p)) line(ICONS.unknown, 'Policies: unknown')
-    else line(p!.count ? ICONS.policies : '🛡️', p!.count ? `Policies failing: ${names(p)}` : 'Policies passing')
+    else if (t.status !== 'succeeded') line('🧪', `Tests: last run ${t.status} (${ago(t.at, now)})`)
+    else if ((t.failed ?? 0) > 0) line('🔴', `Tests: ${t.failed} failing of ${t.ran} (${ago(t.at, now)})`)
+    else line('✅', `Tests: ${t.passed} passed (${ago(t.at, now)})`)
+    topic(ICONS.running, 'Running jobs', s.running, true)
+    topic(ICONS.tasks, 'Needs you', s.tasks_attention, false)
+    topic(ICONS.failed, `Failed jobs (last ${s.failed_jobs?.hours ?? 2} h)`, s.failed_jobs, false)
+    topic(ICONS.scheduled, `Scheduled (next ${s.scheduled?.hours ?? 1} h)`, s.scheduled, false)
+    if (known(s.policies) && s.policies.count === 0) line('🛡️', 'Policies: all passing')
+    else topic(ICONS.policies, 'Failing policies', s.policies, true)
   }
   out.push('── little-workshop ──')
-  const d = s.dead_pillars, i = s.incidents
-  if (unknown(d)) line(ICONS.unknown, 'Pillars: unknown')
-  else line(d!.count ? ICONS.dead : '🟢', d!.count ? `Pillars down: ${names(d)} (${(d!.of ?? 0) - d!.count!}/${d!.of} up)` : `All ${d!.of} pillars up`)
-  if (unknown(i)) line(ICONS.unknown, 'Incidents: unknown')
-  else line(i!.count ? ICONS.incidents : '🧯', i!.count ? `Incidents (last ${i!.hours ?? 2} h): ${names(i)}` : `No incidents (last ${i!.hours ?? 2} h)`)
+  const d = s.dead_pillars
+  if (known(d) && d.count === 0) line('🟢', `Pillars: ${d.of} of ${d.of} up`)
+  else topic(ICONS.dead, `Pillars down (of ${d?.of ?? '?'})`, d, true)
+  topic(s.incidents?.count ? ICONS.incidents : '🧯', `Incidents (last ${s.incidents?.hours ?? 2} h)`, s.incidents, true)
   return out.join('\n')
 }
 
