@@ -312,21 +312,34 @@ REQ-000000416 to REQ-000000419) look at the whole **request** a user makes and p
 hooks and scripts that does it, calling Claude only where judgment was needed. They are worked out in the same
 `usage.mine_automation` run, from the same replay. Nothing is built from a proposal: a person decides.
 
-- **Request**: one prompt's calls from the first call code could make (`mining.actionable`) to the last call that
-  is not judgment. What came before (writing the code being finished) is the user's own work, not the request.
+- **Request** (revised 2026-10-07 on the first run over real sessions, REQ-000000416): one prompt can hold several
+  (a long prompt may start a branch, write code, finish it and start the next), so a request is carved around
+  each **purposeful action**, a state-changing step that is not housekeeping (loops, waits, `sleep`, `kill`,
+  `git add`/`stash`/`checkout`/`rm`, reads such as `cat` or `git grep`). It holds the action, the steps right
+  before it (preparing: test runs, markers, a commit) and the reads and waits right after it; a judgment call
+  ends it, as does, after the action, the next action of another family. An action repeated inside its own
+  request (a retry, a `--continue`) is one request. A request of fewer than 2 calls on median is a single
+  command, which the automation candidates already cover, and is not proposed (`MIN_CALLS`).
 - **Step** or **judgment**: a step is a call code could make in Claude's place (an MCP call, a shell command that
   does work, or one that reads the checkout's state, `git status`/`git log`/`ls`); judgment is reading or writing
-  files, free text, an inline script, a skill or a subagent. `ToolSearch` and `TodoWrite` are neither: a plugin
-  needs no schema loaded and no to-do list.
-- **Family**: requests are grouped by their last state-changing step, with the variants of one action taken as
-  one (the words `feature`, `improvement`, `hotfix`, `changed` dropped from a tool's name, `pillars` made
-  singular; a shell command's first two words), so one plugin covers every variant: the feature, improvement and
-  hotfix finishes are all `version_finish`, proposed as `finish-branch`. A release is its own family.
+  files, free text, an inline script, a script run from a scratch directory (`/tmp/…`), a here-document other
+  than a commit's message (a script writes that from the commit policies' rules), a skill or a subagent.
+  `ToolSearch` and `TodoWrite` are neither: a plugin needs no schema loaded and no to-do list. A judgment run of
+  at most 8 calls between two runs of the same step (tests fail, Claude fixes, tests run again) stays in the
+  request as a fallback point.
+- **Family**: requests are grouped by their action, with the variants of one action taken as one (the words
+  `feature`, `improvement`, `hotfix`, `changed` dropped from a tool's name, `pillars` made singular). A shell
+  command is named from its whole text, not its signature: past `cd`, `export`, wrappers (`timeout 900`,
+  `nohup`, `env`), preambles (`date;`, `echo …;`), redirections and `git -C <dir>`; `lws <pillar> <verb>` takes the
+  MCP tool's family; a loop takes the family of what it repeats; `bash -c '…'` that of the command it runs. So
+  the feature, improvement and hotfix finishes, by MCP or `lws`, are all `version_finish`, proposed as
+  `finish-branch`. A release is its own family.
 - **Proposed** when the group was seen in at least 3 sessions or 10 times in 14 days and Claude made a judgment
   call in at most 25% of its requests (`MAX_FALLBACK_RATE`). A group above that is reported by the mining run as
   `too_much_judgment` and not proposed.
-- **Steps covered**: every step any of its requests took, in the order they usually come, each with how often it
-  came and the signatures it came as.
+- **Steps covered**: the action and every step in at least 25% of the group's requests (`CORE_SHARE`), in the
+  order they usually come, each with how often it came and the signatures it came as; the rarer steps are listed
+  apart as `rare_steps`.
 - **Fallback points**: each run of judgment calls, named after the step before it (`start` when none): how
   often, how often that step had failed just before, the tools Claude used there, the calls it took and what it
   cost per week. These are the only places the plugin hands over to Claude.

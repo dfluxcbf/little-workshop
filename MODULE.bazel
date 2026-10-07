@@ -1,6 +1,6 @@
 module(
     name = "little_workshop",
-    version = "0.2.67",
+    version = "0.2.68-dev.1",
 )
 
 bazel_dep(name = "rules_shell", version = "0.6.1")

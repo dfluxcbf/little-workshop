@@ -569,7 +569,7 @@ def drop_stale_candidates(conn: sqlite3.Connection, found: set[str]) -> int:
 
 # -- plugin proposals ----------------------------------------------------------------
 
-PROPOSAL_DATA = ("usage", "steps", "fallbacks", "projects", "install", "examples", "absorbs")
+PROPOSAL_DATA = ("usage", "steps", "rare_steps", "fallbacks", "projects", "install", "examples", "absorbs")
 
 
 def record_plugin_proposal(conn: sqlite3.Connection, proposal: dict) -> str:
