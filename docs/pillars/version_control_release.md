@@ -25,7 +25,8 @@ repository in a half-finished state.
 
 - **Topic branches** (`feature`/`improvement`) — start from the
   integration branch, finish by rebase + squash to one `feat (N): name`
-  (or `impr (N): name`) commit, merge `--no-ff`, patch-version bump,
+  (or `impr (N): name`) commit, squash merge into the integration branch (one commit, no merge
+  commit; 2026-10-07), patch-version bump,
   delete the branch. `--continue`/`--abort` resume or cancel a finish
   paused by a real rebase conflict.
 - **Hotfixes** — start from the production branch, finish by merging into

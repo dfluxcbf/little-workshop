@@ -469,6 +469,13 @@ def test_candidates_and_triggers_are_read_through_the_client(paths, monkeypatch)
     assert candidates[0] == ((paths,), {"state": "open", "limit": 10}) and listed[0] == ((paths,), {})
 
 
+def test_plugin_proposals_are_read_through_the_client(paths, monkeypatch):
+    """REQ-000000419."""
+    proposals = _fake_client_call(monkeypatch, "usage_plugin_proposals", result=[{"name": "finish-branch", "examples": [1, 2]}])
+    assert tools_mod.TOOLS_BY_NAME["workshop_usage_plugin_proposals"].handler(paths, {"limit": 500}) == [{"name": "finish-branch", "examples": [1]}]
+    assert proposals[0] == ((paths,), {"state": "open", "limit": 50})
+
+
 def test_trigger_add_and_remove_build_the_orchestration_calls(paths, monkeypatch):
     added = _fake_client_call(monkeypatch, "add_trigger", result={"id": "t1"})
     removed = _fake_client_call(monkeypatch, "remove_trigger", result={"removed": "t1"})

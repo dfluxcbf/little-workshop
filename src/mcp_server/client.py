@@ -285,6 +285,11 @@ def usage_candidates(paths: Paths, *, state: str = "open", limit: int | None = N
     return _get(paths, "usage", "/v1/candidates", params=params, timeout=timeout)
 
 
+def usage_plugin_proposals(paths: Paths, *, state: str = "open", limit: int | None = None, timeout: float = 10.0) -> dict:
+    params = {"state": state, **({"limit": limit} if limit is not None else {})}
+    return _get(paths, "usage", "/v1/plugin_proposals", params=params, timeout=timeout)
+
+
 def list_triggers(paths: Paths, *, timeout: float = 5.0):
     return _get(paths, "orchestration", "/v1/triggers", timeout=timeout)
 

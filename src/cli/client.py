@@ -817,6 +817,16 @@ def usage_candidates(paths: Paths, *, state: str = "open", limit: int | None = N
         raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
 
 
+def usage_plugin_proposals(paths: Paths, *, state: str = "open", limit: int | None = None, timeout: float = 10.0) -> list:
+    try:
+        with client_for_socket(paths.socket_path("usage"), timeout=timeout) as client:
+            response = client.get("/v1/plugin_proposals", params={"state": state, **({"limit": limit} if limit is not None else {})})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
+
+
 def trigger_request(paths: Paths, method: str, path: str = "", *, json: dict | None = None, timeout: float = 10.0):
     """One call to Orchestration's `/v1/triggers` routes; a refusal's reason is in the error."""
     try:
