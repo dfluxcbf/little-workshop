@@ -118,7 +118,7 @@ once a hook or its transcript supplies the directory.
 ## Store
 
 `sessions`, `requests`, `tool_calls`, `session_events`, `transcript_events`, `plan_pressure`, `day_rollups` (day ×
-project × origin × model), `run_usage`, `findings`, `experiments`, `candidates`, `branch_finishes`,
+project × origin × model), `run_usage`, `findings`, `experiments`, `candidates`, `plugin_proposals`, `branch_finishes`,
 `requirement_snapshots`, `doctor_reports`, `meta`. Requests, tool calls and transcript events older than `retention_days` (120,
 never under 35) are pruned; a day's rollup stays, so the store, not the raw transcripts, is the long-term
 record (decision 4). `usage.purge_project` removes a project's rows.
@@ -305,6 +305,62 @@ The candidates the baseline showed (proposal §11.3) are built: `workshop_job_wa
 `deployment.redeploy_changed_pillars` with its trigger, `requirements.sync_markers`, the test-output filter and
 the policies digest.
 
+## Plugin proposals
+
+Automation mining looks at short runs of calls; plugin proposals (`usage/plugins.py`, 2026-10-07,
+REQ-000000416 to REQ-000000419) look at the whole **request** a user makes and propose a Claude Code plugin of
+hooks and scripts that does it, calling Claude only where judgment was needed. They are worked out in the same
+`usage.mine_automation` run, from the same replay. Nothing is built from a proposal: a person decides.
+
+- **Request**: one prompt's calls from the first call code could make (`mining.actionable`) to the last call that
+  is not judgment. What came before (writing the code being finished) is the user's own work, not the request.
+- **Step** or **judgment**: a step is a call code could make in Claude's place (an MCP call, a shell command that
+  does work, or one that reads the checkout's state, `git status`/`git log`/`ls`); judgment is reading or writing
+  files, free text, an inline script, a skill or a subagent. `ToolSearch` and `TodoWrite` are neither: a plugin
+  needs no schema loaded and no to-do list.
+- **Family**: requests are grouped by their last state-changing step, with the variants of one action taken as
+  one (the words `feature`, `improvement`, `hotfix`, `changed` dropped from a tool's name, `pillars` made
+  singular; a shell command's first two words), so one plugin covers every variant: the feature, improvement and
+  hotfix finishes are all `version_finish`, proposed as `finish-branch`. A release is its own family.
+- **Proposed** when the group was seen in at least 3 sessions or 10 times in 14 days and Claude made a judgment
+  call in at most 25% of its requests (`MAX_FALLBACK_RATE`). A group above that is reported by the mining run as
+  `too_much_judgment` and not proposed.
+- **Steps covered**: every step any of its requests took, in the order they usually come, each with how often it
+  came and the signatures it came as.
+- **Fallback points**: each run of judgment calls, named after the step before it (`start` when none): how
+  often, how often that step had failed just before, the tools Claude used there, the calls it took and what it
+  cost per week. These are the only places the plugin hands over to Claude.
+- **Claude usage, explicitly**: occurrences per week and a frequency (daily, weekly, occasional), the median
+  calls, turns and tokens (context read plus text written by the request's turns) per occurrence, and the weighted
+  cost per week *today* (each request replayed as a whole, as a trigger would replace it) and *with the plugin*
+  (only its fallback runs, replayed as they happened, plus the plugin's command in every session's starting
+  context, 30 tokens a request). The net saving per week ranks the proposals; one under $0.10 is not listed.
+- **Scope**: all projects when the requests came from two or more projects, else the one project. The plugin is
+  installed from little-workshop's local marketplace (`little-workshop`) with Claude Code's own commands: user scope
+  for all projects, project scope in the project's checkout (`claude plugin install <name>@little-workshop
+  --scope user|project`). Everything stays on this machine.
+- **Absorbs**: the open automation candidates all of whose calls are steps of the plugin.
+- **Listing**: `GET /v1/plugin_proposals?state=` (open by default, `all`), `workshop_usage_plugin_proposals`,
+  `lws usage plugin-proposals`. A decision is `POST /v1/plugin_proposals/{id} {"state": "accepted" | "dismissed" |
+  "done" | "open"}`; an open proposal mining no longer finds is dropped, a decided one is kept. The plugins
+  *installed* are Claude Code's to list: `claude plugin list`, or `/plugin` in a session.
+
+**Reference plugin, `finish-branch`** (agreed 2026-10-07, not built): finishes any `feature/`, `improvement/` or
+`hotfix/` branch of one project or of every project (root last, taking over `stabilize_branches.py`), through
+the little-workshop routes only, started by `/finish-branch [project|--all] [--push]`, which a
+`UserPromptSubmit` hook runs and answers without the model. Steps: the daemon and branch state; commit pending
+changes with the subject the policies want and the `REQ-` ids of the changed tests' markers (never
+little-workshop's generated files: it stops there); `requirements.sync_markers`; the Definition-of-Done run and
+its wait; the policy preflight; `version.<type>_finish` and its wait (rebase, squash merge or, for a hotfix,
+merge, tag and back-merge, `VERSION`, branch deleted); a held finish reported, never confirmed; with `--push`,
+the branches pushed after checking the no-reply e-mail; for little-workshop, the changed pillars redeployed
+unless a trigger already did. Claude is called only for a commit with no `REQ-` to cite (the diff stat), failing
+tests (their output), a preflight failure that needs content written, and a rebase conflict the user hands over
+(the conflicted files).
+
+Grouping by the user's own words instead of the call shape would need the prompt text stored, which the pillar
+does not keep; it is in the backlog.
+
 ## Data explorer
 
 Data kept before it has a use, each kind plotted on one card at the bottom of the Claude usage page
@@ -364,7 +420,7 @@ All are code; none uses Claude.
 | `usage.analyze` | Rolls up, runs the detectors, opens, refreshes and resolves findings, measures the experiments that are due |
 | `usage.measure_experiment` | Measures one running experiment now |
 | `usage.optimize` | Starts the fixed optimization task for a project's chosen findings |
-| `usage.mine_automation` | Mines the last 14 days of tool calls into candidates; updates tokens avoided |
+| `usage.mine_automation` | Mines the last 14 days of tool calls into candidates and plugin proposals; updates tokens avoided |
 | `usage.automate` | Starts the fixed task on little-workshop for one candidate at once (the Dashboard's "Make it a task" opens New task with it instead) |
 
 ## Proxies
@@ -373,11 +429,12 @@ All are code; none uses Claude.
   Each plot is drawn at its on-screen width with a colour legend (a comparison week dashed) and dates on its
   x axis; on a phone each table row stacks into label and value lines (REQ-000000355). The
   [Data explorer](#data-explorer) is its last section.
-- MCP: `workshop_usage_summary`, `workshop_usage_findings`, `workshop_usage_candidates` (reads, every project;
-  candidates come ten at a time with one example each, `limit` up to 50),
+- MCP: `workshop_usage_summary`, `workshop_usage_findings`, `workshop_usage_candidates`,
+  `workshop_usage_plugin_proposals` (reads, every project; candidates and proposals come ten at a time with one
+  example each, `limit` up to 50),
   `workshop_usage_doctor`, `workshop_usage_ingest_transcripts`, `workshop_usage_analyze`,
   `workshop_usage_mine_automation` (little-workshop's sessions), `workshop_usage_configure_claude` (asks).
-- CLI: `lws usage summary | findings | candidates | analyze | mine-automation | doctor | ingest-transcripts |
+- CLI: `lws usage summary | findings | candidates | plugin-proposals | analyze | mine-automation | doctor | ingest-transcripts |
   configure-claude [--apply]`.
 - Events reported to Orchestration's triggers: `claude.session_ended`, `usage.finding_opened`.
 - Job catalog: *Optimize Claude usage* (every project), *Apply common Claude configuration* and

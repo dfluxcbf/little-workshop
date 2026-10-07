@@ -820,6 +820,13 @@ def _usage_candidates(paths: Paths, args: JSONDict) -> Any:
     return [{**row, "examples": (row.get("examples") or [])[:1]} for row in rows] if isinstance(rows, list) else rows
 
 
+def _usage_plugin_proposals(paths: Paths, args: JSONDict) -> Any:
+    """A short page with one example each, as candidates come."""
+    limit = min(int(args.get("limit") or _CANDIDATES_DEFAULT), _CANDIDATES_MAX)
+    rows = client.usage_plugin_proposals(paths, state=args.get("state") or "open", limit=limit)
+    return [{**row, "examples": (row.get("examples") or [])[:1]} for row in rows] if isinstance(rows, list) else rows
+
+
 def _usage_mine_automation(paths: Paths, args: JSONDict) -> Any:
     return _usage_job(paths, "usage.mine_automation", {})
 
@@ -1408,8 +1415,17 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"]),
                       "limit": _prop("integer", "How many, from the costliest. Default 10, at most 50.")}),
              _usage_candidates),
-    ToolSpec("workshop_usage_mine_automation", "Mine the last 14 days of tool calls into automation candidates now. "
-             "No Claude involved, and nothing is implemented from it.", _schema(), _usage_mine_automation),
+    ToolSpec("workshop_usage_plugin_proposals", "Plugin proposals: whole requests Claude handles the same way, mostly "
+             "without judgment, proposed as a Claude Code plugin of hooks and scripts that calls Claude only at its "
+             "fallback points. Each gives its scope (one project or all), the steps it covers, how often and at which step "
+             "Claude would still be needed, the calls, turns and tokens per occurrence, the weekly cost today and with the "
+             "plugin, the candidates it absorbs and how to install it. Ranked by the net saving per week. The plugins "
+             "installed are listed by Claude Code itself (`claude plugin list`, `/plugin`).",
+             _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"]),
+                      "limit": _prop("integer", "How many, from the costliest. Default 10, at most 50.")}),
+             _usage_plugin_proposals),
+    ToolSpec("workshop_usage_mine_automation", "Mine the last 14 days of tool calls into automation candidates and plugin "
+             "proposals now. No Claude involved, and nothing is implemented from it.", _schema(), _usage_mine_automation),
     ToolSpec("workshop_trigger_list", "List the workshop triggers: each fires a Job when an event happens (a Job "
              "settling, a branch finishing, a Claude session ending, a finding opening).", _schema(), _trigger_list),
     ToolSpec("workshop_trigger_add", "Add a workshop trigger: when `event` happens (job.settled, job.succeeded, "

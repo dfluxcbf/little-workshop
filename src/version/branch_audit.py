@@ -116,7 +116,7 @@ def audit(repo_root: Path) -> list[Violation]:
             continue  # long-lived by design, exempt from staleness/stale-merged checks
 
         targets = [integration] if branch_type != "hotfix" else [integration, production]
-        merged = all(gitops.is_ancestor(repo_root, ref, target) for target in targets)
+        merged = all(gitops.is_merged(repo_root, ref, target) for target in targets)
 
         if branch_type == "unknown":
             action = "delete (already merged)." if merged else (

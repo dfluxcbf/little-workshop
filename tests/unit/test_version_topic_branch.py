@@ -118,3 +118,36 @@ def test_improvement_prefix_works_identically(tmp_path):
     finish = cmd_topic_finish(repo, prefix="improvement", commit_label="impr")
     assert finish.success, finish.message
     assert current_branch(repo) == "dev"
+
+
+# --- REQ-000000420: A feature or improvement finish lands on dev as one squash commit; a hotfix merges with --no-ff ---
+
+
+def _log(repo, revisions, *extra):
+    return subprocess.run(["git", "log", "--format=%s", *extra, revisions], cwd=repo, capture_output=True, text=True).stdout.split("\n")[:-1]
+
+
+def test_a_finished_branch_lands_on_dev_as_one_squash_commit(tmp_path):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    before = subprocess.run(["git", "rev-parse", "dev"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    cmd_topic_start(repo, prefix="improvement", name="widgets")
+    _write_commit(repo, "widgets.py", "a = 1\n", "wip 1")
+    _write_commit(repo, "widgets.py", "a = 2\n", "wip 2")
+
+    result = cmd_topic_finish(repo, prefix="improvement", commit_label="impr")
+    assert result.success, result.message
+    assert _log(repo, f"{before}..dev", "--merges") == []  # no merge commit
+    assert _log(repo, f"{before}..dev") == ["chore: bump version to 0.1.1", "impr (-1): widgets"]
+    assert (repo / "widgets.py").read_text() == "a = 2\n"
+
+
+def test_a_hotfix_still_merges_with_no_ff(tmp_path):
+    from version.commands.hotfix import cmd_hotfix_finish, cmd_hotfix_start
+
+    repo = make_repo(tmp_path)
+    cmd_hotfix_start(repo, "urgent-fix")
+    _write_commit(repo, "fix.py", "x = 1\n", "the fix")
+    assert cmd_hotfix_finish(repo).success
+    assert _log(repo, "master", "--merges", "-1") != []
+    assert _log(repo, "dev", "--merges", "-1") != []

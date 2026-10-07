@@ -9,12 +9,12 @@ prompts, and the policies listed in [policy_register.md](policy_register.md).
 |---|---|
 | `master` | Production. Always releasable |
 | `dev` | Integration. Work lands here before release |
-| `feature/<name>`, `improvement/<name>` | From `dev`; merged back into `dev` with `--no-ff` |
+| `feature/<name>`, `improvement/<name>` | From `dev`; squash-merged back into `dev` (one commit, no merge commit) |
 | `release/<version>` | Cut from `dev`; merged into `master` and back into `dev` |
 | `hotfix/<name>` | From `master`; merged into `master` and `dev` |
 | `support/<version>` | Maintenance of an older release line |
 
-- Merges use `git merge --no-ff`. A hotfix reaches the integration branch **by merge only**; it is never
+- A hotfix or a release merges with `git merge --no-ff`; a feature or improvement is squash-merged. A hotfix reaches the integration branch **by merge only**; it is never
   copied commit by commit.
 - An agent task on a milestone uses `feature/`; every other task uses `improvement/`. The agent
   never commits on the integration branch, never merges, never force-pushes, and never pushes:
@@ -97,4 +97,4 @@ requirements pass, all policies pass. A running app is relaunched when the relea
 - Stray branches, detached HEAD and extra worktrees are observed read-only by the cross-repo
   branch audit.
 
-Last reviewed: 2026-10-02 (hand edit: the commit-msg policy hook).
+Last reviewed: 2026-10-07 (hand edit: features and improvements are squash-merged; source docs/version_policy.md).

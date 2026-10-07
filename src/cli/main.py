@@ -1808,6 +1808,16 @@ def cmd_usage_candidates(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_usage_plugin_proposals(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _print(client.usage_plugin_proposals(paths, state=args.state, limit=args.limit))
+    except client.UsagePillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_usage_mine_automation(args: argparse.Namespace) -> int:
     return _usage_job("usage.mine_automation", {})
 
@@ -2079,7 +2089,12 @@ def build_parser() -> argparse.ArgumentParser:
     u_candidates.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "done", "all"])
     u_candidates.add_argument("--limit", type=int, default=20, help="How many, from the costliest (default 20)")
     u_candidates.set_defaults(func=cmd_usage_candidates)
-    u_mine = usage_sub.add_parser("mine-automation", help="Mine the last 14 days of tool calls into automation candidates")
+    u_plugins = usage_sub.add_parser("plugin-proposals", help="Requests Claude repeats that a plugin of hooks and scripts could take "
+                                     "over, ranked by the net saving (installed plugins: `claude plugin list`)")
+    u_plugins.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "done", "all"])
+    u_plugins.add_argument("--limit", type=int, default=20, help="How many, from the costliest (default 20)")
+    u_plugins.set_defaults(func=cmd_usage_plugin_proposals)
+    u_mine = usage_sub.add_parser("mine-automation", help="Mine the last 14 days of tool calls into automation candidates and plugin proposals")
     u_mine.set_defaults(func=cmd_usage_mine_automation)
     u_doctor = usage_sub.add_parser("doctor", help="Check the configuration usage collection depends on")
     u_doctor.set_defaults(func=cmd_usage_doctor)
