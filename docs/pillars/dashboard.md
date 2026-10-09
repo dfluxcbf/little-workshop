@@ -731,3 +731,39 @@ REQ-000000411, REQ-000000412. What a Claude session shows of the workshop, read 
   what is behind each count above zero, linked to its page; a group with nothing to list says so in one line. It
   follows the jobs, tasks, schedule, policies, incidents and pillars topics live and looks again every minute, since
   its windows move with the clock (`window.liveRefresh` in `static/live.js`). The icons are the phone's.
+
+## Assets: reviewing a project's Blender assets (2026-10-09)
+
+REQ-000000426 to REQ-000000430. A project opts in by naming one folder of its checkout, its **visible asset folder**
+(Registry & Portfolio's `projects.assets_dir`, set with the `project.configure_assets` Job: `lws project
+configure-assets --project-id <id> --dir <folder>`, MCP `workshop_project_configure_assets`; empty turns it off). Only
+that folder and its subfolders are ever listed or served: `common/assets.py` resolves every path inside it and refuses
+absolute paths, `..` and links leading out.
+
+- **Entry**: where the project has the folder, `/docs/{project}` shows an **Assets** button above its list of
+  documents (the overview the agent pillar returns carries `assets_dir`).
+- **Page** `/assets/{project}[?path=<file>]`: the folder's own tree on the left (Blender files, glTF models, images and
+  Markdown files; empty folders and `.view` bundle folders are left out), the selected file on the right. A Blender
+  file shows its 3D model (`<model-viewer>`, vendored in `static/vendor/`, no CDN), the ten previews, the UV layout and
+  the textures, each one an image linked at full size; a dot in the tree says whether its bundle is current, stale (the
+  `.blend` changed after the export) or missing. A `.glb`, an image or a Markdown file opens as it is. Files are served
+  by `/assets/{project}/file` with `script-src 'none'`.
+- **Comment**: the textarea under an asset saves `<asset name>.md` beside it (`house.blend` and `house.png` therefore
+  share `house.md`; an empty comment deletes the file). It is written in place, never committed by little-workshop, and
+  a Markdown file with a same-named sibling asset is shown as that asset's comment, not as a document.
+- **Bundle**, written by the per-project `asset-review` MCP server and read by the page: `<dir>/<name>.view/` beside the
+  `.blend` holds `model.glb`, `view_front|right|back|left|top|bottom.png`, `view_ortho_top_1|2.png` and
+  `view_ortho_bottom_1|2.png` (orthographic cameras at ±35° elevation, azimuth 45° and 225°), `uv_layout.png`,
+  `textures/<image>.png` and `manifest.json`. The Agentic Development pillar serves the tree, details, files and
+  comments (`/v1/assets/{project}...`, direct reads and writes like the review comments); the Dashboard only proxies.
+
+**The `asset-review` MCP server** (`src/asset_mcp/`, `lws asset-mcp serve --project-id <id>`, declared in the project's
+`.mcp.json` by `project.configure_assets`; the project's own settings enable it) has `asset_list`, `asset_export`
+(`path`, optional `collection` and `resolution`) and `asset_status`. `asset_export` runs Blender headless
+(`asset_mcp/blender_export.py` inside Blender: the glTF exporter, a Workbench render with the textures shown, UV layout
+drawn with numpy because `uv.export_layout` needs a GPU, textures saved as PNG). It finds Blender through
+`$BLENDER_PATH`, `blender` on PATH or the newest `/mnt/c/Program Files/Blender Foundation/Blender */blender.exe`
+(paths converted with `wslpath -w`). By default it exports every visible mesh outside collections named `Reference`
+or `Scratch`; pass `collection` to export one. A step that fails is listed in the manifest and the tool's result,
+and the others still run. Not done: showing FBX files, and exporting from the Dashboard itself (a Job could call the
+same runner).

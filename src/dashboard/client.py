@@ -400,6 +400,24 @@ def doc_image(paths: Paths, project_id: str, path: str) -> tuple[bytes, str]:
     return response.content, response.headers.get("content-type", "application/octet-stream")
 
 
+def asset_tree(paths: Paths, project_id: str) -> dict:
+    """{assets_dir, tree: [node]}; a node is a dir (`children`) or a file (`kind`, `commented`, `bundle`)."""
+    return _call(paths, "agent", "GET", f"/v1/assets/{project_id}").json()
+
+
+def asset_details(paths: Paths, project_id: str, path: str) -> dict:
+    return _call(paths, "agent", "GET", f"/v1/assets/{project_id}/asset", params={"path": path}).json()
+
+
+def asset_file(paths: Paths, project_id: str, path: str) -> tuple[bytes, str]:
+    response = _call(paths, "agent", "GET", f"/v1/assets/{project_id}/file", params={"path": path})
+    return response.content, response.headers.get("content-type", "application/octet-stream")
+
+
+def put_asset_comment(paths: Paths, project_id: str, path: str, body: str) -> dict:
+    return _call(paths, "agent", "PUT", f"/v1/assets/{project_id}/comment", json={"path": path, "body": body}).json()
+
+
 def review_comments(paths: Paths, project_id: str, *, branch: str | None = None, path: str | None = None) -> list[dict]:
     params = {k: v for k, v in {"branch": branch, "path": path}.items() if v is not None}
     return _call(paths, "agent", "GET", f"/v1/reviews/{project_id}", params=params).json()["comments"]

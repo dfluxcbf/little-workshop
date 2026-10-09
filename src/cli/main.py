@@ -335,6 +335,30 @@ def cmd_project_connect_github(args: argparse.Namespace) -> int:
     return 0 if result.get("status") == "succeeded" else 1
 
 
+def cmd_project_configure_assets(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    if not args.off and not args.dir:
+        print("error: give --dir <folder> or --off", file=sys.stderr)
+        return 2
+    try:
+        result = client.create_job(
+            paths, type="project.configure_assets", target_pillar="registry", project_id=args.project_id,
+            params={"assets_dir": "" if args.off else args.dir, "mcp": not args.no_mcp},
+            queue_key=args.project_id, depends_on=[], created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_asset_mcp_serve(args: argparse.Namespace) -> int:
+    from asset_mcp.server import serve
+
+    return serve(Paths.from_env(), args.project_id)
+
+
 def cmd_project_list(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     _print(client.list_projects(paths, status=args.status))
@@ -2288,6 +2312,15 @@ def build_parser() -> argparse.ArgumentParser:
     project_connect.add_argument("--no-labels", dest="ensure_labels", action="store_false", default=True)
     project_connect.set_defaults(func=cmd_project_connect_github)
 
+    project_assets = project_sub.add_parser(
+        "configure-assets", help="Choose the checkout folder whose assets the Dashboard shows, and give the project the asset-review MCP server"
+    )
+    project_assets.add_argument("--project-id", required=True)
+    project_assets.add_argument("--dir", default=None, help="Folder of the checkout, relative to its root")
+    project_assets.add_argument("--off", action="store_true", help="Turn asset review off for the project")
+    project_assets.add_argument("--no-mcp", action="store_true", help="Do not declare the MCP server in .mcp.json")
+    project_assets.set_defaults(func=cmd_project_configure_assets)
+
     project_import = project_sub.add_parser("import", help="Register an existing, already-conformant repository")
     project_import.add_argument("name")
     project_import.add_argument("--path", required=True)
@@ -2993,6 +3026,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     mcp_serve = mcp_sub.add_parser("serve", help="Run the MCP server over stdio (what `claude mcp add` registers)")
     mcp_serve.set_defaults(func=cmd_mcp_serve)
+
+    asset_mcp = subparsers.add_parser("asset-mcp", help="The per-project asset-review MCP server (3D model and previews of Blender files)")
+    asset_mcp_sub = asset_mcp.add_subparsers(dest="asset_mcp_command", required=True)
+    asset_mcp_serve = asset_mcp_sub.add_parser("serve", help="Run the asset-review MCP server over stdio for one project")
+    asset_mcp_serve.add_argument("--project-id", required=True)
+    asset_mcp_serve.set_defaults(func=cmd_asset_mcp_serve)
 
     return parser
 

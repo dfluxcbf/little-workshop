@@ -43,6 +43,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from urllib.parse import quote
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -1408,6 +1409,48 @@ def build_app(paths: Paths) -> FastAPI:
         except client.PillarUnavailable:
             return Response("agent pillar unreachable", status_code=503)
         return Response(body, media_type=media_type, headers={"Content-Security-Policy": "script-src 'none'"})
+
+    # ---- Assets: the project's visible asset folder (3D models, previews, textures) ----
+
+    @app.get("/assets/{project}", response_class=HTMLResponse)
+    def assets_project(request: Request, project: str, path: str = ""):
+        error, tree, details, doc_html = None, None, None, None
+        try:
+            tree = client.asset_tree(paths, project)
+            if path:
+                details = client.asset_details(paths, project, path)
+                if details["kind"] == "doc":
+                    doc_html = markdown.render_document(details["doc"] or "", project=project, path=path)
+        except client.Refused as exc:
+            error = exc.detail
+        except client.PillarUnavailable as exc:
+            error = str(exc)
+        return _render(
+            request, "assets.html", project=project, tree=(tree or {}).get("tree", []), assets_dir=(tree or {}).get("assets_dir"),
+            path=path, details=details, doc_html=doc_html, error=error, nav_active="docs", saved=request.query_params.get("saved"),
+        )
+
+    @app.get("/assets/{project}/file")
+    def assets_file(project: str, path: str):
+        try:
+            body, media_type = client.asset_file(paths, project, path)
+        except client.Refused as exc:
+            return Response(exc.detail, status_code=exc.status)
+        except client.PillarUnavailable:
+            return Response("agent pillar unreachable", status_code=503)
+        # Served from the dashboard's own origin: scripts in an SVG or Markdown asset must never run.
+        return Response(body, media_type=media_type, headers={"Content-Security-Policy": "script-src 'none'", "Cache-Control": "no-cache"})
+
+    @app.post("/assets/{project}/comment")
+    def assets_comment(project: str, path: str = Form(...), body: str = Form("")):
+        back = f"/assets/{project}?path={quote(path)}"
+        try:
+            client.put_asset_comment(paths, project, path, body.replace("\r\n", "\n"))
+        except client.Refused as exc:
+            return _back(back, f"Could not save the comment: {exc.detail}")
+        except client.PillarUnavailable as exc:
+            return _back(back, f"Could not save the comment: {exc}")
+        return RedirectResponse(back + "&saved=1", status_code=303)
 
     @app.put("/docs/{project}/comments/{comment_id}")
     async def docs_comment_put(request: Request, project: str, comment_id: str):

@@ -26,7 +26,8 @@ from common.pillar_socket import resolve_pillar_socket
 from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
 from common.workspace import WORKSPACE_ID, workspace_dir
-from agent import db, peek, procs, review_store
+from agent import assets as asset_review, db, peek, procs, review_store
+from common.assets import AssetError
 from agent.remote_control import RemoteControl, RemoteControlError, resolve as resolve_claude_session, status as remote_control_status
 from agent.doc_update import DocUpdateError, DocUpdateFlow
 from agent.flow import STOPPED_BY_USER, AgentFlow, AgentFlowError, intent_error
@@ -88,6 +89,11 @@ def resume_doc_updates(paths: Paths, conn: sqlite3.Connection, doc_flow: DocUpda
         threading.Thread(target=doc_flow.watch, args=(conn, update["job_id"], project_dir), daemon=True).start()
         resumed.append(update["job_id"])
     return resumed
+
+
+class AssetCommentRequest(BaseModel):
+    path: str
+    body: str = ""
 
 
 class ReviewCommentRequest(BaseModel):
@@ -505,9 +511,13 @@ def build_app(
                 entry["certified"] += 1
             else:
                 entry["done" if comment.get("status") == review_store.DONE else "open"] += 1
+        try:
+            assets_dir = resolve_project(paths, project_id).get("assets_dir")
+        except ProjectResolutionError:
+            assets_dir = None
         return {
             "project_id": project_id, "branch": branch, "branches": review_store.list_branches(project_dir),
-            "dirty": gitutil_is_dirty(project_dir),
+            "dirty": gitutil_is_dirty(project_dir), "assets_dir": assets_dir,
             "files": [{"path": f, **counts.get(f, {"open": 0, "done": 0, "certified": 0})} for f in review_store.list_docs(project_dir)],
         }
 
@@ -520,6 +530,34 @@ def build_app(
     def read_image(project_id: str, path: str) -> Response:
         body, media_type = _review(review_store.read_image, _project_dir(project_id), path)
         return Response(body, media_type=media_type)
+
+    # -- asset review: the project's visible asset folder ----------------------
+
+    def _assets(fn, project_id: str, *args):
+        try:
+            row = resolve_project(paths, project_id)
+            return fn(Path(row["path"]), row.get("assets_dir"), *args)
+        except ProjectResolutionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except AssetError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc))
+
+    @app.get("/v1/assets/{project_id}")
+    def list_assets(project_id: str) -> dict:
+        return _assets(asset_review.tree, project_id)
+
+    @app.get("/v1/assets/{project_id}/asset")
+    def asset_details(project_id: str, path: str) -> dict:
+        return _assets(asset_review.details, project_id, path)
+
+    @app.get("/v1/assets/{project_id}/file")
+    def asset_file(project_id: str, path: str) -> Response:
+        body, media_type = _assets(asset_review.read_file, project_id, path)
+        return Response(body, media_type=media_type)
+
+    @app.put("/v1/assets/{project_id}/comment")
+    def asset_comment(project_id: str, request: AssetCommentRequest) -> dict:
+        return _assets(asset_review.write_comment, project_id, request.path, request.body)
 
     @app.get("/v1/reviews/{project_id}")
     def list_review_comments(project_id: str, branch: str | None = None, path: str | None = None) -> dict:

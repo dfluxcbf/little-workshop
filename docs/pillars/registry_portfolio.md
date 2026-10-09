@@ -205,3 +205,10 @@ entry (its update time stays), and the Dashboard's backlog pages read them inste
 `lws project backlog list|show|add|delete --project-id <p>` and `workshop_project_backlog_list|get|add|delete`
 act only on the named project's backlog (an entry of another project is refused). Reading and adding are
 pre-allowed in a project's session; deleting asks, being irreversible.
+
+## Asset review configuration (2026-10-09)
+
+`projects.assets_dir` (nullable, added to an existing database on start) is the checkout folder whose assets the
+Dashboard shows; the `project.configure_assets` Job (`assets_dir`, `mcp`) validates it lies inside the checkout,
+records it and merges the `asset-review` server into the checkout's `.mcp.json` (an empty folder removes it). The
+whole feature is described in `dashboard.md` ("Assets"). REQ-000000426.

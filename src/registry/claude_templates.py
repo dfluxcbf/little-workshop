@@ -109,7 +109,7 @@ MCP_ASK = (
     "workshop_agent_run_task", "workshop_agent_finish_task", "workshop_agent_skip_task",
     "workshop_agent_ci_check", "workshop_agent_session_start", "workshop_agent_session_stop",
     "workshop_project_bootstrap", "workshop_project_import", "workshop_project_connect_github",
-    "workshop_project_remove", "workshop_project_backlog_delete",
+    "workshop_project_configure_assets", "workshop_project_remove", "workshop_project_backlog_delete",
     "workshop_version_init", "workshop_version_config_add_hook", "workshop_version_config_remove_hook",
     "workshop_deployment_set_manifest", "workshop_deployment_seed_confirmation",
     "workshop_requirements_publish", "workshop_requirements_delete", "workshop_requirements_suite_delete",
@@ -191,7 +191,7 @@ LWS_ASK = (
     "job stop", "job policy-confirm", "job answer",
     "schedule add", "schedule edit", "schedule remove", "schedule trigger", "schedule cancel",
     "schedule postpone", "schedule queue set",
-    "project bootstrap", "project connect-github", "project import", "project remove", "project backlog delete",
+    "project bootstrap", "project connect-github", "project configure-assets", "project import", "project remove", "project backlog delete",
     "version init", "version config-add-hook", "version config-remove-hook",
     "requirements publish", "requirements delete", "requirements suite delete", "requirements import",
     "policy projects set",
@@ -216,7 +216,7 @@ LWS_UNLISTED = (
     "requirements export", "requirements test-structure-create",
     "build print-pip-config", "build write-pip-config", "build pip", "build print-vsix-urls",
     "deployment rollback-timeout", "deployment redeploy-pillar-worker", "deployment rollback-pillar-worker",
-    "worktree provision", "worktree release", "mcp serve",
+    "worktree provision", "worktree release", "mcp serve", "asset-mcp serve",
     "bypass_policies",  # the user's alone (needs sudo); the command itself refuses Claude
 )
 

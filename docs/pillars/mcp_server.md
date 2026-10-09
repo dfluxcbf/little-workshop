@@ -79,3 +79,10 @@ its checklist so the question can be relayed.
 - **Discovered through**: Core, for every pillar it proxies into — but
   it is never itself discovered through Core by another pillar, since
   nothing calls *into* MCP Server except its own MCP client.
+
+## Asset-review server (2026-10-09)
+
+A second, per-project MCP server lives beside this one: `lws asset-mcp serve --project-id <id>` (`src/asset_mcp/`),
+declared in a project's own `.mcp.json` rather than registered at user scope, so only projects that opted in have it.
+Its tools (`asset_list`, `asset_export`, `asset_status`) and the bundle they write are in `dashboard.md` ("Assets").
+This server's catalog gains `workshop_project_configure_assets`, the route that opts a project in.

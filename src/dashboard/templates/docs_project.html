@@ -17,6 +17,13 @@
   </form>
 </div>
 
+{% if overview.assets_dir %}
+<div class="assets-entry">
+  <a class="btn primary" href="/assets/{{ project }}">Assets</a>
+  <span class="muted">3D models, previews and textures in <code>{{ overview.assets_dir }}</code></span>
+</div>
+{% endif %}
+
 <h2 class="section-label">Documents</h2>
 <div class="report-list">
   {% for f in overview.files %}

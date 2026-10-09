@@ -31,6 +31,7 @@ from common.pillar_socket import resolve_pillar_socket
 from common.uds_client import client_for_socket
 from registry import agent_client, backlog, claude_sync, db, github, gitops, version_client
 from registry.bootstrap import BootstrapError, bootstrap_project
+from registry.assets_config import AssetsConfigError, configure_assets
 from registry.connect_github import ConnectGitHubError, connect_github
 from registry.import_ import ProjectImportError, import_project
 from registry.models import BootstrapParams, ConnectGitHubParams, ImportParams, ProjectSet, ProjectStatus, Ticket
@@ -179,6 +180,19 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
                 detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else str(exc)
                 return {"outcome": "failed", "error": detail}
         return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
+
+    @app.post("/v1/jobs/project.configure_assets")
+    def job_configure_assets(request: JobRequest) -> dict:
+        """Params: `assets_dir` (folder of the checkout to show; empty turns asset review off), `mcp` (default true:
+        declare the project's `asset-review` MCP server in its `.mcp.json`)."""
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project name"}
+        with reported(request), lock:
+            try:
+                result = configure_assets(conn, request.project_id, request.params.get("assets_dir"), mcp=request.params.get("mcp", True) is not False)
+            except AssetsConfigError as exc:
+                return {"outcome": "failed", "error": str(exc)}
+        return {"outcome": "succeeded", "result": result}
 
     @app.post("/v1/jobs/project.remove")
     def job_remove(request: JobRequest) -> dict:
