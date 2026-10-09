@@ -12,8 +12,9 @@ server that generates the derived files:
   the ten preview renders `view_<name>.png`, `uv_<mesh>.png` UV layouts,
   `textures/<image>.png` and `manifest.json`. A bundle folder is never listed
   as a folder of its own: it belongs to its Blender file.
-- **Comment**: the reviewer's comment on an asset is the Markdown file with the
-  asset's name and the `.md` suffix, beside it (`<dir>/<name>.md`).
+- **Comment**: the reviewer's comment on an asset is the Markdown file named after
+  the whole asset file plus `.md`, beside it (`house.blend` -> `house.blend.md`,
+  `example.png` -> `example.png.md`).
 - **Containment**: every path is relative to the asset folder and resolved
   inside it; `..`, absolute paths and links leading out are refused.
 """
@@ -85,7 +86,7 @@ def bundle_dir(blend: Path) -> Path:
 
 
 def comment_file(asset: Path) -> Path:
-    return asset.with_suffix(".md")
+    return asset.with_name(asset.name + ".md")
 
 
 def kind_of(path: Path) -> str | None:
@@ -102,11 +103,11 @@ def kind_of(path: Path) -> str | None:
 
 
 def is_comment(path: Path) -> bool:
-    """A Markdown file that has a sibling asset of the same name is that asset's comment."""
+    """A Markdown file named after a sibling asset file (`house.blend.md`) is that asset's comment."""
     if path.suffix.lower() != ".md":
         return False
-    return any(sibling.stem == path.stem and kind_of(sibling) in ("blend", "model", "image")
-               for sibling in path.parent.iterdir() if sibling != path)
+    asset = path.with_name(path.stem)
+    return asset.suffix != "" and kind_of(asset) in ("blend", "model", "image") and asset.is_file()
 
 
 def read_manifest(blend: Path) -> dict | None:

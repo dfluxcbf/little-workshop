@@ -104,7 +104,7 @@ def read_file(checkout: Path, assets_dir: str | None, rel: str) -> tuple[bytes, 
 
 
 def write_comment(checkout: Path, assets_dir: str | None, rel: str, body: str) -> dict:
-    """Save the comment on an asset beside it as `<asset name>.md`; an empty body deletes the file."""
+    """Save the comment on an asset beside it as `<asset file name>.md`; an empty body deletes the file."""
     root = conv.asset_root(checkout, assets_dir)
     target = conv.resolve_inside(root, rel)
     kind = conv.kind_of(target)

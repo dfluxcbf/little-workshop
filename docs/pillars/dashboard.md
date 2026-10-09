@@ -748,9 +748,10 @@ absolute paths, `..` and links leading out.
   the textures, each one an image linked at full size; a dot in the tree says whether its bundle is current, stale (the
   `.blend` changed after the export) or missing. A `.glb`, an image or a Markdown file opens as it is. Files are served
   by `/assets/{project}/file` with `script-src 'none'`.
-- **Comment**: the textarea under an asset saves `<asset name>.md` beside it (`house.blend` and `house.png` therefore
-  share `house.md`; an empty comment deletes the file). It is written in place, never committed by little-workshop, and
-  a Markdown file with a same-named sibling asset is shown as that asset's comment, not as a document.
+- **Comment**: the textarea under an asset saves `<asset file name>.md` beside it (`house.blend.md`,
+  `example.png.md`: each asset file has its own; an empty comment deletes the file). It is written in place, never
+  committed by little-workshop, and a Markdown file named after a sibling asset file is shown as that asset's comment,
+  not as a document.
 - **Bundle**, written by the per-project `asset-review` MCP server and read by the page: `<dir>/<name>.view/` beside the
   `.blend` holds `model.glb`, `view_front|right|back|left|top|bottom.png`, `view_ortho_top_1|2.png` and
   `view_ortho_bottom_1|2.png` (orthographic cameras at ±35° elevation, azimuth 45° and 225°), `uv_layout.png`,

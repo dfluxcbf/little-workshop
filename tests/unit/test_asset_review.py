@@ -74,12 +74,16 @@ def test_paths_outside_the_folder_are_refused(checkout):
     assert conv.resolve_inside(root, "house/house.blend") == root / "house" / "house.blend"
 
 
-def test_a_comment_file_is_recognised_by_a_sibling_asset_of_the_same_name(checkout):
+def test_a_comment_file_is_named_after_the_whole_asset_file(checkout):
     house = checkout / "art" / "house"
-    (house / "house.md").write_text("comment", encoding="utf-8")
-    assert conv.is_comment(house / "house.md") is True
+    (house / "house.blend.md").write_text("comment", encoding="utf-8")
+    (house / "previews" / "front.png.md").write_text("comment", encoding="utf-8")
+    assert conv.is_comment(house / "house.blend.md") is True
+    assert conv.is_comment(house / "previews" / "front.png.md") is True
     assert conv.is_comment(house / "NOTES.md") is False
-    assert conv.comment_file(house / "house.blend") == house / "house.md"
+    assert conv.is_comment(house / "gone.blend.md") is False  # its asset is not there: an ordinary document
+    assert conv.comment_file(house / "house.blend") == house / "house.blend.md"
+    assert conv.comment_file(house / "previews" / "front.png") == house / "previews" / "front.png.md"
 
 
 def test_bundle_state_follows_the_blend_file(checkout):
@@ -109,7 +113,7 @@ def test_the_tree_mirrors_the_folder_and_hides_bundles_and_empty_folders(agent):
     client, checkout, _ = agent
     blend = checkout / "art" / "house" / "house.blend"
     _bundle(blend)
-    (checkout / "art" / "house" / "house.md").write_text("looks good", encoding="utf-8")
+    (checkout / "art" / "house" / "house.blend.md").write_text("looks good", encoding="utf-8")
     tree = client.get("/v1/assets/proj").json()
     assert tree["assets_dir"] == "art"
     assert _names(tree["tree"]) == [
@@ -136,7 +140,7 @@ def test_details_of_a_blend_list_its_bundle_files(agent):
     assert [v["name"] for v in bundle["views"]] == ["front", "top"]
     assert bundle["uv"][0]["path"] == "house/house.view/uv_layout.png"
     assert bundle["textures"][0]["path"] == "house/house.view/textures/Base.png"
-    assert body["comment"] == "" and body["comment_path"] == "house/house.md"
+    assert body["comment"] == "" and body["comment_path"] == "house/house.blend.md"
 
 
 def test_files_are_served_with_their_type_and_nothing_else(agent):
@@ -155,14 +159,14 @@ def test_files_are_served_with_their_type_and_nothing_else(agent):
 def test_a_comment_is_written_beside_the_asset_and_read_back(agent):
     client, checkout, _ = agent
     saved = client.put("/v1/assets/proj/comment", json={"path": "house/house.blend", "body": "Roof too flat"}).json()
-    assert saved == {"path": "house/house.blend", "comment_path": "house/house.md", "saved": True}
-    assert (checkout / "art" / "house" / "house.md").read_text(encoding="utf-8") == "Roof too flat\n"
+    assert saved == {"path": "house/house.blend", "comment_path": "house/house.blend.md", "saved": True}
+    assert (checkout / "art" / "house" / "house.blend.md").read_text(encoding="utf-8") == "Roof too flat\n"
     assert client.get("/v1/assets/proj/asset", params={"path": "house/house.blend"}).json()["comment"] == "Roof too flat\n"
     # the comment file is not listed as a document of its own
     names = [c["name"] for c in client.get("/v1/assets/proj").json()["tree"][0]["children"]]
-    assert "house.md" not in names
+    assert "house.blend.md" not in names and "house.md" not in names
     assert client.put("/v1/assets/proj/comment", json={"path": "house/house.blend", "body": "  \n"}).json()["saved"] is False
-    assert not (checkout / "art" / "house" / "house.md").exists()
+    assert not (checkout / "art" / "house" / "house.blend.md").exists()
 
 
 def test_a_comment_is_refused_outside_the_folder_and_on_a_document(agent):
@@ -319,9 +323,9 @@ def test_the_page_saves_a_comment_and_shows_it_again(dashboard):
     client, checkout = dashboard
     response = client.post("/assets/proj/comment", data={"path": "house/house.blend", "body": "More windows\r\nPlease"}, follow_redirects=False)
     assert response.status_code == 303 and unquote(response.headers["location"]).endswith("path=house/house.blend&saved=1")
-    assert (checkout / "art" / "house" / "house.md").read_text(encoding="utf-8") == "More windows\nPlease\n"
+    assert (checkout / "art" / "house" / "house.blend.md").read_text(encoding="utf-8") == "More windows\nPlease\n"
     text = client.get("/assets/proj", params={"path": "house/house.blend", "saved": "1"}).text
-    assert "More windows" in text and "house/house.md" in text and "Saved." in text
+    assert "More windows" in text and "house/house.blend.md" in text and "Saved." in text
 
 
 def test_the_page_refuses_a_comment_outside_the_folder(dashboard):
