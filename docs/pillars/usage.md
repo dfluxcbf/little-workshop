@@ -358,18 +358,25 @@ hooks and scripts that does it, calling Claude only where judgment was needed. T
   "done" | "open"}`; an open proposal mining no longer finds is dropped, a decided one is kept. The plugins
   *installed* are Claude Code's to list: `claude plugin list`, or `/plugin` in a session.
 
-**Reference plugin, `finish-branch`** (agreed 2026-10-07, not built): finishes any `feature/`, `improvement/` or
-`hotfix/` branch of one project or of every project (root last, taking over `stabilize_branches.py`), through
-the little-workshop routes only, started by `/finish-branch [project|--all] [--push]`, which a
-`UserPromptSubmit` hook runs and answers without the model. Steps: the daemon and branch state; commit pending
-changes with the subject the policies want and the `REQ-` ids of the changed tests' markers (never
-little-workshop's generated files: it stops there); `requirements.sync_markers`; the Definition-of-Done run and
-its wait; the policy preflight; `version.<type>_finish` and its wait (rebase, squash merge or, for a hotfix,
-merge, tag and back-merge, `VERSION`, branch deleted); a held finish reported, never confirmed; with `--push`,
-the branches pushed after checking the no-reply e-mail; for little-workshop, the changed pillars redeployed
-unless a trigger already did. Claude is called only for a commit with no `REQ-` to cite (the diff stat), failing
-tests (their output), a preflight failure that needs content written, and a rebase conflict the user hands over
-(the conflicted files).
+**Reference plugin, `finish-branch`** (agreed 2026-10-07, built 2026-10-09, REQ-000000422 to REQ-000000425):
+`plugins/finish-branch/`, in the local marketplace `little-workshop` (`plugins/.claude-plugin/marketplace.json`).
+`python3 tools/install_plugins.py` adds the marketplace and installs (or updates) each plugin at user scope with
+`claude plugin marketplace add|update` and `claude plugin install|update`, so every project's sessions have it.
+It finishes the checked-out `feature/`, `improvement/` or `hotfix/` branch of one project or of every project
+(`--all`, the super-repository last, taking over `stabilize_branches.py`), through the little-workshop routes only,
+started by `/finish-branch [project|--all] [--push]`, which a `UserPromptSubmit` hook runs
+(`scripts/finish_branch.py`, stdlib only) and answers without the model. Steps: the daemon (down: nothing runs);
+the branch and a rebase in progress; the pending changes committed with the subject the policies want
+(`feat|impr|fix (-1): <name>`) and the `REQ-` ids of the changed tests' markers (`REQ-NONE` when no source
+changed; never little-workshop's generated files: it stops there); `requirements sync-markers`; the
+Definition-of-Done run, only where the project's `.claude/finish-branch.json` names a `test_command`; the policy
+preflight; `lws version <type>-finish` and its wait (rebase, squash merge or, for a hotfix, merge, tag and
+back-merge, `VERSION`, branch deleted); a held finish reported, never confirmed; for little-workshop, the changed
+pillars redeployed unless a trigger already does; with `--push`, the integration branch (a hotfix also the
+production branch) pushed after checking the no-reply e-mail. Claude is called only (the hook then gives it the
+facts as context instead of answering) for a commit with source changes and no `REQ-` to cite (the diff stat),
+failing tests (their output), a preflight failure (the failing policies), a finish that did not succeed, a
+rebase conflict (the conflicted files) and files little-workshop generates.
 
 Grouping by the user's own words instead of the call shape would need the prompt text stored, which the pillar
 does not keep; it is in the backlog.
