@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from common.job_steps import StepReporter, reporting
+from common.job_steps import StepReporter, reporting, step
 from common.paths import Paths
 # `report_crash`: the route handler below is itself called report_incident.
 from common.incident import install_incident_reporting, report_incident as report_crash
@@ -27,7 +27,9 @@ from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
 from common.workspace import WORKSPACE_ID, workspace_dir
 from agent import assets as asset_review, db, peek, procs, review_store
+from common import assets as asset_conv
 from common.assets import AssetError
+from asset_mcp import runner as asset_runner
 from agent.remote_control import RemoteControl, RemoteControlError, resolve as resolve_claude_session, status as remote_control_status
 from agent.doc_update import DocUpdateError, DocUpdateFlow
 from agent.flow import STOPPED_BY_USER, AgentFlow, AgentFlowError, intent_error
@@ -604,6 +606,53 @@ def build_app(
         if result.returncode != 0:
             return {"outcome": "failed", "error": (result.stderr or result.stdout).strip()}
         return {"outcome": "succeeded", "result": {"branch": review_store.current_branch(project_dir)}}
+
+    @app.post("/v1/jobs/agent.export_asset")
+    def job_export_asset(request: JobRequest) -> dict:
+        """Export the model and previews of the Blender files in `params.paths` (relative to the project's
+        visible asset folder): what the Dashboard's Export button starts. Runs Blender headless, one file at a
+        time, off the request thread, and reports the outcome back when the last file is done."""
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        try:
+            row = resolve_project(paths, request.project_id)
+            root = asset_conv.asset_root(Path(row["path"]), row.get("assets_dir"))
+            blends = []
+            for rel in request.params.get("paths") or []:
+                target = asset_conv.resolve_inside(root, str(rel))
+                if target.suffix.lower() != asset_conv.BLEND_SUFFIX or not target.is_file():
+                    raise AssetError(f"not a .blend file in the asset folder: {rel!r}", 404)
+                blends.append((str(rel), target))
+            if not blends:
+                raise AssetError("no Blender file was named")
+        except (ProjectResolutionError, AssetError) as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        job_id = request.job_id
+
+        def worker() -> None:
+            exported, failures = [], []
+            with reported(job_id):
+                try:
+                    with step("export") as handle:
+                        for rel, target in blends:
+                            try:
+                                outcome = asset_runner.export_bundle(target)
+                            except asset_runner.BlenderError as exc:
+                                failures.append(f"{rel}: {exc}")
+                                continue
+                            (exported if outcome["ok"] else failures).append(rel if outcome["ok"] else f"{rel}: " + "; ".join(outcome["errors"]))
+                        handle.detail = f"{len(exported)} of {len(blends)} exported"
+                        if failures:
+                            raise RuntimeError(" | ".join(failures))
+                except RuntimeError:
+                    pass
+            if failures:
+                _complete_orchestration_job(paths, job_id, succeeded=False, result={"exported": exported}, error=" | ".join(failures))
+            else:
+                _complete_orchestration_job(paths, job_id, succeeded=True, result={"exported": exported}, error=None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"outcome": "accepted", "result": {"dispatched": True, "files": len(blends)}}
 
     @app.post("/v1/jobs/agent.update_docs")
     def job_update_docs(request: JobRequest) -> dict:

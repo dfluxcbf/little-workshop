@@ -48,7 +48,7 @@ def test_docs_index_lists_projects(test_client):
 def test_project_page_lists_docs_branches_and_the_send_form(test_client, monkeypatch):
     _stub(monkeypatch)
     text = test_client.get("/docs/little-widget").text
-    assert "/docs/little-widget/view?path=docs/guide.md" in text
+    assert "/docs/little-widget/view?path=README.md" in text and "/docs/little-widget?dir=docs" in text
     assert "2 open" in text and "1 done" in text
     assert '<option value="feature/x"' in text and '<option value="dev" selected' in text
     assert 'action="/docs/little-widget/update"' in text and "Remote Control" in text
@@ -174,3 +174,51 @@ def test_static_cache_buster_follows_the_newest_static_file(tmp_path):
     assert TestClient(app).get("/docs").status_code == 200
     assert int(os.path.getmtime(static / "review.js")) <= newest
     assert f"?v={newest}" in TestClient(app).get("/docs").text
+
+
+# --- REQ-000000431: The Docs page of a project is organised as its folders ---
+
+TREE = {**OVERVIEW, "files": [
+    {"path": "README.md", "open": 2, "done": 1, "certified": 0},
+    {"path": "docs/guide.md", "open": 1, "done": 0, "certified": 0},
+    {"path": "docs/pillars/agent.md", "open": 0, "done": 3, "certified": 1},
+    {"path": "docs/pillars/dashboard.md", "open": 4, "done": 0, "certified": 0},
+]}
+
+
+def test_the_root_shows_folders_first_as_cards_with_the_totals_beneath_them(test_client, monkeypatch):
+    _stub(monkeypatch, overview=TREE)
+    text = test_client.get("/docs/little-widget").text
+    assert text.index('class="dg-card dg-folder"') < text.index('class="dg-card dg-file"')
+    assert "/docs/little-widget?dir=docs" in text and "3 documents" in text
+    assert "5 open" in text and "3 done" in text and "1 certified" in text
+    assert "docs/guide.md" not in text and "/docs/little-widget/view?path=README.md" in text
+    assert 'action="/docs/little-widget/checkout"' in text  # the branch and update controls stay on the root
+
+
+def test_a_folder_page_lists_its_own_entries_with_a_breadcrumb_back(test_client, monkeypatch):
+    _stub(monkeypatch, overview=TREE)
+    text = test_client.get("/docs/little-widget", params={"dir": "docs"}).text
+    assert "/docs/little-widget/view?path=docs/guide.md" in text and "/docs/little-widget?dir=docs/pillars" in text
+    assert "README.md" not in text and 'action="/docs/little-widget/update"' not in text
+    assert 'href="/docs/little-widget">little-widget</a>' in text and "<strong>docs</strong>" in text
+    deeper = test_client.get("/docs/little-widget", params={"dir": "docs/pillars"}).text
+    assert "/docs/little-widget/view?path=docs/pillars/agent.md" in deeper and "/docs/little-widget?dir=docs\"" in deeper
+    assert "<strong>pillars</strong>" in deeper
+
+
+def test_an_unknown_folder_says_it_is_empty_and_dots_cannot_leave_the_project(test_client, monkeypatch):
+    _stub(monkeypatch, overview=TREE)
+    assert "This folder has no documents" in test_client.get("/docs/little-widget", params={"dir": "nothing"}).text
+    escaped = test_client.get("/docs/little-widget", params={"dir": "../docs"}).text
+    assert "/docs/little-widget/view?path=docs/guide.md" in escaped  # `..` is dropped, not followed
+
+
+def test_folder_view_builds_entries_and_breadcrumbs():
+    from dashboard import docs_tree
+
+    view = docs_tree.folder_view(TREE["files"], "docs/")
+    assert [f["name"] for f in view["files"]] == ["guide.md"]
+    assert view["folders"] == [{"name": "pillars", "path": "docs/pillars", "files": 2, "open": 4, "done": 3, "certified": 1}]
+    assert view["crumbs"] == [{"name": "docs", "path": "docs"}]
+    assert docs_tree.folder_view([], "")["exists"] is True and docs_tree.folder_view([], "x")["exists"] is False

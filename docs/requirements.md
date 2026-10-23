@@ -967,3 +967,15 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | REQ-000000428 | **The Dashboard has an Assets page for projects with a visible asset folder.** Where a project has a visible asset folder, the Dashboard shall show an Assets button above the project's list of documents, leading to an Assets page that shows the folder's tree and, for the selected Blender file, its 3D model, its ten preview images, its UV layout and its textures, and for a glTF model, an image or a Markdown file, the file itself, each texture and UV image being visible directly. | draft |
 | REQ-000000429 | **A comment on an asset is a Markdown file beside it.** When the user saves a comment on an asset in the Assets page, the Agentic Development pillar shall write it as the Markdown file named after the whole asset file plus the .md suffix (house.blend.md) beside the asset, delete that file when the comment is emptied, refuse an asset outside the visible folder, and the Assets page shall show the saved comment again. | draft |
 | REQ-000000430 | **The asset-review MCP server exports a Blender file's model and previews.** When the asset_export tool of a project's asset-review MCP server is called for a Blender file in the visible asset folder, the server shall run Blender headless and write beside the file, in a folder named after it with the .view suffix, a glTF binary model, previews from the front, right, back, left, top and bottom and from two orthographic corners above and two below with the textures applied, the UV layout and the textures the materials use, and a manifest, shall list the folder's Blender files with their bundle state with asset_list, and shall refuse any path outside the folder. | draft |
+
+## Documentation review: the Docs page as folders (2026-10-09)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000431 | **The Docs page of a project is organised as its folders.** When the user opens a project's Docs page, the Dashboard shall show the documents of the project's root folder as a grid of two columns of cards, subfolders first, each folder card showing how many documents lie beneath it with their open, done and certified comment counts and opening a page of its own for that folder with a breadcrumb back to the root, and each document card opening the document. | draft |
+
+## Asset review: the Export button (2026-10-09)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000432 | **An Export button on the Assets page exports a Blender file's model and previews.** When the user presses the Export button shown under the export state of a Blender file on the Assets page, the Dashboard shall start the catalogued Export Blender assets Job for that file, which the Agentic Development pillar runs by running Blender headless to write the file's bundle, shall show the file as exporting and reload itself until the Job ends, shall not start a second export of a file that is being exported, and shall refuse a file that is not a Blender file of the project's visible asset folder. | draft |

@@ -766,5 +766,21 @@ drawn with numpy because `uv.export_layout` needs a GPU, textures saved as PNG).
 `$BLENDER_PATH`, `blender` on PATH or the newest `/mnt/c/Program Files/Blender Foundation/Blender */blender.exe`
 (paths converted with `wslpath -w`). By default it exports every visible mesh outside collections named `Reference`
 or `Scratch`; pass `collection` to export one. A step that fails is listed in the manifest and the tool's result,
-and the others still run. Not done: showing FBX files, and exporting from the Dashboard itself (a Job could call the
-same runner).
+and the others still run. Not done: showing FBX files.
+
+## The Docs page as folders (2026-10-09)
+
+REQ-000000431. `/docs/{project}` shows the project's Markdown files as their folder tree, one directory at a time:
+a grid of two columns of cards (one on a phone), subfolders first. A folder card carries how many documents lie
+beneath it and their open, done and certified comment counts, and opens `/docs/{project}?dir=<folder>`, a page of its
+own with a breadcrumb back to the root; a document card opens the review viewer. The branch picker, the Assets button
+and the update-docs controls stay on the root page. `dashboard/docs_tree.py` builds the entries from the agent's flat
+file list; `..` in `dir` is dropped, so a folder name can only select among the listed paths.
+
+**Export button** (REQ-000000432): under the export state of a Blender file the Assets page has **Export** (or
+**Update export** / **Export again**). It posts `/assets/{project}/export`, which builds the catalogued `export_asset`
+job (`job_catalog.py`: `agent.export_asset`, queue `<project>:assets`, `params.paths` the files, offered on the New Job
+page too with the project's `.blend` files as choices) and starts it. The agent pillar's handler checks every path
+is a `.blend` inside the visible folder, answers `accepted` and runs `asset_mcp.runner.export_bundle` on each file in a
+worker thread, reporting its one step and the outcome back. While a queued or running export names the file the page
+shows "exporting…" and reloads every 4 seconds; a second press for the same file is refused.

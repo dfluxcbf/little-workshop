@@ -29,6 +29,9 @@ STEPS: dict[str, tuple[StepSpec, ...]] = {
         StepSpec("check_session", "Check dtach is installed, no session is running and the folder is trusted"),
         StepSpec("launch_session", "Launch the Remote Control session"),
     ),
+    "agent.export_asset": (
+        StepSpec("export", "Export each Blender file: 3D model, ten previews, UV layout and textures"),
+    ),
     "agent.update_docs": (
         StepSpec("claim_comments", "Claim the branch's open review comments"),
         StepSpec("start_session", "Create the worktree and start the Claude session"),

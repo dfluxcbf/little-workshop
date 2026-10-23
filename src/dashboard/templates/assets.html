@@ -44,7 +44,19 @@
         <h2 class="as-title">{{ details.name }}</h2>
         <p class="muted as-sub">{{ details.path }} · {{ (details.size / 1024) | round | int }} KB</p>
       </div>
-      {% if details.kind == 'blend' %}<span class="pill {{ {'ready': 'ok', 'stale': 'warn', 'none': 'idle'}[details.bundle.state] }}">{{ {'ready': 'exported', 'stale': 'changed since export', 'none': 'not exported'}[details.bundle.state] }}</span>{% endif %}
+      {% if details.kind == 'blend' %}
+      <div class="as-state">
+        <span class="pill {{ 'ok' if exporting else {'ready': 'ok', 'stale': 'warn', 'none': 'idle'}[details.bundle.state] }}">{{ 'exporting…' if exporting else {'ready': 'exported', 'stale': 'changed since export', 'none': 'not exported'}[details.bundle.state] }}</span>
+        {% if exporting %}
+        <span class="muted as-wait" data-reload="4000">Blender is working on it…</span>
+        {% else %}
+        <form method="post" action="/assets/{{ project }}/export">
+          <input type="hidden" name="path" value="{{ details.path }}">
+          <button type="submit" class="{{ 'primary' if details.bundle.state != 'ready' }}" data-busy="Starting…">{{ {'ready': 'Export again', 'stale': 'Update export', 'none': 'Export'}[details.bundle.state] }}</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
     </div>
     {% if message %}<div class="card"><p style="margin:0">{{ message }}</p></div>{% endif %}
 
@@ -54,7 +66,7 @@
       <div class="panel as-stage"><model-viewer src="{{ file_url(b.model) }}" alt="{{ details.name }}" camera-controls touch-action="pan-y" auto-rotate shadow-intensity="0.8" exposure="1.1" interaction-prompt="none"></model-viewer></div>
       {% else %}
       <div class="panel as-hint"><h2>No 3D model yet</h2>
-        <p class="muted">Ask Claude in the project's session to run the <code>asset_export</code> tool of the <code>asset-review</code> MCP server with <code>{{ details.path }}</code>. It writes <code>{{ details.name.rsplit('.', 1)[0] }}.view/</code> beside the file.</p></div>
+        <p class="muted">Press <strong>Export</strong> above: Blender runs on the server and writes <code>{{ details.name.rsplit('.', 1)[0] }}.view/</code> beside the file. If it stays not exported, the Jobs page shows why. Claude can also do it with the <code>asset_export</code> tool of the project's <code>asset-review</code> MCP server.</p></div>
       {% endif %}
       {% if b.errors %}<div class="card fail"><p style="margin:0 0 6px"><strong>The last export reported:</strong></p>{% for e in b.errors %}<pre class="as-err">{{ e }}</pre>{% endfor %}</div>{% endif %}
       {% if b.views %}
@@ -91,5 +103,11 @@
   </section>
 </div>
 <script type="module" src="/static/vendor/model-viewer.min.js"></script>
+<script>
+(function () {
+  var wait = document.querySelector("[data-reload]");
+  if (wait) setTimeout(function () { location.reload(); }, parseInt(wait.dataset.reload, 10));
+})();
+</script>
 {% endif %}
 {% endblock %}

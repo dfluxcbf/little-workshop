@@ -444,3 +444,97 @@ def test_the_runner_reports_a_blender_that_leaves_no_result(tmp_path, monkeypatc
 def test_the_ten_views_are_the_four_sides_top_bottom_and_four_orthographic_corners():
     assert list(conv.VIEWS) == ["front", "right", "back", "left", "top", "bottom", "ortho_top_1", "ortho_top_2", "ortho_bottom_1", "ortho_bottom_2"]
     assert all(conv.VIEWS[n][1] > 0 for n in ("ortho_top_1", "ortho_top_2")) and all(conv.VIEWS[n][1] < 0 for n in ("ortho_bottom_1", "ortho_bottom_2"))
+
+
+# --- REQ-000000432: An Export button on the Assets page exports a Blender file's model and previews ---
+
+
+def test_the_catalog_builds_the_export_job_from_the_chosen_blender_files():
+    from dashboard import job_catalog
+
+    template, error = job_catalog.build_job("proj", "export_asset", {"arg_blend": ["house/house.blend", "house/house.blend", "b.blend"]})
+    assert error is None
+    assert template == {"type": "agent.export_asset", "target_pillar": "agent", "project_id": "proj", "queue_key": "proj:assets",
+                        "params": {"paths": ["house/house.blend", "b.blend"]}}
+    assert job_catalog.build_job("proj", "export_asset", {})[0] is None  # a file must be chosen
+
+
+def test_the_export_button_starts_the_catalogued_job_for_the_file(dashboard, monkeypatch):
+    client, _ = dashboard
+    sent = []
+    monkeypatch.setattr(dashboard_client, "list_jobs", lambda *a, **k: [])
+    monkeypatch.setattr(dashboard_client, "create_job", lambda paths, **job: sent.append(job) or {"status": "queued"})
+    text = client.get("/assets/proj", params={"path": "house/house.blend"}).text
+    assert 'action="/assets/proj/export"' in text and ">Export<" in text and "not exported" in text
+    response = client.post("/assets/proj/export", data={"path": "house/house.blend"}, follow_redirects=False)
+    assert "Export started" in unquote(response.headers["location"])
+    assert sent[0]["type"] == "agent.export_asset" and sent[0]["params"] == {"paths": ["house/house.blend"]} and sent[0]["created_by"] == "dashboard"
+
+
+def test_a_file_being_exported_shows_exporting_and_cannot_be_exported_twice(dashboard, monkeypatch):
+    client, _ = dashboard
+    running = {"id": "j1", "type": "agent.export_asset", "project_id": "proj", "status": "running", "params": {"paths": ["house/house.blend"]}}
+    monkeypatch.setattr(dashboard_client, "list_jobs", lambda *a, **k: [running])
+    sent = []
+    monkeypatch.setattr(dashboard_client, "create_job", lambda paths, **job: sent.append(job) or {"status": "queued"})
+    text = client.get("/assets/proj", params={"path": "house/house.blend"}).text
+    assert "exporting…" in text and "data-reload" in text and 'action="/assets/proj/export"' not in text
+    response = client.post("/assets/proj/export", data={"path": "house/house.blend"}, follow_redirects=False)
+    assert "already being exported" in unquote(response.headers["location"]) and sent == []
+
+
+def test_the_button_offers_an_update_when_stale_and_a_repeat_when_current(dashboard, monkeypatch):
+    client, checkout = dashboard
+    monkeypatch.setattr(dashboard_client, "list_jobs", lambda *a, **k: [])
+    blend = checkout / "art" / "house" / "house.blend"
+    _bundle(blend)
+    assert "Export again" in client.get("/assets/proj", params={"path": "house/house.blend"}).text
+    os.utime(blend, (time.time() + 100, time.time() + 100))
+    assert "Update export" in client.get("/assets/proj", params={"path": "house/house.blend"}).text
+
+
+def _wait_for(captured):
+    for _ in range(100):
+        if captured:
+            return captured[0]
+        time.sleep(0.05)
+    raise AssertionError("the export worker did not report")
+
+
+def test_the_agent_job_exports_each_file_and_reports_back(agent, monkeypatch):
+    client, checkout, _ = agent
+    done, exported = [], []
+    monkeypatch.setattr("agent.app._complete_orchestration_job", lambda paths, job_id, **kw: done.append((job_id, kw)))
+    monkeypatch.setattr("agent.app.asset_runner.export_bundle", lambda blend, **kw: exported.append(blend.name) or {"ok": True, "errors": [], "objects": 1})
+    answer = client.post("/v1/jobs/agent.export_asset", json={"job_id": "j9", "project_id": "proj", "params": {"paths": ["house/house.blend"]}}).json()
+    assert answer["outcome"] == "accepted" and answer["result"]["files"] == 1
+    job_id, outcome = _wait_for(done)
+    assert job_id == "j9" and outcome["succeeded"] is True and outcome["result"] == {"exported": ["house/house.blend"]} and exported == ["house.blend"]
+
+
+def test_the_agent_job_reports_a_failed_export_with_its_reason(agent, monkeypatch):
+    client, *_ = agent
+    done = []
+    monkeypatch.setattr("agent.app._complete_orchestration_job", lambda paths, job_id, **kw: done.append((job_id, kw)))
+
+    def boom(blend, **kw):
+        raise runner.BlenderError("Blender was not found")
+
+    monkeypatch.setattr("agent.app.asset_runner.export_bundle", boom)
+    client.post("/v1/jobs/agent.export_asset", json={"job_id": "j8", "project_id": "proj", "params": {"paths": ["house/house.blend"]}})
+    _, outcome = _wait_for(done)
+    assert outcome["succeeded"] is False and "house/house.blend: Blender was not found" in outcome["error"]
+
+
+def test_the_agent_job_refuses_paths_that_are_not_blend_files_in_the_folder(agent):
+    client, *_ = agent
+    for paths in (["props/barrel.glb"], ["../secret.txt"], ["/etc/passwd"], ["house/missing.blend"], []):
+        answer = client.post("/v1/jobs/agent.export_asset", json={"job_id": "j", "project_id": "proj", "params": {"paths": paths}}).json()
+        assert answer["outcome"] == "failed", paths
+
+
+def test_the_blend_choices_list_the_projects_blender_files_with_their_state(dashboard, monkeypatch):
+    client, checkout = dashboard
+    _bundle(checkout / "art" / "house" / "house.blend")
+    body = client.get("/jobs/catalog/choices/blend", params={"project": "proj"}).json()
+    assert body["choices"] == [{"value": "house/house.blend", "label": "house/house.blend", "detail": "exported"}]

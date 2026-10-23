@@ -52,6 +52,7 @@ from common.job_steps import format_seconds
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.workspace import WORKSPACE_ID, workspace_dir
+from dashboard import docs_tree
 from dashboard import calendar, client, job_catalog, live, markdown, prefs, statistics
 
 GATE_POINT_VALUES = [
@@ -61,6 +62,7 @@ GATE_POINT_VALUES = [
 
 # Documentation review's update job, and the Job statuses that count as "not finished yet".
 DOC_UPDATE_JOB = "agent.update_docs"
+ASSET_EXPORT_JOB = "agent.export_asset"
 # A backlog entry's own record of Claude's work on it (Registry & Portfolio keeps it on the entry), by kind:
 # (since, job, error) columns. Claude's answer comes within the 600s of an agent.query that reads the
 # project's checkout (Orchestration gives up at 630s), so a mark older than BACKLOG_ACTIVITY_STALE
@@ -1290,7 +1292,7 @@ def build_app(paths: Paths) -> FastAPI:
         return _render(request, "docs.html", projects=names, error=error, nav_active="docs")
 
     @app.get("/docs/{project}", response_class=HTMLResponse)
-    def docs_project(request: Request, project: str):
+    def docs_project(request: Request, project: str, dir: str = ""):
         error = None
         try:
             overview = client.docs_overview(paths, project)
@@ -1300,8 +1302,9 @@ def build_app(paths: Paths) -> FastAPI:
         branch = overview["branch"]
         open_comments = sum(f["open"] for f in overview["files"])
         recent = [u for u in _try(client.doc_updates, paths, project, default=[]) if u["status"] not in ("starting", "running")][:5]
+        view = docs_tree.folder_view(overview["files"], dir)
         return _render(
-            request, "docs_project.html", project=project, overview=overview, entries=entries,
+            request, "docs_project.html", project=project, overview=overview, entries=entries, view=view, directory=view["directory"],
             blocked=[e for e in entries if e["branch"] == branch], open_comments=open_comments, recent=recent,
             error=error, nav_active="docs",
         )
@@ -1412,6 +1415,12 @@ def build_app(paths: Paths) -> FastAPI:
 
     # ---- Assets: the project's visible asset folder (3D models, previews, textures) ----
 
+    def _exporting_paths(project: str) -> list[str]:
+        """The Blender files this project's queued or running export Jobs are about (read only for the file on show)."""
+        jobs = _try(lambda: client.list_jobs(paths, types=[ASSET_EXPORT_JOB], project_id=project, status=ACTIVE_JOB_STATUSES), default=[])
+        return [p for job in jobs if job.get("type") == ASSET_EXPORT_JOB and job.get("status") in ACTIVE_JOB_STATUSES
+                for p in (job.get("params") or {}).get("paths", [])]
+
     @app.get("/assets/{project}", response_class=HTMLResponse)
     def assets_project(request: Request, project: str, path: str = ""):
         error, tree, details, doc_html = None, None, None, None
@@ -1425,8 +1434,9 @@ def build_app(paths: Paths) -> FastAPI:
             error = exc.detail
         except client.PillarUnavailable as exc:
             error = str(exc)
+        exporting = _exporting_paths(project) if details and details["kind"] == "blend" else []
         return _render(
-            request, "assets.html", project=project, tree=(tree or {}).get("tree", []), assets_dir=(tree or {}).get("assets_dir"),
+            request, "assets.html", project=project, exporting=details is not None and details["path"] in exporting, tree=(tree or {}).get("tree", []), assets_dir=(tree or {}).get("assets_dir"),
             path=path, details=details, doc_html=doc_html, error=error, nav_active="docs", saved=request.query_params.get("saved"),
         )
 
@@ -1440,6 +1450,19 @@ def build_app(paths: Paths) -> FastAPI:
             return Response("agent pillar unreachable", status_code=503)
         # Served from the dashboard's own origin: scripts in an SVG or Markdown asset must never run.
         return Response(body, media_type=media_type, headers={"Content-Security-Policy": "script-src 'none'", "Cache-Control": "no-cache"})
+
+    @app.post("/assets/{project}/export")
+    def assets_export(project: str, path: str = Form(...)):
+        back = f"/assets/{project}?path={quote(path)}"
+        if path in _exporting_paths(project):
+            return _back(back, "That file is already being exported.")
+        template, error = job_catalog.build_job(project, "export_asset", {"arg_blend": [path]})
+        if template is None:
+            return _back(back, error or "Could not start the export.")
+        result = _try(lambda: client.create_job(paths, **template, depends_on=[], created_by="dashboard"))
+        if result is None or result.get("status") not in ("running", "succeeded", "queued"):
+            return _back(back, f"Could not start the export: {(result or {}).get('error') or 'orchestration unreachable'}")
+        return _back(back, "Export started. This page updates when Blender is done.")
 
     @app.post("/assets/{project}/comment")
     def assets_comment(project: str, path: str = Form(...), body: str = Form("")):
@@ -1846,7 +1869,22 @@ def build_app(paths: Paths) -> FastAPI:
         return [{"value": f["id"], "label": f"{f['detector']} {f['title']} (about ${f['saving']:.2f} a week)"}
                 for f in client.usage_findings(paths, project=project)]
 
-    CHOICE_LOADERS = {"suites": _discover_suites, "findings": _open_findings}
+    def _blend_files(project: str) -> list[dict]:
+        def walk(nodes):
+            for node in nodes:
+                if node["type"] == "dir":
+                    yield from walk(node["children"])
+                elif node["kind"] == "blend":
+                    yield node
+
+        try:
+            tree = client.asset_tree(paths, project)["tree"]
+        except client.Refused as exc:
+            raise ValueError(exc.detail) from exc
+        return [{"value": n["path"], "label": n["path"],
+                 "detail": {"ready": "exported", "stale": "changed since the export", "none": "not exported"}[n["bundle"]]} for n in walk(tree)]
+
+    CHOICE_LOADERS = {"suites": _discover_suites, "findings": _open_findings, "blend": _blend_files}
 
     @app.get("/jobs/catalog/choices/{arg}")
     def job_arg_choices(arg: str, project: str = "") -> Response:

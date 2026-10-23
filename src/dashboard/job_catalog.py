@@ -111,6 +111,12 @@ def _optimize_usage(project: str, values: dict) -> dict:
             "params": {"finding_ids": values["findings"]}}
 
 
+def _export_asset(project: str, values: dict) -> dict:
+    # One export at a time per project: Blender is heavy and the files it writes sit in the checkout.
+    return {"type": "agent.export_asset", "target_pillar": "agent", "project_id": project, "queue_key": f"{project}:assets",
+            "params": {"paths": values["blend"]}}
+
+
 def _apply_claude_config(project: str, values: dict) -> dict:
     return {"type": "registry.sync_claude_files", "target_pillar": "registry", "project_id": None, "queue_key": "claude-files-sync",
             "params": {"write": values["write"]}}
@@ -157,6 +163,14 @@ CATALOG: tuple[JobSpec, ...] = (
             JobArg("all_policies", "All policies pass", "flag", group=_CONDITIONS,
                    help="Runs every enabled policy that applies to the project."),
         ),
+    ),
+    JobSpec(
+        key="export_asset", label="Export Blender assets",
+        description=("Runs Blender headless on the chosen files of the project's visible asset folder and writes each one's "
+                     "3D model, ten preview images, UV layout and textures beside it, for the Assets pages."),
+        make=_export_asset,
+        args=(JobArg("blend", "Blender files", "multi", required=True,
+                     help="The .blend files of the project's visible asset folder."),),
     ),
     JobSpec(
         key="update_standards", label=STANDARDS_TITLE,
