@@ -979,3 +979,9 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000432 | **An Export button on the Assets page exports a Blender file's model and previews.** When the user presses the Export button shown under the export state of a Blender file on the Assets page, the Dashboard shall start the catalogued Export Blender assets Job for that file, which the Agentic Development pillar runs by running Blender headless to write the file's bundle, shall show the file as exporting and reload itself until the Job ends, shall not start a second export of a file that is being exported, and shall refuse a file that is not a Blender file of the project's visible asset folder. | draft |
+
+## Usage analysis: dispatch ceiling (2026-10-24)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000433 | **`usage.analyze` has a dispatch ceiling above Orchestration's 20-second default.** The Usage pillar runs the rollup, the detectors and the experiment measurements synchronously inside its request handler, so `orchestration/dispatch.py`'s `JOB_TYPE_TIMEOUTS` carries `usage.analyze` at 300s; with the default the Job was reported `DispatchTimeout`, requeued while still running and could run twice. | done |

@@ -117,6 +117,10 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     # refresh). With the 20s default, Dashboard, Build and Agent were requeued while still being
     # redeployed and redeployed again, up to three times each.
     "deployment.redeploy_pillar": 1800.0,
+    # 2026-10-24 finding, the OQ-14 class again: usage.analyze runs the rollup, every detector and the
+    # experiment measurements synchronously in its request handler, which outlasts the 20s default on a
+    # real transcript history; the Job was requeued while still running and could run twice.
+    "usage.analyze": 300.0,
 }
 
 
