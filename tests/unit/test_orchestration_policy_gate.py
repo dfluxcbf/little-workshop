@@ -408,3 +408,10 @@ def test_the_release_job_is_gated_like_a_release_finish_and_never_stopped_mid_wa
 
     assert JOB_TYPE_CATEGORIES["version.release"] == JOB_TYPE_CATEGORIES["version.release_finish"]
     assert "version.release" in DECLARED_UNSTOPPABLE_JOB_TYPES and JOB_TYPE_TIMEOUTS["version.release"] >= 60
+
+
+# --- REQ-000000433: usage.analyze has a dispatch ceiling above the 20s default ---
+def test_usage_analyze_dispatch_timeout_exceeds_default():
+    from orchestration.dispatch import DEFAULT_DISPATCH_TIMEOUT_SECONDS, dispatch_timeout_for
+
+    assert dispatch_timeout_for("usage.analyze") >= 300 > DEFAULT_DISPATCH_TIMEOUT_SECONDS
