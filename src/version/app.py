@@ -7,6 +7,7 @@ own interface already makes.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 
 from common.job_steps import StepAborted, StepFailed, StepReporter, reporting
 from common.paths import Paths
-from common.incident import install_incident_reporting
+from common.incident import KIND_UNEXPECTED, install_incident_reporting, report_problem
 from version.commands.config import cmd_config_add_hook, cmd_config_list, cmd_config_remove_hook
 from version.commands.hotfix import cmd_hotfix_finish, cmd_hotfix_start, cmd_hotfix_status
 from version.commands.init import cmd_init
@@ -38,6 +39,7 @@ from version.branch_audit import audit_as_dicts
 from version.common import CommandResult
 from version.gitops import GitError
 from version.resolve import ProjectResolutionError, resolve_project_path
+from version.running import RunningJobs
 from version.stabilize import stabilize
 
 
@@ -177,6 +179,15 @@ STATUS_HANDLERS: dict[str, Callable[[Path], CommandResult]] = {
 
 # How long an asking Job is waited for inside the dispatch call before it carries on in the background.
 SYNC_GRACE_SECONDS = 12.0
+INTERRUPTED_JOB_REASON = (
+    "interrupted: the version pillar restarted while this Job was running, so it stopped part-way; the "
+    "repository may be in the middle of it (a branch, a merge or a tag), so check it before running the Job again"
+)
+
+
+def running_jobs_path(paths: Paths) -> Path:
+    """Where `RunningJobs` keeps the Jobs this pillar accepted and still runs."""
+    return paths.state_home / "pillars" / "version-running.json"
 
 
 def _asking_outcome(reporter: StepReporter, handler: JobHandler, repo_root: Path, request: JobRequest) -> dict | None:
@@ -196,10 +207,13 @@ def _asking_outcome(reporter: StepReporter, handler: JobHandler, repo_root: Path
     return {"outcome": "failed", "error": result.message}
 
 
-def _run_asking_job(services, reporter: StepReporter, handler: JobHandler, repo_root: Path, request: JobRequest) -> dict:
+def _run_asking_job(
+    services, reporter: StepReporter, handler: JobHandler, repo_root: Path, request: JobRequest,
+    running: RunningJobs, job_type: str,
+) -> dict:
     """The answer to the dispatch call: the Job's own outcome when it finishes within `SYNC_GRACE_SECONDS`
     (almost always, unless it stops to ask the user), otherwise `accepted`, and the Job reports back through
-    Orchestration's completion callback when it ends."""
+    Orchestration's completion callback when it ends. An accepted Job is in `running` until then."""
     lock = threading.Lock()
     state: dict = {"detached": False, "outcome": None, "finished": False}
     finished = threading.Event()
@@ -210,6 +224,8 @@ def _run_asking_job(services, reporter: StepReporter, handler: JobHandler, repo_
             state["outcome"], state["finished"] = outcome, True
             detached = state["detached"]
         finished.set()
+        if detached:
+            running.remove(request.job_id)
         if detached and outcome is not None:
             ok = outcome["outcome"] == "succeeded"
             services.complete(
@@ -224,6 +240,7 @@ def _run_asking_job(services, reporter: StepReporter, handler: JobHandler, repo_
         if state["finished"]:
             return state["outcome"] or {"outcome": "failed", "error": "the job was settled while it waited"}
         state["detached"] = True
+        running.add(request.job_id, job_type, request.project_id)  # under the lock: before the thread can remove it
     return {"outcome": "accepted", "result": {"dispatched": True}}
 
 
@@ -233,6 +250,42 @@ def build_app(
     app = FastAPI(title="little-workshop Version Control & Release")
     install_incident_reporting(app, paths, pillar="version")
     release_services = release_services or PillarReleaseServices(paths)
+    running = RunningJobs(running_jobs_path(paths))
+
+    def settle_once() -> list[str]:
+        left = []
+        for job_id, job in running.all().items():
+            if release_services.complete(job_id, succeeded=False, result=None, error=INTERRUPTED_JOB_REASON) is not True:
+                left.append(job_id)  # Orchestration did not take it: tried again
+                continue
+            running.remove(job_id)
+            project = job.get("project_id") or "no project"
+            report_problem(
+                paths, pillar="version", context=f"job {job_id}", kind=KIND_UNEXPECTED, title="InterruptedJob",
+                message=f"the version pillar restarted while {job['type']} on {project} was running: the Job was failed "
+                        "part-way, and its repository may be in the middle of it (a release branch, a merge, a tag). "
+                        "Check `lws version status` and the Job's steps before running it again",
+                detail=f"job {job_id}\ntype {job['type']}\nproject {project}\naccepted {job.get('since', '?')}",
+            )
+        return left
+
+    def settle_interrupted_jobs(*, retry_seconds: float = 30.0, tries: int = 60) -> list[str]:
+        """Startup, before serving (REQ-000000410): fail each Job the previous process accepted and never
+        finished. A release or branch finish cut part-way may have left its repository mid-way, so it is
+        never run again on its own; an incident says where to look. Orchestration may not be back yet
+        (a redeploy restarts it too): what it does not take is tried again in the background."""
+        left = settle_once()
+        if left and tries > 0:
+            def retry() -> None:
+                for _ in range(tries):
+                    time.sleep(retry_seconds)
+                    if not settle_once():
+                        return
+
+            threading.Thread(target=retry, daemon=True, name="version: settle interrupted jobs").start()
+        return left
+
+    app.state.settle_interrupted_jobs = settle_interrupted_jobs
 
     def reporter_for(job_id: str) -> StepReporter:
         return StepReporter(paths, job_id)
@@ -252,22 +305,27 @@ def build_app(
         except ProjectResolutionError as exc:
             return {"outcome": "failed", "error": str(exc)}
 
+        def finish(**outcome) -> None:
+            running.remove(request.job_id)
+            release_services.complete(request.job_id, **outcome)
+
         def worker() -> None:
             try:
                 with reporting(reporter_for(request.job_id)):
                     result = run_release(repo_root, request.project_id, request.params, release_services, job_id=request.job_id)
             except StepFailed as exc:
-                release_services.complete(request.job_id, succeeded=False, result=None, error=str(exc))
+                finish(succeeded=False, result=None, error=str(exc))
             except ReleaseRefused as exc:
-                release_services.complete(request.job_id, succeeded=False, result={"checks": exc.checks} if exc.checks else None, error=str(exc))
+                finish(succeeded=False, result={"checks": exc.checks} if exc.checks else None, error=str(exc))
             except (ReleaseFailed, ServiceUnavailable, GitError, FileNotFoundError, KeyError) as exc:
-                release_services.complete(request.job_id, succeeded=False, result=None, error=str(exc))
+                finish(succeeded=False, result=None, error=str(exc))
             except Exception as exc:  # never leave the Job running forever
-                release_services.complete(request.job_id, succeeded=False, result=None, error=f"release crashed: {exc!r}")
+                finish(succeeded=False, result=None, error=f"release crashed: {exc!r}")
                 raise
             else:
-                release_services.complete(request.job_id, succeeded=True, result=result, error=None)
+                finish(succeeded=True, result=result, error=None)
 
+        running.add(request.job_id, "version.release", request.project_id)
         threading.Thread(target=worker, daemon=True).start()
         return {"outcome": "accepted", "result": {"dispatched": True}}
 
@@ -283,7 +341,7 @@ def build_app(
             return {"outcome": "failed", "error": str(exc)}
 
         if job_type in ASKING_JOB_TYPES:
-            return _run_asking_job(release_services, reporter_for(request.job_id), handler, repo_root, request)
+            return _run_asking_job(release_services, reporter_for(request.job_id), handler, repo_root, request, running, job_type)
 
         try:
             with reporting(reporter_for(request.job_id)):

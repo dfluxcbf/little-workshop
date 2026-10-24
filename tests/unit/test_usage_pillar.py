@@ -17,7 +17,7 @@ from common import manifest, redeploy_plan
 from common.paths import PILLARS, Paths
 from common.shell import CommandResult
 from registry import claude_templates
-from usage import attribution, db, doctor, intake, pricing, profile, proxy, rollup, signatures, transcripts
+from usage import attribution, db, doctor, intake, pricing, profile, proxy, rollup, session_title, signatures, transcripts
 from usage.app import build_app
 
 SESSION = "7a3414cf-1311-4bc2-9381-9ad58a302746"
@@ -380,6 +380,47 @@ def test_a_changed_port_replaces_the_profiles_own_hooks_only():
     assert "hooks.SessionEnd" in {c["setting"] for c in changes}
 
 
+# --- REQ-000000415: The Claude profile installs the session-title hook and the status mod ---
+
+
+def test_the_profile_names_sessions_on_start_and_on_each_prompt_beside_the_owners_hooks():
+    own = {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "echo mine"}]}]}}
+    after, changes, _ = profile.merged(own, profile.desired(4318, Path("/cfg/statusline.py")))
+    title = {"hooks": [{"type": "command", "command": "python3 /cfg/session_title.py", "timeout": profile.TITLE_HOOK_TIMEOUT}]}
+    assert after["hooks"]["UserPromptSubmit"] == [own["hooks"]["UserPromptSubmit"][0], title]
+    assert after["hooks"]["SessionStart"][-1] == title and len(after["hooks"]["SessionStart"]) == 2
+    assert {"hooks.UserPromptSubmit", "hooks.SessionStart"} <= {c["setting"] for c in changes}
+    again, changes, _ = profile.merged(after, profile.desired(4318, Path("/cfg/statusline.py")))
+    assert again == after and not changes  # applied twice, the hooks are there once
+
+
+def test_applying_the_profile_installs_the_title_hook_and_the_status_mod(tmp_path):
+    settings, statusline = tmp_path / "home" / "settings.json", tmp_path / "cfg" / profile.STATUSLINE_FILE
+    mod = profile.StatusMod(tmp_path / "state" / "sockets" / "dashboard.sock", "http://localhost:8790")
+    dry = profile.plan(settings, 4318, statusline, status_mod=mod)
+    folder = profile.mod_dir(settings)
+    assert folder == tmp_path / "home" / "skills" / profile.MOD_NAME
+    assert {str(statusline.parent / profile.SESSION_TITLE_FILE), str(folder / "hooks" / "register.tsx")} <= {c["setting"] for c in dry["changes"]}
+    profile.apply(settings, 4318, statusline, status_mod=mod)
+    assert (statusline.parent / profile.SESSION_TITLE_FILE).read_text() == (Path(session_title.__file__)).read_text()
+    for target, text in profile.mod_files(mod).items():
+        assert (folder / target).read_text() == text
+    assert profile.plan(settings, 4318, statusline, status_mod=mod)["in_place"] is True
+    (folder / "hooks" / "register.tsx").write_text("// an older mod")
+    assert profile.plan(settings, 4318, statusline, status_mod=mod)["changes"] == [
+        {"setting": str(folder / "hooks" / "register.tsx"), "from": "an older version", "to": f"the {profile.MOD_NAME} mod's hooks/register.tsx"}]
+
+
+def test_the_configure_job_writes_the_mod_with_this_pillars_dashboard(client, paths, tmp_path):
+    proxy.intake_port(paths)
+    result = client.post("/v1/jobs/usage.configure_claude", json={"job_id": "j1", "params": {"apply": True}}).json()["result"]
+    assert result["applied"] is True
+    module = (tmp_path / "home" / "skills" / profile.MOD_NAME / "hooks" / "register.tsx").read_text()
+    assert json.dumps(str(paths.socket_path("dashboard"))) in module and '"http://localhost:8790"' in module
+    hooks = json.loads((tmp_path / "home" / "settings.json").read_text())["hooks"]
+    assert any(profile.SESSION_TITLE_FILE in h["hooks"][0]["command"] for h in hooks["UserPromptSubmit"])
+
+
 # --- REQ-000000330: usage.doctor reports what collection depends on ---
 
 
@@ -397,7 +438,8 @@ def test_the_doctor_reports_each_check_with_a_hint_and_keeps_its_report(client, 
 def test_the_doctor_passes_when_everything_is_in_place(conn, paths, tmp_path):
     port = proxy.intake_port(paths)
     settings = tmp_path / "settings.json"
-    profile.apply(settings, port, paths.pillar_config_dir("usage") / profile.STATUSLINE_FILE)
+    profile.apply(settings, port, paths.pillar_config_dir("usage") / profile.STATUSLINE_FILE,
+                  status_mod=profile.StatusMod(paths.socket_path("dashboard"), proxy.load_config(paths)["dashboard_url"]))
     db.upsert_session(conn, "s1", seen=NOW.isoformat())
     report = doctor.run(conn, paths, runner=FakeRunner(), settings_path=settings, which=lambda name: f"/usr/bin/{name}")
     assert report["ok"] is True and all(check["hint"] == "" for check in report["checks"])

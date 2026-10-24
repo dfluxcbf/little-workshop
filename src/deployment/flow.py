@@ -39,7 +39,7 @@ SELF_REDEPLOY_GATED_BY_DEFAULT = ("core", "deployment")
 # it means refreshing that environment and restarting the unit. Launching a transient Core beside
 # it gave two Cores, and the rollback of that put an old Core on the socket (2026-10-04).
 CORE_PILLAR = "core"
-INSTALLED_CORE_UNIT = "little-workshop.service"
+INSTALLED_CORE_UNIT = systemd.INSTALLED_CORE_UNIT
 INSTALLED_CORE_HOW = f"restarted the installed unit {INSTALLED_CORE_UNIT}"
 # Pillars whose process is the one waiting on the redeploy Job's HTTP reply
 # (Orchestration dispatches every Job): stopping it mid-request times the Job

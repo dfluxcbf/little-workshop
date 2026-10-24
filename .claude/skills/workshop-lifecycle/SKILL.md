@@ -13,7 +13,7 @@ the guard refuses them. Name the project in every call: `project_id` `little-wor
 | To do this | Use |
 |---|---|
 | Start a branch | `workshop_version_feature_start` (milestone work, from `dev`), `workshop_version_improvement_start` (anything else, from `dev`), `workshop_version_hotfix_start` (from the production branch) |
-| Finish it: `--no-ff` merge, `VERSION` bump, branch deleted | `workshop_version_<type>_finish` |
+| Finish it: squash merge (a hotfix: `--no-ff` into production and back into `dev`), `VERSION` bump, branch deleted | `workshop_version_<type>_finish` |
 | Cut, promote or finish a release | `workshop_version_release_start`, `workshop_version_release_candidate_cut` / `_promote`, `workshop_version_release_finish` |
 | Deploy, stop or inspect the server | `workshop_deployment_deploy`, `_stop`, `_status` |
 | Publish a package | `workshop_build_publish_pypi`, `workshop_build_publish_vsix` |

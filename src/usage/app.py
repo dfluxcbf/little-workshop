@@ -20,13 +20,13 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
-from common import events
+from common import events, serving
 from common.incident import install_incident_reporting
 from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.uds_client import client_for_socket
-from usage import (attribution, counterfactual, db, detectors, doctor, explorer, intake, mining, optimize, outcomes, pricing, profile, proxy,
+from usage import (attribution, counterfactual, db, detectors, doctor, explorer, intake, mining, optimize, outcomes, plugins, pricing, profile, proxy,
                    rollup, transcripts)
 
 TICK_SECONDS = 600.0
@@ -143,6 +143,9 @@ def build_app(
     def statusline_path() -> Path:
         return paths.pillar_config_dir(proxy.PILLAR) / profile.STATUSLINE_FILE
 
+    def status_mod() -> profile.StatusMod:
+        return profile.StatusMod(paths.socket_path("dashboard"), proxy.load_config(paths)["dashboard_url"])
+
     def attribute(session_ids) -> None:
         """Call with `lock` held."""
         registry = known_projects()
@@ -173,9 +176,9 @@ def build_app(
 
     @app.get("/v1/health")
     def health() -> dict:
-        with lock:
-            count = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
-        return {"ok": True, "request_count": count}
+        with serving.held_or_busy(lock) as free:  # busy work never makes it look hung (REQ-000000409)
+            count = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0] if free else None
+        return {"ok": True, "request_count": count, **({} if free else {"busy": True})}
 
     # -- intake ------------------------------------------------------------------
 
@@ -362,9 +365,16 @@ def build_app(
             for candidate in db.list_candidates(conn, state=None):
                 if candidate.get("replacement"):
                     db.update_candidate(conn, candidate["id"], tokens_avoided=mining.tokens_avoided(conn, candidate))
+            # Whole requests, mostly deterministic, proposed as plugins (docs/pillars/usage.md "Plugin proposals").
+            proposed = plugins.propose(conn, prices(), today=today, replay=replay, calibration=calibration)
+            open_candidates = db.list_candidates(conn)
+            for proposal in proposed["proposals"]:
+                db.record_plugin_proposal(conn, {**proposal, "absorbs": plugins.absorbed(proposal, open_candidates)})
+            db.drop_stale_plugin_proposals(conn, {proposal["name"] for proposal in proposed["proposals"]})
             conn.commit()
         return {"candidates": len(found), "calibration": calibration.as_dict(), "by_class": {kind: sum(1 for c in found if c["class"] == kind)
-                                                       for kind in (mining.CLASS_DETERMINISTIC, mining.CLASS_HYBRID, mining.CLASS_HEURISTIC)}}
+                                                       for kind in (mining.CLASS_DETERMINISTIC, mining.CLASS_HYBRID, mining.CLASS_HEURISTIC)},
+                "plugin_proposals": len(proposed["proposals"]), "too_much_judgment": proposed["too_much_judgment"][:10]}
 
     app.state.mine_automation = mine_automation
 
@@ -392,8 +402,8 @@ def build_app(
         try:
             port = proxy.intake_port(paths)
             if request.params.get("apply") is True:
-                return {"outcome": "succeeded", "result": profile.apply(target, port, statusline_path())}
-            return {"outcome": "succeeded", "result": {**profile.plan(target, port, statusline_path()), "applied": False}}
+                return {"outcome": "succeeded", "result": profile.apply(target, port, statusline_path(), status_mod=status_mod())}
+            return {"outcome": "succeeded", "result": {**profile.plan(target, port, statusline_path(), status_mod=status_mod()), "applied": False}}
         except (OSError, ValueError, RuntimeError) as exc:
             return {"outcome": "failed", "error": str(exc)}
 
@@ -518,6 +528,25 @@ def build_app(
             rows = db.list_candidates(conn, state=None if state == "all" else state)
         return rows[:max(limit, 0)] if limit is not None else rows
 
+    @app.get("/v1/plugin_proposals")
+    def plugin_proposals(state: str | None = db.CANDIDATE_OPEN, limit: int | None = None) -> list[dict]:
+        """Plugin proposals ranked by the net saving per week; `state=all` lists every state, `limit` keeps the
+        first ones. The plugins installed are Claude Code's to list (`claude plugin list`)."""
+        with lock:
+            rows = db.list_plugin_proposals(conn, state=None if state == "all" else state)
+        return rows[:max(limit, 0)] if limit is not None else rows
+
+    @app.post("/v1/plugin_proposals/{proposal_id}")
+    def decide_plugin_proposal(proposal_id: str, body: dict) -> dict:
+        """A person's decision on a proposal: {"state": "accepted" | "dismissed" | "done" | "open"}."""
+        try:
+            with lock:
+                changed = db.set_plugin_proposal_state(conn, proposal_id, str(body.get("state") or ""))
+                conn.commit()
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": changed, **({} if changed else {"error": "no proposal with that id"})}
+
     @app.get("/v1/estimate_method")
     def estimate_method() -> dict:
         """What the candidates' estimates rest on: the constants fitted on the stored turns, their error on
@@ -533,7 +562,8 @@ def build_app(
         with lock:
             row = conn.execute(
                 "SELECT (SELECT COALESCE(MAX(rowid), 0) FROM requests), (SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at), '') FROM findings), "
-                "(SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at), '') FROM candidates)").fetchone()
+                "(SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at), '') FROM candidates), "
+                "(SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at), '') FROM plugin_proposals)").fetchone()
         return {"version": ":".join(str(value) for value in row)}
 
     @app.get("/v1/candidates/{candidate_id}/task")

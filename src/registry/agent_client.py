@@ -12,6 +12,7 @@ from common.pillar_socket import resolve_pillar_socket
 from common.uds_client import client_for_socket
 
 QUERY_TIMEOUT_SECONDS = 320.0  # agent.query's own ceiling is 300s
+CHECKOUT_QUERY_TIMEOUT_SECONDS = 620.0  # and 600s for one that reads the project's checkout
 
 
 class AgentClientError(Exception):
@@ -19,14 +20,16 @@ class AgentClientError(Exception):
 
 
 def query(paths: Paths, prompt: str, *, job_id: str, project_id: str | None = None, ref: str | None = None,
-          timeout: float = QUERY_TIMEOUT_SECONDS) -> str:
+          read_checkout: bool = False, timeout: float | None = None) -> str:
     """Claude's answer to `prompt`. `job_id` is the Job asking: the call's usage is counted against it, and
     its session can be watched as that Job's peek. `ref` names what the session worked on (a backlog
-    entry), so that `forget` can delete its transcript with it."""
+    entry), so that `forget` can delete its transcript with it. `read_checkout` has Claude answer from
+    `project_id`'s checkout, which it can read but not change."""
     socket_path = resolve_pillar_socket(paths, "agent", timeout=5.0)
     if socket_path is None:
         raise AgentClientError("the Agentic Development pillar is unavailable (unreachable, disabled or faulted)")
-    params = {"prompt": prompt, **({"ref": ref} if ref else {})}
+    params = {"prompt": prompt, **({"ref": ref} if ref else {}), **({"read_checkout": True} if read_checkout else {})}
+    timeout = timeout or (CHECKOUT_QUERY_TIMEOUT_SECONDS if read_checkout else QUERY_TIMEOUT_SECONDS)
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.post("/v1/jobs/agent.query", json={"job_id": job_id, "project_id": project_id, "params": params})

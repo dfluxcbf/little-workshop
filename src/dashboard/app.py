@@ -43,14 +43,16 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from urllib.parse import quote
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from common import redeploy_plan
+from common import redeploy_plan, serving
 from common.job_steps import format_seconds
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.workspace import WORKSPACE_ID, workspace_dir
+from dashboard import docs_tree
 from dashboard import calendar, client, job_catalog, live, markdown, prefs, statistics
 
 GATE_POINT_VALUES = [
@@ -60,15 +62,18 @@ GATE_POINT_VALUES = [
 
 # Documentation review's update job, and the Job statuses that count as "not finished yet".
 DOC_UPDATE_JOB = "agent.update_docs"
+ASSET_EXPORT_JOB = "agent.export_asset"
 # A backlog entry's own record of Claude's work on it (Registry & Portfolio keeps it on the entry), by kind:
-# (since, job, error) columns. Claude's answer comes within agent.query's 300s, so a mark older than
-# BACKLOG_ACTIVITY_STALE belongs to a Job that never came back.
+# (since, job, error) columns. Claude's answer comes within the 600s of an agent.query that reads the
+# project's checkout (Orchestration gives up at 630s), so a mark older than BACKLOG_ACTIVITY_STALE
+# belongs to a Job that never came back.
 BACKLOG_ACTIVITY = {"refine": ("refining_since", "refining_job", "refine_error"),
                     "prompt": ("prompting_since", "prompting_job", "prompt_error")}
-BACKLOG_ACTIVITY_STALE = timedelta(minutes=10)
+BACKLOG_ACTIVITY_STALE = timedelta(minutes=15)
 _UNFINISHED = {"refine": "the last refinement did not finish", "prompt": "the last task prompt did not finish"}
 STATISTICS_UPDATE_SECONDS = 600  # how often the running Dashboard counts new jobs, checks and incidents
 LIVE_KEEPALIVE_SECONDS = 15.0  # a comment on an idle event stream, so proxies keep it open
+LIVE_STOP_CHECK_SECONDS = 1.0  # how soon an open event stream notices the Dashboard is stopping
 LIVE_MAX_TOPICS = 20
 ACTIVE_JOB_STATUSES = ("queued", "running", "pending_confirmation")
 
@@ -443,6 +448,29 @@ def _policy_associated_projects(policy: dict) -> set[str]:
     return {p["project_id"] for p in policy.get("projects", [])}
 
 
+def _failing_checks(policies: list[dict], latest: dict[tuple[str, str], dict]) -> list[tuple[dict, str, dict]]:
+    """(policy, project, latest result) for every enabled policy whose latest check on a project still
+    associated with it failed: what "a policy is failing" means on the attention list and in the status."""
+    by_id = {p["id"]: p for p in policies}
+    failing = []
+    for (policy_id, project), result in latest.items():
+        policy = by_id.get(policy_id)
+        if not (result["outcome"] == "fail" and policy and policy.get("enabled", True)):
+            continue
+        # A stale result from before the project was removed from this
+        # policy's own `projects` list (policy.set_projects) must not keep
+        # showing up forever -- 2026-09-22's finding: disassociating
+        # back-merge-no-ff from little-home/little-meals/little-mindcheck
+        # (a category error for apps that don't implement gitflow themselves)
+        # left their old fail results still in the history table, and this
+        # function never checked current association at all.
+        associated = _policy_associated_projects(policy)
+        if associated and project not in associated:
+            continue
+        failing.append((policy, project, result))
+    return failing
+
+
 POLICY_STATUS_FILTERS = (("", "Any status"), ("enabled", "Enabled"), ("disabled", "Disabled"), ("failing", "Failing"))
 
 
@@ -479,25 +507,11 @@ def collect_attention(paths: Paths) -> list[dict]:
     for a confirmation. Both are read live from their owning pillar; a pillar
     that is down contributes nothing."""
     items: list[dict] = []
-    policies = {p["id"]: p for p in _try(lambda: client.policy_list(paths, summary=True), default=[])}
-    latest = _latest_policy_results(paths, failing=True)
-    for (policy_id, project), result in latest.items():
-        policy = policies.get(policy_id)
-        if not (result["outcome"] == "fail" and policy and policy.get("enabled", True)):
-            continue
-        # A stale result from before the project was removed from this
-        # policy's own `projects` list (policy.set_projects) must not keep
-        # showing up forever -- 2026-09-22's finding: disassociating
-        # back-merge-no-ff from little-home/little-meals/little-mindcheck
-        # (a category error for apps that don't implement gitflow themselves)
-        # left their old fail results still in the history table, and this
-        # function never checked current association at all.
-        associated = _policy_associated_projects(policy)
-        if associated and project not in associated:
-            continue
+    policies = _try(lambda: client.policy_list(paths, summary=True), default=[])
+    for policy, project, result in _failing_checks(policies, _latest_policy_results(paths, failing=True)):
         items.append({
             "kind": "policy", "tag": "Policies", "project": project, "title": f"{policy['topic']} is failing",
-            "detail": (result.get("detail") or "").strip()[:240], "href": f"/policies/{policy_id}",
+            "detail": (result.get("detail") or "").strip()[:240], "href": f"/policies/{policy['id']}",
             "since": result.get("checked_at"),
         })
     for job in _try(lambda: client.list_jobs(paths, status="pending_confirmation", summary=True), default=[]):
@@ -520,6 +534,187 @@ def collect_attention(paths: Paths) -> list[dict]:
             "since": incident.get("created_at"),
         })
     return items
+
+
+# -- The status Claude Code shows of a project and of the workshop (REQ-000000411) -------------------------
+
+STATUS_FAILED_JOB_HOURS = 2  # a failed Job counts for this long after it failed
+STATUS_INCIDENT_HOURS = 2  # an open incident counts for this long after it was recorded
+STATUS_SCHEDULE_HOURS = 1  # a scheduled task counts once it is due within this long
+DEAD_PILLAR_STATUSES = ("crashed", "faulted")
+STATUS_ITEMS = 20  # items listed per topic; the counts stay exact up to STATUS_READ_LIMIT
+STATUS_READ_LIMIT = 100
+
+
+def _status_topic(items: list[dict] | None, **extra) -> dict:
+    """One topic of the status: how many there are and the first of them; a `count` of None says its pillar
+    did not answer, which a reader shows as unknown rather than as none."""
+    if items is None:
+        return {"count": None, "items": [], **extra}
+    return {"count": len(items), "items": items[:STATUS_ITEMS], **extra}
+
+
+def _status_job(job: dict, *, at: str) -> dict:
+    title = (job.get("params") or {}).get("title") or job.get("type")
+    return {"id": job["id"], "type": job.get("type"), "title": title, "at": job.get(at), "progress": job.get("progress"),
+            "error": (job.get("error") or "").strip()[:240] or None, "href": f"/jobs/{job['id']}"}
+
+
+def collect_status(paths: Paths, project_id: str | None, *, now: datetime | None = None) -> dict:
+    """What Claude Code shows of the workshop: for the project a session works in, its server (None when it
+    has none), its running Jobs, its tasks that need attention (the Tasks page's group), its Jobs failed in
+    the last STATUS_FAILED_JOB_HOURS, its scheduled tasks due within STATUS_SCHEDULE_HOURS and its failing
+    policies; across every project, the open incidents of the last STATUS_INCIDENT_HOURS and the pillars Core
+    sees crashed or faulted. Each read is a filtered one on the owning pillar, all of them at once; a pillar
+    that does not answer is listed in `unavailable` and its topics have a `count` of None. A project the
+    Registry does not know (or none) gets only the workshop's topics."""
+    now = now or datetime.now(timezone.utc)
+    unavailable: set[str] = set()
+
+    def read(pillar: str, fn, *args, **kwargs):
+        try:
+            return fn(paths, *args, **kwargs)
+        except client.PillarUnavailable:
+            unavailable.add(pillar)
+            return None
+
+    def project_reads() -> dict:
+        names = read("registry", client.list_projects)
+        if not project_id or names is None or project_id not in {p.get("name") for p in names}:
+            return {}
+        failed_since = now - timedelta(hours=STATUS_FAILED_JOB_HOURS)
+        calls = {
+            "server": ("deployment", client.deployment_status_optional, (project_id,), {}),
+            "running": ("orchestration", client.list_jobs, (), {"status": "running", "project_id": project_id, "summary": True,
+                                                                  "newest_first": True, "limit": STATUS_READ_LIMIT}),
+            "runs": ("agent", client.agent_runs, (project_id,), {}),
+            "task_jobs": ("orchestration", client.list_jobs, (), {"types": ["agent.run_task"], "status": TASK_JOB_STATUSES_WITHOUT_RUN,
+                                                                    "project_id": project_id, "summary": True}),
+            "failed": ("orchestration", client.list_jobs, (), {"status": "failed", "project_id": project_id, "updated_since": failed_since,
+                                                                 "summary": True, "newest_first": True, "limit": STATUS_READ_LIMIT}),
+            "scheduled": ("orchestration", client.scheduled_tasks, (), {}),
+            "policies": ("policy", client.policy_list, (), {"summary": True}),
+            "tests": ("orchestration", client.list_jobs, (), {"types": ["requirements.run_tests"], "project_id": project_id,
+                                                                "summary": True, "newest_first": True, "limit": 1}),
+        }
+        with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+            futures = {key: pool.submit(read, pillar, fn, *args, **kwargs) for key, (pillar, fn, args, kwargs) in calls.items()}
+            return {key: future.result() for key, future in futures.items()}
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        project_future = pool.submit(project_reads)
+        incidents_future = pool.submit(read, "agent", client.list_incidents, status="open")
+        core_future = pool.submit(read, "core", client.core_status)
+        reads, incidents, core = project_future.result(), incidents_future.result(), core_future.result()
+
+    status: dict = {"project": project_id if reads else None, "generated_at": now.isoformat()}
+    if reads:
+        server = reads["server"]
+        status["server"] = None if server is None and "deployment" not in unavailable else {
+            "known": server is not None, "running": bool(server and server.get("unit") == "active"),
+            "listening": bool(server and server.get("listening")), "unit": (server or {}).get("unit")}
+        status["running"] = _status_topic(None if reads["running"] is None else [_status_job(j, at="created_at") for j in reads["running"]])
+
+        runs, task_jobs = reads["runs"], reads["task_jobs"]
+        attention = None
+        if runs is not None and task_jobs is not None:
+            rows = runs + _task_rows_without_a_run(task_jobs, runs)
+            attention = [{"id": r["id"], "title": r.get("title"), "status": r["status"], "at": r.get("updated_at") or r.get("created_at"),
+                          "href": f"/jobs/{r['id']}" if r.get("job_only") else f"/tasks/{project_id}/{r['id']}"}
+                         for r in sorted(rows, key=lambda r: r.get("updated_at") or r.get("created_at") or "", reverse=True)
+                         if _task_group(r, now) == "attention"]
+        status["tasks_attention"] = _status_topic(attention)
+
+        failed = reads["failed"]
+        status["failed_jobs"] = _status_topic(None if failed is None else [_status_job(j, at="updated_at") for j in failed],
+                                              hours=STATUS_FAILED_JOB_HOURS)
+
+        scheduled = None
+        if reads["scheduled"] is not None:
+            local_now = now.astimezone().replace(tzinfo=None)  # Orchestration keeps `next_run_at` in local time
+            scheduled = []
+            for task in reads["scheduled"]:
+                due = _parse_time(task.get("next_run_at"))
+                if task.get("state") != "active" or (task.get("job_template") or {}).get("project_id") != project_id or due is None:
+                    continue
+                due = due.astimezone().replace(tzinfo=None) if due.tzinfo else due
+                if timedelta(minutes=-1) <= due - local_now <= timedelta(hours=STATUS_SCHEDULE_HOURS):
+                    scheduled.append({"id": task["id"], "title": task.get("name"), "at": task.get("next_run_at"),
+                                      "href": f"/schedule/item/scheduled/{task['id']}"})
+            scheduled.sort(key=lambda item: item["at"] or "")
+        status["scheduled"] = _status_topic(scheduled, hours=STATUS_SCHEDULE_HOURS)
+
+        failing = None
+        if reads["policies"] is not None:
+            failing = [{"id": policy["id"], "title": policy.get("topic"), "detail": (result.get("detail") or "").strip()[:240] or None,
+                        "at": result.get("checked_at"), "href": f"/policies/{policy['id']}"}
+                       for policy, project, result in _failing_checks(reads["policies"], _latest_policy_results(paths, failing=True))
+                       if project == project_id]
+        status["policies"] = _status_topic(failing)
+
+        # The project's latest recorded test run, whenever it was: what "do the tests pass" means here.
+        tests = reads["tests"]
+        if tests is None:
+            status["tests"] = {"known": False}
+        elif not tests:
+            status["tests"] = None
+        else:
+            run = tests[0]
+            result = run.get("result") or {}
+            verdicts = result.get("verdicts") or {}
+            status["tests"] = {"known": True, "status": run.get("status"), "ran": result.get("ran"), "passed": verdicts.get("passed", 0),
+                               "failed": result.get("failing_total", 0), "at": run.get("updated_at"), "href": f"/jobs/{run['id']}"}
+
+    recent = None
+    if incidents is not None:
+        since = now - timedelta(hours=STATUS_INCIDENT_HOURS)
+        recent = []
+        for incident in incidents:
+            at = _parse_time(incident.get("created_at"))
+            if at is not None and (at if at.tzinfo else at.replace(tzinfo=timezone.utc)) >= since:
+                recent.append({"id": incident["id"], "title": f"{incident.get('exception_type')} in {incident.get('pillar')}",
+                               "project": incident.get("project_id"), "at": incident.get("created_at"), "href": f"/incidents/{incident['id']}"})
+        recent.sort(key=lambda item: item["at"] or "", reverse=True)
+    status["incidents"] = _status_topic(recent, hours=STATUS_INCIDENT_HOURS)
+
+    dead, watched = None, None
+    if core is not None:
+        pillars = core.get("pillars") or {}
+        watched = sum(1 for p in pillars.values() if p.get("status") != "disabled")
+        dead = [{"id": name, "title": name, "status": p.get("status"), "crash_count": p.get("crash_count", 0)}
+                for name, p in sorted(pillars.items()) if p.get("status") in DEAD_PILLAR_STATUSES]
+    status["dead_pillars"] = _status_topic(dead, of=watched)
+    status["unavailable"] = sorted(unavailable)
+    return status
+
+
+# The status page's topics (REQ-000000412), with the icons the status mod draws on the phone:
+# (key, icon, label, the page that lists them in full, what a count above zero says: run | warn | fail).
+STATUS_PROJECT_TOPICS = (
+    ("running", "⚙️", "Running jobs", "/jobs?status=running&q={project}", "run"),
+    ("tasks_attention", "❗", "Tasks needing attention", "/tasks", "warn"),
+    ("failed_jobs", "❌", "Failed jobs", "/jobs?status=failed&q={project}", "fail"),
+    ("scheduled", "⏰", "Scheduled", "/schedule", "run"),
+    ("policies", "⛔", "Failing policies", "/policies?status=failing&project={project}", "fail"),
+)
+STATUS_WORKSHOP_TOPICS = (
+    ("incidents", "🔥", "Incidents", "/incidents", "fail"),
+    ("dead_pillars", "💀", "Dead pillars", "/pillars", "fail"),
+)
+# What the page follows live; its time windows also move by the clock, so it looks again every minute too.
+STATUS_LIVE_TOPICS = "jobs,tasks,schedule,policies,incidents,pillars"
+
+
+def _status_topics(status: dict, project_id: str) -> tuple[list[dict], list[dict]]:
+    """The page's tiles and panels: each topic of `status` with its icon, label, window and link."""
+    def topic(key, icon, label, href, tone):
+        data = status.get(key) or {"count": None, "items": []}
+        window = f"last {data['hours']} h" if key in ("failed_jobs", "incidents") else f"next {data['hours']} h" if key == "scheduled" else None
+        count = data["count"]
+        return {"key": key, "icon": icon, "label": label, "window": window, "count": count, "of": data.get("of"),
+                "items": data["items"], "href": href.format(project=project_id), "tone": tone if count else ("idle" if count == 0 else "unknown")}
+    project = [topic(*spec) for spec in STATUS_PROJECT_TOPICS] if status.get("project") else []
+    return project, [topic(*spec) for spec in STATUS_WORKSHOP_TOPICS]
 
 
 JOB_STATUS_ORDER = ["running", "pending_confirmation", "queued", "failed", "succeeded", "cancelled", "stopped"]
@@ -631,6 +826,8 @@ def build_app(paths: Paths) -> FastAPI:
         context.setdefault("message", request.query_params.get("message"))
         context.setdefault("nav_active", "")
         context.setdefault("attention_count", len(collect_attention(paths)))
+        # The user's policy bypass, warned on every page while it is TRUE.
+        context.setdefault("bypass", _try(lambda: client.policy_bypass(paths), default={}) or {})
         # The topics the page's live stream follows (static/live.js); every page follows "attention" for the banner.
         context.setdefault("live_topics", "")
         return templates.TemplateResponse(request, name, context)
@@ -646,14 +843,22 @@ def build_app(paths: Paths) -> FastAPI:
             subscriber = live.HUB.subscribe(wanted, asyncio.get_running_loop())
             try:
                 yield f"retry: {int(live.RETRY_SECONDS * 1000)}\n\n"
-                while True:
+                idle = 0.0
+                # A stopping Dashboard ends its streams, which held its stop open for up to a minute;
+                # each page reconnects to the next process after `retry` (REQ-000000404).
+                while not serving.stopping.is_set():
                     try:
-                        message = await asyncio.wait_for(subscriber.queue.get(), timeout=LIVE_KEEPALIVE_SECONDS)
+                        message = await asyncio.wait_for(subscriber.queue.get(), timeout=LIVE_STOP_CHECK_SECONDS)
                     except asyncio.TimeoutError:
+                        idle += LIVE_STOP_CHECK_SECONDS
+                        if idle < LIVE_KEEPALIVE_SECONDS:
+                            continue
+                        idle = 0.0
                         if await request.is_disconnected():
                             return
                         yield ": keepalive\n\n"
                         continue
+                    idle = 0.0
                     yield f"event: update\ndata: {json.dumps(message)}\n\n"
             finally:
                 live.HUB.unsubscribe(subscriber)
@@ -675,6 +880,21 @@ def build_app(paths: Paths) -> FastAPI:
     def attention_json() -> dict:
         items = collect_attention(paths)
         return {"count": len(items), "items": items}
+
+    @app.get("/status.json")
+    def status_json(project: str = "") -> dict:
+        """What Claude Code shows of a project and of the workshop (REQ-000000411): the little-workshop status
+        mod reads it for the phone, the status page for the Windows app."""
+        return collect_status(paths, project or None)
+
+    @app.get("/status/{project_id}", response_class=HTMLResponse)
+    def status_page(request: Request, project_id: str):
+        """The same topics in detail, every count shown, zeros too (REQ-000000412): opened beside the chat in the
+        Windows app's Browser pane, and anywhere else a browser reaches the Dashboard."""
+        status = collect_status(paths, project_id)
+        project_topics, workshop_topics = _status_topics(status, project_id)
+        return _render(request, "status.html", status=status, project_id=project_id, project_topics=project_topics,
+                       workshop_topics=workshop_topics, live_topics=STATUS_LIVE_TOPICS)
 
     @app.get("/starting.json")
     def starting_json() -> dict:
@@ -1072,7 +1292,7 @@ def build_app(paths: Paths) -> FastAPI:
         return _render(request, "docs.html", projects=names, error=error, nav_active="docs")
 
     @app.get("/docs/{project}", response_class=HTMLResponse)
-    def docs_project(request: Request, project: str):
+    def docs_project(request: Request, project: str, dir: str = ""):
         error = None
         try:
             overview = client.docs_overview(paths, project)
@@ -1082,8 +1302,9 @@ def build_app(paths: Paths) -> FastAPI:
         branch = overview["branch"]
         open_comments = sum(f["open"] for f in overview["files"])
         recent = [u for u in _try(client.doc_updates, paths, project, default=[]) if u["status"] not in ("starting", "running")][:5]
+        view = docs_tree.folder_view(overview["files"], dir)
         return _render(
-            request, "docs_project.html", project=project, overview=overview, entries=entries,
+            request, "docs_project.html", project=project, overview=overview, entries=entries, view=view, directory=view["directory"],
             blocked=[e for e in entries if e["branch"] == branch], open_comments=open_comments, recent=recent,
             error=error, nav_active="docs",
         )
@@ -1191,6 +1412,68 @@ def build_app(paths: Paths) -> FastAPI:
         except client.PillarUnavailable:
             return Response("agent pillar unreachable", status_code=503)
         return Response(body, media_type=media_type, headers={"Content-Security-Policy": "script-src 'none'"})
+
+    # ---- Assets: the project's visible asset folder (3D models, previews, textures) ----
+
+    def _exporting_paths(project: str) -> list[str]:
+        """The Blender files this project's queued or running export Jobs are about (read only for the file on show)."""
+        jobs = _try(lambda: client.list_jobs(paths, types=[ASSET_EXPORT_JOB], project_id=project, status=ACTIVE_JOB_STATUSES), default=[])
+        return [p for job in jobs if job.get("type") == ASSET_EXPORT_JOB and job.get("status") in ACTIVE_JOB_STATUSES
+                for p in (job.get("params") or {}).get("paths", [])]
+
+    @app.get("/assets/{project}", response_class=HTMLResponse)
+    def assets_project(request: Request, project: str, path: str = ""):
+        error, tree, details, doc_html = None, None, None, None
+        try:
+            tree = client.asset_tree(paths, project)
+            if path:
+                details = client.asset_details(paths, project, path)
+                if details["kind"] == "doc":
+                    doc_html = markdown.render_document(details["doc"] or "", project=project, path=path)
+        except client.Refused as exc:
+            error = exc.detail
+        except client.PillarUnavailable as exc:
+            error = str(exc)
+        exporting = _exporting_paths(project) if details and details["kind"] == "blend" else []
+        return _render(
+            request, "assets.html", project=project, exporting=details is not None and details["path"] in exporting, tree=(tree or {}).get("tree", []), assets_dir=(tree or {}).get("assets_dir"),
+            path=path, details=details, doc_html=doc_html, error=error, nav_active="docs", saved=request.query_params.get("saved"),
+        )
+
+    @app.get("/assets/{project}/file")
+    def assets_file(project: str, path: str):
+        try:
+            body, media_type = client.asset_file(paths, project, path)
+        except client.Refused as exc:
+            return Response(exc.detail, status_code=exc.status)
+        except client.PillarUnavailable:
+            return Response("agent pillar unreachable", status_code=503)
+        # Served from the dashboard's own origin: scripts in an SVG or Markdown asset must never run.
+        return Response(body, media_type=media_type, headers={"Content-Security-Policy": "script-src 'none'", "Cache-Control": "no-cache"})
+
+    @app.post("/assets/{project}/export")
+    def assets_export(project: str, path: str = Form(...)):
+        back = f"/assets/{project}?path={quote(path)}"
+        if path in _exporting_paths(project):
+            return _back(back, "That file is already being exported.")
+        template, error = job_catalog.build_job(project, "export_asset", {"arg_blend": [path]})
+        if template is None:
+            return _back(back, error or "Could not start the export.")
+        result = _try(lambda: client.create_job(paths, **template, depends_on=[], created_by="dashboard"))
+        if result is None or result.get("status") not in ("running", "succeeded", "queued"):
+            return _back(back, f"Could not start the export: {(result or {}).get('error') or 'orchestration unreachable'}")
+        return _back(back, "Export started. This page updates when Blender is done.")
+
+    @app.post("/assets/{project}/comment")
+    def assets_comment(project: str, path: str = Form(...), body: str = Form("")):
+        back = f"/assets/{project}?path={quote(path)}"
+        try:
+            client.put_asset_comment(paths, project, path, body.replace("\r\n", "\n"))
+        except client.Refused as exc:
+            return _back(back, f"Could not save the comment: {exc.detail}")
+        except client.PillarUnavailable as exc:
+            return _back(back, f"Could not save the comment: {exc}")
+        return RedirectResponse(back + "&saved=1", status_code=303)
 
     @app.put("/docs/{project}/comments/{comment_id}")
     async def docs_comment_put(request: Request, project: str, comment_id: str):
@@ -1382,15 +1665,22 @@ def build_app(paths: Paths) -> FastAPI:
                        live_topics="tasks")
 
     def _task_prefill(backlog: str | None, candidate: str | None) -> tuple[dict, str | None]:
-        """What New task opens with: a backlog entry's refined entry (Launch task) or an automation
+        """What New task opens with: a backlog entry's task prompt (Launch task) or an automation
         candidate's task (Make it a task). ({} and a message, when neither can be read.)"""
         if backlog:
             entry = _try(client.backlog_get, paths, backlog)
             if entry is None:
                 return {}, "That backlog entry is no longer in the backlog."
-            return {"project": entry["project_name"], "title": entry["title"],
-                    "description": entry["refined_entry"] or entry["primary_entry"],
-                    "source": f"the backlog entry “{entry['title']}”" + ("" if entry["refined_entry"] else " (not refined yet: its primary entry)"),
+            # The task prompt is written for the task, and only it ends by having the task delete the entry;
+            # an entry without one yet gives what it has, and says so.
+            if entry["task_prompt"]:
+                description, note = entry["task_prompt"], ""
+            elif entry["refined_entry"]:
+                description, note = entry["refined_entry"], " (no task prompt yet: its refined entry)"
+            else:
+                description, note = entry["primary_entry"], " (not refined yet: its primary entry)"
+            return {"project": entry["project_name"], "title": entry["title"], "description": description,
+                    "source": f"the backlog entry “{entry['title']}”{note}",
                     "source_href": f"/backlog/{entry['project_name']}/{entry['id']}"}, None
         if candidate:
             task = _try(client.usage_candidate_task, paths, candidate)
@@ -1488,10 +1778,11 @@ def build_app(paths: Paths) -> FastAPI:
         can_retry = run.get("status") == "failed" and not _is_recurring_task(project, run.get("title"), job)
         can_dismiss = _task_group(run) == "attention" and run.get("status") in _DISMISSABLE_STATUSES
         claude_peek = _peek_of(run["job_id"]) if run.get("job_id") else None
+        remote_control = _remote_control_of(run["job_id"], project) if run.get("job_id") else None
         topics = ["tasks", *([f"job:{run['job_id']}"] if run.get("job_id") else []),
                   *([f"peek:{run['job_id']}"] if claude_peek and claude_peek.get("running") else [])]
         return _render(request, "task_detail.html", run=run, job=job, description=description, can_retry=can_retry, can_dismiss=can_dismiss,
-                       peek=claude_peek, stop_refused=request.query_params.get("refused") == "1", nav_active="tasks", live_topics=",".join(topics))
+                       peek=claude_peek, remote_control=remote_control, stop_refused=request.query_params.get("refused") == "1", nav_active="tasks", live_topics=",".join(topics))
 
     def _retryable_run(project: str, run_id: str):
         run = _try(client.agent_run, paths, project, run_id)
@@ -1578,7 +1869,22 @@ def build_app(paths: Paths) -> FastAPI:
         return [{"value": f["id"], "label": f"{f['detector']} {f['title']} (about ${f['saving']:.2f} a week)"}
                 for f in client.usage_findings(paths, project=project)]
 
-    CHOICE_LOADERS = {"suites": _discover_suites, "findings": _open_findings}
+    def _blend_files(project: str) -> list[dict]:
+        def walk(nodes):
+            for node in nodes:
+                if node["type"] == "dir":
+                    yield from walk(node["children"])
+                elif node["kind"] == "blend":
+                    yield node
+
+        try:
+            tree = client.asset_tree(paths, project)["tree"]
+        except client.Refused as exc:
+            raise ValueError(exc.detail) from exc
+        return [{"value": n["path"], "label": n["path"],
+                 "detail": {"ready": "exported", "stale": "changed since the export", "none": "not exported"}[n["bundle"]]} for n in walk(tree)]
+
+    CHOICE_LOADERS = {"suites": _discover_suites, "findings": _open_findings, "blend": _blend_files}
 
     @app.get("/jobs/catalog/choices/{arg}")
     def job_arg_choices(arg: str, project: str = "") -> Response:
@@ -1661,18 +1967,18 @@ def build_app(paths: Paths) -> FastAPI:
         shown = jobs if everything else [j for j in jobs if j.get("created_by") == calendar.SCHEDULER]
         weeks = calendar.month(shown, _task_runs_of(shown), tasks, first, today, scheduled_only=not everything)
         return _render(
-            request, "schedule.html", weeks=weeks, first=first, today=today, error=error, everything=everything,
-            previous=calendar.shift_month(first, -1), following=calendar.shift_month(first, 1), per_day=calendar.PER_DAY,
+            request, "schedule.html", weeks=weeks, totals=calendar.totals(weeks), first=first, today=today, error=error, everything=everything,
+            previous=calendar.shift_month(first, -1), following=calendar.shift_month(first, 1),
             weekdays=WEEKDAYS, states=calendar.STATES, nav_active="schedule", live_topics="schedule",
         )
 
     @app.get("/schedule/item/job/{job_id}", response_class=HTMLResponse)
     def schedule_item_job(request: Request, job_id: str):
-        """The details panel of one job or task on the calendar (a fragment the page loads beside the month)."""
+        """The details of one job or task of a day (a fragment the day's panel loads when it is expanded)."""
         job = _try(client.get_job, paths, job_id)
         run = _try(client.agent_run_for_job, paths, job_id) if job and job.get("type") == "agent.run_task" else None
         return templates.TemplateResponse(request, "_schedule_item.html", {
-            "job": job, "run": run, "task": None, "at": None, "state": calendar.item_state(job, run) if job else None,
+            "job": job, "run": run, "task": None, "at": None,
             "subjects": _job_subjects(job, job.get("steps") or [], {}) if job else [],
         })
 
@@ -1812,10 +2118,11 @@ def build_app(paths: Paths) -> FastAPI:
         policies = {p["id"]: p for p in _try(lambda: client.policy_list(paths, summary=True), default=[])} if job and (job.get("type") or "").startswith("policy.") else {}
         task_run = _try(client.agent_run_for_job, paths, job_id) if job and job.get("type") == "agent.run_task" else None
         claude_peek = _peek_of(job_id) if job and job.get("type") in PEEK_JOB_TYPES else None
+        remote_control = _remote_control_of(job_id, job.get("project_id") or "") if job and job.get("type") in PEEK_JOB_TYPES else None
         topics = [f"job:{job_id}", *([f"peek:{job_id}"] if claude_peek and claude_peek.get("running") else [])]
         return _render(
             request, "job_detail.html", job=job, error=error, subjects=_job_subjects(job, job.get("steps") or [], policies) if job else [], dependencies=dependencies.get(job["id"], []) if job else [],
-            active=bool(job) and job["status"] in JOB_ACTIVE_STATUSES, task_run=task_run, peek=claude_peek,
+            active=bool(job) and job["status"] in JOB_ACTIVE_STATUSES, task_run=task_run, peek=claude_peek, remote_control=remote_control,
             stop_refused=request.query_params.get("refused") == "1", nav_active="jobs", live_topics=",".join(topics))
 
     def _peek_of(job_id: str) -> dict | None:
@@ -1825,6 +2132,34 @@ def build_app(paths: Paths) -> FastAPI:
         if not peek or not (peek.get("available") or peek.get("running")):
             return None
         return {**peek, "job_id": job_id}
+
+    def _remote_control_of(job_id: str, project_id: str) -> dict | None:
+        """Remote Control of the job's Claude session, for its page (the button, or the status). None when the
+        job has no Claude session or there is nothing to show: not running and never activated."""
+        state = _try(lambda: client.agent_remote_control(paths, job_id, project_id=project_id))
+        if not state or not (state["running"] or state["session_name"]):
+            return None
+        return {**state, "job_id": job_id, "project_id": project_id}
+
+    @app.post("/jobs/{job_id}/remote-control/{action}")
+    def job_remote_control(job_id: str, action: str, project_id: str = Form(""), next: str = Form("")):
+        """Activate remote control on the job's running Claude session (it is resumed with it, never
+        interrupted), or deactivate it (only the connection ends). Any user may."""
+        to = _local_path(next, f"/jobs/{job_id}")
+        if action not in ("activate", "deactivate"):
+            return _back(to, "Unknown remote-control action.")
+        try:
+            result = client.agent_remote_control_act(paths, job_id, action, project_id=project_id)
+        except client.RemoteControlRefused as exc:
+            live.publish(f"job:{job_id}")
+            return _back(to, f"Could not {action} remote control: {exc}")
+        except client.PillarUnavailable as exc:
+            return _back(to, f"Could not {action} remote control: {exc}")
+        live.publish(f"job:{job_id}")
+        live.publish("tasks")
+        if action == "activate":
+            return _back(to, f"Remote control is active: session {result.get('session_name')}.")
+        return _back(to, "Remote control deactivated; the job keeps running.")
 
     @app.get("/jobs/{job_id}/peek.json")
     def job_peek(job_id: str, after: int = 0):
@@ -1878,6 +2213,16 @@ def build_app(paths: Paths) -> FastAPI:
         kept = result.get("kept_for_safety", 0)
         note = f" {kept} kept because active work still depends on them." if kept else ""
         return _back("/jobs", f"Deleted {deleted} job{'' if deleted == 1 else 's'} older than {labels[hours]}.{note}")
+
+    @app.post("/policy-bypass/off")
+    def policy_bypass_off(next: str = Form("/")):
+        """The warning's button: `bypass_policies` back to FALSE at once."""
+        to = _local_path(next, "/")
+        try:
+            client.policy_bypass_off(paths)
+        except client.PillarUnavailable as exc:
+            return _back(to, f"Could not turn the policy bypass off: {exc}")
+        return _back(to, "bypass_policies is FALSE again: policies gate as usual.")
 
     @app.post("/jobs/{job_id}/gate/{action}")
     def job_gate_action(job_id: str, action: str, next: str = Form("/jobs?status=pending_confirmation")):

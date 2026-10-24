@@ -54,7 +54,7 @@ def test_an_entry_says_claude_is_refining_it_while_it_does_and_with_which_job(re
     entry = _entry(client)
     seen = {}
 
-    def query(paths, prompt, *, job_id, project_id=None, ref=None, timeout=0):
+    def query(paths, prompt, *, job_id, project_id=None, ref=None, read_checkout=False, timeout=0):
         seen["during"] = client.get(f"/v1/backlog/{entry['id']}").json()
         seen["ref"] = ref
         return "# Weekly export\n\nRefined."
@@ -154,6 +154,31 @@ def test_a_query_is_recorded_against_the_job_that_asked_and_can_be_peeked(paths,
     conn.close()
 
 
+def test_a_query_in_the_checkout_is_peeked_from_the_checkouts_transcripts(paths, home, tmp_path, monkeypatch):
+    from agent import db, peek
+    from agent.app import build_app
+    from agent.flow import AgentFlow
+
+    checkout = tmp_path / "little-meals"
+    checkout.mkdir()
+    monkeypatch.setattr("agent.app.resolve_project", lambda paths_, project_id, **kw: {"name": project_id, "path": str(checkout)})
+    conn = db.connect(tmp_path / "agent.db")
+    runner = _QueryRunner()
+    client = TestClient(build_app(paths, conn, flow=AgentFlow(paths=paths, runner=runner)))
+    client.post("/v1/jobs/agent.query", json={"job_id": "job-8", "project_id": "little-meals",
+                                              "params": {"prompt": "Refine this", "ref": "backlog:e1", "read_checkout": True}})
+    argv = runner.calls[0]
+    session_id = argv[argv.index("--session-id") + 1]
+    (session,) = db.query_sessions(conn, job_id="job-8")
+    assert session["cwd"] == str(checkout.resolve())  # where its transcript is, recorded rather than searched for
+
+    transcript = peek.transcripts_dir(checkout.resolve()) / f"{session_id}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Reading src/"}]}}) + "\n")
+    assert client.get("/v1/peek/job-8").json()["events"][0]["text"] == "Reading src/"
+    conn.close()
+
+
 def test_policy_authoring_asks_claude_under_its_own_job(monkeypatch, paths):
     from common.job_steps import StepReporter, reporting
     from policy import agent_client
@@ -233,4 +258,24 @@ def test_the_agent_deletes_the_transcripts_of_a_refs_sessions(paths, home, tmp_p
     assert sorted(p.name for p in folder.iterdir()) == ["s-3.jsonl"]
     assert [s["session_id"] for s in db.query_sessions(conn)] == ["s-3"]
     assert client.post("/v1/query-sessions/forget", json={"ref": ""}).status_code == 422
+    conn.close()
+
+
+def test_the_agent_deletes_a_checkout_querys_transcripts_and_nothing_else_there(paths, home, tmp_path):
+    from agent import db, peek
+    from agent.app import build_app
+
+    checkout = tmp_path / "little-meals"
+    conn = db.connect(tmp_path / "agent.db")
+    client = TestClient(build_app(paths, conn))
+    folder = peek.transcripts_dir(checkout)
+    folder.mkdir(parents=True)
+    db.start_query_session(conn, job_id="j1", session_id="s-1", ref="backlog:e1", cwd=str(checkout))
+    (folder / "s-1.jsonl").write_text("{}\n")
+    (folder / "s-1").mkdir()  # its subagents' transcripts
+    (folder / "s-1" / "agent-x.jsonl").write_text("{}\n")
+    (folder / "owners-own-session.jsonl").write_text("{}\n")  # the owner's own sessions in that checkout stay
+
+    assert client.post("/v1/query-sessions/forget", json={"ref": "backlog:e1"}).json() == {"deleted": 1}
+    assert sorted(p.name for p in folder.iterdir()) == ["owners-own-session.jsonl"]
     conn.close()

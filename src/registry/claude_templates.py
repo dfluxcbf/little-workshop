@@ -73,7 +73,8 @@ MCP_READ_ONLY = (
     "workshop_agent_runs", "workshop_agent_run_status", "workshop_agent_ci_list",
     "workshop_agent_ci_status", "workshop_agent_session_status",
     "workshop_schedule_list", "workshop_schedule_status", "workshop_schedule_queue_get",
-    "workshop_usage_summary", "workshop_usage_findings", "workshop_usage_candidates", "workshop_trigger_list",
+    "workshop_usage_summary", "workshop_usage_findings", "workshop_usage_candidates", "workshop_usage_plugin_proposals",
+    "workshop_trigger_list",
 )
 
 # Routine, reversible day-to-day work on the project (each takes the project's `project_id`).
@@ -108,7 +109,7 @@ MCP_ASK = (
     "workshop_agent_run_task", "workshop_agent_finish_task", "workshop_agent_skip_task",
     "workshop_agent_ci_check", "workshop_agent_session_start", "workshop_agent_session_stop",
     "workshop_project_bootstrap", "workshop_project_import", "workshop_project_connect_github",
-    "workshop_project_remove", "workshop_project_backlog_delete",
+    "workshop_project_configure_assets", "workshop_project_remove", "workshop_project_backlog_delete",
     "workshop_version_init", "workshop_version_config_add_hook", "workshop_version_config_remove_hook",
     "workshop_deployment_set_manifest", "workshop_deployment_seed_confirmation",
     "workshop_requirements_publish", "workshop_requirements_delete", "workshop_requirements_suite_delete",
@@ -146,7 +147,7 @@ MCP_NAMED_PROJECT = (
 # No project argument: a read by id or of the whole system, pre-allowed as it stands.
 LWS_READ_ONLY_ANY = (
     "core status", "project list", "job list", "job status", "job wait", "job watch", "job queue show",
-    "schedule list", "schedule status", "schedule queue get", "trigger list", "usage candidates",
+    "schedule list", "schedule status", "schedule queue get", "trigger list", "usage candidates", "usage plugin-proposals",
     "policy list", "policy status", "policy catalog list", "policy draft list",
     "requirements status", "requirements suite status", "build run-status", "agent session-list",
 )
@@ -190,7 +191,7 @@ LWS_ASK = (
     "job stop", "job policy-confirm", "job answer",
     "schedule add", "schedule edit", "schedule remove", "schedule trigger", "schedule cancel",
     "schedule postpone", "schedule queue set",
-    "project bootstrap", "project connect-github", "project import", "project remove", "project backlog delete",
+    "project bootstrap", "project connect-github", "project configure-assets", "project import", "project remove", "project backlog delete",
     "version init", "version config-add-hook", "version config-remove-hook",
     "requirements publish", "requirements delete", "requirements suite delete", "requirements import",
     "policy projects set",
@@ -215,7 +216,8 @@ LWS_UNLISTED = (
     "requirements export", "requirements test-structure-create",
     "build print-pip-config", "build write-pip-config", "build pip", "build print-vsix-urls",
     "deployment rollback-timeout", "deployment redeploy-pillar-worker", "deployment rollback-pillar-worker",
-    "worktree provision", "worktree release", "mcp serve",
+    "worktree provision", "worktree release", "mcp serve", "asset-mcp serve",
+    "bypass_policies",  # the user's alone (needs sudo); the command itself refuses Claude
 )
 
 # Why a raw command is refused, and the little-workshop route the policies gate instead. The
@@ -223,7 +225,7 @@ LWS_UNLISTED = (
 # than a bare denial.
 ROUTES = {
     "merge": "a branch is finished with workshop_version_<type>_finish, which runs the branch_finish policies "
-             "and merges with --no-ff",
+             "and squash-merges a feature or improvement (a hotfix or a release merges with --no-ff)",
     "cherry-pick": "a fix reaches the integration branch through workshop_version_hotfix_start / _finish "
                    "(hotfix-propagates-by-merge)",
     "tag": "tags are written by workshop_version_release_* (annotated v<M>.<m>.<p>); read the release state with "
@@ -981,7 +983,7 @@ the guard refuses them. Name the project in every call: `project_id` `{project}`
 | To do this | Use |
 |---|---|
 | Start a branch | `workshop_version_feature_start` (milestone work, from `dev`), `workshop_version_improvement_start` (anything else, from `dev`), `workshop_version_hotfix_start` (from the production branch) |
-| Finish it: `--no-ff` merge, `VERSION` bump, branch deleted | `workshop_version_<type>_finish` |
+| Finish it: squash merge (a hotfix: `--no-ff` into production and back into `dev`), `VERSION` bump, branch deleted | `workshop_version_<type>_finish` |
 | Cut, promote or finish a release | `workshop_version_release_start`, `workshop_version_release_candidate_cut` / `_promote`, `workshop_version_release_finish` |
 | Deploy, stop or inspect the server | `workshop_deployment_deploy`, `_stop`, `_status` |
 | Publish a package | `workshop_build_publish_pypi`, `workshop_build_publish_vsix` |

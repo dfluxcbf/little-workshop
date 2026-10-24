@@ -70,7 +70,7 @@ proxies, and the transcript backfill still covers every session.
 |---|---|---|
 | User | `~/.claude/settings.json` | `usage.configure_claude` (`usage/profile.py`) |
 | Launch | the environment of each Claude little-workshop starts | Agentic Development, from `GET /v1/config` (`agent/usage_client.py`) |
-| Pillar | `<config>/usage/config.json` (`intake_port`, `retention_days`, `plan_pressure_hold_percent`), `pricing.json` | the owner |
+| Pillar | `<config>/usage/config.json` (`intake_port`, `retention_days`, `plan_pressure_hold_percent`, `dashboard_url`), `pricing.json` | the owner |
 
 - **User profile**: the telemetry environment (`CLAUDE_CODE_ENABLE_TELEMETRY=1`, the `OTEL_*` exporter
   variables for http/json to the intake, `OTEL_LOG_TOOL_DETAILS=1`), the four session hooks, a generated
@@ -79,6 +79,23 @@ proxies, and the transcript backfill still covers every session.
   `apply: true` it copies the settings file beside itself, then writes. It keeps every entry of the owner's,
   leaves a statusline of the owner's own and a longer retention alone, and replaces only its own hooks. The
   MCP tool and the `lws` command always prompt.
+- **Session title** (REQ-000000413, REQ-000000415): the profile copies `usage/session_title.py` to
+  `<config>/usage/session_title.py` and runs it on SessionStart and UserPromptSubmit. In a checkout whose top holds
+  a `VERSION` file it names the session `<project> · <VERSION> · <branch>` (the project is the checkout's
+  directory, a submodule's module name), only when the branch or the version differs from what it last applied to
+  that session (`~/.local/state/little-workshop/session-titles/<session>.json`), so a name given in between stays
+  until the next change. Hooks run in every session, the Windows app's WSL sessions included.
+- **Status mod** (REQ-000000414, REQ-000000415): the profile writes the plugin `src/usage/claude_mod/` to
+  `~/.claude/skills/little-workshop-status/`, which every terminal session loads by itself, with the Dashboard's
+  socket and `dashboard_url` (default `http://localhost:8790`) written in. It reads `GET /status.json` for the
+  checkout's project every 30 seconds and when a turn ends, while a surface draws the session. `/ws` answers on every
+  surface, the phone included, with a short status report, one labelled line each: project, branch, version, server, the latest
+  test run and the running jobs, then only when there are any the tasks needing you, the jobs failed in 2 h and those
+  due within the hour, then the policies and the workshop's pillars and incidents of 2 h; each topic has its count
+  and its items listed under it. The phone app draws no plugin pane (2026-10-06), so the report is
+  its view; in the terminal `/ws` also opens a pane with every topic and links to the Dashboard. The Windows app's
+  WSL sessions load no plugins: it shows the status page instead (`docs/pillars/dashboard.md`).
+  `tools/test_claude_mod.py` validates and tests it with the `claude` CLI.
 - **Launch environment**: task runs, queries, doc updates and project sessions get the same telemetry
   variables plus `OTEL_RESOURCE_ATTRIBUTES=lws.project=…,lws.job=…,lws.job_type=…,lws.run=…`. With the pillar
   off or unreachable the run starts unchanged.
@@ -101,7 +118,7 @@ once a hook or its transcript supplies the directory.
 ## Store
 
 `sessions`, `requests`, `tool_calls`, `session_events`, `transcript_events`, `plan_pressure`, `day_rollups` (day ×
-project × origin × model), `run_usage`, `findings`, `experiments`, `candidates`, `branch_finishes`,
+project × origin × model), `run_usage`, `findings`, `experiments`, `candidates`, `plugin_proposals`, `branch_finishes`,
 `requirement_snapshots`, `doctor_reports`, `meta`. Requests, tool calls and transcript events older than `retention_days` (120,
 never under 35) are pruned; a day's rollup stays, so the store, not the raw transcripts, is the long-term
 record (decision 4). `usage.purge_project` removes a project's rows.
@@ -288,6 +305,82 @@ The candidates the baseline showed (proposal §11.3) are built: `workshop_job_wa
 `deployment.redeploy_changed_pillars` with its trigger, `requirements.sync_markers`, the test-output filter and
 the policies digest.
 
+## Plugin proposals
+
+Automation mining looks at short runs of calls; plugin proposals (`usage/plugins.py`, 2026-10-07,
+REQ-000000416 to REQ-000000419) look at the whole **request** a user makes and propose a Claude Code plugin of
+hooks and scripts that does it, calling Claude only where judgment was needed. They are worked out in the same
+`usage.mine_automation` run, from the same replay. Nothing is built from a proposal: a person decides.
+
+- **Request** (revised 2026-10-07 on the first run over real sessions, REQ-000000416): one prompt can hold several
+  (a long prompt may start a branch, write code, finish it and start the next), so a request is carved around
+  each **purposeful action**, a state-changing step that is not housekeeping (loops, waits, `sleep`, `kill`,
+  `git add`/`stash`/`checkout`/`rm`, reads such as `cat` or `git grep`). It holds the action, the steps right
+  before it (preparing: test runs, markers, a commit) and the reads and waits right after it; a judgment call
+  ends it, as does, after the action, the next action of another family. An action repeated inside its own
+  request (a retry, a `--continue`) is one request. A request of fewer than 2 calls on median is a single
+  command, which the automation candidates already cover, and is not proposed (`MIN_CALLS`).
+- **Step** or **judgment**: a step is a call code could make in Claude's place (an MCP call, a shell command that
+  does work, or one that reads the checkout's state, `git status`/`git log`/`ls`); judgment is reading or writing
+  files, free text, an inline script, a script run from a scratch directory (`/tmp/…`), a here-document other
+  than a commit's message (a script writes that from the commit policies' rules), a skill or a subagent.
+  `ToolSearch` and `TodoWrite` are neither: a plugin needs no schema loaded and no to-do list. A judgment run of
+  at most 8 calls between two runs of the same step (tests fail, Claude fixes, tests run again) stays in the
+  request as a fallback point.
+- **Family**: requests are grouped by their action, with the variants of one action taken as one (the words
+  `feature`, `improvement`, `hotfix`, `changed` dropped from a tool's name, `pillars` made singular). A shell
+  command is named from its whole text, not its signature: past `cd`, `export`, wrappers (`timeout 900`,
+  `nohup`, `env`), preambles (`date;`, `echo …;`), redirections and `git -C <dir>`; `lws <pillar> <verb>` takes the
+  MCP tool's family; a loop takes the family of what it repeats; `bash -c '…'` that of the command it runs. So
+  the feature, improvement and hotfix finishes, by MCP or `lws`, are all `version_finish`, proposed as
+  `finish-branch`. A release is its own family.
+- **Proposed** when the group was seen in at least 3 sessions or 10 times in 14 days and Claude made a judgment
+  call in at most 25% of its requests (`MAX_FALLBACK_RATE`). A group above that is reported by the mining run as
+  `too_much_judgment` and not proposed.
+- **Steps covered**: the action and every step in at least 25% of the group's requests (`CORE_SHARE`), in the
+  order they usually come, each with how often it came and the signatures it came as; the rarer steps are listed
+  apart as `rare_steps`.
+- **Fallback points**: each run of judgment calls, named after the step before it (`start` when none): how
+  often, how often that step had failed just before, the tools Claude used there, the calls it took and what it
+  cost per week. These are the only places the plugin hands over to Claude.
+- **Claude usage, explicitly**: occurrences per week and a frequency (daily, weekly, occasional), the median
+  calls, turns and tokens (context read plus text written by the request's turns) per occurrence, and the weighted
+  cost per week *today* (each request replayed as a whole, as a trigger would replace it) and *with the plugin*
+  (only its fallback runs, replayed as they happened, plus the plugin's command in every session's starting
+  context, 30 tokens a request). The net saving per week ranks the proposals; one under $0.10 is not listed.
+- **Scope**: all projects when the requests came from two or more projects, else the one project. The plugin is
+  installed from little-workshop's local marketplace (`little-workshop`) with Claude Code's own commands: user scope
+  for all projects, project scope in the project's checkout (`claude plugin install <name>@little-workshop
+  --scope user|project`). Everything stays on this machine.
+- **Absorbs**: the open automation candidates all of whose calls are steps of the plugin.
+- **Listing**: `GET /v1/plugin_proposals?state=` (open by default, `all`), `workshop_usage_plugin_proposals`,
+  `lws usage plugin-proposals`. A decision is `POST /v1/plugin_proposals/{id} {"state": "accepted" | "dismissed" |
+  "done" | "open"}`; an open proposal mining no longer finds is dropped, a decided one is kept. The plugins
+  *installed* are Claude Code's to list: `claude plugin list`, or `/plugin` in a session.
+
+**Reference plugin, `finish-branch`** (agreed 2026-10-07, built 2026-10-09, REQ-000000422 to REQ-000000425):
+`plugins/finish-branch/`, in the local marketplace `little-workshop` (`plugins/.claude-plugin/marketplace.json`).
+`python3 tools/install_plugins.py` adds the marketplace and installs (or updates) each plugin at user scope with
+`claude plugin marketplace add|update` and `claude plugin install|update`, so every project's sessions have it.
+It finishes the checked-out `feature/`, `improvement/` or `hotfix/` branch of one project or of every project
+(`--all`, the super-repository last, taking over `stabilize_branches.py`), through the little-workshop routes only,
+started by `/finish-branch [project|--all] [--push]`, which a `UserPromptSubmit` hook runs
+(`scripts/finish_branch.py`, stdlib only) and answers without the model. Steps: the daemon (down: nothing runs);
+the branch and a rebase in progress; the pending changes committed with the subject the policies want
+(`feat|impr|fix (-1): <name>`) and the `REQ-` ids of the changed tests' markers (`REQ-NONE` when no source
+changed; never little-workshop's generated files: it stops there); `requirements sync-markers`; the
+Definition-of-Done run, only where the project's `.claude/finish-branch.json` names a `test_command`; the policy
+preflight; `lws version <type>-finish` and its wait (rebase, squash merge or, for a hotfix, merge, tag and
+back-merge, `VERSION`, branch deleted); a held finish reported, never confirmed; for little-workshop, the changed
+pillars redeployed unless a trigger already does; with `--push`, the integration branch (a hotfix also the
+production branch) pushed after checking the no-reply e-mail. Claude is called only (the hook then gives it the
+facts as context instead of answering) for a commit with source changes and no `REQ-` to cite (the diff stat),
+failing tests (their output), a preflight failure (the failing policies), a finish that did not succeed, a
+rebase conflict (the conflicted files) and files little-workshop generates.
+
+Grouping by the user's own words instead of the call shape would need the prompt text stored, which the pillar
+does not keep; it is in the backlog.
+
 ## Data explorer
 
 Data kept before it has a use, each kind plotted on one card at the bottom of the Claude usage page
@@ -347,7 +440,7 @@ All are code; none uses Claude.
 | `usage.analyze` | Rolls up, runs the detectors, opens, refreshes and resolves findings, measures the experiments that are due |
 | `usage.measure_experiment` | Measures one running experiment now |
 | `usage.optimize` | Starts the fixed optimization task for a project's chosen findings |
-| `usage.mine_automation` | Mines the last 14 days of tool calls into candidates; updates tokens avoided |
+| `usage.mine_automation` | Mines the last 14 days of tool calls into candidates and plugin proposals; updates tokens avoided |
 | `usage.automate` | Starts the fixed task on little-workshop for one candidate at once (the Dashboard's "Make it a task" opens New task with it instead) |
 
 ## Proxies
@@ -356,11 +449,12 @@ All are code; none uses Claude.
   Each plot is drawn at its on-screen width with a colour legend (a comparison week dashed) and dates on its
   x axis; on a phone each table row stacks into label and value lines (REQ-000000355). The
   [Data explorer](#data-explorer) is its last section.
-- MCP: `workshop_usage_summary`, `workshop_usage_findings`, `workshop_usage_candidates` (reads, every project;
-  candidates come ten at a time with one example each, `limit` up to 50),
+- MCP: `workshop_usage_summary`, `workshop_usage_findings`, `workshop_usage_candidates`,
+  `workshop_usage_plugin_proposals` (reads, every project; candidates and proposals come ten at a time with one
+  example each, `limit` up to 50),
   `workshop_usage_doctor`, `workshop_usage_ingest_transcripts`, `workshop_usage_analyze`,
   `workshop_usage_mine_automation` (little-workshop's sessions), `workshop_usage_configure_claude` (asks).
-- CLI: `lws usage summary | findings | candidates | analyze | mine-automation | doctor | ingest-transcripts |
+- CLI: `lws usage summary | findings | candidates | plugin-proposals | analyze | mine-automation | doctor | ingest-transcripts |
   configure-claude [--apply]`.
 - Events reported to Orchestration's triggers: `claude.session_ended`, `usage.finding_opened`.
 - Job catalog: *Optimize Claude usage* (every project), *Apply common Claude configuration* and

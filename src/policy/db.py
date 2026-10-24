@@ -70,11 +70,39 @@ CREATE TABLE IF NOT EXISTS policy_drafts (
     decided_at TEXT
 );
 
+-- The user's policy bypass (policy/bypass.py): at most one row, TRUE while expires_at is in the future,
+-- and the audit log of turning it on, off, lapsing and of each violation it let through.
+CREATE TABLE IF NOT EXISTS policy_bypass (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    expires_at TEXT NOT NULL,
+    enabled_by TEXT NOT NULL,
+    enabled_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS policy_bypass_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT ''
+);
+
 -- A policy whose project selection has been initialised (seeded once from
 -- its authoring scope, or set explicitly) — so deselecting every project is
 -- a real choice that a restart never undoes.
 CREATE TABLE IF NOT EXISTS policy_seeded (
     policy_id TEXT PRIMARY KEY
+);
+
+-- A policy check whose sandbox is running: its Job was answered `accepted`, and only the thread that
+-- finishes the check calls Orchestration back. A row still here when the pillar starts is a check its
+-- stop cut short, which runs again (REQ-000000405).
+CREATE TABLE IF NOT EXISTS running_checks (
+    job_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    params TEXT NOT NULL,
+    started_at TEXT NOT NULL
 );
 """
 
@@ -101,6 +129,9 @@ def connect(path: Path) -> sqlite3.Connection:
     result_columns = {row["name"] for row in conn.execute("PRAGMA table_info(policy_check_results)")}
     if "checked_state" not in result_columns:
         conn.execute("ALTER TABLE policy_check_results ADD COLUMN checked_state TEXT NOT NULL DEFAULT ''")
+    if "origin" not in result_columns:
+        conn.execute("ALTER TABLE policy_check_results ADD COLUMN origin TEXT NOT NULL DEFAULT 'unknown'")
+        conn.execute("ALTER TABLE policy_check_results ADD COLUMN bypassed INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     return conn
 
@@ -294,13 +325,32 @@ def unseeded_policies(conn: sqlite3.Connection) -> list[Policy]:
 # -- policy check results -----------------------------------------------------
 
 
+def add_running_check(conn: sqlite3.Connection, job_id: str, project_id: str, params: dict) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO running_checks (job_id, project_id, params, started_at) VALUES (?, ?, ?, ?)",
+        (job_id, project_id, json.dumps(params), _iso(datetime.now(timezone.utc))),
+    )
+    conn.commit()
+
+
+def remove_running_check(conn: sqlite3.Connection, job_id: str) -> None:
+    conn.execute("DELETE FROM running_checks WHERE job_id = ?", (job_id,))
+    conn.commit()
+
+
+def list_running_checks(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute("SELECT * FROM running_checks ORDER BY started_at").fetchall()
+    return [{"job_id": r["job_id"], "project_id": r["project_id"], "params": json.loads(r["params"]),
+             "started_at": r["started_at"]} for r in rows]
+
+
 def insert_check_result(conn: sqlite3.Connection, result: PolicyCheckResult) -> None:
     conn.execute(
-        """INSERT INTO policy_check_results (id, policy_id, project_id, outcome, detail, job_id, checked_at, checked_state)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO policy_check_results (id, policy_id, project_id, outcome, detail, job_id, checked_at, checked_state, origin, bypassed)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             result.id, result.policy_id, result.project_id, result.outcome.value, result.detail,
-            result.job_id, _iso(result.checked_at), result.checked_state,
+            result.job_id, _iso(result.checked_at), result.checked_state, result.origin, int(result.bypassed),
         ),
     )
     conn.commit()
@@ -311,6 +361,7 @@ def _row_to_result(row: sqlite3.Row) -> PolicyCheckResult:
         id=row["id"], policy_id=row["policy_id"], project_id=row["project_id"],
         outcome=CheckOutcome(row["outcome"]), detail=row["detail"], job_id=row["job_id"],
         checked_at=_parse_iso(row["checked_at"]), checked_state=row["checked_state"] if "checked_state" in row.keys() else "",
+        origin=row["origin"], bypassed=bool(row["bypassed"]),
     )
 
 

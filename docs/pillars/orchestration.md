@@ -224,6 +224,25 @@ summary (`total`, `done`, `current`, `attention`).
   `pending_confirmation`, or a step is in `attention`), and otherwise when the timeout passes (120 seconds
   by default, 300 at most), with the Job still queued or running. It is one call (`workshop_job_wait`,
   `lws job wait`) where a Claude session used to poll the status, each poll re-reading its whole context.
+  (2026-10-05, REQ-000000404) A wait answers at once when Orchestration is asked to stop: an open wait
+  held its stop until systemd killed it 90 seconds later.
+- **A pillar that took a Job and never answered** (2026-10-05):
+  - A dispatch the pillar took but did not answer within the Job type's ceiling is still requeued, with
+    an error saying it may run twice, and is an incident (`DispatchTimeout`, kind unexpected), at most
+    once an hour per Job type and pillar (REQ-000000402). A dispatch the pillar never took (refused,
+    socket missing) is requeued as before, no incident.
+  - A dispatch the pillar took and then dropped, closing the connection unanswered because it stopped
+    (a stop cuts the requests still running after a minute) or crashed mid-way, fails its Job at once
+    with a reason saying whether the pillar did it is unknown, and is an incident (`DispatchDropped`).
+    The error used to escape the dispatch and leave the Job `running` for six hours (REQ-000000407).
+  - `deployment.redeploy_pillar` has an 1800-second ceiling (REQ-000000406). A redeploy batch's Jobs are
+    dispatched side by side, but Deployment & Servers runs them one at a time under its lock: with the
+    20-second default the ones waiting their turn were requeued while still being redeployed and ran
+    again, up to three times each (2026-10-05).
+  - At its start, before serving, Orchestration fails each `running` Job whose dispatch its previous
+    process never finished, one with no `running` run row, which an accepted Job has; whether its pillar
+    did it is unknown, so it is not run again. What depends on it fails too, and one incident
+    (`InterruptedDispatch`) lists them (REQ-000000403). An accepted Job is left to its pillar.
 
 
 ## Interfacing
@@ -359,3 +378,11 @@ A cleanup preview (`GET /v1/job-cleanup`) reads only each Job's id, status, last
 dependencies, once for all the ages it is asked about (REQ-000000389): with 1,792 Jobs it took 1.1 s,
 holding the lock (every Job read whole, once per age), and now takes 0.01 s.
 
+
+## A Job's origin (2026-10-05)
+
+A Job carries `origin` (`common/origin.py`: `user_cli`, `claude`, `scheduled_job`, `ui_job`, `automation`,
+`unknown`), stamped by whoever creates it and stored with it. `attach_policy_gate` passes it to the Policy pillar,
+which decides from it whether the user's policy bypass lifts the gating of the Job's checks; each check Job
+carries the `origin` and `bypassed` it was created with. A Job created by another Job (a release's children, a
+check fan-out) has origin `unknown` and is never bypassed. See `policy_compliance.md`, "Policy bypass".

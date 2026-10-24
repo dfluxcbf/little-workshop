@@ -174,9 +174,19 @@ edit and deletion (the Dashboard's live pages watch it). Two Jobs ask Claude, th
 Development's `agent.query` (this pillar runs no Claude itself), without holding the pillar's lock:
 
 - `registry.backlog_refine` — from the primary entry, the current refined entry and the notes;
-- `registry.backlog_task_prompt` — from the refined entry alone; the instruction to delete the entry
-  once the work is done (`lws project backlog delete --project-id <p> <id>`, or the MCP tool
-  `workshop_project_backlog_delete`) is appended here, word for word.
+- `registry.backlog_task_prompt` — from the refined entry (not the primary entry or the notes); the
+  instruction to delete the entry once the work is done (`lws project backlog delete --project-id <p>
+  <id>`, or the MCP tool `workshop_project_backlog_delete`) is appended here, word for word.
+
+Since 2026-10-05 both read the project's checkout as Claude writes (REQ-000000370, 371, 397): the query
+asks for `read_checkout`, so the agent runs Claude in the checkout with only the tools that read
+(`docs/pillars/agentic_development.md`, "A query that reads a project's checkout"). The refined entry says how that
+part of the project works today, naming its files, and settles from the code what the code answers; the
+task prompt names the files to change and the tests to add or run. The requirements still come from the
+owner alone: what Claude takes from the code says where and how, never what is wanted. Each Job waits
+for the longer query (600 s), and Orchestration for each Job (630 s). Before, Claude had only the
+entry's text, so a refined entry could not say where a change went and asked the owner what the code
+would have answered.
 
 Each is refused for a missing entry (and the prompt for an entry not refined yet), and an entry deleted
 while Claude works keeps nothing of the answer. Deleting an entry — from the Dashboard, `lws project
@@ -195,3 +205,10 @@ entry (its update time stays), and the Dashboard's backlog pages read them inste
 `lws project backlog list|show|add|delete --project-id <p>` and `workshop_project_backlog_list|get|add|delete`
 act only on the named project's backlog (an entry of another project is refused). Reading and adding are
 pre-allowed in a project's session; deleting asks, being irreversible.
+
+## Asset review configuration (2026-10-09)
+
+`projects.assets_dir` (nullable, added to an existing database on start) is the checkout folder whose assets the
+Dashboard shows; the `project.configure_assets` Job (`assets_dir`, `mcp`) validates it lies inside the checkout,
+records it and merges the `asset-review` server into the checkout's `.mcp.json` (an empty folder removes it). The
+whole feature is described in `dashboard.md` ("Assets"). REQ-000000426.

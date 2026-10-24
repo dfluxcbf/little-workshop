@@ -1,15 +1,19 @@
 """The desired Claude Code user profile: what `~/.claude/settings.json` must hold for every Claude
-session on this machine to report to the intake (docs/pillars/usage.md, "Configuration").
+session on this machine to report to the intake (docs/pillars/usage.md, "Configuration"), to be named
+after its checkout (the session-title hook, REQ-000000413) and to show little-workshop's status (the
+status mod in `~/.claude/skills/`, REQ-000000414).
 
-It is the only file this pillar edits outside every repository, so nothing here writes without being
-asked: `plan` says what would change, `apply` changes it after keeping a backup, and both leave every
-entry the owner made alone."""
+These are the only files this pillar edits outside every repository, so nothing here writes without being
+asked: `plan` says what would change, `apply` changes it after keeping a backup of the settings, and both
+leave every entry the owner made alone."""
 
 from __future__ import annotations
 
 import copy
+import importlib.resources
 import json
 import shutil
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +22,25 @@ HTTP_HOOK_EVENTS = ("SessionEnd", "PreCompact", "PostCompact")
 COMMAND_HOOK_EVENTS = ("SessionStart",)  # Claude Code 2.1.289 posts no `http` hook at session start
 CLEANUP_PERIOD_DAYS = 90
 STATUSLINE_FILE = "statusline.py"
+SESSION_TITLE_FILE = "session_title.py"  # this package's own module, copied beside the statusline script
+TITLE_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit")  # the events whose answer may carry `sessionTitle`
+TITLE_HOOK_TIMEOUT = 10
+MOD_NAME = "little-workshop-status"
+# The status mod's files: where each lands in its plugin folder, from its source in `claude_mod/` beside this module.
+MOD_FILES = {
+    ".claude-plugin/plugin.json": "plugin.json",
+    "hooks/hooks.json": "hooks.json",
+    "hooks/register.tsx": "register.tsx",
+    "types/index.d.ts": "state.d.ts",
+}
+
+
+@dataclass(frozen=True)
+class StatusMod:
+    """Where the status mod reads the Dashboard (its Unix socket) and where its links open it."""
+
+    dashboard_socket: Path
+    dashboard_url: str
 # Prompt and response text stay out of the store (decision 10 of the proposal: off until decided).
 FORBIDDEN_ENV = ("OTEL_LOG_USER_PROMPTS", "OTEL_LOG_ASSISTANT_RESPONSES")
 
@@ -53,10 +76,40 @@ def _hook(event: str, port: int) -> dict:
     return {"hooks": [{"type": "http", "url": url}]}
 
 
+def session_title_path(statusline_path: Path) -> Path:
+    return statusline_path.parent / SESSION_TITLE_FILE
+
+
+def session_title_script() -> str:
+    return (importlib.resources.files("usage") / SESSION_TITLE_FILE).read_text(encoding="utf-8")
+
+
+def mod_dir(settings_path: Path) -> Path:
+    """The status mod's folder: a plugin in the user's skills folder, which every session loads by itself."""
+    return settings_path.parent / "skills" / MOD_NAME
+
+
+def mod_files(mod: StatusMod) -> dict[str, str]:
+    """{path in the mod's folder: its text}, with the Dashboard's socket and URL written in."""
+    source = importlib.resources.files("usage") / "claude_mod"
+    values = {"'@@DASHBOARD_SOCKET@@'": json.dumps(str(mod.dashboard_socket)), "'@@DASHBOARD_URL@@'": json.dumps(mod.dashboard_url.rstrip("/"))}
+    files = {}
+    for target, name in MOD_FILES.items():
+        text = (source / name).read_text(encoding="utf-8")
+        for placeholder, value in values.items():
+            text = text.replace(placeholder, value)
+        files[target] = text
+    return files
+
+
 def desired(port: int, statusline_path: Path) -> dict:
+    hooks = {event: [_hook(event, port)] for event in (*COMMAND_HOOK_EVENTS, *HTTP_HOOK_EVENTS)}
+    title = {"hooks": [{"type": "command", "command": f"python3 {session_title_path(statusline_path)}", "timeout": TITLE_HOOK_TIMEOUT}]}
+    for event in TITLE_HOOK_EVENTS:
+        hooks.setdefault(event, []).append(title)
     return {
         "env": telemetry_env(port),
-        "hooks": {event: [_hook(event, port)] for event in (*COMMAND_HOOK_EVENTS, *HTTP_HOOK_EVENTS)},
+        "hooks": hooks,
         "statusLine": {"type": "command", "command": f"python3 {statusline_path}"},
         "cleanupPeriodDays": CLEANUP_PERIOD_DAYS,
     }
@@ -64,7 +117,8 @@ def desired(port: int, statusline_path: Path) -> dict:
 
 def _is_ours(entry) -> bool:
     return isinstance(entry, dict) and any(
-        HOOK_PATH in str(hook.get("url") or hook.get("command") or "") for hook in entry.get("hooks") or [] if isinstance(hook, dict))
+        HOOK_PATH in str(hook.get("url") or hook.get("command") or "") or SESSION_TITLE_FILE in str(hook.get("command") or "")
+        for hook in entry.get("hooks") or [] if isinstance(hook, dict))
 
 
 def merged(current: dict, want: dict) -> tuple[dict, list[dict], list[str]]:
@@ -117,18 +171,37 @@ def read_settings(path: Path) -> dict:
     return data
 
 
-def plan(path: Path, port: int, statusline_path: Path) -> dict:
-    """What applying the profile would change: {"settings_path", "changes", "notes", "in_place"}."""
+def _read(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+
+
+def _files(path: Path, port: int, statusline_path: Path, status_mod: StatusMod | None) -> list[tuple[Path, str, str]]:
+    """The files the profile writes beside the settings: (where, its text, what to call it in a change)."""
+    files = [(statusline_path, statusline_script(port), "the generated statusline script"),
+             (session_title_path(statusline_path), session_title_script(), "the session-title hook")]
+    if status_mod is not None:
+        folder = mod_dir(path)
+        files += [(folder / target, text, f"the {MOD_NAME} mod's {target}") for target, text in mod_files(status_mod).items()]
+    return files
+
+
+def plan(path: Path, port: int, statusline_path: Path, *, status_mod: StatusMod | None = None) -> dict:
+    """What applying the profile would change: {"settings_path", "changes", "notes", "in_place"}. The status mod
+    is part of it when `status_mod` says where the Dashboard is."""
     _, changes, notes = merged(read_settings(path), desired(port, statusline_path))
-    script_current = statusline_path.read_text(encoding="utf-8") if statusline_path.exists() else None
-    if script_current != statusline_script(port):
-        changes.append({"setting": str(statusline_path), "from": "missing" if script_current is None else "an older version", "to": "the generated statusline script"})
+    for target, text, name in _files(path, port, statusline_path, status_mod):
+        current = _read(target)
+        if current != text:
+            changes.append({"setting": str(target), "from": "missing" if current is None else "an older version", "to": name})
     return {"settings_path": str(path), "changes": changes, "notes": notes, "in_place": not changes}
 
 
-def apply(path: Path, port: int, statusline_path: Path, *, now: datetime | None = None) -> dict:
+def apply(path: Path, port: int, statusline_path: Path, *, status_mod: StatusMod | None = None, now: datetime | None = None) -> dict:
     """Write the profile. The settings file is copied beside itself first; the result names the backup."""
-    report = plan(path, port, statusline_path)
+    report = plan(path, port, statusline_path, status_mod=status_mod)
     if report["in_place"]:
         return {**report, "applied": False, "backup": None}
     after, _, _ = merged(read_settings(path), desired(port, statusline_path))
@@ -136,8 +209,10 @@ def apply(path: Path, port: int, statusline_path: Path, *, now: datetime | None 
     if path.exists():
         backup = path.with_name(f"{path.name}.lws-backup-{(now or datetime.now()).strftime('%Y%m%d-%H%M%S')}")
         shutil.copy2(path, backup)
-    statusline_path.parent.mkdir(parents=True, exist_ok=True)
-    statusline_path.write_text(statusline_script(port), encoding="utf-8")
+    for target, text, _ in _files(path, port, statusline_path, status_mod):
+        if _read(target) != text:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(after, indent=2) + "\n", encoding="utf-8")
     return {**report, "applied": True, "backup": str(backup) if backup else None}

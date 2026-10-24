@@ -23,7 +23,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ValidationError
 
-from common import events
+from common import events, serving
 from common.job_steps import StepReporter, reporting, step
 from common.paths import Paths
 from common.incident import install_incident_reporting
@@ -31,6 +31,7 @@ from common.pillar_socket import resolve_pillar_socket
 from common.uds_client import client_for_socket
 from registry import agent_client, backlog, claude_sync, db, github, gitops, version_client
 from registry.bootstrap import BootstrapError, bootstrap_project
+from registry.assets_config import AssetsConfigError, configure_assets
 from registry.connect_github import ConnectGitHubError, connect_github
 from registry.import_ import ProjectImportError, import_project
 from registry.models import BootstrapParams, ConnectGitHubParams, ImportParams, ProjectSet, ProjectStatus, Ticket
@@ -107,9 +108,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
 
     @app.get("/v1/health")
     def health() -> dict:
-        with lock:
-            count = len(db.list_projects(conn, status=ProjectStatus.ACTIVE))
-        return {"ok": True, "active_projects": count}
+        with serving.held_or_busy(lock) as free:  # busy work never makes it look hung (REQ-000000409)
+            count = len(db.list_projects(conn, status=ProjectStatus.ACTIVE)) if free else None
+        return {"ok": True, "active_projects": count, **({} if free else {"busy": True})}
 
     @app.post("/v1/jobs/project.bootstrap")
     def job_bootstrap(request: JobRequest) -> dict:
@@ -179,6 +180,19 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
                 detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else str(exc)
                 return {"outcome": "failed", "error": detail}
         return {"outcome": "succeeded", "result": result.model_dump(mode="json")}
+
+    @app.post("/v1/jobs/project.configure_assets")
+    def job_configure_assets(request: JobRequest) -> dict:
+        """Params: `assets_dir` (folder of the checkout to show; empty turns asset review off), `mcp` (default true:
+        declare the project's `asset-review` MCP server in its `.mcp.json`)."""
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project name"}
+        with reported(request), lock:
+            try:
+                result = configure_assets(conn, request.project_id, request.params.get("assets_dir"), mcp=request.params.get("mcp", True) is not False)
+            except AssetsConfigError as exc:
+                return {"outcome": "failed", "error": str(exc)}
+        return {"outcome": "succeeded", "result": result}
 
     @app.post("/v1/jobs/project.remove")
     def job_remove(request: JobRequest) -> dict:
@@ -369,7 +383,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
                 _activity(entry_id, **{since: datetime.now(timezone.utc).isoformat(), job: request.job_id, error: None})
                 with step("ask_claude") as handle:
                     text = agent_client.query(paths, prompt, job_id=request.job_id, project_id=entry["project_name"],
-                                              ref=backlog_ref(entry_id))
+                                              ref=backlog_ref(entry_id), read_checkout=True)
                     handle.detail = f"{len(text)} characters"
                 with step("save") as handle:
                     with lock:
@@ -387,13 +401,15 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
 
     @app.post("/v1/jobs/registry.backlog_refine")
     def job_backlog_refine(request: JobRequest) -> dict:
-        """Claude writes the refined entry from the primary entry, the current refined entry and the notes."""
+        """Claude writes the refined entry from the primary entry, the current refined entry and the notes,
+        reading the project's checkout."""
         return _ask_claude_for_entry(request, write="refined_entry", build_prompt=backlog.refine_prompt, finish=lambda text, entry: text,
                                      activity=REFINING)
 
     @app.post("/v1/jobs/registry.backlog_task_prompt")
     def job_backlog_task_prompt(request: JobRequest) -> dict:
-        """Claude writes the task prompt from the refined entry alone; the delete instruction is appended here."""
+        """Claude writes the task prompt from the refined entry, reading the project's checkout; the delete
+        instruction is appended here."""
         return _ask_claude_for_entry(
             request, write="task_prompt", build_prompt=backlog.task_prompt_prompt,
             finish=lambda text, entry: backlog.with_delete_instruction(text, entry["project_name"], entry["id"]), activity=PROMPTING,

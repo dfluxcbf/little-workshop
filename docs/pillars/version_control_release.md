@@ -25,7 +25,8 @@ repository in a half-finished state.
 
 - **Topic branches** (`feature`/`improvement`) — start from the
   integration branch, finish by rebase + squash to one `feat (N): name`
-  (or `impr (N): name`) commit, merge `--no-ff`, patch-version bump,
+  (or `impr (N): name`) commit, squash merge into the integration branch (one commit, no merge
+  commit; 2026-10-07), patch-version bump,
   delete the branch. `--continue`/`--abort` resume or cancel a finish
   paused by a real rebase conflict.
 - **Hotfixes** — start from the production branch, finish by merging into
@@ -211,6 +212,18 @@ version-number-only rebase conflicts are still resolved automatically. Run direc
 ask, a dirty tree raises and a conflict returns the `--continue`/`--abort` message as before.
 These jobs run on a background thread and answer the dispatch call at once only when they finish within
 `SYNC_GRACE_SECONDS`; otherwise `accepted`, completing through Orchestration's callback.
+
+## A Job cut by a restart (2026-10-05)
+
+REQ-000000410. The thread running an accepted Job (the Release job, or a finish waiting for the user's
+answer) dies with the process, and only it would have told Orchestration how the Job ended, so the Job
+stayed `running` until the six-hour sweep. The pillar now keeps each Job it answered `accepted` in
+`pillars/version-running.json` under the state directory (`version/running.py`) until it reports the end.
+At its next start, before serving, it fails each one still listed: a release or finish cut part-way may
+have left its repository mid-way (a release branch, a merge, a tag), so it is never run again on its
+own. An incident (`InterruptedJob`, kind unexpected) names the Job and says to check `lws version status`
+and its steps before running it again. A redeploy restarts Orchestration too, so the answers it does not
+take yet are tried again every 30 seconds for half an hour.
 
 
 ## Interfacing

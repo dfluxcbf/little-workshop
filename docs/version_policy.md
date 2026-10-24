@@ -18,14 +18,15 @@ depend on the `lvx` tool or its `.lvx/config.json`.
 
 - `master` — production. Always releasable.
 - `dev` — integration. Work lands here before release.
-- `feature/<name>`, `improvement/<name>` — branched from `dev`, merged back
-  into `dev` (`--no-ff`).
+- `feature/<name>`, `improvement/<name>` — branched from `dev`, squash-merged
+  back into `dev`: one commit, no merge commit (amended 2026-10-07; it was `--no-ff`).
 - `release/<version>` — cut from `dev`, merged into `master` and back into
   `dev`.
 - `hotfix/<name>` — branched from `master`, merged into `master` and `dev`.
 - `support/<version>` — maintenance of an older release line.
 
-Merges use plain `git merge --no-ff`. No tool is required to create, merge or
+A hotfix or a release merges with plain `git merge --no-ff`; a feature or improvement with
+`git merge --squash` (amended 2026-10-07). No tool is required to create, merge or
 delete these branches.
 
 ## Version numbering

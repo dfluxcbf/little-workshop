@@ -29,6 +29,8 @@ class Project(BaseModel):
     name: str
     path: str
     repo_url: str | None = None
+    # The checkout folder (relative) whose assets the Dashboard shows; None: asset review is off.
+    assets_dir: str | None = None
     status: ProjectStatus = ProjectStatus.ACTIVE
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)

@@ -128,6 +128,19 @@ def merge_no_ff(repo_root: Path, branch: str, message: str) -> None:
         raise GitError(f"Merge failed: {result.stderr.strip() or result.stdout.strip()}")
 
 
+def merge_squash(repo_root: Path, branch: str, message: str) -> None:
+    """Land `branch` on the current branch as one commit, with no merge commit. Raises MergeConflictError
+    if conflicts occur (never auto-resolves)."""
+    result = run(["git", "merge", "--squash", branch], repo_root, check=False)
+    if result.returncode != 0:
+        status = run(["git", "status", "--porcelain"], repo_root, check=False)
+        if "UU" in status.stdout or "AA" in status.stdout or "DD" in status.stdout:
+            raise MergeConflictError(f"Merge conflict when squash-merging {branch!r}. Resolve conflicts manually, then commit.")
+        raise GitError(f"Merge failed: {result.stderr.strip() or result.stdout.strip()}")
+    if run(["git", "diff", "--cached", "--quiet"], repo_root, check=False).returncode != 0:
+        run(["git", "commit", "-m", message], repo_root)
+
+
 def create_annotated_tag(repo_root: Path, tag: str, message: str, commit: str | None = None) -> None:
     if tag_exists(repo_root, tag):
         raise TagExistsError(f"Tag already exists: {tag!r}")
@@ -191,6 +204,18 @@ def get_commit_sha(repo_root: Path, ref: str = "HEAD") -> str:
 def is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
     result = run(["git", "merge-base", "--is-ancestor", ancestor, descendant], repo_root, check=False)
     return result.returncode == 0
+
+
+def is_merged(repo_root: Path, ref: str, target: str) -> bool:
+    """Whether `target` already holds everything `ref` changed: `ref` is in its history, or merging `ref`
+    into it would change nothing, as after a squash merge, whose commits never become ancestors."""
+    if is_ancestor(repo_root, ref, target):
+        return True
+    merged = run(["git", "merge-tree", "--write-tree", target, ref], repo_root, check=False)
+    if merged.returncode != 0 or not merged.stdout.strip():
+        return False
+    tree = run(["git", "rev-parse", f"{target}^{{tree}}"], repo_root, check=False).stdout.strip()
+    return merged.stdout.splitlines()[0].strip() == tree
 
 
 def delete_branch(repo_root: Path, name: str, force: bool = False) -> None:

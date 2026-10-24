@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "little-workshop"
-version = "0.2.56"
+version = "0.2.73-dev.1"
 description = "Unified, self-hosted software project-management daemon absorbing little-requirements/little-versions/little-runner/little-pypi/bootstrap-little-project as pillars"
 readme = "README.md"
 license = "MIT"
@@ -30,11 +30,12 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["common*", "core*", "orchestration*", "registry*", "requirements*", "version*", "build*", "policy*", "deployment*", "agent*", "cli*", "mcp_server*", "dashboard*", "usage*"]
+include = ["common*", "core*", "orchestration*", "registry*", "requirements*", "version*", "build*", "policy*", "deployment*", "agent*", "cli*", "mcp_server*", "asset_mcp*", "dashboard*", "usage*"]
 
 [tool.setuptools.package-data]
 agent = ["templates/prompts/*.md"]
-dashboard = ["templates/*.html", "static/*.css", "static/*.js", "static/*.webmanifest", "static/icons/*.png"]
+dashboard = ["templates/*.html", "static/*.css", "static/*.js", "static/vendor/*.js", "static/*.webmanifest", "static/icons/*.png"]
+usage = ["claude_mod/*.json", "claude_mod/*.tsx", "claude_mod/*.ts"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

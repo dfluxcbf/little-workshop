@@ -78,6 +78,16 @@ def test_project_bootstrap_passes_template_defaulting_to_python(paths, fake_crea
     assert schema["properties"]["template"]["enum"] == ["python", "unity"]
 
 
+def test_project_configure_assets_builds_registry_job(paths, fake_create_job):
+    """REQ-000000426."""
+    tools_mod.TOOLS_BY_NAME["workshop_project_configure_assets"].handler(paths, {"project_id": "ethereal-lands", "assets_dir": "blender_development"})
+    tools_mod.TOOLS_BY_NAME["workshop_project_configure_assets"].handler(paths, {"project_id": "ethereal-lands", "mcp": False})
+    first, second = fake_create_job
+    assert (first["type"], first["target_pillar"], first["project_id"], first["queue_key"]) == ("project.configure_assets", "registry", "ethereal-lands", "ethereal-lands")
+    assert first["params"] == {"assets_dir": "blender_development", "mcp": True}
+    assert second["params"] == {"assets_dir": "", "mcp": False}
+
+
 def test_project_connect_github_builds_registry_job(paths, fake_create_job):
     """REQ-000000282."""
     tools_mod.TOOLS_BY_NAME["workshop_project_connect_github"].handler(paths, {"name": "ethereal-lands", "public": True})
@@ -467,6 +477,13 @@ def test_candidates_and_triggers_are_read_through_the_client(paths, monkeypatch)
     assert tools_mod.TOOLS_BY_NAME["workshop_usage_candidates"].handler(paths, {}) == [{"signature": "x", "examples": []}]
     assert tools_mod.TOOLS_BY_NAME["workshop_trigger_list"].handler(paths, {}) == [{"id": "t1"}]
     assert candidates[0] == ((paths,), {"state": "open", "limit": 10}) and listed[0] == ((paths,), {})
+
+
+def test_plugin_proposals_are_read_through_the_client(paths, monkeypatch):
+    """REQ-000000419."""
+    proposals = _fake_client_call(monkeypatch, "usage_plugin_proposals", result=[{"name": "finish-branch", "examples": [1, 2]}])
+    assert tools_mod.TOOLS_BY_NAME["workshop_usage_plugin_proposals"].handler(paths, {"limit": 500}) == [{"name": "finish-branch", "examples": [1]}]
+    assert proposals[0] == ((paths,), {"state": "open", "limit": 50})
 
 
 def test_trigger_add_and_remove_build_the_orchestration_calls(paths, monkeypatch):

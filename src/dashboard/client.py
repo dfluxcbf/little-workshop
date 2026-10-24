@@ -21,6 +21,7 @@ from datetime import datetime
 
 import httpx
 
+from common import origin as origins
 from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
 from common.uds_client import client_for_socket
@@ -54,6 +55,7 @@ def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
 
 
 def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
+    fields.setdefault("origin", origins.UI_JOB)  # a Job triggered through the UI: never bypassable
     socket_path = resolve_pillar_socket(paths, "orchestration", timeout=timeout)
     if socket_path is None:
         raise PillarUnavailable("orchestration daemon unreachable — Core has no socket for it registered")
@@ -189,6 +191,16 @@ def policy_check_results(paths: Paths, *, latest: bool = False, outcome: str | N
     params = {"latest": "true" if latest else None, "outcome": outcome, "policy_id": policy_id,
               "checked_since": checked_since.isoformat() if checked_since else None}
     return _get(paths, "policy", "/v1/policy_check_results", params={k: v for k, v in params.items() if v is not None}, timeout=timeout)
+
+
+def policy_bypass(paths: Paths, *, timeout: float = 3.0) -> dict:
+    """The `bypass_policies` flag: `{"bypass_policies": bool, "remaining_seconds", "expires_at", "enabled_by"}`."""
+    return _get(paths, "policy", "/v1/bypass", timeout=timeout)
+
+
+def policy_bypass_off(paths: Paths, *, timeout: float = 5.0) -> dict:
+    """The Dashboard's button: the flag back to FALSE now. It can only lower the flag, never raise it."""
+    return _send(paths, "policy", "POST", "/v1/bypass", json={"enabled": False, "origin": origins.UI_JOB, "actor": "dashboard"}, timeout=timeout)
 
 
 def policy_drafts(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> list[dict]:
@@ -388,6 +400,24 @@ def doc_image(paths: Paths, project_id: str, path: str) -> tuple[bytes, str]:
     return response.content, response.headers.get("content-type", "application/octet-stream")
 
 
+def asset_tree(paths: Paths, project_id: str) -> dict:
+    """{assets_dir, tree: [node]}; a node is a dir (`children`) or a file (`kind`, `commented`, `bundle`)."""
+    return _call(paths, "agent", "GET", f"/v1/assets/{project_id}").json()
+
+
+def asset_details(paths: Paths, project_id: str, path: str) -> dict:
+    return _call(paths, "agent", "GET", f"/v1/assets/{project_id}/asset", params={"path": path}).json()
+
+
+def asset_file(paths: Paths, project_id: str, path: str) -> tuple[bytes, str]:
+    response = _call(paths, "agent", "GET", f"/v1/assets/{project_id}/file", params={"path": path})
+    return response.content, response.headers.get("content-type", "application/octet-stream")
+
+
+def put_asset_comment(paths: Paths, project_id: str, path: str, body: str) -> dict:
+    return _call(paths, "agent", "PUT", f"/v1/assets/{project_id}/comment", json={"path": path, "body": body}).json()
+
+
 def review_comments(paths: Paths, project_id: str, *, branch: str | None = None, path: str | None = None) -> list[dict]:
     params = {k: v for k, v in {"branch": branch, "path": path}.items() if v is not None}
     return _call(paths, "agent", "GET", f"/v1/reviews/{project_id}", params=params).json()["comments"]
@@ -484,6 +514,35 @@ def agent_peek(paths: Paths, job_id: str, *, after: int = 0, limit: int = 200, t
     events, next, skipped}; `after` is where the caller's copy ends (-1: only where it ends now). None for a Job
     the agent has no session for."""
     return _get_optional(paths, "agent", f"/v1/peek/{job_id}", params={"after": after, "limit": limit}, timeout=timeout)
+
+
+def agent_remote_control(paths: Paths, job_id: str, *, project_id: str = "") -> dict | None:
+    """Remote Control of a Job's running Claude session: {running, active, can_activate, can_deactivate,
+    already_set_up, session_name, started_at, stopped_at}. None for a Job that has no Claude session."""
+    return _get_optional(paths, "agent", f"/v1/remote-control/{job_id}", params={"project_id": project_id})
+
+
+class RemoteControlRefused(Exception):
+    """The agent refused to (de)activate remote control; the message says why."""
+
+
+def agent_remote_control_act(paths: Paths, job_id: str, action: str, *, project_id: str = "") -> dict:
+    """`action` is "activate" (resume the session with remote control) or "deactivate" (drop only that connection)."""
+    socket_path = resolve_pillar_socket(paths, "agent", timeout=30.0)
+    if socket_path is None:
+        raise PillarUnavailable("agent daemon unreachable — Core has no socket for it registered")
+    try:
+        with client_for_socket(socket_path, timeout=30.0) as client:
+            response = client.post(f"/v1/remote-control/{job_id}/{action}", params={"project_id": project_id})
+    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        raise PillarUnavailable("agent daemon unreachable") from exc
+    if response.status_code in (404, 409):
+        raise RemoteControlRefused(str(response.json().get("detail") or "refused"))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise PillarUnavailable("agent daemon refused the request") from exc
+    return response.json()
 
 
 def agent_run_for_job(paths: Paths, job_id: str) -> dict | None:

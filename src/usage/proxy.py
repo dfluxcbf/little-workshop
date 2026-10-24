@@ -27,6 +27,8 @@ DEFAULTS = {
     "retention_days": 120,
     # Above this share of the plan's 5-hour window, scheduled jobs that use Claude wait (decision 6).
     "plan_pressure_hold_percent": 80,
+    # Where a browser reaches the Dashboard: the status mod's links open its pages here (REQ-000000414).
+    "dashboard_url": "http://localhost:8790",
 }
 MIN_RETENTION_DAYS = 35
 

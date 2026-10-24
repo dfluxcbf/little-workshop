@@ -554,15 +554,22 @@ Claude is working on it). An entry's page (`/backlog/{project}/{entry}`) shows i
   entry**: it saves both fields, then starts `registry.backlog_refine`, which has Claude write a new
   refined entry from the primary entry, the current refined entry and the notes, and replaces it;
 - **Task prompt**, with a copy icon at its top right corner and **Generate task prompt**
-  (`registry.backlog_task_prompt`, from the refined entry alone; it ends with the instruction to delete
+  (`registry.backlog_task_prompt`, from the refined entry; it ends with the instruction to delete
   the entry once the work is done). Disabled until the entry is refined.
+
+Both have Claude read the project's checkout, which it cannot change (since 2026-10-05,
+`docs/pillars/registry_portfolio.md`, "Backlog"); the task prompt's card says so.
 
 While Claude works the buttons say so, the entry's page shows the session as it grows (its Claude
 peek), and a failed attempt's error shows until one succeeds. The entry itself records this (Registry &
-Portfolio, REQ-000000385), so the backlog pages read no Jobs; a mark older than ten minutes is shown as
-an attempt that did not finish.
-**Launch task** opens New task (`/tasks/new?backlog=<id>`) with the entry's title and its refined entry
-in the Task box (the primary entry while it is not refined). **Delete from backlog** asks first, then
+Portfolio, REQ-000000385), so the backlog pages read no Jobs; a mark older than fifteen minutes (past the
+630 s Orchestration waits for either Job; ten minutes until 2026-10-05, when Claude only had the entry's
+text) is shown as an attempt that did not finish.
+**Launch task** opens New task (`/tasks/new?backlog=<id>`) with the entry's title and its task prompt
+in the Task box, the text written for the task and the only one that ends by having it delete the entry;
+while there is no task prompt yet, the refined entry, and while the entry is not refined, the primary
+entry, the form saying which (until 2026-10-05 it gave the refined entry, so a launched task never
+deleted its entry). **Delete from backlog** asks first, then
 deletes the entry and everything it holds. The pages follow the `backlog` topic, so an entry refined,
 prompted or deleted elsewhere (`lws`, an MCP tool, Claude at the end of a task) shows at once, and a
 deleted one says it is gone. The store is Registry & Portfolio's (`docs/pillars/registry_portfolio.md`,
@@ -582,17 +589,36 @@ and tasks (`dashboard/calendar.py`): their runs come from Orchestration's Job hi
 scheduler created), on the local day each was created, and what will run from the scheduled tasks — a
 once task on its day, a weekly one on each of its days from its next run on; a missed firing shows on its
 day as skipped. **Everything** (`&show=all`) adds every other job and task that ran (a branch finish alone
-creates dozens of policy checks, hence not by default); a day shows six items and "+N more", which lists
-them all in the panel. A Job deleted from the history, one cancelled before it ran and a removed
-schedule are not shown. Tasks (`agent.run_task`) and
-jobs differ in colour and shape (the item's left edge and its glyph, square for a task, round for a
-job); the state is the fill: succeeded green, failed red, running cyan, skipped grey (a stopped job, a
-skipped or stopped run), scheduled dashed (queued, or still to come). A task's state is its run's (a run
-awaiting review counts as succeeded). Choosing an item loads its details into a panel beside the
-calendar on a wide screen and under it on a phone (`/schedule/item/job/{id}`,
-`/schedule/item/scheduled/{id}?at=`): a job's checklist, error and links to the job and its task, or a
-schedule's times and template with a link to its page, where it is removed. Choosing a day lists its
-items in the panel; on a phone the month shows only the glyphs. The page follows the `schedule` topic.
+creates dozens of policy checks, hence not by default). A Job deleted from the history, one cancelled
+before it ran and a removed schedule are not shown.
+
+A day shows symbols, not items (2026-10-05): a triangle for tasks (`agent.run_task`), a circle for jobs,
+filled with the state's colour — succeeded green, failed red, running cyan (pulsing), skipped grey (a
+stopped job, a skipped or stopped run), scheduled hollow and dashed (queued, or still to come). A task's
+state is its run's (a run awaiting review counts as succeeded). A symbol is never repeated: there is one
+per kind and state, with the number of items it stands for inside when there are several (`99+` above
+99), tasks first, then jobs, each in the order succeeded, failed, running, skipped, scheduled
+(`calendar.symbols`).
+
+A day is one button and nothing on the calendar is a link: a tap anywhere on a day lists all its items in
+a panel beside the calendar on a wide screen and under it on a phone, each a line (symbol, time, title,
+state) that expands and collapses on its own, so several can be open at the same time. Expanding an item
+reads its details (`/schedule/item/job/{id}`, `/schedule/item/scheduled/{id}?at=`): a job's checklist,
+error and links to the job and its task, or a schedule's times and template with a link to its page,
+where it is removed. The day's sheet travels with the month (a `<template>` in the day), so listing a day
+reads nothing more. The page follows the `schedule` topic: when the month changes, the panel lists its
+day anew, keeping open the items that were open.
+
+The look (2026-10-05) is the Dashboard identity's — Ledger's structure, Mission Control's colours — with
+depth: a title block (the month, ‹ Today › and a Scheduled | Everything switch); the month at a glance as
+the dashboard's five stat tiles, one per state with its tasks and jobs (`calendar.totals`, the month's
+own days only), which are also the colours' legend; the days as tiles raised off a board (weekends
+tinted, past dates dimmed, days of the months around recessed, today's date a cyan pill with a glow);
+symbols lit from above with a soft shadow, a failed one with a red halo and a running one with a ping
+(succeeded green and running cyan are close, so running also moves: still, a ring, under reduced motion);
+and the day sheet: the date, how far it is from today, a pill per state with its count, and the items on
+a timeline, their details opening in a recessed well. The month that holds today opens with today
+listed; Today lists it again without reloading.
 
 ## Policy filters (2026-10-04)
 
@@ -681,3 +707,80 @@ Jobs page and a job's page show at most 20,000 characters of a Job's params or r
 then say how much there is, and name what a summary left out; both link to `/jobs/{id}.json`, the whole
 Job.
 
+## Policy bypass warning (2026-10-05)
+
+While the Policy pillar's `bypass_policies` flag is TRUE (`GET /v1/bypass`), every page shows a bar under the
+navigation: "bypass_policies is TRUE", the remaining time counting down in the browser (the page reloads when it
+reaches zero), and a "Set to FALSE now" button posting to `/policy-bypass/off`, which sets the flag back at once. The
+Dashboard never raises the flag. See `policy_compliance.md`, "Policy bypass".
+
+## Status for Claude Code (2026-10-06)
+
+REQ-000000411, REQ-000000412. What a Claude session shows of the workshop, read from the Dashboard:
+
+- `GET /status.json?project=<id>` (`collect_status`): for the project, its server (`null` without a deployment
+  manifest), its running Jobs, its tasks in the Tasks page's "Needs attention" group, its Jobs failed in the last
+  2 hours, its active scheduled tasks due within the next hour and its failing policies (as the attention list
+  decides it, `_failing_checks`) and its latest recorded test run (`tests`, whenever it ran); across every project, the open incidents of the last 2 hours and the pillars Core
+  sees `crashed` or `faulted`. Each topic is `{count, items}` (the first 20), read filtered from its owner, all reads
+  at once; a pillar that does not answer is listed in `unavailable` and its topics' `count` is `null`. A project the
+  Registry does not know gets the workshop's topics alone. The status mod reads it every 30 seconds per session that
+  something draws (`docs/pillars/usage.md`, "Configuration").
+- `GET /status/<project>`: the same topics in detail for the Windows app's Browser pane (Ctrl+Shift+B, then this URL
+  on the Dashboard's address) and any browser: a tile per topic with its count, zeros included, then a panel listing
+  what is behind each count above zero, linked to its page; a group with nothing to list says so in one line. It
+  follows the jobs, tasks, schedule, policies, incidents and pillars topics live and looks again every minute, since
+  its windows move with the clock (`window.liveRefresh` in `static/live.js`). The icons are the phone's.
+
+## Assets: reviewing a project's Blender assets (2026-10-09)
+
+REQ-000000426 to REQ-000000430. A project opts in by naming one folder of its checkout, its **visible asset folder**
+(Registry & Portfolio's `projects.assets_dir`, set with the `project.configure_assets` Job: `lws project
+configure-assets --project-id <id> --dir <folder>`, MCP `workshop_project_configure_assets`; empty turns it off). Only
+that folder and its subfolders are ever listed or served: `common/assets.py` resolves every path inside it and refuses
+absolute paths, `..` and links leading out.
+
+- **Entry**: where the project has the folder, `/docs/{project}` shows an **Assets** button above its list of
+  documents (the overview the agent pillar returns carries `assets_dir`).
+- **Page** `/assets/{project}[?path=<file>]`: the folder's own tree on the left (Blender files, glTF models, images and
+  Markdown files; empty folders and `.view` bundle folders are left out), the selected file on the right. A Blender
+  file shows its 3D model (`<model-viewer>`, vendored in `static/vendor/`, no CDN), the ten previews, the UV layout and
+  the textures, each one an image linked at full size; a dot in the tree says whether its bundle is current, stale (the
+  `.blend` changed after the export) or missing. A `.glb`, an image or a Markdown file opens as it is. Files are served
+  by `/assets/{project}/file` with `script-src 'none'`.
+- **Comment**: the textarea under an asset saves `<asset file name>.md` beside it (`house.blend.md`,
+  `example.png.md`: each asset file has its own; an empty comment deletes the file). It is written in place, never
+  committed by little-workshop, and a Markdown file named after a sibling asset file is shown as that asset's comment,
+  not as a document.
+- **Bundle**, written by the per-project `asset-review` MCP server and read by the page: `<dir>/<name>.view/` beside the
+  `.blend` holds `model.glb`, `view_front|right|back|left|top|bottom.png`, `view_ortho_top_1|2.png` and
+  `view_ortho_bottom_1|2.png` (orthographic cameras at ±35° elevation, azimuth 45° and 225°), `uv_layout.png`,
+  `textures/<image>.png` and `manifest.json`. The Agentic Development pillar serves the tree, details, files and
+  comments (`/v1/assets/{project}...`, direct reads and writes like the review comments); the Dashboard only proxies.
+
+**The `asset-review` MCP server** (`src/asset_mcp/`, `lws asset-mcp serve --project-id <id>`, declared in the project's
+`.mcp.json` by `project.configure_assets`; the project's own settings enable it) has `asset_list`, `asset_export`
+(`path`, optional `collection` and `resolution`) and `asset_status`. `asset_export` runs Blender headless
+(`asset_mcp/blender_export.py` inside Blender: the glTF exporter, a Workbench render with the textures shown, UV layout
+drawn with numpy because `uv.export_layout` needs a GPU, textures saved as PNG). It finds Blender through
+`$BLENDER_PATH`, `blender` on PATH or the newest `/mnt/c/Program Files/Blender Foundation/Blender */blender.exe`
+(paths converted with `wslpath -w`). By default it exports every visible mesh outside collections named `Reference`
+or `Scratch`; pass `collection` to export one. A step that fails is listed in the manifest and the tool's result,
+and the others still run. Not done: showing FBX files.
+
+## The Docs page as folders (2026-10-09)
+
+REQ-000000431. `/docs/{project}` shows the project's Markdown files as their folder tree, one directory at a time:
+a grid of two columns of cards (one on a phone), subfolders first. A folder card carries how many documents lie
+beneath it and their open, done and certified comment counts, and opens `/docs/{project}?dir=<folder>`, a page of its
+own with a breadcrumb back to the root; a document card opens the review viewer. The branch picker, the Assets button
+and the update-docs controls stay on the root page. `dashboard/docs_tree.py` builds the entries from the agent's flat
+file list; `..` in `dir` is dropped, so a folder name can only select among the listed paths.
+
+**Export button** (REQ-000000432): under the export state of a Blender file the Assets page has **Export** (or
+**Update export** / **Export again**). It posts `/assets/{project}/export`, which builds the catalogued `export_asset`
+job (`job_catalog.py`: `agent.export_asset`, queue `<project>:assets`, `params.paths` the files, offered on the New Job
+page too with the project's `.blend` files as choices) and starts it. The agent pillar's handler checks every path
+is a `.blend` inside the visible folder, answers `accepted` and runs `asset_mcp.runner.export_bundle` on each file in a
+worker thread, reporting its one step and the outcome back. While a queued or running export names the file the page
+shows "exporting…" and reloads every 4 seconds; a second press for the same file is refused.

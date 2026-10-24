@@ -189,6 +189,19 @@ CREATE TABLE IF NOT EXISTS candidates (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS plugin_proposals (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    family TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'open',
+    weekly_value REAL NOT NULL DEFAULT 0,
+    occurrences INTEGER NOT NULL DEFAULT 0,
+    sessions INTEGER NOT NULL DEFAULT 0,
+    data_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -551,6 +564,48 @@ def drop_stale_candidates(conn: sqlite3.Connection, found: set[str]) -> int:
     stale = [row["id"] for row in conn.execute("SELECT id, signature FROM candidates WHERE state = 'open'") if row["signature"] not in found]
     for candidate_id in stale:
         conn.execute("DELETE FROM candidates WHERE id = ?", (candidate_id,))
+    return len(stale)
+
+
+# -- plugin proposals ----------------------------------------------------------------
+
+PROPOSAL_DATA = ("usage", "steps", "rare_steps", "fallbacks", "projects", "install", "examples", "absorbs")
+
+
+def record_plugin_proposal(conn: sqlite3.Connection, proposal: dict) -> str:
+    """Store what a mining run proposed under the plugin's name, keeping the decision a person made on it."""
+    now = now_iso()
+    data = json.dumps({key: proposal[key] for key in PROPOSAL_DATA if key in proposal})
+    values = (proposal["family"], proposal["scope"], proposal["weekly_value"], proposal["occurrences"], proposal["sessions"], data, now)
+    row = conn.execute("SELECT id FROM plugin_proposals WHERE name = ?", (proposal["name"],)).fetchone()
+    if row is None:
+        proposal_id = uuid.uuid4().hex
+        conn.execute(
+            """INSERT INTO plugin_proposals (id, name, family, scope, weekly_value, occurrences, sessions, data_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (proposal_id, proposal["name"], *values, now))
+        return proposal_id
+    conn.execute("""UPDATE plugin_proposals SET family = ?, scope = ?, weekly_value = ?, occurrences = ?, sessions = ?, data_json = ?,
+                    updated_at = ? WHERE id = ?""", (*values, row["id"]))
+    return row["id"]
+
+
+def list_plugin_proposals(conn: sqlite3.Connection, *, state: str | None = CANDIDATE_OPEN) -> list[dict]:
+    """Plugin proposals ranked by the net saving per week; the states are the candidates' ones."""
+    sql = "SELECT * FROM plugin_proposals" + (" WHERE state = ?" if state else "") + " ORDER BY weekly_value DESC, occurrences DESC"
+    return [_candidate(row) for row in conn.execute(sql, (state,) if state else ())]
+
+
+def set_plugin_proposal_state(conn: sqlite3.Connection, proposal_id: str, state: str) -> bool:
+    if state not in CANDIDATE_STATES:
+        raise ValueError(f"unknown proposal state {state!r}")
+    return bool(conn.execute("UPDATE plugin_proposals SET state = ?, updated_at = ? WHERE id = ?", (state, now_iso(), proposal_id)).rowcount)
+
+
+def drop_stale_plugin_proposals(conn: sqlite3.Connection, found: set[str]) -> int:
+    """Remove the open proposals mining no longer finds; one a person decided on is kept."""
+    stale = [row["id"] for row in conn.execute("SELECT id, name FROM plugin_proposals WHERE state = 'open'") if row["name"] not in found]
+    for proposal_id in stale:
+        conn.execute("DELETE FROM plugin_proposals WHERE id = ?", (proposal_id,))
     return len(stale)
 
 

@@ -7,7 +7,9 @@ generating replaces the task prompt: there is only ever one of each. Deleting an
 it, whoever deletes it (the Dashboard, `lws`, an MCP tool, or Claude at the end of the task).
 
 Claude writes the refined entry from the primary entry, the current refined entry and the notes, and
-the task prompt from the refined entry alone; the instruction to delete the entry once the task is
+the task prompt from the refined entry; both times it reads the project's checkout, which it cannot
+change, so that both say where the change goes and how that part works today (2026-10-05). The
+requirements still come from the owner alone. The instruction to delete the entry once the task is
 done is appended here, word for word, rather than left to Claude to remember."""
 
 from __future__ import annotations
@@ -18,13 +20,14 @@ TITLE_LENGTH = 80
 
 REFINE_PROMPT = """You refine one entry of the backlog of the software project "{project}". A backlog entry records something the project's owner wants built or fixed. Write its refined entry: a clear, self-contained description that an engineer, or Claude working alone, can act on.
 
-Use what is below and nothing else:
+You are working in the project's checkout, which you can read but not change. The owner decides what is wanted; the code shows how things are now:
 
 - The primary entry is what the owner wrote first, as they wrote it. Keep every requirement, constraint and detail it states.
 - The current refined entry, when there is one, is the last refinement: start from it.
 - The owner's refinement notes say what to change, add, drop or clarify: apply every one of them. Where they disagree with the entries, the notes win.
+- The checkout is how the project works today. Read what the entry touches, and only that: the files and modules where the change belongs, how that part behaves now, the conventions it follows and the tests that cover it.
 
-Write it in Markdown, in this order: a short title as a `#` heading; the goal (why it is wanted); what to build or change, as concrete behaviour; acceptance criteria as a checklist; and, only if some remain, the open questions the owner must answer. Do not invent requirements the owner did not state or imply: where something is unclear, list it as an open question instead of deciding it. Answer with the refined entry only, with no preamble and no closing remarks.
+Write it in Markdown, in this order: a short title as a `#` heading; the goal (why it is wanted); how it works today, naming the files involved by their paths; what to build or change, as concrete behaviour; acceptance criteria as a checklist; and, only if some remain, the open questions the owner must answer. Do not invent requirements the owner did not state or imply: what you take from the code says where and how, never what is wanted. Settle from the code the questions it answers; where what is wanted is unclear, list it as an open question instead of deciding it. Answer with the refined entry only, with no preamble and no closing remarks.
 
 <primary_entry>
 {primary}
@@ -39,7 +42,9 @@ Write it in Markdown, in this order: a short title as a `#` heading; the goal (w
 </refinement_notes>
 """
 
-TASK_PROMPT_PROMPT = """Write the prompt for an unattended Claude Code task in the software project "{project}", from the refined backlog entry below. Claude will work in the project's checkout with no conversation before it, so the prompt must stand on its own: what to build or fix and why, the behaviour expected, the acceptance criteria, and how to check the result (the tests to add or run). Follow the refined entry faithfully: add nothing it does not ask for, and leave its open questions as questions for Claude to raise in its report rather than decide. Address the instructions to Claude, in Markdown. Answer with the prompt only, with no preamble and no closing remarks, and do not mention the backlog: an instruction about it is added after your text.
+TASK_PROMPT_PROMPT = """Write the prompt for an unattended Claude Code task in the software project "{project}", from the refined backlog entry below. Claude will work in the project's checkout with no conversation before it, so the prompt must stand on its own: what to build or fix and why, the behaviour expected, the acceptance criteria, and how to check the result (the tests to add or run).
+
+You are working in that checkout, which you can read but not change. Read what makes the prompt precise: the files and modules to change, the conventions they follow, the tests to extend and the command that runs them. Follow the refined entry faithfully: add no requirement it does not state (what you take from the code says where and how, never what), and leave its open questions as questions for Claude to raise in its report rather than decide. Claude Code loads the project's own instructions by itself, so do not repeat them: name only what is particular to this change. Address the instructions to Claude, in Markdown. Answer with the prompt only, with no preamble and no closing remarks, and do not mention the backlog: an instruction about it is added after your text.
 
 <refined_entry>
 {refined}

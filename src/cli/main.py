@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -332,6 +333,30 @@ def cmd_project_connect_github(args: argparse.Namespace) -> int:
         return 1
     _print(result)
     return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_project_configure_assets(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    if not args.off and not args.dir:
+        print("error: give --dir <folder> or --off", file=sys.stderr)
+        return 2
+    try:
+        result = client.create_job(
+            paths, type="project.configure_assets", target_pillar="registry", project_id=args.project_id,
+            params={"assets_dir": "" if args.off else args.dir, "mcp": not args.no_mcp},
+            queue_key=args.project_id, depends_on=[], created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_asset_mcp_serve(args: argparse.Namespace) -> int:
+    from asset_mcp.server import serve
+
+    return serve(Paths.from_env(), args.project_id)
 
 
 def cmd_project_list(args: argparse.Namespace) -> int:
@@ -1299,9 +1324,15 @@ def format_evaluation(result: dict) -> str:
         if entry["outcome"] not in ("fail", "error"):
             continue
         tag = "FAIL" if entry["outcome"] == "fail" else "ERROR"
-        gating = "" if entry.get("gating", True) else " (gating off for this project: reported, never blocks)"
+        if entry.get("bypassed"):
+            gating = " (BYPASSED: policy bypass is on, reported but not blocking)"
+        else:
+            gating = "" if entry.get("gating", True) else " (gating off for this project: reported, never blocks)"
         lines.append(f"\n{tag} {entry['topic']}{gating}\n  rule: {entry.get('ears_text', '')}")
         lines.extend(f"  {line}" for line in str(entry.get("detail", "")).splitlines())
+    if result.get("bypassed"):
+        lines.append(f"\nPolicy bypass is on: {', '.join(result['bypassed'])} failed and would have blocked this. "
+                     "The violation is recorded and shown on the Dashboard.")
     if result.get("blocking"):
         lines.append(
             f"\nBlocked by: {', '.join(result['blocking'])}. Fix what each failure says and try again; "
@@ -1356,6 +1387,64 @@ def cmd_policy_evaluate(args: argparse.Namespace) -> int:
         return 1
     if result.get("errors"):
         return unavailable(f"{', '.join(result['errors'])} could not run")
+    return 0
+
+
+def _format_bypass(state: dict) -> str:
+    if not state.get("bypass_policies"):
+        return "bypass_policies is FALSE: policies gate as usual."
+    seconds = int(state.get("remaining_seconds", 0))
+    return (f"bypass_policies is TRUE for {seconds // 60}m{seconds % 60:02d}s more: failing checks run from this terminal are "
+            "reported but do not block. Claude, scheduled jobs and the Dashboard are still gated.")
+
+
+def _bypass_paths() -> Paths:
+    """Under `sudo` the home is root's: the pillars' state is the invoking user's."""
+    import pwd
+
+    sudo_user = os.environ.get("SUDO_USER")
+    if os.geteuid() != 0 or not sudo_user:
+        return Paths.from_env()
+    home = Path(pwd.getpwnam(sudo_user).pw_dir)
+    return Paths(config_home=home / ".config" / "little-workshop", state_home=home / ".local" / "state" / "little-workshop")
+
+
+def cmd_bypass_policies(args: argparse.Namespace) -> int:
+    """`sudo lws bypass_policies true [--time N]` raises the flag, `lws bypass_policies false` lowers it,
+    `lws bypass_policies status` reads it. Raising it needs the super user, a terminal and a session that is
+    not Claude's; the Policy pillar checks the origin again."""
+    from common import origin as origins
+    from policy import bypass
+
+    action = args.state
+    try:
+        if action == "status":
+            print(_format_bypass(client.policy_bypass_status(_bypass_paths())))
+            return 0
+        if action == "false":
+            print(_format_bypass(client.policy_bypass_set(_bypass_paths(), enabled=False, minutes=None, actor=os.environ.get("SUDO_USER", ""))))
+            return 0
+        if origins.invoked_by_claude():
+            print("error: the policy bypass is the user's alone; Claude may not turn it on. Ask the user to run "
+                  "`sudo lws bypass_policies true` in their own terminal.", file=sys.stderr)
+            return 1
+        if os.geteuid() != 0 or not os.environ.get("SUDO_USER"):
+            print("error: turning the policy bypass on needs the super user: run `sudo lws bypass_policies true "
+                  f"[--time minutes]` (default {bypass.DEFAULT_MINUTES}, at most {bypass.MAX_MINUTES}).", file=sys.stderr)
+            return 1
+        try:
+            minutes = bypass.validate_minutes(args.time)
+        except bypass.BypassRefused as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        state = client.policy_bypass_set(_bypass_paths(), enabled=True, minutes=minutes, actor=os.environ["SUDO_USER"])
+    except client.PolicyBypassRefused as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except client.PolicyPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(_format_bypass(state))
     return 0
 
 
@@ -1743,6 +1832,16 @@ def cmd_usage_candidates(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_usage_plugin_proposals(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _print(client.usage_plugin_proposals(paths, state=args.state, limit=args.limit))
+    except client.UsagePillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_usage_mine_automation(args: argparse.Namespace) -> int:
     return _usage_job("usage.mine_automation", {})
 
@@ -2014,7 +2113,12 @@ def build_parser() -> argparse.ArgumentParser:
     u_candidates.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "done", "all"])
     u_candidates.add_argument("--limit", type=int, default=20, help="How many, from the costliest (default 20)")
     u_candidates.set_defaults(func=cmd_usage_candidates)
-    u_mine = usage_sub.add_parser("mine-automation", help="Mine the last 14 days of tool calls into automation candidates")
+    u_plugins = usage_sub.add_parser("plugin-proposals", help="Requests Claude repeats that a plugin of hooks and scripts could take "
+                                     "over, ranked by the net saving (installed plugins: `claude plugin list`)")
+    u_plugins.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "done", "all"])
+    u_plugins.add_argument("--limit", type=int, default=20, help="How many, from the costliest (default 20)")
+    u_plugins.set_defaults(func=cmd_usage_plugin_proposals)
+    u_mine = usage_sub.add_parser("mine-automation", help="Mine the last 14 days of tool calls into automation candidates and plugin proposals")
     u_mine.set_defaults(func=cmd_usage_mine_automation)
     u_doctor = usage_sub.add_parser("doctor", help="Check the configuration usage collection depends on")
     u_doctor.set_defaults(func=cmd_usage_doctor)
@@ -2023,6 +2127,14 @@ def build_parser() -> argparse.ArgumentParser:
     u_configure = usage_sub.add_parser("configure-claude", help="Show, or with --apply write, the Claude user profile")
     u_configure.add_argument("--apply", action="store_true", help="Write ~/.claude/settings.json (a backup is kept)")
     u_configure.set_defaults(func=cmd_usage_configure_claude)
+
+    bypass_policies = subparsers.add_parser(
+        "bypass_policies",
+        help="The user's temporary policy bypass: `sudo lws bypass_policies true --time 5`, `... false`, `... status`")
+    bypass_policies.add_argument("state", choices=["true", "false", "status"])
+    bypass_policies.add_argument("--time", type=int, default=None, metavar="MINUTES",
+                                 help="How long the bypass lasts (default 2, at most 30); with `true` only")
+    bypass_policies.set_defaults(func=cmd_bypass_policies)
 
     trigger = subparsers.add_parser("trigger", help="Workshop triggers: an event starts a Job")
     trigger_sub = trigger.add_subparsers(dest="trigger_command", required=True)
@@ -2199,6 +2311,15 @@ def build_parser() -> argparse.ArgumentParser:
     project_connect.add_argument("--github-token", default=None)
     project_connect.add_argument("--no-labels", dest="ensure_labels", action="store_false", default=True)
     project_connect.set_defaults(func=cmd_project_connect_github)
+
+    project_assets = project_sub.add_parser(
+        "configure-assets", help="Choose the checkout folder whose assets the Dashboard shows, and give the project the asset-review MCP server"
+    )
+    project_assets.add_argument("--project-id", required=True)
+    project_assets.add_argument("--dir", default=None, help="Folder of the checkout, relative to its root")
+    project_assets.add_argument("--off", action="store_true", help="Turn asset review off for the project")
+    project_assets.add_argument("--no-mcp", action="store_true", help="Do not declare the MCP server in .mcp.json")
+    project_assets.set_defaults(func=cmd_project_configure_assets)
 
     project_import = project_sub.add_parser("import", help="Register an existing, already-conformant repository")
     project_import.add_argument("name")
@@ -2905,6 +3026,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     mcp_serve = mcp_sub.add_parser("serve", help="Run the MCP server over stdio (what `claude mcp add` registers)")
     mcp_serve.set_defaults(func=cmd_mcp_serve)
+
+    asset_mcp = subparsers.add_parser("asset-mcp", help="The per-project asset-review MCP server (3D model and previews of Blender files)")
+    asset_mcp_sub = asset_mcp.add_subparsers(dest="asset_mcp_command", required=True)
+    asset_mcp_serve = asset_mcp_sub.add_parser("serve", help="Run the asset-review MCP server over stdio for one project")
+    asset_mcp_serve.add_argument("--project-id", required=True)
+    asset_mcp_serve.set_defaults(func=cmd_asset_mcp_serve)
 
     return parser
 

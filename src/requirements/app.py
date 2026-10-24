@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from common.job_steps import StepReporter, reporting, step
+from common import serving
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.worktree_client import WorktreeUnavailable
@@ -100,9 +101,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
 
     @app.get("/v1/health")
     def health() -> dict:
-        with lock:
-            count = len(db.list_requirements(conn))
-        return {"ok": True, "requirement_count": count}
+        with serving.held_or_busy(lock) as free:  # busy work never makes it look hung (REQ-000000409)
+            count = len(db.list_requirements(conn)) if free else None
+        return {"ok": True, "requirement_count": count, **({} if free else {"busy": True})}
 
     # -- test suites -------------------------------------------------------
 

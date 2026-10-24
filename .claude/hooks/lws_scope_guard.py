@@ -54,7 +54,7 @@ ROUTES = {
     "github": "workshop_project_connect_github creates the repository, little-workshop's agent flow opens and merges pull requests, and a release comes from workshop_version_release_finish",
     "hooks-path": "core.hooksPath stays .githooks, where the VERSION sync and the commit-gated policies run",
     "install": "the project installs with `bazel run //:install`; a server is deployed with workshop_deployment_deploy",
-    "merge": "a branch is finished with workshop_version_<type>_finish, which runs the branch_finish policies and merges with --no-ff",
+    "merge": "a branch is finished with workshop_version_<type>_finish, which runs the branch_finish policies and squash-merges a feature or improvement (a hotfix or a release merges with --no-ff)",
     "no-verify": "the commit hooks write VERSION and run the commit-gated policies: fix what the hook reports and commit again",
     "publish": "packages are published with workshop_build_publish_pypi / _vsix (wheel-filename-has-version runs there)",
     "push": "little-workshop pushes when it finishes or releases, and workshop_project_connect_github creates the remote; a push the user asks for is theirs to run",

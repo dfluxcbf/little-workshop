@@ -76,6 +76,8 @@ def connect(path: Path) -> sqlite3.Connection:
     for column in BACKLOG_ACTIVITY:
         if column not in present:
             conn.execute(f"ALTER TABLE backlog_entries ADD COLUMN {column} TEXT")
+    if "assets_dir" not in {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}:
+        conn.execute("ALTER TABLE projects ADD COLUMN assets_dir TEXT")
     conn.commit()
     return conn
 
@@ -112,6 +114,7 @@ def _row_to_project(row: sqlite3.Row) -> Project:
         name=row["name"],
         path=row["path"],
         repo_url=row["repo_url"],
+        assets_dir=row["assets_dir"],
         status=ProjectStatus(row["status"]),
         created_at=_parse_iso(row["created_at"]),
         updated_at=_parse_iso(row["updated_at"]),
@@ -138,6 +141,12 @@ def update_project_repo_url(conn: sqlite3.Connection, name: str, repo_url: str |
         "UPDATE projects SET repo_url = ?, updated_at = ? WHERE name = ?",
         (repo_url, _iso(datetime.now(timezone.utc)), name),
     )
+    conn.commit()
+
+
+def update_project_assets_dir(conn: sqlite3.Connection, name: str, assets_dir: str | None) -> None:
+    conn.execute("UPDATE projects SET assets_dir = ?, updated_at = ? WHERE name = ?",
+                 (assets_dir, _iso(datetime.now(timezone.utc)), name))
     conn.commit()
 
 

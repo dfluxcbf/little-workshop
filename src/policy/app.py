@@ -10,11 +10,13 @@ pillar's Pillar Interface already uses.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import subprocess
 import functools
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,19 +26,21 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from common.job_steps import StepReporter, done, reporting, step
+from common import serving
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.pillar_socket import resolve_pillar_socket
 from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
-from policy import agent_client, db, gates, registry_client, sandbox
+from common import origin as origins
+from policy import agent_client, bypass, db, gates, registry_client, sandbox
 from policy.agent_client import AgentClientError
 from policy.models import (
     CheckOutcome, CreatedBy, DraftStatus, GatePoint, Policy, PolicyCheckResult, PolicyDraft, PolicyProject, ScopeLevel,
 )
 from policy.precedence import gating_enabled_for, resolve_winning_policy
 from policy.registry_client import RegistryReadError
-from policy.sandbox import SandboxUnavailable
+from policy.sandbox import SandboxInterrupted, SandboxUnavailable
 
 PILLAR_ITSELF = "policy"
 
@@ -64,6 +68,15 @@ class EvaluateRequest(BaseModel):
     # The checkout to judge when it is not the registered one (a git worktree an agent or a
     # session commits in). Accepted only if it shares the registered checkout's repository.
     checkout: str | None = None
+    # Where the request came from (`common.origin`); only the user's terminal CLI can be bypassed.
+    origin: str = "unknown"
+
+
+class BypassRequest(BaseModel):
+    enabled: bool
+    minutes: int | None = None
+    origin: str = "unknown"
+    actor: str = ""
 
 
 # A script judging a pending commit finds it here (the sandbox's `/policy/input`):
@@ -151,7 +164,14 @@ class _Refused(Exception):
 
 
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
-    app = FastAPI(title="little-workshop Policy & Compliance")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # Stopping: remove the containers of the checks still running; they run again at the next
+        # start (REQ-000000405).
+        await asyncio.to_thread(sandbox.remove_running_containers)
+
+    app = FastAPI(title="little-workshop Policy & Compliance", lifespan=lifespan)
     install_incident_reporting(app, paths, pillar="policy")
     lock = threading.Lock()
 
@@ -199,9 +219,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
 
     @app.get("/v1/health")
     def health() -> dict:
-        with lock:
-            count = len(db.list_policies(conn))
-        return {"ok": True, "policy_count": count}
+        with serving.held_or_busy(lock) as free:  # busy work never makes it look hung (REQ-000000409)
+            count = len(db.list_policies(conn)) if free else None
+        return {"ok": True, "policy_count": count, **({} if free else {"busy": True})}
 
     # -- authoring pipeline: Gates 1-3 + script drafting (never saves) -------
 
@@ -684,6 +704,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             policy_id = request.params["policy_id"]
             project_id = request.project_id
             force = bool(request.params.get("force"))
+            check_origin = origins.normalize(request.params.get("origin"))
+            check_bypassed = bool(request.params.get("bypassed"))
             with lock:
                 policy = db.get_policy(conn, policy_id)
             if policy is None:
@@ -706,7 +728,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                     reused = PolicyCheckResult(
                         id=db.new_id(), policy_id=policy_id, project_id=project_id,
                         outcome=previous.outcome, detail=previous.detail, job_id=request.job_id,
-                        checked_state=current_state,
+                        checked_state=current_state, origin=check_origin,
+                        bypassed=check_bypassed and previous.outcome == CheckOutcome.FAIL,
                     )
                     with lock:
                         db.insert_check_result(conn, reused)
@@ -722,27 +745,34 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 raise _Refused(str(exc))
             handle.detail = f"{len(mounts)} mount(s)"
 
+        def finish(**outcome) -> None:
+            with lock:
+                db.remove_running_check(conn, request.job_id)
+            _complete_orchestration_job(request.job_id, **outcome)
+
         def worker() -> None:
             with reporting(StepReporter(paths, request.job_id)):
                 try:
                     with step("run_check") as handle:
                         sandbox_result = sandbox.run_policy_check(policy.test_script, mounts)
                         handle.detail = sandbox_result.outcome.value if hasattr(sandbox_result.outcome, "value") else str(sandbox_result.outcome)
+                except SandboxInterrupted:
+                    # The pillar is stopping and removed the check's container. The Job is not over:
+                    # the check stays in running_checks and runs again at the next start.
+                    return
                 except SandboxUnavailable as exc:
                     # No verdict at all — a framework-level fault, never
                     # pending_confirmation: nothing was determined to be a
                     # violation, only that the check itself is broken.
-                    _complete_orchestration_job(
-                        request.job_id, succeeded=False, result=None,
-                        error=f"policy check did not complete: {exc}",
-                    )
+                    finish(succeeded=False, result=None, error=f"policy check did not complete: {exc}")
                     return
 
                 with step("record_result") as handle:
                     result = PolicyCheckResult(
                         id=db.new_id(), policy_id=policy_id, project_id=project_id,
                         outcome=sandbox_result.outcome, detail=sandbox_result.detail, job_id=request.job_id,
-                        checked_state=current_state,
+                        checked_state=current_state, origin=check_origin,
+                        bypassed=check_bypassed and sandbox_result.outcome == CheckOutcome.FAIL,
                     )
                     with lock:
                         db.insert_check_result(conn, result)
@@ -751,10 +781,34 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             # not_applicable verdict is success for the check itself; only an
             # unreachable dependency or the sandbox's own 30-minute ceiling is
             # a genuine Job failure (see the SandboxUnavailable branch above).
-            _complete_orchestration_job(request.job_id, succeeded=True, result=result.model_dump(mode="json"), error=None)
+            finish(succeeded=True, result=result.model_dump(mode="json"), error=None)
 
+        with lock:
+            db.add_running_check(conn, request.job_id, project_id, request.params)
         threading.Thread(target=worker, daemon=True).start()
         return {"outcome": "accepted", "result": {"dispatched": True}}
+
+    def rerun_interrupted_checks() -> list[str]:
+        """Startup, before serving (REQ-000000405): a check still in running_checks was cut short when
+        the pillar last stopped (2026-10-04: a gate check lost this way kept a branch finish waiting for
+        hours). Run it again from the start under its own Job; one that cannot run is completed as it
+        would have been answered."""
+        with lock:
+            cut = db.list_running_checks(conn)
+        for row in cut:
+            try:
+                answer = job_check_project(JobRequest(job_id=row["job_id"], project_id=row["project_id"], params=row["params"]))
+            except Exception as exc:  # one check must never keep the pillar from starting
+                answer = {"outcome": "failed", "error": f"could not run the check again after a restart: {exc}"}
+            if answer["outcome"] != "accepted":
+                with lock:
+                    db.remove_running_check(conn, row["job_id"])
+                _complete_orchestration_job(
+                    row["job_id"], succeeded=answer["outcome"] == "succeeded", result=answer.get("result"), error=answer.get("error"),
+                )
+        return [row["job_id"] for row in cut]
+
+    app.state.rerun_interrupted_checks = rerun_interrupted_checks
 
     @app.post("/v1/jobs/policy.check_all")
     @_reported
@@ -821,16 +875,44 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         return winners
 
     @app.get("/v1/policies/gating-for-job")
-    def get_gating_for_job(project_id: str, categories: str) -> list[dict]:
+    def get_gating_for_job(project_id: str, categories: str, origin: str = "unknown") -> list[dict]:
         """Every currently-winning policy, for this project, whose own
         `gate_points` intersects the requested categories — Orchestration's
         own entry point for "which policies, if any, apply to this Job."
         Each carries `gating`: whether a failure may hold the Job. With
         gating off for this project the check is still returned so it runs
-        (for analysis) — it just cannot block."""
+        (for analysis) — it just cannot block. While the user's policy bypass is on, a request whose `origin`
+        is the user's terminal CLI is likewise checked but not gated, and says so (`bypassed`); any other
+        origin keeps its gating."""
         requested = {GatePoint(c) for c in categories.split(",") if c}
-        return [{**winner.model_dump(mode="json"), "gating": gating}
+        origin = origins.normalize(origin)
+        with lock:
+            bypassing = bypass.bypasses(conn, origin)
+        return [{**winner.model_dump(mode="json"), "gating": gating and not bypassing, "bypassed": gating and bypassing}
                 for winner, gating in _gating_winners(project_id, requested)]
+
+    @app.get("/v1/bypass")
+    def get_bypass() -> dict:
+        """The `bypass_policies` flag, with the time left while it is TRUE."""
+        with lock:
+            return bypass.status(conn)
+
+    @app.post("/v1/bypass")
+    def set_bypass(request: BypassRequest) -> dict:
+        """Turn the flag on (only for the user's terminal CLI, `sudo lws bypass_policies true`) or back off."""
+        origin = origins.normalize(request.origin)
+        with lock:
+            if not request.enabled:
+                return bypass.disable(conn, origin=origin, actor=request.actor or origin)
+            try:
+                return bypass.enable(conn, minutes=request.minutes, origin=origin, actor=request.actor)
+            except bypass.BypassRefused as exc:
+                raise HTTPException(status_code=403 if origin != origins.USER_CLI else 400, detail=str(exc))
+
+    @app.get("/v1/bypass/log")
+    def get_bypass_log(limit: int = 50) -> list[dict]:
+        with lock:
+            return bypass.log_entries(conn, limit)
 
     @app.post("/v1/policies/evaluate")
     def evaluate(request: EvaluateRequest) -> dict:
@@ -862,8 +944,13 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         except ProjectResolutionError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
+        origin = origins.normalize(request.origin)
+        with lock:
+            bypassing = bypass.bypasses(conn, origin)
+
         def run_one(winner: Policy, gating: bool) -> dict:
-            entry = {"policy_id": winner.id, "topic": winner.topic, "ears_text": winner.ears_text, "gating": gating}
+            entry = {"policy_id": winner.id, "topic": winner.topic, "ears_text": winner.ears_text, "gating": gating and not bypassing,
+                     "bypassed": gating and bypassing}
             try:
                 mounts = _mounts_for_policy(winner, request.project_id, checkout)
                 verdict = sandbox.run_policy_check(winner.test_script, mounts, env=env, inputs=inputs)
@@ -874,11 +961,17 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         winners = _gating_winners(request.project_id, {gate_point})
         with ThreadPoolExecutor(max_workers=EVALUATE_WORKERS) as pool:
             results = list(pool.map(lambda pair: run_one(*pair), winners))
+        bypassed = [r["topic"] for r in results if r["outcome"] == CheckOutcome.FAIL.value and r["bypassed"]]
+        if bypassed:
+            with lock:
+                bypass.record_violation(conn, origin=origin, detail=f"{request.project_id} {gate_point.value}: {', '.join(bypassed)}")
         return {
             "project_id": request.project_id,
             "gate_point": gate_point.value,
+            "origin": origin,
             "results": results,
             "blocking": [r["topic"] for r in results if r["outcome"] == CheckOutcome.FAIL.value and r["gating"]],
+            "bypassed": bypassed,
             "errors": [r["topic"] for r in results if r["outcome"] == "error"],
         }
 

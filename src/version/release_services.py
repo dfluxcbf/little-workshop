@@ -86,10 +86,12 @@ class PillarReleaseServices:
             raise ServiceUnavailable(f"could not reach Core: {exc}") from exc
         return response.json().get("pillars", {})
 
-    def complete(self, job_id: str, *, succeeded: bool, result: dict | None, error: str | None) -> None:
-        """Best-effort, like every other async Job's completion report."""
+    def complete(self, job_id: str, *, succeeded: bool, result: dict | None, error: str | None) -> bool:
+        """Best-effort, like every other async Job's completion report; True once Orchestration answered
+        (a Job it no longer has, or already settled, counts: there is nothing more to tell it)."""
         try:
-            self._call("orchestration", "POST", f"/v1/jobs/{job_id}/complete",
-                       json={"succeeded": succeeded, "result": result, "error": error})
+            response = self._call("orchestration", "POST", f"/v1/jobs/{job_id}/complete",
+                                  json={"succeeded": succeeded, "result": result, "error": error})
         except ServiceUnavailable:
-            pass
+            return False
+        return response.status_code < 500

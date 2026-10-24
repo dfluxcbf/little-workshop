@@ -111,6 +111,12 @@ def _optimize_usage(project: str, values: dict) -> dict:
             "params": {"finding_ids": values["findings"]}}
 
 
+def _export_asset(project: str, values: dict) -> dict:
+    # One export at a time per project: Blender is heavy and the files it writes sit in the checkout.
+    return {"type": "agent.export_asset", "target_pillar": "agent", "project_id": project, "queue_key": f"{project}:assets",
+            "params": {"paths": values["blend"]}}
+
+
 def _apply_claude_config(project: str, values: dict) -> dict:
     return {"type": "registry.sync_claude_files", "target_pillar": "registry", "project_id": None, "queue_key": "claude-files-sync",
             "params": {"write": values["write"]}}
@@ -159,6 +165,14 @@ CATALOG: tuple[JobSpec, ...] = (
         ),
     ),
     JobSpec(
+        key="export_asset", label="Export Blender assets",
+        description=("Runs Blender headless on the chosen files of the project's visible asset folder and writes each one's "
+                     "3D model, ten preview images, UV layout and textures beside it, for the Assets pages."),
+        make=_export_asset,
+        args=(JobArg("blend", "Blender files", "multi", required=True,
+                     help="The .blend files of the project's visible asset folder."),),
+    ),
+    JobSpec(
         key="update_standards", label=STANDARDS_TITLE,
         description=(f"Has Claude review every little-workshop standard, every policy and every project's own rules, then "
                      f"update the documents in {STANDARDS_FOLDER}/. Opens a branch for your review, like any task."),
@@ -183,8 +197,9 @@ CATALOG: tuple[JobSpec, ...] = (
     ),
     JobSpec(
         key="configure_claude_telemetry", label="Configure Claude telemetry",
-        description=("Shows what the Claude usage profile would change in ~/.claude/settings.json: the telemetry "
-                     "environment, the session hooks, the statusline and the transcript retention."),
+        description=("Shows what the Claude profile would change in ~/.claude: the telemetry environment, the session "
+                     "hooks (the session title among them), the statusline, the transcript retention and the "
+                     "little-workshop status mod."),
         make=_configure_claude_telemetry, projects=(WORKSHOP_PROJECT,),
         args=(JobArg("apply", "Write the profile", "flag",
                      help="Keeps a backup of the settings file and every entry of your own. Unticked: a dry run."),),

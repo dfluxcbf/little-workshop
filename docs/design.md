@@ -449,6 +449,14 @@ connection every other pillar-to-pillar call uses. Core waits up to
 **5 seconds** per probe, retrying up to **10 times** before treating a
 nominally-running pillar as unhealthy.
 
+**A running pillar that does not answer is hung** (2026-10-05): once its
+unit has been active for two minutes, Core stops it and starts it again,
+since systemd refuses a relaunch while the unit exists. That makes a
+health check's answer matter: it never waits for work holding the
+pillar's lock, and says "busy" instead, so long work is never mistaken
+for a hang. A unit that systemd is still starting or stopping is left to
+whoever is doing it.
+
 **Crash-loop bounds** (resolved 2026-09-15): Core relaunches a crashed
 pillar immediately, up to **10 consecutive tries, 1 minute apart**. If
 the 10th attempt still fails, Core stops trying automatically and marks
@@ -458,6 +466,15 @@ same channel a failing policy check uses (see
 `docs/pillars/policy_compliance.md`'s "Informing the user immediately"),
 since a faulted pillar is exactly the kind of thing nothing should
 quietly stop trying to fix without someone finding out.
+
+**Every outage is an incident** (2026-10-05): that channel is the
+Incidents list. Core files one incident of kind "crash" per outage, when
+the pillar answers again or is marked faulted, saying what happened and
+why: what systemd logged for the run that ended (a crash, a kill, a stop
+that overran its timeout) and what Core saw at each check, including an
+outage in which no process failed, such as a pillar a redeploy was
+stopping. A process that cannot be reached is a fact worth recording
+even when there is nothing to fix.
 
 ### Cross-pillar configuration change
 

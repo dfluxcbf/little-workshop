@@ -195,6 +195,14 @@ def _project_connect_github(paths: Paths, args: JSONDict) -> Any:
     )
 
 
+def _project_configure_assets(paths: Paths, args: JSONDict) -> Any:
+    return client.create_job(
+        paths, type="project.configure_assets", target_pillar="registry", project_id=args["project_id"],
+        params={"assets_dir": args.get("assets_dir") or "", "mcp": args.get("mcp", True)},
+        queue_key=args["project_id"], depends_on=[], created_by="mcp",
+    )
+
+
 def _project_remove(paths: Paths, args: JSONDict) -> Any:
     return client.create_job(
         paths, type="project.remove", target_pillar="registry", project_id=args["name"],
@@ -820,6 +828,13 @@ def _usage_candidates(paths: Paths, args: JSONDict) -> Any:
     return [{**row, "examples": (row.get("examples") or [])[:1]} for row in rows] if isinstance(rows, list) else rows
 
 
+def _usage_plugin_proposals(paths: Paths, args: JSONDict) -> Any:
+    """A short page with one example each, as candidates come."""
+    limit = min(int(args.get("limit") or _CANDIDATES_DEFAULT), _CANDIDATES_MAX)
+    rows = client.usage_plugin_proposals(paths, state=args.get("state") or "open", limit=limit)
+    return [{**row, "examples": (row.get("examples") or [])[:1]} for row in rows] if isinstance(rows, list) else rows
+
+
 def _usage_mine_automation(paths: Paths, args: JSONDict) -> Any:
     return _usage_job(paths, "usage.mine_automation", {})
 
@@ -1025,6 +1040,14 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "github_token": _prop("string", "GitHub token; omit to use the logged-in gh CLI."),
                  "ensure_labels": _prop("boolean", "Ensure the bootstrap GitHub labels exist. Default: true."),
              }, ["name"]), _project_connect_github),
+    ToolSpec("workshop_project_configure_assets", "Turn on asset review for a project: only `assets_dir` (a folder of its checkout) "
+             "and its subfolders are shown on the Dashboard's Assets pages, and the project's `.mcp.json` declares the `asset-review` MCP "
+             "server that generates a Blender file's 3D model and preview images. An empty `assets_dir` turns asset review off.",
+             _schema({
+                 "project_id": _PROJECT_ID,
+                 "assets_dir": _prop("string", "Folder of the checkout, relative to its root (for example blender_development). Empty: off."),
+                 "mcp": _prop("boolean", "Declare the asset-review MCP server in .mcp.json. Default: true."),
+             }, ["project_id"]), _project_configure_assets),
     ToolSpec("workshop_project_remove", "Hard-delete a registered project: cascades to every pillar's own data for it.",
              _schema({"name": _prop("string", "The project's name.")}, ["name"]), _project_remove),
     ToolSpec("workshop_project_list", "List every registered project, with its overall status.",
@@ -1408,8 +1431,17 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"]),
                       "limit": _prop("integer", "How many, from the costliest. Default 10, at most 50.")}),
              _usage_candidates),
-    ToolSpec("workshop_usage_mine_automation", "Mine the last 14 days of tool calls into automation candidates now. "
-             "No Claude involved, and nothing is implemented from it.", _schema(), _usage_mine_automation),
+    ToolSpec("workshop_usage_plugin_proposals", "Plugin proposals: whole requests Claude handles the same way, mostly "
+             "without judgment, proposed as a Claude Code plugin of hooks and scripts that calls Claude only at its "
+             "fallback points. Each gives its scope (one project or all), the steps it covers, how often and at which step "
+             "Claude would still be needed, the calls, turns and tokens per occurrence, the weekly cost today and with the "
+             "plugin, the candidates it absorbs and how to install it. Ranked by the net saving per week. The plugins "
+             "installed are listed by Claude Code itself (`claude plugin list`, `/plugin`).",
+             _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"]),
+                      "limit": _prop("integer", "How many, from the costliest. Default 10, at most 50.")}),
+             _usage_plugin_proposals),
+    ToolSpec("workshop_usage_mine_automation", "Mine the last 14 days of tool calls into automation candidates and plugin "
+             "proposals now. No Claude involved, and nothing is implemented from it.", _schema(), _usage_mine_automation),
     ToolSpec("workshop_trigger_list", "List the workshop triggers: each fires a Job when an event happens (a Job "
              "settling, a branch finishing, a Claude session ending, a finding opening).", _schema(), _trigger_list),
     ToolSpec("workshop_trigger_add", "Add a workshop trigger: when `event` happens (job.settled, job.succeeded, "

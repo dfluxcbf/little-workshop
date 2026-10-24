@@ -1,7 +1,48 @@
 {% extends "base.html" %}
 {% block title %}Docs · {{ project }} — little-workshop{% endblock %}
 {% block content %}
+{% macro cards(view) %}
+<div class="dg-grid">
+  {% for d in view.folders %}
+  <a class="dg-card dg-folder" href="/docs/{{ project }}?dir={{ d.path | urlencode }}">
+    <span class="dg-ico dg-ico-folder" aria-hidden="true"></span>
+    <span class="dg-body">
+      <span class="dg-name">{{ d.name }}</span>
+      <span class="dg-meta">{{ d.files }} document{{ '' if d.files == 1 else 's' }}</span>
+    </span>
+    <span class="job-tags">
+      {% if d.open %}<span class="chip docs-chip-open">{{ d.open }} open</span>{% endif %}
+      {% if d.done %}<span class="chip docs-chip-done">{{ d.done }} done</span>{% endif %}
+      {% if d.certified %}<span class="chip docs-chip-certified">{{ d.certified }} certified</span>{% endif %}
+    </span>
+  </a>
+  {% endfor %}
+  {% for f in view.files %}
+  <a class="dg-card dg-file" href="/docs/{{ project }}/view?path={{ f.path | urlencode }}">
+    <span class="dg-ico dg-ico-doc" aria-hidden="true"></span>
+    <span class="dg-body">
+      <span class="dg-name">{{ f.name }}</span>
+      {% if f.path != f.name %}<span class="dg-meta">{{ f.path }}</span>{% endif %}
+    </span>
+    <span class="job-tags">
+      {% if f.open %}<span class="chip docs-chip-open">{{ f.open }} open</span>{% endif %}
+      {% if f.done %}<span class="chip docs-chip-done">{{ f.done }} done</span>{% endif %}
+      {% if f.certified %}<span class="chip docs-chip-certified">{{ f.certified }} certified</span>{% endif %}
+    </span>
+  </a>
+  {% endfor %}
+</div>
+{% endmacro %}
 <h1>{{ project }} <span class="muted" style="font-weight:normal">docs</span></h1>
+
+{% if directory %}
+<nav class="dg-crumbs" aria-label="Folder">
+  <a href="/docs/{{ project }}">{{ project }}</a>
+  {% for c in view.crumbs %}<span aria-hidden="true">/</span>{% if loop.last %}<strong>{{ c.name }}</strong>{% else %}<a href="/docs/{{ project }}?dir={{ c.path | urlencode }}">{{ c.name }}</a>{% endif %}{% endfor %}
+</nav>
+{% if error %}<div class="card fail"><p style="margin:0">{{ error }}</p></div>{% endif %}
+{% if view.folders or view.files %}{{ cards(view) }}{% else %}<p class="muted">This folder has no documents.</p>{% endif %}
+{% else %}
 
 <div class="card">
   <form method="post" action="/docs/{{ project }}/checkout" class="docs-branch">
@@ -17,21 +58,15 @@
   </form>
 </div>
 
-<h2 class="section-label">Documents</h2>
-<div class="report-list">
-  {% for f in overview.files %}
-  <a class="card linkcard docs-file" href="/docs/{{ project }}/view?path={{ f.path | urlencode }}">
-    <span class="docs-file-path">{{ f.path }}</span>
-    <span class="job-tags">
-      {% if f.open %}<span class="chip docs-chip-open">{{ f.open }} open</span>{% endif %}
-      {% if f.done %}<span class="chip docs-chip-done">{{ f.done }} done</span>{% endif %}
-      {% if f.certified %}<span class="chip docs-chip-certified">{{ f.certified }} certified</span>{% endif %}
-    </span>
-  </a>
-  {% else %}
-  {% if not error %}<p class="muted">No markdown files in this project.</p>{% endif %}
-  {% endfor %}
+{% if overview.assets_dir %}
+<div class="assets-entry">
+  <a class="btn primary" href="/assets/{{ project }}">Assets</a>
+  <span class="muted">3D models, previews and textures in <code>{{ overview.assets_dir }}</code></span>
 </div>
+{% endif %}
+
+<h2 class="section-label">Documents</h2>
+{% if view.folders or view.files %}{{ cards(view) }}{% elif not error %}<p class="muted">No markdown files in this project.</p>{% endif %}
 
 <h2 class="section-label">Update docs</h2>
 {% for e in entries %}
@@ -96,6 +131,7 @@
   {% if u.error %}<p class="job-error">{{ u.error }}</p>{% endif %}
 </div>
 {% endfor %}
+{% endif %}
 {% endif %}
 <script>
 (function () {

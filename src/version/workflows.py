@@ -18,7 +18,7 @@ from version.gitops import (
     current_branch,
     delete_branch,
     get_merge_base,
-    merge_no_ff,
+    merge_squash,
     no_requirement,
     run,
     squash_to_single_commit,
@@ -133,8 +133,9 @@ def squash_merge_and_bump_patch(repo_root: Path, plan: PatchMergePlan) -> Comman
     with step("merge") as handle:
         checkout(repo_root, plan.target_branch)
         target_ver = read_version(repo_root)
-        merge_no_ff(repo_root, plan.work_branch, plan.merge_message)
-        handle.detail = f"{plan.work_branch} into {plan.target_branch}"
+        # A feature or improvement lands as one commit, with no merge commit; only a hotfix merges --no-ff.
+        merge_squash(repo_root, plan.work_branch, plan.merge_message)
+        handle.detail = f"{plan.work_branch} into {plan.target_branch} (squash)"
 
     with step("bump_version") as handle:
         new_ver = finished_version(read_version(repo_root), target_ver)
