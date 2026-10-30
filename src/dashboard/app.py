@@ -94,6 +94,14 @@ def _run_status_bucket(runs: list[dict]) -> tuple[int, int]:
 
 
 # The Task list's four sections, in page order: (key, heading).
+# Requirements & Quality's conflict kinds (requirements/conflicts.py) and the three ways to resolve one.
+CONFLICT_KINDS = {"duplicate_key": "Same key", "contradiction": "Contradiction", "different_value": "Different values"}
+CONFLICT_DECISIONS = {
+    "older_wins": "Older requirement wins",
+    "newer_wins": "Newer requirement wins",
+    "other": "Another approach",
+}
+
 TASK_GROUPS = (("queued", "Queued"), ("running", "Running"), ("attention", "Needs attention"), ("done", "Done"))
 _TASK_GROUP_OF_STATUS = {
     "waiting": "queued", "running": "running",
@@ -503,8 +511,8 @@ def policy_matches(policy: dict, *, q: str = "", status: str = "", gates=(), pro
 
 def collect_attention(paths: Paths) -> list[dict]:
     """What needs a human right now: an enabled policy whose latest check on a
-    project still currently associated with it failed, and every Job waiting
-    for a confirmation. Both are read live from their owning pillar; a pillar
+    project still currently associated with it failed, every Job waiting
+    for a confirmation, a project's open requirement conflicts and every open incident. Both are read live from their owning pillar; a pillar
     that is down contributes nothing."""
     items: list[dict] = []
     policies = _try(lambda: client.policy_list(paths, summary=True), default=[])
@@ -526,6 +534,15 @@ def collect_attention(paths: Paths) -> list[dict]:
                 "title": f"{job['type']} needs your answer", "detail": (job["progress"].get("current") or "")[:240],
                 "href": f"/jobs/{job['id']}", "since": job.get("updated_at"),
             })
+    open_conflicts: dict[str, int] = {}
+    for conflict in _try(lambda: client.requirement_conflicts(paths, status="open"), default=[]):
+        open_conflicts[conflict["project_id"]] = open_conflicts.get(conflict["project_id"], 0) + 1
+    for project, count in sorted(open_conflicts.items()):  # one item per project: a duplicated key alone can make many
+        items.append({
+            "kind": "requirement_conflict", "tag": "Requirements", "project": project,
+            "title": f"{count} requirement conflict{'' if count == 1 else 's'} to resolve",
+            "detail": "", "href": f"/requirements/conflicts?project={project}", "since": None,
+        })
     for incident in _try(lambda: client.list_incidents(paths, status="open"), default=[]):
         items.append({
             "kind": "incident", "tag": "Incidents", "project": incident["project_id"],
@@ -1037,6 +1054,44 @@ def build_app(paths: Paths) -> FastAPI:
         if result is None or result.get("status") != "succeeded":
             return _back(f"/incidents/{incident_id}", f"Could not dismiss: {(result or {}).get('error', 'agent pillar unreachable')}")
         return _back("/incidents", "Dismissed.")
+
+    # -- Requirement conflicts: found by Requirements & Quality, resolved by a Claude task ----------
+
+    @app.get("/requirements/conflicts", response_class=HTMLResponse)
+    def requirement_conflicts(request: Request, status: str = "open", project: str = ""):
+        try:
+            rows, error = client.requirement_conflicts(paths, project_id=project or None, status=status or None), None
+        except client.PillarUnavailable as exc:
+            rows, error = [], str(exc)
+        return _render(request, "conflicts.html", conflicts=rows, status=status, project=project, error=error,
+                       conflict_kinds=CONFLICT_KINDS, nav_active="conflicts", live_topics="conflicts")
+
+    @app.get("/requirements/conflicts/{conflict_id}", response_class=HTMLResponse)
+    def requirement_conflict_detail(request: Request, conflict_id: str):
+        conflict = _try(lambda: client.get_requirement_conflict(paths, conflict_id), default=None)
+        return _render(request, "conflict_detail.html", c=conflict, conflict_kinds=CONFLICT_KINDS,
+                       decisions=CONFLICT_DECISIONS, nav_active="conflicts", live_topics="conflicts")
+
+    @app.post("/requirements/conflicts/{conflict_id}/resolve")
+    def requirement_conflict_resolve(conflict_id: str, decision: str = Form(...), guidance: str = Form(""),
+                                     review_mode: str = Form("manual")):
+        back = f"/requirements/conflicts/{conflict_id}"
+        if decision not in CONFLICT_DECISIONS:
+            return _back(back, "Choose how to resolve the conflict.")
+        if decision == "other" and not guidance.strip():
+            return _back(back, "Another approach needs a description of what to do.")
+        conflict = _try(lambda: client.get_requirement_conflict(paths, conflict_id), default=None)
+        if conflict is None:
+            return _back(back, "The conflict could not be read: Requirements & Quality is unreachable or no longer has it.")
+        result = _try(lambda: client.create_job(
+            paths, type="agent.resolve_requirement_conflict", target_pillar="agent", project_id=conflict["project_id"],
+            params={"conflict_id": conflict_id, "decision": decision, "guidance": guidance.strip() if decision == "other" else "",
+                    "review_mode": review_mode},
+            queue_key=conflict["project_id"], depends_on=[], created_by="dashboard",
+        ))
+        if result is None or result.get("status") not in ("running", "succeeded", "queued"):
+            return _back(back, f"Could not start the fix: {(result or {}).get('error', 'orchestration unreachable')}")
+        return _back(back, "A Claude task is resolving the conflict — it is on the Tasks page.")
 
     def _project_names() -> list[str]:
         return [p["name"] for p in client.list_projects(paths) if p.get("status", "active") == "active"]

@@ -209,6 +209,11 @@ def requirements_get_requirement(paths: Paths, requirement_id: str, *, timeout: 
     return _get(paths, "requirements", f"/v1/requirements/{requirement_id}", timeout=timeout)
 
 
+def requirements_conflicts(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 10.0) -> list[dict]:
+    params = {"project_id": project_id, **({"status": status} if status else {})}
+    return _get(paths, "requirements", "/v1/conflicts", params=params, timeout=timeout)
+
+
 def requirements_report(paths: Paths, project_id: str, *, timeout: float = 10.0) -> dict:
     return _get(paths, "requirements", "/v1/report", params={"project_id": project_id}, timeout=timeout)
 

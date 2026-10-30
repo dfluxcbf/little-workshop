@@ -916,6 +916,14 @@ def test_requirements_report_calls_client(paths, monkeypatch):
     assert calls[0] == ((paths, "p1"), {})
 
 
+# --- REQ-000000468: Requirement conflicts are found by code and resolved by a Claude task the user directs ---
+
+def test_requirements_conflicts_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "requirements_conflicts", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_conflicts"].handler(paths, {"project_id": "p1", "status": "open"})
+    assert calls[0] == ((paths, "p1"), {"status": "open"})
+
+
 def test_build_run_builds_job(paths, fake_create_job):
     tools_mod.TOOLS_BY_NAME["workshop_build_run"].handler(paths, {
         "project_id": "p1", "command": ["python3", "-m", "pytest"], "from_fork": True,

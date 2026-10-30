@@ -985,3 +985,9 @@ imports outside the project, rule fields other than paths, skill and subagent de
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000433 | **`usage.analyze` has a dispatch ceiling above Orchestration's 20-second default.** The Usage pillar runs the rollup, the detectors and the experiment measurements synchronously inside its request handler, so `orchestration/dispatch.py`'s `JOB_TYPE_TIMEOUTS` carries `usage.analyze` at 300s; with the default the Job was reported `DispatchTimeout`, requeued while still running and could run twice. | done |
+
+## Requirement conflicts, found by code and resolved by a Claude task (2026-10-30)
+
+| ID | Description | Status |
+| --- | --- | --- |
+| REQ-000000468 | **Requirement conflicts are found by code and resolved by a Claude task the user directs.** The Requirements & Quality pillar shall compare every project's requirements every 15 minutes, using deterministic code only, and record as a conflict two requirements with the same key, one whose EARS statement requires what the other's forbids under the same conditions, or the same statement with different numbers, and the Dashboard shall show each project's open conflicts as needing attention and offer on a conflict's page `Older requirement wins`, `Newer requirement wins` or `Another approach` with required guidance text, whose submission starts a Claude task on the project to resolve it. | draft |

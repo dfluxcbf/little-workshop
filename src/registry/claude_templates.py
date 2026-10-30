@@ -63,7 +63,7 @@ MCP_READ_ONLY = (
     "workshop_version_status", "workshop_version_config", "workshop_version_issue_list",
     "workshop_version_branch_audit", "workshop_version_release_candidate_list",
     "workshop_requirements_list", "workshop_requirements_get", "workshop_requirements_report",
-    "workshop_requirements_suite_list",
+    "workshop_requirements_suite_list", "workshop_requirements_conflicts",
     "workshop_policy_list", "workshop_policy_get", "workshop_policy_results", "workshop_policy_winning",
     "workshop_policy_gating_for_job", "workshop_policy_projects_list", "workshop_policy_catalog_list",
     "workshop_policy_draft_list", "workshop_policy_check_project", "workshop_policy_evaluate",

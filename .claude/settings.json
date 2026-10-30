@@ -131,6 +131,7 @@
       "mcp__little-workshop__workshop_requirements_get",
       "mcp__little-workshop__workshop_requirements_report",
       "mcp__little-workshop__workshop_requirements_suite_list",
+      "mcp__little-workshop__workshop_requirements_conflicts",
       "mcp__little-workshop__workshop_policy_list",
       "mcp__little-workshop__workshop_policy_get",
       "mcp__little-workshop__workshop_policy_results",

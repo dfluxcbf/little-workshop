@@ -3485,3 +3485,59 @@ def test_a_refused_remote_control_is_reported_and_an_unknown_action_is_ignored(t
     location = test_client.post("/jobs/j1/remote-control/activate", follow_redirects=False).headers["location"]
     assert location.startswith("/jobs/j1") and "not%20running" in location
     assert "Unknown" in unquote(test_client.post("/jobs/j1/remote-control/bogus", follow_redirects=False).headers["location"])
+
+
+# --- REQ-000000468: Requirement conflicts are found by code and resolved by a Claude task the user directs ---
+
+def _conflict_row(**overrides):
+    base = {
+        "id": "c1", "project_id": "little-widget", "kind": "different_value", "status": "open",
+        "older_key": "REQ-1", "newer_key": "REQ-2", "summary": "the same rule for the pillar with different values: 3 against 4",
+        "older_text": "The pillar shall wait 3 seconds", "newer_text": "The pillar shall wait 4 seconds",
+        "detected_at": "2026-10-30T09:00:00Z", "last_seen_at": "2026-10-30T09:00:00Z", "decided_at": None, "resolved_at": None,
+        "decision": None, "guidance": "", "job_id": None,
+        "older": {"id": "r1", "key": "REQ-1", "title": "Wait", "status": "published", "created_at": "2026-10-01T00:00:00Z",
+                  "description": "The pillar shall wait 3 seconds."},
+        "newer": {"id": "r2", "key": "REQ-2", "title": "Wait longer", "status": "draft", "created_at": "2026-10-20T00:00:00Z",
+                  "description": "The pillar shall wait 4 seconds."},
+    }
+    return {**base, **overrides}
+
+
+def test_open_requirement_conflicts_need_attention_once_per_project(test_client, monkeypatch):
+    _stub_attention(monkeypatch, policies=[], results=[], jobs=[])
+    rows = [_conflict_row(), _conflict_row(id="c2"), _conflict_row(id="c3", project_id="other")]
+    monkeypatch.setattr(client, "requirement_conflicts", lambda paths, project_id=None, status=None: rows if status == "open" else [])
+    items = [i for i in test_client.get("/attention.json").json()["items"] if i["kind"] == "requirement_conflict"]
+    assert [(i["project"], i["title"]) for i in items] == [
+        ("little-widget", "2 requirement conflicts to resolve"), ("other", "1 requirement conflict to resolve")]
+    assert items[0]["href"] == "/requirements/conflicts?project=little-widget"
+
+
+def test_the_conflict_page_shows_both_requirements_and_the_three_ways_to_resolve(test_client, monkeypatch):
+    monkeypatch.setattr(client, "get_requirement_conflict", lambda paths, cid: _conflict_row())
+    text = test_client.get("/requirements/conflicts/c1").text
+    assert "The pillar shall wait 3 seconds" in text and "The pillar shall wait 4 seconds" in text
+    for label in ("Older requirement wins", "Newer requirement wins", "Another approach"):
+        assert label in text
+    assert 'name="guidance"' in text and 'action="/requirements/conflicts/c1/resolve"' in text
+
+
+def test_resolving_starts_the_agent_job_and_another_approach_needs_guidance(test_client, monkeypatch):
+    monkeypatch.setattr(client, "get_requirement_conflict", lambda paths, cid: _conflict_row())
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **kw: jobs.append(kw) or {"id": "j1", "status": "running"})
+    refused = test_client.post("/requirements/conflicts/c1/resolve", data={"decision": "other", "guidance": " "}, follow_redirects=False)
+    assert "needs a description" in unquote(refused.headers["location"]) and jobs == []
+    ok = test_client.post("/requirements/conflicts/c1/resolve", data={"decision": "other", "guidance": "Keep 3s"}, follow_redirects=False)
+    assert "Claude task is resolving" in unquote(ok.headers["location"])
+    [job] = jobs
+    assert job["type"] == "agent.resolve_requirement_conflict" and job["project_id"] == "little-widget"
+    assert job["params"] == {"conflict_id": "c1", "decision": "other", "guidance": "Keep 3s", "review_mode": "manual"}
+
+
+def test_the_conflicts_list_filters_by_status_and_project(test_client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(client, "requirement_conflicts", lambda paths, project_id=None, status=None: calls.append((project_id, status)) or [_conflict_row()])
+    text = test_client.get("/requirements/conflicts", params={"project": "little-widget", "status": "resolving"}).text
+    assert ("little-widget", "resolving") in calls and 'href="/requirements/conflicts/c1"' in text

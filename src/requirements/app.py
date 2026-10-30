@@ -11,6 +11,7 @@ from __future__ import annotations
 import functools
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,10 +21,10 @@ from pydantic import BaseModel
 from common.job_steps import StepReporter, reporting, step
 from common import serving
 from common.paths import Paths
-from common.incident import install_incident_reporting
+from common.incident import install_incident_reporting, report_incident as report_crash
 from common.worktree_client import WorktreeUnavailable
 from common.registry_client import ProjectResolutionError, resolve_project_path
-from requirements import db, markers
+from requirements import conflicts, db, markers
 from requirements.ears import ears_error
 from requirements.junit import JUnitParseError, parse_junit_xml
 from requirements.models import (
@@ -82,10 +83,41 @@ class _Refused(Exception):
 markers_default_suite = "Unit tests"
 
 
-def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
+# How to resolve a conflict between two requirements; `other` needs the user's guidance.
+CONFLICT_DECISIONS = ("older_wins", "newer_wins", "other")
+# The running pillar analyzes every project's requirements for conflicts this often (and once when it starts).
+CONFLICT_SCAN_SECONDS = 15 * 60
+
+
+def analyze_conflicts(conn: sqlite3.Connection, lock: threading.Lock, project_id: str | None = None) -> dict:
+    """Run the conflict analysis on one project, or on every project with requirements, and record it:
+    {project_id: {found, new, reopened, resolved}}."""
+    with lock:
+        requirements = db.list_requirements(conn, project_id=project_id)
+        projects = {project_id} if project_id else {r.project_id for r in requirements}
+        projects |= {c["project_id"] for c in db.list_conflicts(conn, project_id=project_id)}  # a project emptied since
+        return {
+            pid: db.record_conflict_analysis(conn, pid, conflicts.find_conflicts([r for r in requirements if r.project_id == pid]))
+            for pid in sorted(projects)
+        }
+
+
+def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: float | None = None) -> FastAPI:
     app = FastAPI(title="little-workshop Requirements & Quality")
     install_incident_reporting(app, paths, pillar="requirements")
     lock = threading.Lock()
+
+    if conflict_scan_seconds:
+        def scan() -> None:
+            while True:
+                try:
+                    analyze_conflicts(conn, lock)
+                except Exception as exc:  # noqa: BLE001 - one failed scan must not end the periodic analysis
+                    report_crash(paths, project_id="little-workshop", pillar="requirements",
+                                 context="periodic requirement conflict analysis", exc=exc)
+                time.sleep(conflict_scan_seconds)
+
+        threading.Thread(target=scan, daemon=True, name="requirement conflicts").start()
 
     def _reported(route):
         """Run a job route with its steps reported to Orchestration; a `_Refused` raised inside a
@@ -464,6 +496,57 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         totals = run_outcome(((sid, item) for sid, items in by_suite.items() for item in items),
                              suite_names={sid: suite.name for sid, suite in suites.items()})
         return {"outcome": "succeeded", "result": {"suites": summary, **totals}}
+
+    # -- requirement conflicts (requirements/conflicts.py) ---------------------
+
+    @app.post("/v1/jobs/requirements.analyze_conflicts")
+    def job_analyze_conflicts(request: JobRequest) -> dict:
+        return {"outcome": "succeeded", "result": {"projects": analyze_conflicts(conn, lock, request.project_id)}}
+
+    @app.post("/v1/jobs/requirements.decide_conflict")
+    def job_decide_conflict(request: JobRequest) -> dict:
+        """Record how the user chose to resolve a conflict and the Job of the Claude task fixing it (called by
+        Agentic Development's `agent.resolve_requirement_conflict` once that task has started)."""
+        params = request.params
+        conflict_id, decision, guidance = params.get("conflict_id"), params.get("decision"), (params.get("guidance") or "").strip()
+        if not conflict_id:
+            return {"outcome": "failed", "error": "missing 'conflict_id'"}
+        if decision not in CONFLICT_DECISIONS:
+            return {"outcome": "failed", "error": f"decision must be one of {', '.join(CONFLICT_DECISIONS)}"}
+        if decision == "other" and not guidance:
+            return {"outcome": "failed", "error": "another approach needs guidance on what to do"}
+        with lock:
+            conflict = db.get_conflict(conn, conflict_id)
+            if conflict is None:
+                return {"outcome": "failed", "error": f"conflict {conflict_id!r} not found"}
+            if conflict["status"] == db.CONFLICT_RESOLVED:
+                return {"outcome": "failed", "error": "the conflict is already resolved"}
+            db.decide_conflict(conn, conflict_id, decision=decision, guidance=guidance, job_id=params.get("job_id"))
+            return {"outcome": "succeeded", "result": db.get_conflict(conn, conflict_id)}
+
+    @app.get("/v1/conflicts")
+    def list_conflicts(project_id: str | None = None, status: str | None = None) -> list[dict]:
+        if status is not None and status not in db.CONFLICT_STATUSES:
+            raise HTTPException(status_code=422, detail=f"status must be one of {', '.join(db.CONFLICT_STATUSES)}")
+        with lock:
+            return db.list_conflicts(conn, project_id=project_id, status=status)
+
+    @app.get("/v1/conflicts/version")
+    def conflicts_version() -> dict:
+        with lock:
+            return {"version": db.conflicts_version(conn)}
+
+    @app.get("/v1/conflicts/{conflict_id}")
+    def get_conflict(conflict_id: str) -> dict:
+        """The conflict, with each of its two requirements as it is now (None once deleted)."""
+        with lock:
+            conflict = db.get_conflict(conn, conflict_id)
+            if conflict is None:
+                raise HTTPException(status_code=404, detail="conflict not found")
+            for side in ("older", "newer"):
+                requirement = db.get_requirement(conn, conflict[f"{side}_requirement_id"])
+                conflict[side] = requirement.model_dump(mode="json") if requirement else None
+        return conflict
 
     # -- reads ----------------------------------------------------------------
 

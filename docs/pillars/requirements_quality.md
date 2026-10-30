@@ -203,3 +203,40 @@ failing test naming its suite. Before, the answer carried every result (3,317 of
 project's unit suite), and every list of Jobs and every reader of the Job carried them too. The results
 themselves stay at `GET /v1/test_results`. Agentic Development's CI check reads the counts.
 
+## Requirement conflicts (2026-10-30)
+
+REQ-000000468. `requirements/conflicts.py` compares a project's requirements with code alone, so the same
+requirements always give the same conflicts. Each description is read as EARS statements: each sentence, and
+each `, and the <system> shall …` within one, keeping the sentence's `While`/`When`/`Where`/`If` clauses. Words
+are compared in lower case, without punctuation and without `a`/`an`/`the`. Two requirements of one project
+conflict when:
+
+- **Same key** (`duplicate_key`): each later copy of a key is paired with the first copy;
+- **Contradiction**: a statement in each has the same conditions, system and response, and one says `shall`
+  where the other says `shall not` or `shall never`;
+- **Different values**: same conditions, system and polarity, and the same response apart from its numbers.
+
+The older requirement is the one created first. A conflict's id hashes its kind, the two requirement ids and
+the statements involved, so every analysis finds a conflict under the same id. The table
+`requirement_conflicts` holds each one as `open`, then `resolving` once the user has chosen a resolution, then
+`resolved` when an analysis no longer finds it (because a requirement was changed or deleted). A resolved
+conflict that comes back is `open` again.
+
+The running pillar analyzes every project when it starts and every 15 minutes after that
+(`CONFLICT_SCAN_SECONDS`). `requirements.analyze_conflicts` does the same for one project, or for all of them
+when no project is given; it is in the Dashboard's New Job catalog as "Check requirement conflicts". Reads:
+`GET /v1/conflicts?project_id&status`, `GET /v1/conflicts/{id}` (with both requirements as they are now, or
+None once deleted), and `GET /v1/conflicts/version`, which the Dashboard's live stream polls. MCP:
+`workshop_requirements_conflicts`.
+
+On the Dashboard, each project with open conflicts is one item in the attention list, linking to
+`/requirements/conflicts` (Documentation → Conflicts). A conflict's page shows the two requirements side by side
+and offers **Older requirement wins**, **Newer requirement wins** or **Another approach**; the last one needs
+text saying what to do. Submitting starts Agentic Development's `agent.resolve_requirement_conflict` on the
+conflict's project. That job builds an ordinary `agent.run_task` (intent `task`, manual review unless the user
+chose auto-approve) from the conflict and the decision (`agent/requirement_conflicts.py`), then records the
+decision and the Job on the conflict through `requirements.decide_conflict`. The task tells Claude to change
+requirements only through this pillar: a draft can be edited, a published one is deleted and, where some of it
+still holds, replaced under the next free key. The conflict is resolved when the next analysis no longer finds
+it. A conflict still `resolving` can be resolved again from its page, for example when its task failed.
+

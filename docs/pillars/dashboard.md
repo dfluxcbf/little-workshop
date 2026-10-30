@@ -64,7 +64,8 @@ are the current state of every pillar.
 - **Needs attention** (every page; `/attention`, `/attention.json`, 2026-09-21):
   a banner under the top bar, shown only when something needs a human — an
   enabled policy whose latest check on a project failed, or a Job awaiting
-  confirmation. `/attention` lists each item as a card linking to the
+  confirmation (since 2026-10-30, also a project's open requirement conflicts, one item per project:
+  `docs/pillars/requirements_quality.md`'s "Requirement conflicts"). `/attention` lists each item as a card linking to the
   policy or the Jobs page; `/attention.json` is the same list as data. The
   banner re-reads the feed when the page's live stream says something needing attention changed
   ("Live pages", 2026-10-04; it used to every 20 seconds), and once the
@@ -77,7 +78,7 @@ are the current state of every pillar.
   toolbar/task/job/policy workflow overhauled 2026-09-23)**:
   - **Navigation** is grouped (regrouped 2026-10-03; Backlog and Schedule added 2026-10-04). The bottom
     toolbar has Dashboard (standalone), Documentation, Actions, Policies and System; a group button reveals
-    its pages (Documentation: Review, Backlog, Report; Actions: Task list, New task, Jobs, New job, Schedule,
+    its pages (Documentation: Review, Backlog, Report, Conflicts (2026-10-30); Actions: Task list, New task, Jobs, New job, Schedule,
     Triggers; Policies: Policies, New policy; System: Pillars, Incidents, Statistics, Claude usage,
     Settings) with Back returning to the main row, and the
     group of the current page stays open. On a wide screen the top bar holds the groups and a

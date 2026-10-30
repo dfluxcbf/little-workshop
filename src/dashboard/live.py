@@ -48,12 +48,14 @@ VERSION_SOURCES: dict[str, Callable[[Paths], str]] = {
     "backlog": lambda paths: client.backlog_version(paths),
     "usage": lambda paths: client.usage_version(paths),
     "incidents": lambda paths: client.incidents_version(paths),
+    "conflicts": lambda paths: client.requirement_conflicts_version(paths),
     "pillars": pillars_version,
 }
-# An incident appearing is also something needing attention; a pillar's health is on the Dashboard page too.
-ALSO_PUBLISH = {"incidents": ("attention",), "pillars": ("dashboard",)}
+# An incident or a requirement conflict appearing is also something needing attention; a pillar's health is on the Dashboard page too.
+ALSO_PUBLISH = {"incidents": ("attention",), "conflicts": ("attention",), "pillars": ("dashboard",)}
 
-_TASK_TYPES = {"agent.run_task", "agent.finish_task", "agent.skip_task", "agent.dismiss_task", "agent.confirm_incident"}
+_TASK_TYPES = {"agent.run_task", "agent.finish_task", "agent.skip_task", "agent.dismiss_task", "agent.confirm_incident",
+               "agent.resolve_requirement_conflict"}
 _DASHBOARD_TYPES = {"agent.session_start", "agent.session_stop", "agent.ci_check", "project.bootstrap", "project.remove"}
 _SETTLED = {"succeeded", "failed", "cancelled", "stopped"}
 
@@ -82,6 +84,8 @@ def job_topics(change: dict) -> set[str]:
         topics.add("backlog")
     if job_type in ("agent.confirm_incident", "agent.dismiss_incident"):
         topics.add("incidents")
+    if job_type in ("agent.resolve_requirement_conflict", "requirements.analyze_conflicts", "requirements.decide_conflict"):
+        topics.add("conflicts")
     return topics
 
 

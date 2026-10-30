@@ -64,6 +64,11 @@ def _run_tests(project: str, values: dict) -> dict:
             "params": {"commitish": COMMITISH, "suite_ids": values["suites"]}}
 
 
+def _analyze_conflicts(project: str, values: dict) -> dict:
+    return {"type": "requirements.analyze_conflicts", "target_pillar": "requirements", "project_id": project, "queue_key": None,
+            "params": {}}
+
+
 def _release(project: str, values: dict) -> dict:
     # The project's own queue: nothing else may branch, build or launch it mid-release.
     return {"type": "version.release", "target_pillar": "version", "project_id": project, "queue_key": project,
@@ -143,6 +148,12 @@ CATALOG: tuple[JobSpec, ...] = (
         make=_run_tests,
         args=(JobArg("suites", "Test suites", "multi", required=True,
                      help="Each suite's tests are found by listing the project's tests, without running them."),),
+    ),
+    JobSpec(
+        key="analyze_conflicts", label="Check requirement conflicts",
+        description=("Compare the project's requirements for conflicts now, instead of waiting for the next check "
+                     "(every 15 minutes). Conflicts found are on the Conflicts page."),
+        make=_analyze_conflicts,
     ),
     JobSpec(
         key="release", label="Release",

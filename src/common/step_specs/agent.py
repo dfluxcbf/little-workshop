@@ -19,6 +19,8 @@ STEPS: dict[str, tuple[StepSpec, ...]] = {
     "agent.run_task": RUN_TASK,
     # A confirmed incident's fix is an ordinary task run.
     "agent.confirm_incident": RUN_TASK,
+    # So is a requirement conflict's resolution.
+    "agent.resolve_requirement_conflict": RUN_TASK,
     "agent.ci_check": (
         StepSpec("resolve_pr", "Look up the pull request's head commit"),
         StepSpec("post_pending", "Post a pending status to GitHub"),

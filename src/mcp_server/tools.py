@@ -575,6 +575,10 @@ def _requirements_report(paths: Paths, args: JSONDict) -> Any:
     return client.requirements_report(paths, args["project_id"])
 
 
+def _requirements_conflicts(paths: Paths, args: JSONDict) -> Any:
+    return client.requirements_conflicts(paths, args["project_id"], status=args.get("status"))
+
+
 # ---------------------------------------------------------------------------
 # Build & Packages
 # ---------------------------------------------------------------------------
@@ -1239,6 +1243,12 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_requirements_report", "Definition-of-done report for a project: for each requirement, "
              "whether it is published, tested, passing, and therefore done.",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _requirements_report),
+    ToolSpec("workshop_requirements_conflicts", "The conflicts Requirements & Quality's periodic analysis found "
+             "between two of a project's requirements (same key, a contradiction, or different values): "
+             "open, resolving (a fix was started) or resolved (no longer found).",
+             _schema({"project_id": _PROJECT_ID,
+                      "status": _prop("string", "open, resolving or resolved. Default: all.")}, ["project_id"]),
+             _requirements_conflicts),
 
     ToolSpec("workshop_build_run", "Run a build/test command sandboxed, in a fresh Deployment & Servers "
              "worktree of a given commit — never the project's own working checkout. Mark from_fork true for "

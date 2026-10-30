@@ -36,3 +36,20 @@ def run_job(paths: Paths, project_id: str, job_type: str, params: dict, *, timeo
     if body.get("outcome") != "succeeded":
         raise RequirementsClientError(f"{job_type} failed: {body.get('error')}")
     return body.get("result") or {}
+
+
+def get_conflict(paths: Paths, conflict_id: str, *, timeout: float = 10.0) -> dict | None:
+    """A requirement conflict with both its requirements as they are now (`GET /v1/conflicts/{id}`); None when
+    there is no such conflict."""
+    socket_path = resolve_pillar_socket(paths, "requirements", timeout=5.0)
+    if socket_path is None:
+        raise RequirementsClientError("Requirements & Quality pillar is unavailable")
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.get(f"/v1/conflicts/{conflict_id}")
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
+        raise RequirementsClientError(f"could not read conflict {conflict_id}: {exc}") from exc

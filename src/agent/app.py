@@ -33,7 +33,8 @@ from asset_mcp import runner as asset_runner
 from agent.remote_control import RemoteControl, RemoteControlError, resolve as resolve_claude_session, status as remote_control_status
 from agent.doc_update import DocUpdateError, DocUpdateFlow
 from agent.flow import STOPPED_BY_USER, AgentFlow, AgentFlowError, intent_error
-from agent import usage_client
+from agent import requirements_client, usage_client
+from agent.requirement_conflicts import conflict_task, decision_error
 from agent.launch import JOB_QUERY, JOB_QUERY_CHECKOUT, launch_for
 from agent.query import CHECKOUT_QUERY_TIMEOUT_SECONDS, query_dir, run_query, session_dir
 from agent.gitutil import is_dirty as gitutil_is_dirty
@@ -822,6 +823,41 @@ def build_app(
         if result["outcome"] == "accepted":
             with lock:
                 db.decide_incident(conn, incident_id, status="confirmed", run_id=result["result"]["run_id"])
+        return result
+
+    @app.post("/v1/jobs/agent.resolve_requirement_conflict")
+    def job_resolve_requirement_conflict(request: JobRequest) -> dict:
+        """The user's resolution of a requirement conflict (older wins, newer wins, or another approach with
+        their guidance) as an ordinary task on the conflict's project; once it has started, Requirements &
+        Quality records the decision and the task's Job on the conflict."""
+        conflict_id = request.params.get("conflict_id")
+        decision, guidance = str(request.params.get("decision") or ""), str(request.params.get("guidance") or "")
+        if not conflict_id:
+            return {"outcome": "failed", "error": "missing params.conflict_id"}
+        refusal = decision_error(decision, guidance)
+        if refusal:
+            return {"outcome": "failed", "error": refusal}
+        try:
+            conflict = requirements_client.get_conflict(paths, conflict_id)
+        except requirements_client.RequirementsClientError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        if conflict is None:
+            return {"outcome": "failed", "error": f"no such conflict {conflict_id!r}"}
+        if conflict["status"] == "resolved":
+            return {"outcome": "failed", "error": "the conflict is already resolved"}
+        title, description = conflict_task(conflict, decision, guidance)
+        result = _dispatch_run_task(conflict["project_id"], request.job_id, {
+            "title": title, "description": description, "intent": "task",
+            "review_mode": request.params.get("review_mode", "manual"),
+        })
+        if result["outcome"] == "accepted":
+            try:
+                requirements_client.run_job(paths, conflict["project_id"], "requirements.decide_conflict", {
+                    "conflict_id": conflict_id, "decision": decision, "guidance": guidance, "job_id": request.job_id,
+                }, timeout=10.0)
+            except requirements_client.RequirementsClientError as exc:  # the task runs anyway; only the record is missing
+                report_crash(paths, project_id="little-workshop", pillar="agent",
+                             context=f"recording the decision on requirement conflict {conflict_id}", exc=exc)
         return result
 
     @app.post("/v1/jobs/agent.dismiss_incident")

@@ -335,6 +335,19 @@ def requirements_report(paths: Paths, project_id: str) -> dict:
     return _get(paths, "requirements", "/v1/report", params={"project_id": project_id}, timeout=10.0)
 
 
+def requirement_conflicts(paths: Paths, *, project_id: str | None = None, status: str | None = None) -> list[dict]:
+    params = {k: v for k, v in (("project_id", project_id), ("status", status)) if v}
+    return _get(paths, "requirements", "/v1/conflicts", params=params or None)
+
+
+def get_requirement_conflict(paths: Paths, conflict_id: str) -> dict | None:
+    return _get_optional(paths, "requirements", f"/v1/conflicts/{conflict_id}")
+
+
+def requirement_conflicts_version(paths: Paths, *, timeout: float = 3.0) -> str:
+    return _get(paths, "requirements", "/v1/conflicts/version", timeout=timeout)["version"]
+
+
 def requirements_list(paths: Paths, project_id: str) -> list[dict]:
     return _get(paths, "requirements", "/v1/requirements", params={"project_id": project_id}, timeout=10.0)
 

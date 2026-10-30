@@ -1,5 +1,6 @@
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -1015,3 +1016,63 @@ def test_a_running_query_session_can_get_remote_control_in_its_own_folder(paths,
     assert "22222222-bbbb" in argv and cwd == folder and "--dangerously-skip-permissions" not in argv
     db.finish_query_session(conn, "22222222-bbbb")
     assert not c.get("/v1/remote-control/q1").json()["can_activate"]
+
+
+# --- REQ-000000468: Requirement conflicts are found by code and resolved by a Claude task the user directs ---
+
+def _conflict(**overrides):
+    base = {
+        "id": "c1", "project_id": "little-meals", "kind": "contradiction", "status": "open",
+        "older_key": "REQ-1", "newer_key": "REQ-2", "summary": "one requires the dashboard to show banner, the other forbids it",
+        "older_text": "The Dashboard shall show a banner", "newer_text": "The Dashboard shall not show a banner",
+        "older": {"id": "r1", "key": "REQ-1", "title": "Banner", "status": "published", "created_at": "2026-10-01T00:00:00Z",
+                  "description": "The Dashboard shall show a banner."},
+        "newer": None,
+    }
+    return {**base, **overrides}
+
+
+def _wait_for_worker(job_id, *, timeout=5.0):
+    """A run settles before its worker thread ends (the worker still writes after it); the test's database
+    must not close under that write."""
+    for thread in threading.enumerate():
+        if thread.name == f"agent.run_task {job_id[:8]}":
+            thread.join(timeout)
+
+
+def _stub_conflicts(monkeypatch, conflict):
+    recorded = []
+    monkeypatch.setattr("agent.app.requirements_client.get_conflict", lambda paths, cid, **kw: conflict if conflict and cid == conflict["id"] else None)
+    monkeypatch.setattr("agent.app.requirements_client.run_job", lambda paths, pid, job_type, params, **kw: recorded.append((job_type, params)) or {})
+    return recorded
+
+
+@pytest.mark.parametrize("decision, guidance, expected", [
+    ("older_wins", "", "The older requirement REQ-1 wins"),
+    ("newer_wins", "", "The newer requirement REQ-2 wins"),
+    ("other", "Keep both, scoped to drafts", "Keep both, scoped to drafts"),
+])
+def test_resolving_a_conflict_starts_a_task_with_the_users_decision_and_records_it(paths, conn, tmp_path, monkeypatch, decision, guidance, expected):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    recorded = _stub_conflicts(monkeypatch, _conflict())
+    body = client.post("/v1/jobs/agent.resolve_requirement_conflict", json={
+        "job_id": "fix", "params": {"conflict_id": "c1", "decision": decision, "guidance": guidance}}).json()
+    assert body["outcome"] == "accepted", body
+    run = _wait_for_run(client, "little-meals", body["result"]["run_id"])
+    _wait_for_worker("fix")
+    assert "REQ-1 / REQ-2" in run["title"] and expected in run["description"] and run["review_mode"] == "manual"
+    assert "deleted since" in run["description"]  # the newer requirement no longer exists
+    assert recorded == [("requirements.decide_conflict", {"conflict_id": "c1", "decision": decision, "guidance": guidance, "job_id": "fix"})]
+
+
+def test_resolving_a_conflict_is_refused_without_guidance_or_for_a_resolved_or_unknown_conflict(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+
+    def post(params):
+        return client.post("/v1/jobs/agent.resolve_requirement_conflict", json={"job_id": "j", "params": params}).json()
+
+    _stub_conflicts(monkeypatch, _conflict(status="resolved"))
+    assert "guidance" in post({"conflict_id": "c1", "decision": "other", "guidance": "  "})["error"]
+    assert "already resolved" in post({"conflict_id": "c1", "decision": "older_wins"})["error"]
+    assert "no such conflict" in post({"conflict_id": "ghost", "decision": "older_wins"})["error"]
+    assert client.get("/v1/runs/little-meals").json() == []

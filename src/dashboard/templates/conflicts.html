@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Requirement conflicts — little-workshop{% endblock %}
+{% block content %}
+<form class="report-filter" method="get" action="/requirements/conflicts">
+  {% if project %}<input type="hidden" name="project" value="{{ project }}">{% endif %}
+  <select name="status" aria-label="Status" onchange="this.form.submit()">
+    <option value="open" {{ 'selected' if status == 'open' }}>To resolve</option>
+    <option value="resolving" {{ 'selected' if status == 'resolving' }}>Being resolved</option>
+    <option value="resolved" {{ 'selected' if status == 'resolved' }}>Resolved</option>
+    <option value="" {{ 'selected' if not status }}>All</option>
+  </select>
+  {% if project %}<a class="chip" href="/requirements/conflicts?status={{ status }}">{{ project }} ✕</a>{% endif %}
+</form>
+<p class="muted">Requirements &amp; Quality compares every project's requirements every 15 minutes: two with the same
+key, one requiring what another forbids, or the same rule with different numbers.</p>
+{% if error %}<p class="muted">Requirements &amp; Quality is unreachable: {{ error }}</p>{% endif %}
+<div class="policy-list" id="conflicts-live" data-live-region>
+  {% for c in conflicts %}
+  <a class="polcard" href="/requirements/conflicts/{{ c.id }}">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ c.older_key }} / {{ c.newer_key }}</span>
+      <span class="pill {{ {'open': 'fail', 'resolving': 'warn', 'resolved': 'ok'}.get(c.status, 'idle') }}">{{ {'open': 'to resolve', 'resolving': 'being resolved'}.get(c.status, c.status) }}</span>
+    </span>
+    <span class="polcard-ears">{{ c.summary }}</span>
+    <span class="polcard-meta">
+      <span class="chip">{{ conflict_kinds.get(c.kind, c.kind) }}</span>
+      <span class="chip">{{ c.project_id }}</span>
+      <span class="chip">found {{ c.detected_at | reltime }}</span>
+    </span>
+  </a>
+  {% else %}
+  <p class="muted">No {{ {'open': 'conflicts to resolve', 'resolving': 'conflicts being resolved', 'resolved': 'resolved conflicts'}.get(status, 'conflicts') }}{{ ' in ' ~ project if project }}.</p>
+  {% endfor %}
+</div>
+{% endblock %}

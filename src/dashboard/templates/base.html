@@ -27,7 +27,7 @@
 {# Each group is (key, label, landing href, icon, [(page key, href, label, icon)]). A one-page group is a plain link. #}
 {% set groups = [
   ('dashboard', 'Dashboard', '/', 'dashboard', [('dashboard', '/', 'Dashboard', 'dashboard')]),
-  ('documentation', 'Documentation', '/docs', 'report', [('docs', '/docs', 'Review', 'review'), ('backlog', '/backlog', 'Backlog', 'backlog'), ('report', '/report', 'Report', 'report')]),
+  ('documentation', 'Documentation', '/docs', 'report', [('docs', '/docs', 'Review', 'review'), ('backlog', '/backlog', 'Backlog', 'backlog'), ('report', '/report', 'Report', 'report'), ('conflicts', '/requirements/conflicts', 'Conflicts', 'alert')]),
   ('actions', 'Actions', '/tasks', 'tasks', [('tasks', '/tasks', 'Task list', 'tasks'), ('new-task', '/tasks/new', 'New task', 'plus'), ('jobs', '/jobs', 'Jobs', 'jobs'), ('new-job', '/jobs/new', 'New job', 'plus'), ('schedule', '/schedule', 'Schedule', 'calendar'), ('triggers', '/triggers', 'Triggers', 'jobs')]),
   ('policies', 'Policies', '/policies', 'policies', [('policies', '/policies', 'Policies', 'policies'), ('new-policy', '/policies/new', 'New policy', 'plus')]),
   ('system', 'System', '/pillars', 'system', [('pillars', '/pillars', 'Pillars', 'pillars'), ('incidents', '/incidents', 'Incidents', 'bug'), ('statistics', '/statistics', 'Statistics', 'chart'), ('usage', '/usage', 'Claude usage', 'chart'), ('settings', '/settings', 'Settings', 'gear')]),
