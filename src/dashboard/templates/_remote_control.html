@@ -1,0 +1,32 @@
+{#- Remote Control of a job's running Claude session. Needs `remote_control` (the agent's /v1/remote-control answer plus
+    job_id and project_id; None shows nothing) and `next`. Lives inside a live region, so it follows the job without a refresh.
+    A session is shown by its status and name only: no link, URL or QR code. -#}
+{% macro remote_control_card(rc, next) %}
+{% if rc %}
+<section class="dcard remote-control" data-remote-control="{{ 'active' if rc.active else ('available' if rc.can_activate else 'history') }}">
+  <div class="dcard-head"><span class="dcard-title">Remote control</span>
+    <span class="dcard-note"><span class="pill {{ 'ok' if rc.active else 'idle' }} rc-status">{{ 'active' if rc.active else ('ended' if rc.session_name else 'off') }}</span></span></div>
+  {% if rc.session_name %}
+  <p class="rc-session">
+    {% if rc.already_set_up %}Remote control is already set up for this session.{% elif rc.active %}Remote control is on.{% else %}Remote control {{ 'ended' if rc.stopped_at else 'was on' }}.{% endif %}
+    Find the session <code class="rc-name">{{ rc.session_name }}</code> in the Claude Code app.
+    <span class="muted">Started {{ rc.started_at.replace('T', ' ')[:19] }}{% if rc.stopped_at %}, ended {{ rc.stopped_at.replace('T', ' ')[:19] }}{% endif %}.</span>
+  </p>
+  {% endif %}
+  {% if rc.can_activate %}
+  <form method="post" action="/jobs/{{ rc.job_id }}/remote-control/activate" class="rc-activate">
+    <input type="hidden" name="project_id" value="{{ rc.project_id }}"><input type="hidden" name="next" value="{{ next }}">
+    <button type="submit" class="btn">Activate remote-control</button>
+    <span class="muted">Resumes this session with remote control; the work in progress is not interrupted.</span>
+  </form>
+  {% endif %}
+  {% if rc.can_deactivate %}
+  <form method="post" action="/jobs/{{ rc.job_id }}/remote-control/deactivate" class="rc-deactivate">
+    <input type="hidden" name="project_id" value="{{ rc.project_id }}"><input type="hidden" name="next" value="{{ next }}">
+    <button type="submit" class="btn">Deactivate remote-control</button>
+    <span class="muted">Ends only the connection: the job keeps running.</span>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+{% endmacro %}

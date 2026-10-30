@@ -23,6 +23,7 @@ PILLARS = (
     "agent",
     "dashboard",
     "mcp",
+    "usage",
 )
 
 OWNER_TAGS = {
@@ -36,6 +37,7 @@ OWNER_TAGS = {
     "agent": "agent",
     "dashboard": "dashboard",
     "mcp": "mcp",
+    "usage": "usage",
 }
 
 

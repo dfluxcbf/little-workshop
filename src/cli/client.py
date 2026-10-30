@@ -6,9 +6,12 @@ today (docs/architecture.md's CLI section).
 
 from __future__ import annotations
 
+import os
+
 import httpx
 
 from common.manifest import load_manifest
+from common.origin import cli_origin
 from common.paths import Paths
 from common.uds_client import client_for_socket
 from common import systemd
@@ -46,11 +49,28 @@ def _core_status_fallback(paths: Paths) -> dict:
 
 
 def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
+    """Create a Job and return it once dispatched. The Job's checklist is shown on stderr while it runs
+    (`cli.progress`); `LWS_NO_PROGRESS=1` turns that off."""
+    if os.environ.get("LWS_NO_PROGRESS"):
+        return post_job(paths, timeout=timeout, **fields)
+    from cli import progress
+
+    return progress.create_and_follow(paths, timeout=timeout, **fields)
+
+
+def post_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
+    fields.setdefault("origin", cli_origin())
     try:
         with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
             response = client.post("/v1/jobs", json=fields)
         response.raise_for_status()
         return response.json()
+    except httpx.ReadTimeout as exc:
+        # It took the request: the Job exists and may well be running.
+        raise DaemonUnavailable(
+            f"Orchestration took the job but has not answered within {timeout:g}s; it may still be "
+            "working on it -- check `lws job list` before retrying"
+        ) from exc
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable(
             "Orchestration daemon unreachable — job creation needs the daemon "
@@ -58,20 +78,23 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
         ) from exc
 
 
-def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> dict:
+def list_jobs(paths: Paths, *, status: str | None = None, types: str | None = None, newest_first: bool = False,
+              limit: int | None = None, summary: bool = False, timeout: float = 5.0) -> dict:
+    """Jobs as Orchestration selects them: `status` and `types` one or several, comma-separated; a summary
+    gives each Job's brief in place of its params and result. From the database when the daemon is down."""
+    params = {"status": status, "type": types, "order": "newest" if newest_first else None, "limit": limit,
+              "view": "summary" if summary else None}
     try:
         with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
-            params = {"status": status} if status else {}
-            response = client.get("/v1/jobs", params=params)
+            response = client.get("/v1/jobs", params={key: value for key, value in params.items() if value is not None})
         response.raise_for_status()
         return {"source": "daemon", "jobs": response.json()}
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
-        from orchestration.models import JobStatus
-
         conn = orchestration_db.connect(paths.pillar_db_path("orchestration"))
-        jobs = orchestration_db.list_jobs(conn, status=JobStatus(status) if status else None)
+        jobs = orchestration_db.find_jobs(conn, statuses=status.split(",") if status else None, types=types.split(",") if types else None,
+                                          newest_first=newest_first, limit=limit, summary=summary)
         conn.close()
-        return {"source": "fallback", "jobs": [job.model_dump(mode="json") for job in jobs]}
+        return {"source": "fallback", "jobs": jobs}
 
 
 def stop_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> dict:
@@ -213,6 +236,29 @@ def set_queue_capacity(paths: Paths, queue_key: str, capacity: int, *, timeout: 
         raise DaemonUnavailable("Orchestration daemon unreachable — setting queue capacity needs the daemon") from exc
 
 
+def get_job(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
+    """The Job with its checklist, from the daemon only (no fallback to the database file)."""
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.get(f"/v1/jobs/{job_id}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable(f"could not read job {job_id} from the Orchestration daemon: {exc}") from exc
+
+
+def answer_step(paths: Paths, job_id: str, key: str, choice: str, *, timeout: float = 10.0) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.post(f"/v1/jobs/{job_id}/steps/{key}/answer", json={"choice": choice})
+        if response.status_code in (404, 409, 422):
+            raise DaemonUnavailable(f"answer refused: {response.json().get('detail', response.text)}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable(f"could not send the answer to the Orchestration daemon: {exc}") from exc
+
+
 def job_status(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
     try:
         with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
@@ -224,6 +270,21 @@ def job_status(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
         job = orchestration_db.get_job(conn, job_id)
         conn.close()
         return {"source": "fallback", "job": job.model_dump(mode="json") if job else None}
+
+
+def job_wait(paths: Paths, job_id: str, timeout_seconds: float | None = None) -> dict:
+    """Orchestration's long poll: the Job once it settled, is held for a confirmation or asks a question,
+    else as it is when the timeout passed."""
+    params = {"timeout": timeout_seconds} if timeout_seconds is not None else {}
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=(timeout_seconds or 120.0) + 15.0) as client:
+            response = client.get(f"/v1/jobs/{job_id}/wait", params=params)
+        if response.status_code == 404:
+            return {"source": "daemon", "job": None}
+        response.raise_for_status()
+        return {"source": "daemon", "job": response.json()}
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable(f"could not wait for the Job: the Orchestration daemon is unreachable: {exc}") from exc
 
 
 def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5.0) -> dict:
@@ -241,6 +302,25 @@ def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5
         projects = registry_db.list_projects(conn, status=ProjectStatus(status) if status else None)
         conn.close()
         return {"source": "fallback", "projects": [p.model_dump(mode="json") for p in projects]}
+
+
+def backlog(paths: Paths, method: str, path: str = "", *, params: dict | None = None, json: dict | None = None,
+            timeout: float = 10.0):
+    """A call to Registry & Portfolio's backlog (`/v1/backlog...`). A refusal (no such entry, an empty
+    one) raises DaemonUnavailable with the pillar's own reason, as an outage does: either way the
+    command has nothing to show."""
+    try:
+        with client_for_socket(paths.socket_path("registry"), timeout=timeout) as client:
+            response = client.request(method, f"/v1/backlog{path}", params=params or {}, json=json)
+    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        raise DaemonUnavailable(f"the Registry & Portfolio daemon is unreachable: {exc}") from exc
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail", response.text)
+        except ValueError:
+            detail = response.text
+        raise DaemonUnavailable(f"the backlog refused it: {detail}")
+    return response.json()
 
 
 class VersionPillarUnavailable(Exception):
@@ -583,6 +663,72 @@ def policy_gating_for_job(paths: Paths, project_id: str, categories: list[str], 
         ) from exc
 
 
+class PolicyEvaluationRefused(Exception):
+    """Policy & Compliance refused the request itself (an unknown gate point, a checkout
+    that is not the project's): nothing ran."""
+
+
+def policy_evaluate(
+    paths: Paths, project_id: str, gate_point: str, *, commit: dict | None = None, checkout: str | None = None,
+    timeout: float = 1900.0,
+) -> dict:
+    """Run, now, every policy gating `gate_point` for the project, in the sandbox, and
+    return each verdict. Nothing is recorded or held. Long timeout: a branch_finish
+    preflight includes policies that run the project's own test suite."""
+    body: dict = {"project_id": project_id, "gate_point": gate_point, "origin": cli_origin()}
+    if commit is not None:
+        body["commit"] = commit
+    if checkout is not None:
+        body["checkout"] = checkout
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.post("/v1/policies/evaluate", json=body)
+    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        raise PolicyPillarUnavailable(
+            "Policy & Compliance daemon unreachable -- policies only run in its sandbox"
+        ) from exc
+    if response.status_code == 400:
+        try:
+            detail = response.json().get("detail", response.text)
+        except ValueError:
+            detail = response.text
+        raise PolicyEvaluationRefused(str(detail))
+    if response.status_code in (404, 405):
+        raise PolicyPillarUnavailable(
+            "the running Policy & Compliance pillar predates policy evaluate; redeploy it "
+            "(workshop_deployment_redeploy_pillar policy)"
+        )
+    if response.status_code != 200:
+        raise PolicyPillarUnavailable(f"Policy & Compliance answered HTTP {response.status_code}")
+    return response.json()
+
+
+def policy_bypass_status(paths: Paths, *, timeout: float = 5.0) -> dict:
+    return _policy_bypass(paths, "GET", None, timeout)
+
+
+def policy_bypass_set(paths: Paths, *, enabled: bool, minutes: int | None, actor: str, timeout: float = 5.0) -> dict:
+    """Turn the `bypass_policies` flag on (the pillar refuses any origin but the user's terminal) or off."""
+    return _policy_bypass(paths, "POST", {"enabled": enabled, "minutes": minutes, "actor": actor, "origin": cli_origin()}, timeout)
+
+
+class PolicyBypassRefused(Exception):
+    pass
+
+
+def _policy_bypass(paths: Paths, method: str, body: dict | None, timeout: float) -> dict:
+    try:
+        with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
+            response = client.request(method, "/v1/bypass", json=body)
+    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        raise PolicyPillarUnavailable("Policy & Compliance daemon unreachable -- the bypass flag lives there") from exc
+    if response.status_code in (400, 403):
+        raise PolicyBypassRefused(str(response.json().get("detail", response.text)))
+    if response.status_code != 200:
+        raise PolicyPillarUnavailable(f"Policy & Compliance answered HTTP {response.status_code}")
+    return response.json()
+
+
 class DeploymentPillarUnavailable(Exception):
     pass
 
@@ -659,6 +805,66 @@ def complete_orchestration_job(
 
 class AgentPillarUnavailable(Exception):
     pass
+
+
+def usage_candidates(paths: Paths, *, state: str = "open", limit: int | None = None, timeout: float = 10.0) -> list:
+    try:
+        with client_for_socket(paths.socket_path("usage"), timeout=timeout) as client:
+            response = client.get("/v1/candidates", params={"state": state, **({"limit": limit} if limit is not None else {})})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
+
+
+def usage_plugin_proposals(paths: Paths, *, state: str = "open", limit: int | None = None, timeout: float = 10.0) -> list:
+    try:
+        with client_for_socket(paths.socket_path("usage"), timeout=timeout) as client:
+            response = client.get("/v1/plugin_proposals", params={"state": state, **({"limit": limit} if limit is not None else {})})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
+
+
+def trigger_request(paths: Paths, method: str, path: str = "", *, json: dict | None = None, timeout: float = 10.0):
+    """One call to Orchestration's `/v1/triggers` routes; a refusal's reason is in the error."""
+    try:
+        with client_for_socket(paths.socket_path("orchestration"), timeout=timeout) as client:
+            response = client.request(method, f"/v1/triggers{path}", json=json)
+        if response.status_code in (404, 422):
+            raise DaemonUnavailable(f"refused: {response.json().get('detail', response.text)}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise DaemonUnavailable(f"the Orchestration daemon is unreachable: {exc}") from exc
+
+
+def usage_findings(paths: Paths, *, project: str | None = None, state: str = "open", timeout: float = 10.0) -> list:
+    params = {"state": state, **({"project": project} if project else {})}
+    try:
+        with client_for_socket(paths.socket_path("usage"), timeout=timeout) as client:
+            response = client.get("/v1/findings", params=params)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
+
+
+class UsagePillarUnavailable(Exception):
+    pass
+
+
+def usage_summary(paths: Paths, *, project: str | None = None, week: str | None = None, origin: str | None = None,
+                  timeout: float = 20.0) -> dict:
+    params = {key: value for key, value in (("project", project), ("week", week), ("origin", origin)) if value}
+    try:
+        with client_for_socket(paths.socket_path("usage"), timeout=timeout) as client:
+            response = client.get("/v1/summary", params=params)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
 
 
 def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> dict:

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Docs — little-workshop{% endblock %}
+{% block content %}
+<h1>Docs</h1>
+<p class="lede">Read and review a project's documentation: highlight text, comment on it, and send the comments to Claude to update the docs.</p>
+<div class="report-list">
+  {% for name in projects %}
+  <a class="card linkcard" href="/docs/{{ name }}"><span class="proj-name">{{ name }}</span></a>
+  {% else %}
+  {% if not error %}<p class="muted">No projects registered.</p>{% endif %}
+  {% endfor %}
+</div>
+{% endblock %}

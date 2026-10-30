@@ -1,0 +1,29 @@
+{#- Stop and force stop of a running Job, from its page or its task's. Needs `job`, `stop_refused` and `next`
+    (where to come back to). Force stop only after the user is told what it does, and asked once more. -#}
+{% macro stop_controls(job, stop_refused, next) %}
+{% if job and job.status in ("running", "queued") %}
+<form method="post" action="/jobs/{{ job.id }}/stop" class="job-stop" onsubmit="return confirm('{{ "Stop this running job?" if job.status == "running" else "Cancel this queued job?" }}')">
+  <input type="hidden" name="next" value="{{ next }}">
+  <button type="submit" class="btn danger">{{ "Stop job" if job.status == "running" else "Cancel job" }}</button>
+</form>
+{% if job.status == "running" %}
+<details class="force-stop"{% if stop_refused %} open{% endif %}>
+  <summary>{{ "It would not stop. Force stop…" if stop_refused else "Force stop…" }}</summary>
+  <p>Force stop settles this job as <strong>stopped</strong> without its pillar's agreement: use it when the job cannot
+    be stopped and you know it is stuck (its worker died, its pillar restarted). What it means:</p>
+  <ul>
+    <li>Its pillar is still asked to stop it, but whatever it was doing may carry on and is <strong>not undone</strong>:
+      a branch, commits or files it changed stay as they are.</li>
+    <li>Its outcome is no longer recorded: if it finishes later, that is ignored.</li>
+    <li>The jobs waiting on it fail.</li>
+    <li>Its queue is released at once, so the next job of {{ job.queue_key or "its queue" }} may start while the old work still runs.</li>
+  </ul>
+  <form method="post" action="/jobs/{{ job.id }}/stop"
+        onsubmit="return confirm('Force-stop {{ job.type }}? Its work is not undone, its later outcome is ignored and the jobs waiting on it fail.')">
+    <input type="hidden" name="force" value="1"><input type="hidden" name="next" value="{{ next }}">
+    <button type="submit" class="btn danger">Force stop</button>
+  </form>
+</details>
+{% endif %}
+{% endif %}
+{% endmacro %}

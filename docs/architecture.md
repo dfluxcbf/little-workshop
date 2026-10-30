@@ -18,7 +18,8 @@ answers to, not about the architecture itself.
 ## Revision note (this round)
 
 The first round described one process with internal modules sharing one
-database. This round replaces that with **Core + ten pillars**, each its own
+database. This round replaces that with **Core + ten pillars** (eleven since 2026-10-04, with
+Usage & Efficiency), each its own
 process with its own storage, communicating only through a declared Pillar
 Interface (PI). Every section below (Components, Data model, Feature
 mapping, Technical decisions) reflects the pillar model; where it differs
@@ -47,6 +48,23 @@ is-active` plus each pillar's own health probe, reconnecting to whatever it
 finds and starting only whatever's actually missing. See `design.md`'s
 "Core's own recovery" data-flow diagram.
 
+Every outage and every abnormal end of a unit's run is an incident
+(2026-10-05): Core reads each failure systemd logged for the pillars' and
+its own units from the user journal (`core/journal.py`, from a kept
+position), gathers what it saw during the outage, and files one incident
+per outage when the pillar answers again or is faulted
+(`docs/pillars/agentic_development.md`, "Pillar outages and cut work
+become incidents"). A pillar whose unit has been active for two minutes
+but does not answer a whole probe is hung: Core stops the unit and starts
+it again (a relaunch alone is refused while the unit exists). A unit
+systemd is still starting or stopping (a redeploy) is left alone, and a
+health check never waits for its pillar's lock (busy, it says so), so
+busy work is never taken for a hang. Every pillar serves through `common/serving.py`,
+whose stop ends long-polls and live streams at once, cuts the requests
+still running after 60 seconds instead of waiting until systemd kills
+the process at 90, and tells the policy sandbox that the pillar is
+stopping (`serving.stopping`).
+
 Ten pillars, each its own process, its own SQLite file, and its own Pillar
 Interface (a small FastAPI app bound to a Unix domain socket):
 
@@ -62,6 +80,7 @@ Interface (a small FastAPI app bound to a Unix domain socket):
 | **Agentic Development** | Claude does real implementation work on a real branch, safely, and the human stays in control of when it's finished. | little-runner's `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`/`sessions.py`, generalized from GitHub-issue-only triggers | Optional — a project not using agentic dev never starts it. Fully specified: `docs/pillars/agentic_development.md`. |
 | **Dashboard** | A human can see and act on everything above, without a terminal. | little-runner's `web/`, extended with panels for every other pillar | Optional — a headless/automation-only setup can disable it. Visual identity decided: see `presentations/06-visual-identity.md`. |
 | **MCP Server** | An agent (Claude, or another tool) can see and act on everything above, without a terminal. | little-requirements' and little-versions' MCP tool surfaces, unified and namespaced | Optional — but the common case, since Claude is this ecosystem's primary caller |
+| **Usage & Efficiency** | Claude is used knowingly: what every session on this machine costs is recorded, interpreted and reduced. | Nothing absorbed: new with `docs/claude_usage_optimization.md` (accepted 2026-10-04) | Optional, on by default — switched off, nothing is collected and nothing else changes. Specified: `docs/pillars/usage.md`. |
 
 Dashboard and MCP Server hold no domain data of their own — both are thin,
 stateless proxies translating their caller's request (an HTTP request, an
@@ -173,6 +192,7 @@ number of distinctly-named files per project.
 | `.agent` | Agentic Development |
 | `.dashboard` | Dashboard |
 | `.mcp` | MCP Server |
+| `.usage` | Usage & Efficiency |
 
 Examples: `retention.policy.json` (Policy & Compliance's, for one project),
 `manifest.deployment.toml` (Deployment & Servers', for one project's server
@@ -253,7 +273,7 @@ row is what "this project exists" actually means. A
 Portfolio creates it as part of registering a project, the same way it
 creates the registry row, never the other way around.
 
-- **Orchestration** — `jobs`, `job_runs`, `pipelines`, `pipeline_runs`.
+- **Orchestration** — `jobs`, `job_runs`, `job_steps`, `step_durations`, `pipelines`, `pipeline_runs`.
 - **Policy & Compliance** — `policies`, `policy_check_results`
   (three-outcome: pass/fail/not-applicable), `policy_projects` (the
   projects each policy applies to, with per-project gating on/off; added
@@ -266,7 +286,8 @@ creates the registry row, never the other way around.
   resolving a project-set-scoped policy's targets — it doesn't own that
   table (moved this round; see Registry & Portfolio's entry below).
 - **Registry & Portfolio** — `projects` (incl. the super-repo container
-  row), `project_sets`, `tickets`.
+  row), `project_sets`, `tickets`, `backlog_entries` (2026-10-04: each
+  project's backlog, `docs/pillars/registry_portfolio.md`).
 - **Requirements & Quality** — `requirements`, `test_suites`,
   `test_results`, `use_cases`, `milestones`.
 - **Version Control & Release** — no persistent DB beyond a small cache;
@@ -276,7 +297,11 @@ creates the registry row, never the other way around.
   `build_runs`.
 - **Deployment & Servers** — `servers`, `deployments`,
   `deploy_confirmations`.
-- **Agentic Development** — `agent_runs`, `remote_control_sessions`.
+- **Agentic Development** — `agent_runs` (with each run's Claude
+  `session_id`, 2026-10-04), `remote_control_sessions` (also the Job-keyed rows of docs/pillars/agentic_development.md "Activating Remote Control"), `incidents` (with
+  their kind: exception, crash or unexpected behaviour).
+- **Usage & Efficiency** — `sessions`, `requests`, `tool_calls`, `session_events`, `plan_pressure`,
+  `day_rollups`, `run_usage`, `doctor_reports` (`docs/pillars/usage.md`, "Store").
 - **Dashboard**, **MCP Server** — no persistent storage of their own.
 
 What stays outside every pillar's database, deliberately: git repositories

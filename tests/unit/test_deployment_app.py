@@ -486,3 +486,42 @@ def test_deploy_and_stop_jobs_for_an_external_server_fail_cleanly_and_touch_noth
     assert deploy["outcome"] == "failed" and "managed outside Deployment" in deploy["error"] and "will not deploy" in deploy["error"]
     assert stop["outcome"] == "failed" and "will not stop" in stop["error"]
     assert not any(c and (c[0] in ("pkill", "systemd-run", "bazel") or c[:3] == ["systemctl", "--user", "stop"]) for c in runner.calls[before:])
+
+
+def test_status_and_history_answer_while_a_deploy_is_in_progress(paths, conn, tmp_path):
+    """A deploy holds the pillar's lock for minutes; the Dashboard's server
+    panel reads must not wait for it (they used to time out mid-launch)."""
+    import threading
+    import time
+
+    repo = make_repo(tmp_path)
+    client, runner = make_client(paths, conn, repo)
+    client.post("/v1/jobs/deployment.deploy", json={"job_id": "j0", "project_id": "little-meals", "params": {"branch": "main"}})
+
+    building, release = threading.Event(), threading.Event()
+    inner = runner.run
+
+    def slow_bazel(argv, timeout=None, cwd=None):
+        if argv and argv[0] == "bazel":
+            building.set()
+            assert release.wait(timeout=10)
+        return inner(argv, timeout=timeout, cwd=cwd)
+
+    runner.run = slow_bazel
+    out = {}
+    deploying = threading.Thread(target=lambda: out.update(client.post(
+        "/v1/jobs/deployment.deploy", json={"job_id": "j1", "project_id": "little-meals", "params": {"branch": "main"}},
+    ).json()), daemon=True)
+    deploying.start()
+    assert building.wait(timeout=10)
+
+    start = time.monotonic()
+    status = client.get("/v1/status/little-meals")
+    history = client.get("/v1/deployments/little-meals")
+    assert time.monotonic() - start < 2
+    assert status.status_code == 200 and status.json()["branch"] == "main"
+    assert history.status_code == 200 and len(history.json()) >= 1
+
+    release.set()
+    deploying.join(timeout=10)
+    assert out["outcome"] == "succeeded"

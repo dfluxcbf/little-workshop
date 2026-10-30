@@ -14,6 +14,7 @@ from __future__ import annotations
 import shutil
 import sqlite3
 
+from common.job_steps import done, step
 from common.paths import Paths
 from registry import db
 
@@ -23,11 +24,17 @@ class ProjectNotFoundError(Exception):
 
 
 def remove_project(conn: sqlite3.Connection, paths: Paths, name: str) -> None:
-    if db.get_project(conn, name) is None:
-        raise ProjectNotFoundError(name)
+    with step("check_project"):
+        if db.get_project(conn, name) is None:
+            raise ProjectNotFoundError(name)
 
-    db.delete_project(conn, name)
+    with step("purge_registry"):
+        db.delete_project(conn, name)
 
     project_dir = paths.project_dir(name)
     if project_dir.exists():
-        shutil.rmtree(project_dir)
+        with step("purge_files") as handle:
+            shutil.rmtree(project_dir)
+            handle.detail = str(project_dir)
+    else:
+        done("purge_files", "no files directory")

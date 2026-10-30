@@ -15,8 +15,11 @@ not something to paper over with a local read.
 
 from __future__ import annotations
 
+import time
+
 import httpx
 
+from common import origin as origins
 from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
 from common.uds_client import client_for_socket
@@ -24,6 +27,20 @@ from common.uds_client import client_for_socket
 
 class PillarUnavailable(Exception):
     """Raised whenever a pillar's Pillar Interface can't be reached."""
+
+
+def _failure(pillar: str, exc: Exception, timeout: float) -> str:
+    """Say what actually went wrong. A pillar that took the request and has
+    not answered yet is not "unreachable": a caller told it was would retry
+    something that is in fact running (2026-09-24)."""
+    if isinstance(exc, httpx.ReadTimeout):
+        return (
+            f"{pillar} daemon took the request but has not answered within {timeout:g}s; "
+            "it may still be working on it -- check workshop_job_list before retrying"
+        )
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"{pillar} daemon answered HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+    return f"{pillar} daemon unreachable"
 
 
 def _get(paths: Paths, pillar: str, path: str, *, params: dict | None = None, timeout: float = 5.0) -> dict:
@@ -36,7 +53,7 @@ def _get(paths: Paths, pillar: str, path: str, *, params: dict | None = None, ti
         response.raise_for_status()
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
-        raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
+        raise PillarUnavailable(_failure(pillar, exc, timeout)) from exc
 
 
 def _mutate(
@@ -51,7 +68,7 @@ def _mutate(
         response.raise_for_status()
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
-        raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
+        raise PillarUnavailable(_failure(pillar, exc, timeout)) from exc
 
 
 def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
@@ -65,6 +82,7 @@ def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
 
 
 def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
+    fields.setdefault("origin", origins.CLAUDE)  # the MCP server serves Claude: never bypassable
     socket_path = resolve_pillar_socket(paths, "orchestration", timeout=timeout)
     if socket_path is None:
         raise PillarUnavailable("orchestration daemon unreachable — Core has no socket for it registered")
@@ -74,15 +92,50 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
         response.raise_for_status()
         return response.json()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
-        raise PillarUnavailable("orchestration daemon unreachable") from exc
+        raise PillarUnavailable(_failure("orchestration", exc, timeout)) from exc
 
 
-def list_jobs(paths: Paths, *, status: str | None = None, timeout: float = 5.0):
-    return _get(paths, "orchestration", "/v1/jobs", params={"status": status} if status else None, timeout=timeout)
+_TERMINAL = ("succeeded", "failed", "cancelled", "stopped")
+
+
+def await_job(paths: Paths, job: dict, *, timeout: float = 120.0, poll_seconds: float = 2.0) -> dict:
+    """A Job that can stop and ask the user (a step with `needs_attention`) and is still running is
+    waited for, up to `timeout` seconds, until it ends or a step waits for an answer; the caller gets
+    that Job, with its checklist, to relay the question. Any other Job comes back as it is."""
+    if job.get("status") != "running" or not any(s.get("needs_attention") for s in job.get("steps") or []):
+        return job
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(poll_seconds)
+        try:
+            job = job_status(paths, job["id"])
+        except PillarUnavailable:
+            continue
+        if job.get("status") in _TERMINAL or any(s["state"] == "attention" for s in job.get("steps") or []):
+            break
+    return job
+
+
+def answer_step(paths: Paths, job_id: str, key: str, choice: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "orchestration", "POST", f"/v1/jobs/{job_id}/steps/{key}/answer", json={"choice": choice}, timeout=timeout)
+
+
+def list_jobs(paths: Paths, *, status: str | None = None, types: str | None = None, limit: int | None = 50, full: bool = False,
+              timeout: float = 5.0):
+    """The newest Jobs first, at most `limit` (None: every one), as summaries unless `full`. (No project filter:
+    an optional `project_id` would have the scope guard insist on it, and a pillar redeploy names a pillar there.)"""
+    params = {"status": status, "type": types, "order": "newest", "limit": limit, "view": None if full else "summary"}
+    return _get(paths, "orchestration", "/v1/jobs", params={key: value for key, value in params.items() if value is not None}, timeout=timeout)
 
 
 def job_status(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "orchestration", f"/v1/jobs/{job_id}", timeout=timeout)
+
+
+def job_wait(paths: Paths, job_id: str, timeout_seconds: float | None = None) -> dict:
+    """Orchestration's long poll; the request may take as long as the wait itself, plus a margin."""
+    params = {"timeout": timeout_seconds} if timeout_seconds is not None else None
+    return _get(paths, "orchestration", f"/v1/jobs/{job_id}/wait", params=params, timeout=(timeout_seconds or 120.0) + 15.0)
 
 
 def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5.0):
@@ -91,6 +144,22 @@ def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5
 
 def get_project(paths: Paths, name: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "registry", f"/v1/projects/{name}", timeout=timeout)
+
+
+def backlog_list(paths: Paths, project_id: str, *, timeout: float = 5.0) -> list[dict]:
+    return _get(paths, "registry", "/v1/backlog", params={"project_name": project_id}, timeout=timeout)
+
+
+def backlog_get(paths: Paths, entry_id: str, *, timeout: float = 5.0) -> dict:
+    return _get(paths, "registry", f"/v1/backlog/{entry_id}", timeout=timeout)
+
+
+def backlog_add(paths: Paths, project_id: str, text: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "registry", "POST", "/v1/backlog", json={"project_name": project_id, "primary_entry": text}, timeout=timeout)
+
+
+def backlog_delete(paths: Paths, entry_id: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "registry", "DELETE", f"/v1/backlog/{entry_id}", timeout=timeout)
 
 
 def version_status(paths: Paths, kind: str, project_id: str, *, timeout: float = 5.0) -> dict:
@@ -138,6 +207,11 @@ def requirements_list_requirements(
 
 def requirements_get_requirement(paths: Paths, requirement_id: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "requirements", f"/v1/requirements/{requirement_id}", timeout=timeout)
+
+
+def requirements_conflicts(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 10.0) -> list[dict]:
+    params = {"project_id": project_id, **({"status": status} if status else {})}
+    return _get(paths, "requirements", "/v1/conflicts", params=params, timeout=timeout)
 
 
 def requirements_report(paths: Paths, project_id: str, *, timeout: float = 10.0) -> dict:
@@ -191,6 +265,47 @@ def policy_list_drafts(paths: Paths, status: str | None = None, *, timeout: floa
 
 def policy_gating_for_job(paths: Paths, project_id: str, categories: list[str], *, timeout: float = 10.0):
     return _get(paths, "policy", "/v1/policies/gating-for-job", params={"project_id": project_id, "categories": ",".join(categories)}, timeout=timeout)
+
+
+def policy_evaluate(paths: Paths, project_id: str, gate_point: str, *, timeout: float = 1900.0) -> dict:
+    """Run the policies gating `gate_point` for the project now, unrecorded. Long timeout: a
+    branch_finish preflight includes policies that run the project's own test suite."""
+    return _mutate(paths, "policy", "POST", "/v1/policies/evaluate",
+                   json={"project_id": project_id, "gate_point": gate_point, "origin": origins.CLAUDE}, timeout=timeout)
+
+
+def usage_summary(paths: Paths, *, project: str | None = None, week: str | None = None, origin: str | None = None,
+                  timeout: float = 20.0) -> dict:
+    params = {key: value for key, value in (("project", project), ("week", week), ("origin", origin)) if value}
+    return _get(paths, "usage", "/v1/summary", params=params or None, timeout=timeout)
+
+
+def usage_findings(paths: Paths, *, project: str | None = None, state: str = "open", timeout: float = 10.0) -> dict:
+    params = {"state": state, **({"project": project} if project else {})}
+    return _get(paths, "usage", "/v1/findings", params=params, timeout=timeout)
+
+
+def usage_candidates(paths: Paths, *, state: str = "open", limit: int | None = None, timeout: float = 10.0) -> dict:
+    params = {"state": state, **({"limit": limit} if limit is not None else {})}
+    return _get(paths, "usage", "/v1/candidates", params=params, timeout=timeout)
+
+
+def usage_plugin_proposals(paths: Paths, *, state: str = "open", limit: int | None = None, timeout: float = 10.0) -> dict:
+    params = {"state": state, **({"limit": limit} if limit is not None else {})}
+    return _get(paths, "usage", "/v1/plugin_proposals", params=params, timeout=timeout)
+
+
+def list_triggers(paths: Paths, *, timeout: float = 5.0):
+    return _get(paths, "orchestration", "/v1/triggers", timeout=timeout)
+
+
+def add_trigger(paths: Paths, *, name: str, event: str, event_filter: dict, job_template: dict, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "orchestration", "POST", "/v1/triggers",
+                   json={"name": name, "on": {"event": event, "filter": event_filter}, "job_template": job_template}, timeout=timeout)
+
+
+def remove_trigger(paths: Paths, trigger_id: str, *, timeout: float = 10.0) -> dict:
+    return _mutate(paths, "orchestration", "DELETE", f"/v1/triggers/{trigger_id}", timeout=timeout)
 
 
 def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> dict:

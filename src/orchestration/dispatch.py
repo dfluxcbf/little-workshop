@@ -5,16 +5,22 @@ docs/design.md's "Cross-pillar job dispatch" data flow.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+import threading
+import time
+from contextlib import nullcontext
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
 import httpx
 
+from common.incident import KIND_UNEXPECTED, report_problem
+from common.job_steps import ATTENTION_TIMEOUT_SECONDS
 from common.uds_client import client_for_socket
-from orchestration.db import insert_job_run, update_job
+from orchestration import steps
+from orchestration.db import get_job, insert_job, insert_job_run, list_job_runs, list_jobs, update_job
 from orchestration.models import Job, JobStatus
-from orchestration.queue import cascade_dependency_failures, ready_jobs
+from orchestration.queue import cascade_dependency_failures, is_ready, ready_jobs
 
 # Given a pillar name, returns its socket path if that pillar is known
 # and enabled — regardless of whether it's currently *up* — or None if
@@ -32,7 +38,7 @@ SocketLookup = Callable[[str], Path | None]
 # answer — the probing fallback. This set only ever grows by a
 # maintainer's own hand; nothing computes it.
 DECLARED_UNSTOPPABLE_JOB_TYPES: frozenset[str] = frozenset({
-    "project.bootstrap", "project.import", "project.remove",
+    "project.bootstrap", "project.import", "project.remove", "project.connect_github",
     "version.init", "version.feature_start", "version.feature_finish",
     "version.improvement_start", "version.improvement_finish",
     "version.hotfix_start", "version.hotfix_finish",
@@ -40,6 +46,9 @@ DECLARED_UNSTOPPABLE_JOB_TYPES: frozenset[str] = frozenset({
     "version.release_candidate_promote", "version.release_finish",
     "version.support_start", "version.support_finish",
     "version.config_add_hook", "version.config_remove_hook",
+    # Answers `accepted` at once and runs on (release start/finish mid-way
+    # must never be cut off); the 180s dispatch ceiling below is ample.
+    "version.release",
 })
 
 # Per-Job-type dispatch timeout overrides — `docs/open_questions.md`'s
@@ -56,6 +65,8 @@ DECLARED_UNSTOPPABLE_JOB_TYPES: frozenset[str] = frozenset({
 # confirm`) still defaults to the plain 20s unless it looks this up too.
 DEFAULT_DISPATCH_TIMEOUT_SECONDS = 20.0
 JOB_TYPE_TIMEOUTS: dict[str, float] = {
+    # Real network work: a repo create, two pushes and eleven label upserts.
+    "project.connect_github": 180.0,
     "policy.author": 120.0,
     "policy.activate": 60.0,
     # M17 ecosystem-cutover finding, the same OQ-14 class of defect: a
@@ -75,124 +86,485 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     # that gave up on it. 1860s gives a 60s margin over the sandbox's
     # own ceiling for image-pull/startup overhead on the first run.
     "policy.check_project": 1860.0,
+    # 2026-09-23 finding, reproduced live during an actual release: both
+    # version.release_start and version.release_finish hit the plain 20s
+    # default and were requeued mid-flight ("target pillar unreachable:
+    # timed out"), then re-dispatched a moment later while the FIRST,
+    # still-running-server-side invocation was still mid-way through its
+    # own real git operations (branch create/merge/tag/commit/back-merge)
+    # — the retry then failed on a dirty tree or wrong branch, a
+    # confusing symptom of the SAME underlying timeout mismatch already
+    # fixed once for policy.check_project. `DECLARED_UNSTOPPABLE_JOB_TYPES`
+    # above is exactly the maintainer-curated set of "real, possibly-slow,
+    # never-safely-interruptible" Job types — reused here rather than a
+    # second hand-written list, since it's the same judgment call.
+    **{job_type: 180.0 for job_type in DECLARED_UNSTOPPABLE_JOB_TYPES},
+    # The same OQ-14 class once more, for the Dashboard's New Job catalog
+    # (build a project, run its tests): each runs synchronously in its own
+    # request handler with a 1800s ceiling of its own (build/runner.py,
+    # requirements/testrun.py's run_suites_sandboxed); discovery only
+    # collects tests (300s ceiling). 60s/30s margins for worktree setup.
+    "build.run": 1860.0,
+    "requirements.run_tests": 1860.0,
+    "requirements.discover_tests": 330.0,
+    # A backlog entry's refinement and task prompt wait for one agent.query that reads the project's
+    # checkout (600s ceiling; the registry waits 620s for it).
+    "registry.backlog_refine": 630.0,
+    "registry.backlog_task_prompt": 630.0,
+    # 2026-10-05 finding, the OQ-14 class once more: a redeploy batch's Jobs are dispatched side by
+    # side, but Deployment & Servers runs them one at a time under its lock, so the last one waits for
+    # every redeploy before it (each a smoke check, a stop, a 20-try health probe and maybe a CLI
+    # refresh). With the 20s default, Dashboard, Build and Agent were requeued while still being
+    # redeployed and redeployed again, up to three times each.
+    "deployment.redeploy_pillar": 1800.0,
+    # 2026-10-24 finding, the OQ-14 class again: usage.analyze runs the rollup, every detector and the
+    # experiment measurements synchronously in its request handler, which outlasts the 20s default on a
+    # real transcript history; the Job was requeued while still running and could run twice.
+    "usage.analyze": 300.0,
 }
+
+
+# A Job still `running` this long after its last change is presumed lost:
+# its pillar's worker died (a restart mid-run) or never called back, and it
+# would otherwise sit `running` forever, holding its queue_key. Far above
+# any real Job's length (the longest dispatch ceiling above is
+# policy.check_project's 1860s; an agent task runs up to an hour). A plain
+# framework rule, not a Policy: `SchedulerThread` enforces it every tick.
+RUNNING_JOB_TIMEOUT = timedelta(hours=6)
+# Job types that legitimately run longer. An update-doc job's Claude session
+# may work for hours and is then given 5 idle hours before it is wrapped up.
+RUNNING_JOB_TIMEOUTS: dict[str, timedelta] = {
+    "agent.update_docs": timedelta(hours=30),
+}
+
+
+def running_timeout_for(job_type: str, default: timedelta = RUNNING_JOB_TIMEOUT) -> timedelta:
+    return RUNNING_JOB_TIMEOUTS.get(job_type, default)
 
 
 def dispatch_timeout_for(job_type: str) -> float:
     return JOB_TYPE_TIMEOUTS.get(job_type, DEFAULT_DISPATCH_TIMEOUT_SECONDS)
 
 
-def dispatch_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = DEFAULT_DISPATCH_TIMEOUT_SECONDS) -> Job:
+# Job id -> set once its dispatch call has returned. A Job claimed by one
+# request's pump can be the very Job another request (the one that
+# created it) is waiting to report on; see `wait_for_dispatch`.
+_dispatching: dict[str, threading.Event] = {}
+_dispatching_lock = threading.Lock()
+
+# A pillar that took a Job's request and did not answer within the Job type's ceiling may still be doing
+# it, and the requeued Job runs again (REQ-000000402). Each (Job type, pillar) is an incident at most
+# once an hour, however many of its Jobs time out together.
+TIMEOUT_REPORT_INTERVAL_SECONDS = 3600.0
+_timeouts_reported: dict[tuple[str, str], float] = {}
+_clock = time.monotonic
+
+INTERRUPTED_DISPATCH_REASON = (
+    "interrupted: Orchestration restarted while dispatching this Job to the {pillar} pillar, "
+    "so whether the pillar did it is unknown"
+)
+
+
+def wait_for_dispatch(job_id: str, timeout: float) -> None:
+    """Block until `job_id`'s in-flight dispatch call (if any) returns."""
+    with _dispatching_lock:
+        done = _dispatching.get(job_id)
+    if done is not None:
+        done.wait(timeout)
+
+
+def dispatch_job(
+    conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *,
+    timeout: float = DEFAULT_DISPATCH_TIMEOUT_SECONDS, lock: threading.Lock | None = None,
+) -> Job:
+    """`lock`, when given, guards only this function's own db work: the call
+    to the target pillar runs without it. A deploy takes minutes, and every
+    other request (a job list, a status read, a session start) would
+    otherwise queue behind it and time out. The caller must not hold it."""
+    guard = lock if lock is not None else nullcontext()
     socket_path = socket_lookup(job.target_pillar)
     if socket_path is None:
-        job.status = JobStatus.FAILED
-        job.error = "pillar disabled"
-        update_job(conn, job)
-        insert_job_run(
-            conn, job.id, outcome="failed", detail=job.error,
-            started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
-        )
+        with guard:
+            job.status = JobStatus.FAILED
+            job.error = "pillar disabled"
+            update_job(conn, job)
+            insert_job_run(
+                conn, job.id, outcome="failed", detail=job.error,
+                started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
+            )
         return job
 
-    job.status = JobStatus.RUNNING
-    update_job(conn, job)
-    started_at = datetime.now(timezone.utc)
-
+    done = threading.Event()
+    with _dispatching_lock:
+        _dispatching[job.id] = done
     try:
-        with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.post(
-                f"/v1/jobs/{job.type}",
-                json={"job_id": job.id, "project_id": job.project_id, "params": job.params},
+        with guard:
+            job.status = JobStatus.RUNNING
+            update_job(conn, job)
+        started_at = datetime.now(timezone.utc)
+
+        status, result, error = JobStatus.RUNNING, None, None
+        took_it = dropped = False
+        try:
+            with client_for_socket(socket_path, timeout=timeout) as client:
+                response = client.post(
+                    f"/v1/jobs/{job.type}",
+                    json={"job_id": job.id, "project_id": job.project_id, "params": job.params},
+                )
+            if response.status_code == 200:
+                body = response.json()
+                outcome = body.get("outcome", "succeeded")
+                if outcome == "succeeded":
+                    status, result = JobStatus.SUCCEEDED, body.get("result")
+                elif outcome == "accepted":
+                    # Long-running: stays RUNNING, completed later via
+                    # Orchestration's own callback endpoint.
+                    pass
+                else:
+                    status, error = JobStatus.FAILED, body.get("error", "pillar reported failure")
+            else:
+                status, error = JobStatus.FAILED, f"pillar returned status {response.status_code}"
+        except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+            # Pillar enabled but unreachable right now — leave the job queued
+            # so it's retried once Core reports the pillar healthy again,
+            # rather than failing outright.
+            status, error = JobStatus.QUEUED, f"target pillar unreachable: {exc}"
+            if isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout)):
+                # It took the request: requeued all the same, but it may still be doing it.
+                took_it = True
+                error = f"target pillar did not answer within {timeout:g}s and may still be doing it; requeued, so it may run twice"
+        except (httpx.RemoteProtocolError, httpx.ReadError):
+            # It took the request and closed the connection unanswered: it stopped (a stop cuts what
+            # still runs) or crashed mid-way. Escaping here left the Job `running` for six hours
+            # (REQ-000000407); what the pillar did is unknown, so it is not run again.
+            dropped = True
+            status, error = JobStatus.FAILED, (
+                f"the {job.target_pillar} pillar dropped the request before answering (it stopped or crashed), "
+                "so whether it did the Job is unknown"
             )
-        if response.status_code == 200:
-            body = response.json()
-            outcome = body.get("outcome", "succeeded")
-            if outcome == "succeeded":
-                job.status = JobStatus.SUCCEEDED
-                job.result = body.get("result")
+
+        with guard:
+            if lock is not None:
+                current = get_job(conn, job.id)
+                if current is not None and current.status != JobStatus.RUNNING:
+                    # Settled while the call was in flight (a `stop`, or an
+                    # accepted Job's own completion callback) — that wins.
+                    return current
+            job.status, job.error = status, error
+            if status == JobStatus.SUCCEEDED:
+                job.result = result
                 from orchestration import policy_gate
 
                 policy_gate.verify_after_completion(conn, socket_lookup, job)
-            elif outcome == "accepted":
-                # Long-running: stays RUNNING, completed later via
-                # Orchestration's own callback endpoint.
-                pass
-            else:
-                job.status = JobStatus.FAILED
-                job.error = body.get("error", "pillar reported failure")
-        else:
-            job.status = JobStatus.FAILED
-            job.error = f"pillar returned status {response.status_code}"
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
-        # Pillar enabled but unreachable right now — leave the job queued
-        # so it's retried once Core reports the pillar healthy again,
-        # rather than failing outright.
-        job.status = JobStatus.QUEUED
-        job.error = f"target pillar unreachable: {exc}"
+            update_job(conn, job)
+            insert_job_run(
+                conn, job.id, outcome=job.status.value, detail=job.error,
+                started_at=started_at, finished_at=datetime.now(timezone.utc),
+            )
+        if took_it:
+            _report_dispatch_timeout(job, timeout, socket_lookup)
+        if dropped:
+            report_problem(
+                socket_lookup("agent"), pillar="orchestration", context=f"job {job.id}", kind=KIND_UNEXPECTED,
+                title="DispatchDropped",
+                message=f"{job.type} on {job.project_id or 'no project'} was sent to the {job.target_pillar} pillar, which "
+                        "closed the connection without answering (it stopped or crashed mid-way): the Job was failed, "
+                        "since whether the pillar did it is unknown. Check what it changed before running it again",
+                detail=f"job {job.id}\ntype {job.type}\nproject {job.project_id}\ntarget pillar {job.target_pillar}\n"
+                       f"created {job.created_at.isoformat()} by {job.created_by}",
+            )
+        return job
+    finally:
+        done.set()
+        with _dispatching_lock:
+            if _dispatching.get(job.id) is done:
+                del _dispatching[job.id]
 
-    update_job(conn, job)
-    insert_job_run(
-        conn, job.id, outcome=job.status.value, detail=job.error,
-        started_at=started_at, finished_at=datetime.now(timezone.utc),
+
+def _report_dispatch_timeout(job: Job, timeout: float, socket_lookup: SocketLookup) -> None:
+    key = (job.type, job.target_pillar)
+    with _dispatching_lock:
+        last = _timeouts_reported.get(key)
+        if last is not None and _clock() - last < TIMEOUT_REPORT_INTERVAL_SECONDS:
+            return
+        _timeouts_reported[key] = _clock()
+    report_problem(
+        socket_lookup("agent"), pillar="orchestration", context=f"job {job.id}", kind=KIND_UNEXPECTED, title="DispatchTimeout",
+        message=f"{job.type} on {job.project_id or 'no project'} was sent to the {job.target_pillar} pillar, which took it "
+                f"but did not answer within {timeout:g}s: the Job was requeued and may run twice. Give {job.type} a longer "
+                f"ceiling in JOB_TYPE_TIMEOUTS (orchestration/dispatch.py), or have the pillar answer 'accepted' and call back",
+        detail=f"job {job.id}\ntype {job.type}\nproject {job.project_id}\ntarget pillar {job.target_pillar}\n"
+               f"dispatch timeout {timeout:g}s\ncreated {job.created_at.isoformat()} by {job.created_by}\n"
+               f"(other {job.type} Jobs timing out within the hour are not reported again)",
     )
-    return job
 
 
-def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup) -> list[Job]:
+def settle_interrupted_dispatches(
+    conn: sqlite3.Connection, socket_lookup: SocketLookup, *, now: datetime | None = None,
+) -> list[Job]:
+    """Startup, before serving (REQ-000000403). A Job is `running` from the moment a pump claims it
+    until its dispatch call returns; one its pillar accepted also has a `running` run row, kept until
+    the pillar calls back. A `running` Job without that row was claimed by the previous process, which
+    died before the pillar answered: only the 6-hour timeout would ever settle it, holding its
+    queue_key and what depends on it all that time. Fail each (whether its pillar did it is unknown,
+    so it is not run again), fail its dependants, and report them in one incident."""
+    now = now or datetime.now(timezone.utc)
+    settled: list[Job] = []
+    for job in list_jobs(conn, status=JobStatus.RUNNING):
+        runs = list_job_runs(conn, job.id)
+        if runs and runs[-1]["outcome"] == JobStatus.RUNNING.value:
+            continue  # accepted: its pillar completes it, or the running-Job timeout does
+        claimed_at = job.updated_at
+        job.status = JobStatus.FAILED
+        job.error = INTERRUPTED_DISPATCH_REASON.format(pillar=job.target_pillar)
+        update_job(conn, job)
+        insert_job_run(conn, job.id, outcome="failed", detail=job.error, started_at=claimed_at, finished_at=now)
+        settled.append(job)
+    if not settled:
+        return []
+    cascade_dependency_failures(conn)
+    count = f"{len(settled)} Job{'' if len(settled) == 1 else 's'}"
+    report_problem(
+        socket_lookup("agent"), pillar="orchestration", context="orchestration startup", kind=KIND_UNEXPECTED,
+        title="InterruptedDispatch",
+        message=f"Orchestration restarted while dispatching {count}: each was failed with the Jobs that depend on it, "
+                "since whether its pillar did it is unknown. Check what it changed before running it again",
+        detail="\n".join(
+            f"job {job.id}  {job.type}  project {job.project_id or '-'}  to {job.target_pillar}  created by {job.created_by}"
+            for job in settled
+        ),
+    )
+    return settled
+
+
+def dispatch_ready_jobs(conn: sqlite3.Connection, socket_lookup: SocketLookup, *, lock: threading.Lock | None = None) -> list[Job]:
     """The queue's own pump: fail anything whose dependency died, then
     dispatch everything actually ready — except a gated Job type whose
     governing policy check just came back `fail`, which goes to
     `pending_confirmation` instead of dispatching (docs/milestones.md
-    M12's action-gating)."""
+    M12's action-gating).
+
+    With `lock` (which the caller must not hold), ready Jobs are claimed
+    (set `running`) under it, so two concurrent pumps never dispatch the
+    same Job, and then dispatched without it, side by side."""
     from orchestration import policy_gate
 
-    cascade_dependency_failures(conn)
-    dispatched: list[Job] = []
-    for job in ready_jobs(conn):
-        if policy_gate.maybe_gate(conn, job):
-            dispatched.append(job)
+    from orchestration import triggers
+
+    def insert_triggered(job: Job) -> None:
+        insert_job(conn, job)
+        policy_gate.attach_policy_gate(conn, socket_lookup, job)
+
+    from orchestration import plan_pressure
+
+    if lock is None:
+        triggers.fire_pending(conn, insert_triggered)
+        cascade_dependency_failures(conn)
+        dispatched: list[Job] = []
+        hold = plan_pressure.holding(socket_lookup)
+        for job in ready_jobs(conn):
+            if hold and plan_pressure.applies(job):
+                continue  # stays queued until the plan's 5-hour window has room again
+            if policy_gate.maybe_gate(conn, job):
+                dispatched.append(job)
+                continue
+            dispatched.append(dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type)))
+        return dispatched
+
+    def run(job: Job) -> Job:
+        return dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type), lock=lock)
+
+    handled: list[Job] = []
+    tried: set[str] = set()
+    while True:
+        claimed: list[Job] = []
+        hold = plan_pressure.holding(socket_lookup)  # asked before the lock: it calls another pillar
+        with lock:
+            triggers.fire_pending(conn, insert_triggered)
+            cascade_dependency_failures(conn)
+            for job in ready_jobs(conn):
+                # Re-checked per Job: claiming an earlier one may have filled its queue_key.
+                if job.id in tried or not is_ready(conn, job):
+                    continue
+                if hold and plan_pressure.applies(job):
+                    tried.add(job.id)  # stays queued until the plan's 5-hour window has room again
+                    continue
+                tried.add(job.id)
+                if policy_gate.maybe_gate(conn, job):
+                    handled.append(job)
+                    continue
+                job.status = JobStatus.RUNNING
+                update_job(conn, job)
+                claimed.append(job)
+        if not claimed:
+            return handled
+        if len(claimed) == 1:
+            handled.append(run(claimed[0]))
             continue
-        dispatched.append(dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type)))
-    return dispatched
+        results: dict[str, Job] = {}
+        threads = [threading.Thread(target=lambda j=job: results.__setitem__(j.id, run(j)), daemon=True) for job in claimed]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        handled.extend(results.get(job.id, job) for job in claimed)
+        # Another round: a Job whose queue_key or dependency just freed up is ready now.
 
 
-def stop_job(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 10.0) -> dict:
+def stop_job(
+    conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, timeout: float = 10.0, lock: threading.Lock | None = None,
+    force: bool = False,
+) -> dict:
     """`docs/milestones.md` M9's `stop`: interrupt a Job that is
     currently *running* — scheduled-originated or not. Never raises;
     every outcome (already settled, declared unstoppable, target
     unreachable, target genuinely stopped it, target says it can't) is a
     plain `{"stopped": bool, "reason": str | None}` the caller can show
-    directly."""
+    directly.
+
+    `force` is the user's decision to settle the Job whatever its pillar says (the Dashboard asks
+    first and warns what it means): the pillar is still asked, so it can clean up what it can,
+    and then the Job is `stopped` all the same, its dependants failed and its queue key free.
+    Whatever the pillar was doing may carry on; its outcome is no longer recorded."""
+    if job.status == JobStatus.QUEUED:
+        # Not dispatched yet: nothing to interrupt, so stopping it cancels it.
+        with lock if lock is not None else nullcontext():
+            job.status = JobStatus.CANCELLED
+            job.error = "cancelled by user before it started"
+            update_job(conn, job)
+            cascade_dependency_failures(conn)
+        return {"stopped": True, "reason": None}
+
+    if job.status == JobStatus.PENDING_CONFIRMATION:
+        # Never dispatched: nothing to interrupt, but it holds its
+        # queue_key until confirmed or timed out -- stopping it declines it.
+        with lock if lock is not None else nullcontext():
+            job.status = JobStatus.CANCELLED
+            job.error = "stopped by user while awaiting policy confirmation"
+            update_job(conn, job)
+            cascade_dependency_failures(conn)
+        return {"stopped": True, "reason": None}
+
     if job.status != JobStatus.RUNNING:
         return {"stopped": False, "reason": f"job is {job.status.value}, not running"}
 
-    if job.type in DECLARED_UNSTOPPABLE_JOB_TYPES:
-        return {"stopped": False, "reason": f"{job.type!r} is declared unstoppable"}
+    refusal = _ask_pillar_to_stop(job, socket_lookup, timeout=timeout, force=force)
+    if refusal is None:
+        _settle_stopped(conn, job, "stopped by user", lock=lock)
+        return {"stopped": True, "reason": None}
+    if not force:
+        return {"stopped": False, "reason": refusal}
+    _settle_stopped(conn, job, f"force-stopped by user (the pillar said: {refusal})", lock=lock)
+    return {"stopped": True, "reason": None, "forced": True}
 
+
+def _ask_pillar_to_stop(job: Job, socket_lookup: SocketLookup, *, timeout: float, force: bool) -> str | None:
+    """None once the target pillar has stopped the Job, else why it has not."""
+    if job.type in DECLARED_UNSTOPPABLE_JOB_TYPES:
+        return f"{job.type!r} is declared unstoppable"
     socket_path = socket_lookup(job.target_pillar)
     if socket_path is None:
-        return {"stopped": False, "reason": "target pillar unreachable"}
-
+        return "target pillar unreachable"
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.post(f"/v1/jobs/{job.id}/stop")
+            response = client.post(f"/v1/jobs/{job.id}/stop", json={"type": job.type, "force": force})
     except (httpx.ConnectError, httpx.TimeoutException, OSError):
-        return {"stopped": False, "reason": "target pillar unreachable"}
-
+        return "target pillar unreachable"
     if response.status_code == 200 and response.json().get("stopped"):
+        return None
+    if response.status_code == 200:
+        return response.json().get("reason") or "not stoppable"
+    return "not stoppable"
+
+
+def _settle_stopped(conn: sqlite3.Connection, job: Job, error: str, *, lock: threading.Lock | None) -> None:
+    with lock if lock is not None else nullcontext():  # `lock`: not held by the caller, db work only
         job.status = JobStatus.STOPPED
-        job.error = "stopped by user"
+        job.error = error
         update_job(conn, job)
         insert_job_run(
             conn, job.id, outcome="stopped", detail=job.error,
             started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
         )
-        return {"stopped": True, "reason": None}
+        cascade_dependency_failures(conn)  # nothing waits for a stopped Job: it can never succeed
 
-    reason = "not stoppable"
-    if response.status_code == 200:
-        reason = response.json().get("reason", reason)
-    return {"stopped": False, "reason": reason}
+
+def expire_stuck_jobs(
+    conn: sqlite3.Connection, socket_lookup: SocketLookup, *,
+    now: datetime | None = None, max_age: timedelta = RUNNING_JOB_TIMEOUT, lock: threading.Lock | None = None,
+) -> list[Job]:
+    """Fail every Job `running` for longer than `max_age` (see
+    `RUNNING_JOB_TIMEOUT`), after asking its pillar to stop it where that
+    pillar can; then fail whatever depended on it and pump the queue its
+    queue_key was holding. `lock`, when given, must not be held by the caller."""
+    guard = lock if lock is not None else nullcontext()
+    now = now or datetime.now(timezone.utc)
+    with guard:
+        stale = [
+            job for job in list_jobs(conn, status=JobStatus.RUNNING)
+            if now - (job.updated_at if job.updated_at.tzinfo else job.updated_at.replace(tzinfo=timezone.utc)) >= running_timeout_for(job.type, max_age)
+            # A Job waiting for the user is not stuck: its step has its own, longer limit (expire_attention_steps).
+            and not steps.has_attention(conn, job.id)
+        ]
+    expired: list[Job] = []
+    for job in stale:
+        stop_job(conn, job, socket_lookup, lock=lock)  # best effort: most pillars say "not stoppable"
+        hours = running_timeout_for(job.type, max_age).total_seconds() / 3600
+        with guard:
+            current = get_job(conn, job.id)
+            if current is None:
+                continue
+            timed_out = current.status == JobStatus.RUNNING
+            if timed_out:
+                current.status = JobStatus.FAILED
+                current.error = f"timed out: still running after {hours:g} hours"
+                update_job(conn, current)
+                insert_job_run(conn, current.id, outcome="failed", detail=current.error, started_at=job.updated_at, finished_at=now)
+            expired.append(current)
+        if timed_out:
+            # A Job is never meant to run this long: its worker died or never called back. Someone should look.
+            report_problem(
+                socket_lookup("agent"), pillar="orchestration", context=f"job {job.id}", kind=KIND_UNEXPECTED, title="StuckJob",
+                message=f"{job.type} on {job.project_id or 'no project'} was still running after {hours:g} hours "
+                        f"(since {job.updated_at.isoformat()}) and was failed",
+                detail=f"job {job.id}\ntype {job.type}\nproject {job.project_id}\ntarget pillar {job.target_pillar}\n"
+                       f"created {job.created_at.isoformat()} by {job.created_by}\nlast change {job.updated_at.isoformat()}",
+            )
+    if expired:
+        with guard:
+            cascade_dependency_failures(conn)
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)
+    return expired
+
+
+def expire_attention_steps(
+    conn: sqlite3.Connection, socket_lookup: SocketLookup, *, now: datetime | None = None, lock: threading.Lock | None = None,
+) -> list[Job]:
+    """Fail every step that has waited for the user longer than `ATTENTION_TIMEOUT_SECONDS`, and
+    its Job with it; then fail what depended on the Job and pump the queue its queue_key held.
+    `lock`, when given, must not be held by the caller."""
+    guard = lock if lock is not None else nullcontext()
+    now = now or datetime.now(timezone.utc)
+    failed: list[Job] = []
+    with guard:
+        expired = steps.expired_attention(conn, now)
+    for job_id, key in expired:
+        with guard:
+            job = get_job(conn, job_id)
+            if job is None or job.status != JobStatus.RUNNING:
+                continue
+            hours = ATTENTION_TIMEOUT_SECONDS / 3600
+            steps.fail_step(conn, job, key, f"no answer within {hours:g} hours", now=now)
+            job.status = JobStatus.FAILED
+            job.error = f"step {key!r} waited more than {hours:g} hours for an answer"
+            update_job(conn, job)
+            insert_job_run(conn, job.id, outcome="failed", detail=job.error, started_at=now, finished_at=now)
+            failed.append(job)
+    if failed:
+        with guard:
+            cascade_dependency_failures(conn)
+        dispatch_ready_jobs(conn, socket_lookup, lock=lock)
+    return failed
 
 
 def complete_job(conn: sqlite3.Connection, job: Job, *, succeeded: bool, result: dict | None, error: str | None) -> Job:

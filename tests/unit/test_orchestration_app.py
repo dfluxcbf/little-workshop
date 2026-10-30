@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from orchestration import db
 from orchestration.app import build_app
+from orchestration.models import JobStatus
 
 
 @pytest.fixture
@@ -248,6 +249,10 @@ def test_complete_job_callback(conn):
         json={"type": "agent.run_task", "target_pillar": "agent", "params": {}},
     )
     job_id = create.json()["id"]
+    # With no pillar reachable the job failed at once; a real one is `running` while its pillar works on it.
+    job = db.get_job(conn, job_id)
+    job.status, job.error = JobStatus.RUNNING, None
+    db.update_job(conn, job)
 
     response = app_client.post(
         f"/v1/jobs/{job_id}/complete",

@@ -77,6 +77,21 @@ healthy, currently-running process down.
   to call rather than each provisioning their own: Requirements &
   Quality's sandboxed test execution (M10) and Policy & Compliance's
   test-script sandbox (M12) are both meant to use it.
+- **A self-redeploy refreshes `lws`** (2026-09-24): the pre-commit version
+  hook, the MCP server and the self-redeploy workers all run the
+  pipx-installed `lws`, which nothing updated — a fix to any of them sat
+  undeployed until someone ran `bazel run //:install` (the pre-commit sync
+  fix did). Redeploying a pillar now also upgrades `lws` to the deployed
+  commit, in place with its venv's own pip (recreating the venv would pull
+  it out from under the processes running from it), once per version, and
+  reports it as `cli_note` in the redeploy's result; a failed upgrade never
+  fails the redeploy. REQ-000000272.
+- **`lws` never moves backwards** (2026-09-24): a rollback puts one pillar
+  back on an older commit, and the refresh above followed it — a timed-out
+  `deployment` confirm rolled `lws` back to 0.1.1, which no longer had
+  `sync-version-files`, and the pre-commit hook failed. `lws` is shared by
+  every pillar: a rollback never touches it, and a forward redeploy only
+  ever moves it up. REQ-000000273.
 
 ## Interfacing
 
@@ -100,3 +115,55 @@ healthy, currently-running process down.
   own* new socket to confirm it came back healthy, and resolves
   Orchestration's socket to report completion back
   (`common.pillar_socket`).
+
+## Redeploying several pillars: batches (2026-10-03)
+
+REQ-000000314.
+
+Redeploying more than one of little-workshop's own pillars goes through `common/redeploy_plan.py`:
+`REDEPLOY_AFTER` says, per pillar, which pillars must be redeployed before it when both are chosen,
+and `redeploy_batches` turns the chosen pillars into batches. A batch's redeploys run side by side
+(separate `queue_key`s); a batch starts when every redeploy of the previous one has succeeded, which is
+plain Orchestration `depends_on` between `deployment.redeploy_pillar` Jobs (`submit_redeploy_batches`
+pre-assigns the Job ids so all Jobs are created at once; a failed batch fails the later ones).
+Choosing pillars with no rule between them, such as policy and version, is one batch.
+
+The rules reproduce the order proven by hand: **orchestration**; then **build, agent, dashboard**;
+then **policy, registry, requirements, version** (and the MCP server); then **deployment** (it performs the
+redeploys); **core**, if named, last. Orchestration is first because every pillar settles its Jobs through
+it and the redeploy Jobs are dispatched by it. Why Build, Agent and Dashboard precede the four after them
+is not visible in the code: the rule records the observed order, and a change is one line in
+`REDEPLOY_AFTER`. A pillar the table does not know goes with the third group.
+
+Users of the plan: the Dashboard's Pillars page, the Release job's relaunch of little-workshop itself
+(every batch waits for the release Job), `lws deployment redeploy-pillars [--pillar ...] --commit`, and the
+`workshop_deployment_redeploy_pillars` MCP tool (default: every enabled pillar). Redeploying one pillar is
+unchanged. `lws` is shared by all pillars, so refreshing it is serialized (`_CLI_REFRESH_LOCK`): of two
+pillars redeployed at once, the second finds it already current.
+
+## Redeploying the pillars a commit changed (2026-10-04)
+
+REQ-000000345. `deployment.redeploy_changed_pillars` (`params.commit`, default HEAD) compares each live pillar
+with the commit this pillar last deployed it at (`pillar_deployments`), or every pillar with `params.base` when
+one is given; a pillar it never deployed is brought in. A finish ends in a squash commit and a version-bump
+commit, not a merge commit, so the commit's parent says nothing: what a pillar runs is what decides
+(2026-10-04). It lists the files changed under `src/`, maps each `src/<directory>` to its pillar (`mcp_server` is `mcp`; a change under `src/common`
+means every live pillar; the CLI, docs, tests and tools redeploy nothing; `common/redeploy_plan.changed_pillars`),
+keeps the pillars Core runs, and creates one `deployment.redeploy_pillar` Job per pillar in the order of
+`REDEPLOY_AFTER`, each confirm-gated as any redeploy. With no pillar changed it does nothing. It replaces
+redeploying pillars by hand, one call each, after every finish; a trigger runs it after a branch finishes on
+little-workshop (`docs/pillars/orchestration.md`, "Triggers"). `lws deployment redeploy-changed-pillars`,
+`workshop_deployment_redeploy_changed_pillars`.
+
+## Redeploying Core (2026-10-04)
+
+REQ-000000351. On a real install Core is not a transient `little-workshop-core` unit like the pillars: it is
+the installed unit `little-workshop.service`, running `python -m core` from the environment `lws` is installed
+in. Redeploying `core` therefore refreshes that environment (the `refresh_cli` step) and restarts the unit,
+which reconnects to the running pillars and starts any the manifest newly names. No transient unit is
+launched, no process is stopped by name, and no confirmation window is armed: the environment never moves
+backwards, so there is nothing to roll back to. Where Core is not running as that unit (a development setup,
+the tests), it is redeployed like any other pillar.
+
+Before this, a redeploy of `core` launched a transient Core beside the installed one, and its unconfirmed
+rollback put a Core of an old version on the socket (2026-10-04).

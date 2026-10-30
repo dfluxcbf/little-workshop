@@ -9,8 +9,7 @@ import os
 import threading
 import time
 
-import uvicorn
-
+from common import serving
 from common.manifest import load_manifest
 from common.paths import Paths
 from core.app import build_app
@@ -34,13 +33,9 @@ def main() -> None:
     thread = threading.Thread(target=reconcile_loop, daemon=True)
     thread.start()
 
-    socket_path = paths.core_socket_path
-    if socket_path.exists():
-        socket_path.unlink()
-
     app = build_app(supervisor, paths)
     try:
-        uvicorn.run(app, uds=str(socket_path), log_level="info")
+        serving.serve(app, paths.core_socket_path)
     finally:
         stop_event.set()
 

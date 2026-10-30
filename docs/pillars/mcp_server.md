@@ -47,6 +47,15 @@ and `little-versions`' own MCP surfaces.
   scope (never local/project) is required since this server proxies the
   same daemon regardless of which project's session attaches it.
 
+## Job checklists (2026-10-03)
+
+`workshop_job_wait` waits for a Job in one call (Orchestration's `GET /v1/jobs/{id}/wait`), instead of
+repeated `workshop_job_status` calls. `workshop_job_status` returns the Job's `steps`; `workshop_job_answer` relays the user's choice for
+a step in state `attention` (always a prompt, since it stands in for a human decision). A version
+job that can ask is waited for up to 120 seconds, until it ends or a step asks, and comes back with
+its checklist so the question can be relayed.
+
+
 ## Interfacing
 
 - **Calls**: Registry & Portfolio, Version Control & Release, Deployment
@@ -70,3 +79,10 @@ and `little-versions`' own MCP surfaces.
 - **Discovered through**: Core, for every pillar it proxies into — but
   it is never itself discovered through Core by another pillar, since
   nothing calls *into* MCP Server except its own MCP client.
+
+## Asset-review server (2026-10-09)
+
+A second, per-project MCP server lives beside this one: `lws asset-mcp serve --project-id <id>` (`src/asset_mcp/`),
+declared in a project's own `.mcp.json` rather than registered at user scope, so only projects that opted in have it.
+Its tools (`asset_list`, `asset_export`, `asset_status`) and the bundle they write are in `dashboard.md` ("Assets").
+This server's catalog gains `workshop_project_configure_assets`, the route that opts a project in.

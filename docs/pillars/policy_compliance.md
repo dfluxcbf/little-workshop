@@ -530,6 +530,20 @@ probe, decoupled from how long any individual check takes; a check
 resolved by the unchanged-fingerprint skip (above) stays fully
 synchronous, since nothing there can block.
 
+**A check cut short by the pillar stopping runs again (2026-10-05,
+REQ-000000405).** The background thread dies with the process, so a
+check running when Policy & Compliance was redeployed was lost: its Job
+stayed `running` until the six-hour sweep failed it, and the branch
+finish it gated waited the whole time (2026-10-04). Its `docker run`
+client outlived the pillar, too: the stop's SIGTERM reached the
+container, whose PID 1 ignores it, and systemd killed the client 90
+seconds later while the container ran on. Now each accepted check is
+kept in `running_checks` until its Job is completed; the pillar's
+shutdown hook removes the containers of the checks still running, a run
+the stop cut gives no verdict (`SandboxInterrupted`), and at its next
+start, before serving, the pillar runs every check left in
+`running_checks` again from the start under its own Job.
+
 ## Informing the user immediately
 
 **Not yet implemented as of M12** — a real gap, not an oversight: the
@@ -894,9 +908,9 @@ Supersedes the placeholder `policy_rules`, `policy_check_results` pair in
   `all_projects`), scope_target (a project id, a project-set id, or null
   for all-projects), created_by (`user` | `framework`), **enabled**
   (bool, default true — refined 2026-09-16, see "Action-gating checks"),
-  **gate_points** (a set of the six gate-point categories this policy
-  gates on failure, default empty — refined 2026-09-16), created_at,
-  amended_at.
+  **gate_points** (a set of the gate-point categories this policy gates
+  on failure, default empty — refined 2026-09-16; `commit` added
+  2026-10-02), created_at, amended_at.
 - `policy_check_results` — policy id, project id, outcome (`pass` | `fail`
   | `not_applicable`), checked_at, job id.
 - `policy_projects` (added 2026-09-21, replacing `policy_waivers`) —
@@ -939,3 +953,193 @@ stack (fastapi, uvicorn, pydantic, httpx, jinja2, python-multipart, pyyaml, apsc
 alongside `pytest`/`pytest-cov`/`coverage`. A project needing a dependency outside that
 list fails the check with the pytest output attached, rather than silently reporting a
 pass it never actually measured.
+
+## Enforcement moves to the moment of the change (2026-10-02)
+
+A gate at `branch_finish` catches a broken rule late: a commit that forgot to raise `VERSION` or to
+cite a requirement is only found when the branch is finished, long after the session that made it has
+moved on. Three additions put the same policies where the change is made, for a person and for a
+Claude session alike, without a second copy of any rule.
+
+**The `commit` gate point.** It gates no Job: the project's `.githooks/commit-msg` hook (installed with
+the VERSION pre-commit hook by `lws version install-hooks` and `lws version init`) runs
+`lws policy evaluate --gate-point commit` for the commit being made, and git refuses the commit when a
+policy gating `commit` fails with gating on, printing each policy's rule and its reason. The hook reads
+the pending commit itself — the message after git's cleanup, the paths it changes and its staged
+`VERSION`, from the index git hands the hook (`GIT_INDEX_FILE` may point at a temporary one) — and the
+script gets them as files in `POLICY_COMMIT_DIR`. When `lws`, the daemon or Docker is unavailable the
+hook warns and lets the commit through (`--fail-open`): the same policies still gate the finish. Only a
+project-bound policy may gate `commit`; little-workshop's own finish and bookkeeping commits run with
+hooks off. `commit-bumps-version`, `branch-commit-dev-suffix`, `commit-cites-requirement` and
+`version-format` gate `commit` and `branch_finish`.
+
+**`policy.evaluate`** (`POST /v1/policies/evaluate`; `lws policy evaluate`, `workshop_policy_evaluate`)
+runs, now and in the sandbox, every winning policy that gates a gate point for a project and answers
+with each verdict and reason, and `blocking`: the topics the real gate would hold. Nothing is recorded
+and nothing is held — it is the early warning, not the gate (`policy.check_project` stays the only thing
+that records results). It can judge a git worktree of the project instead of the registered checkout
+(`checkout`, accepted only if it shares the registered checkout's repository), since agents and
+sessions commit in worktrees. Each project's scaffolded `policy-preflight` skill runs it before a finish,
+release or publish.
+
+**Readable verdicts.** A check's recorded detail is the failure's reasons — the assertion messages and
+skip reasons pytest prints — and the summary line, not pytest's last five lines (which held only
+`FAILED ... - A...`). Every script's assertion message says what is wrong and how to fix it.
+Since 2026-10-02 the sandbox and the preflight's local fallback run pytest with `--color=no` and
+strip colour codes before reading the reasons: with `FORCE_COLOR` or `PY_COLORS` set, every line
+started with an escape code, none matched, and the detail fell back to pytest's last lines, which
+drop the assertion message.
+
+**Policies as code.** Every policy's script is a file in `tools/policy_scripts/`, and its EARS text,
+target pillar, scope and gate points are in `tools/policy_scripts/policies.json`.
+`python3 tools/sync_policies.py` lists what differs from the live pillar; `--apply` replaces each
+differing policy in place (`policy.activate` with its id, which keeps its project selection) and
+creates a missing one with the projects its entry names. Applying is Gate 4: the person who runs it has
+reviewed the files, like any other change to them. Every script follows one contract, which the
+authoring prompt (`gates.generate_test_script`) also states: the checkout is
+`os.environ.get("POLICY_PROJECT_DIR", "/project")`, so the same script runs in the sandbox, from the
+hook and from the preflight; a policy gating `commit` judges the pending commit when `POLICY_COMMIT_DIR`
+is set; only the newest commit or tag is judged.
+
+**Judged on state, not on text.** `back-merge-no-ff` and `hotfix-propagates-by-merge` had been static
+scans of the project's source for `git merge` and "cherry-pick", and failed on the very text that
+forbids merging by hand (`registry/claude_templates.py`'s deny table). They now judge history: the
+newest production tag's commit must be in the integration branch's history (merged, not
+cherry-picked), but not on its first-parent line (a non-fast-forward merge).
+
+Two framework policies check that a project carries this integration: `commit-policy-hook-installed`
+(the commit-msg hook and `core.hooksPath`) and `claude-config-present` (an `AGENTS.md` briefing at the
+root or as `.claude/AGENTS.md`, the scope guard registered in `.claude/settings.json`, the
+`policy-preflight` skill, and no `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`, any of which makes
+Claude Code skip `AGENTS.md`). The second pass below widened `claude-config-present`.
+
+## Policies are the hard layer of a project's Claude instructions (2026-10-02)
+
+A project's Claude Code instructions come in layers that load at different moments: the `AGENTS.md`
+briefing in every session, `.claude/rules/` files when Claude reads a file their `paths:` match, skills
+when a task calls for them. All three are read and weighed, never executed, so a rule that must hold
+every time is not a sentence in them: it is a hook in the project (`.claude/hooks/`, refusing a tool call
+before it happens) or a policy here, run by the commit-msg hook on the commit being made and by the gate
+before a finish, with a failure message addressed to whoever reads it, a person or Claude, that says what
+to do instead. The instructions then only need to say that the rule exists and what enforces it.
+
+Policies that came out of this, and what they replaced:
+
+- `claude-instructions-valid` (registry; `branch_finish`; all projects): the instructions load as
+  written. Every `@path` import resolves (Claude Code skips a missing one silently), every path-scoped
+  rule's frontmatter parses (otherwise the rule loads in every session) and each of its patterns
+  matches a file (otherwise it never loads), every script a skill names and every hook script
+  `.claude/settings.json` runs exists, and no instruction file loads more than 200 lines (block-level
+  HTML comments, which Claude Code strips, do not count).
+- `unity-meta-files-paired` (version; `commit`, `branch_finish`; all projects, applies to Unity
+  projects): an asset and its `.meta` are added and deleted together, folders included, and no `.meta`
+  is added or deleted apart from its asset. It replaced "never commit an asset without its `.meta`".
+- `lfs-tracked-files-are-pointers` (version; `commit`, `branch_finish`; all projects, applies where
+  `.gitattributes` routes files to LFS): a file routed to LFS is committed as a pointer. It replaced
+  "never commit a binary outside Git LFS". At commit time it reads the staged blob from the index; a
+  blob only a temporary index holds (`git commit -a`) is left to the branch-finish check.
+- `design-index-and-schema-current` (build; `branch_finish`; project ethereal-lands): the generated
+  design index and ELM schema match their generators (`--check`). It replaced "generated, never
+  hand-edited" for those files; ethereal-lands' edit guard hook refuses the hand edit itself.
+- `commit-cites-requirement` now also covers a Unity project's own folders (`Assets/`, `Packages/`,
+  `ProjectSettings/`, `tools/`), which had left the rule unenforced on the Unity layout.
+- `commit-bumps-version` and `branch-commit-dev-suffix` are scoped to all projects, matching the projects
+  they were already attached to and the pre-commit hook every project carries.
+- `requirement-marker-registered`, `requirement-marker-id-format`, `version-hook-installed` and
+  `wheel-filename-has-version` list the project's files through `git ls-files` (tracked, or untracked and
+  not ignored) instead of walking the checkout. On a Unity project the walk went through `Library/` (tens
+  of thousands of package files on a slow Windows-drive mount), took minutes, and judged vendored code:
+  a package's test comment could have failed the marker policies, and any package file holding the
+  project's version string triggered `version-hook-installed`, which now also matches the version whole
+  (`10.1.5` no longer carries `0.1.5`) and names the file it found.
+
+## Briefings, rules, skills and the guard: the second pass (2026-10-02)
+
+The first pass made policies the hard layer; this one moves what was still prose in every briefing to where
+it loads or is enforced, and checks the result.
+
+- **The guard refuses with the route.** The generated `.claude/hooks/lws_scope_guard.py` runs for Bash, the
+  file-edit tools and the little-workshop MCP tools. Besides a call naming another project, it refuses the
+  raw commands `.claude/settings.json` denies (`git merge`, `tag`, `push`, `cherry-pick`, branch deletion,
+  `reset --hard`, `clean`, `commit --no-verify` or `-n`, a `core.hooksPath` override, `systemctl --user
+  start|stop|restart|kill`, `systemd-run`, `twine`, `pipx install`, `gh repo create`, `gh pr create|merge`,
+  `gh release`), in any spelling it can parse (`git -C . merge`, `bash -c '...'`), and its reason names the
+  little-workshop route instead (`claude_templates.ROUTES`); a permission denial alone said nothing. It also
+  refuses a hand edit of what little-workshop generates (`VERSION`, `.githooks/`, its `.claude/` files) and
+  of any `CLAUDE.md` or `CLAUDE.local.md`. The deny rules stay as the backstop.
+- **The shared briefing is generated and imported.** The lifecycle, enforcement and scope sections every
+  project's `AGENTS.md` repeated are `.claude/little-workshop.md`, which the briefing imports
+  (`@little-workshop.md`); the routing table and the steps before a finish moved into the generated
+  `workshop-lifecycle` skill, loaded when the work reaches one of them. The generated path-scoped rule
+  `.claude/rules/claude-instructions.md` says where an instruction belongs; it loads when Claude reads an
+  instruction file. `tools/sync_claude_files.py` rewrites the generated files in a registered project,
+  merging the project's own settings entries back in.
+- `claude-config-present` now also requires the briefing's import of the shared section, the generated rule
+  and skills, and the guard registered for every tool it judges, and refuses a `CLAUDE.md` or
+  `CLAUDE.local.md` anywhere in the project.
+- `claude-instructions-valid` now also fails an import outside the project (it loads only after the user
+  approves external imports, and never in the sandbox or another clone), a rule frontmatter field other
+  than `paths` (Claude Code ignores it, so a misspelt `paths` loads the rule in every session), a skill or
+  subagent without a description, and more than 250 lines loaded at session start (the root briefing, the
+  rules without `paths` and everything they import).
+- `no-committed-secrets` (version; `commit`, `branch_finish`; all projects): a commit introduces no private
+  key, no token or API key in a recognisable provider format and no environment file. Only matches the
+  file's previous version did not hold count, and a line marked `pragma: allowlist secret` is skipped, so a
+  test's fake value has a way out.
+- The settings' deny rules end at a word (`git merge *`, which also matches a bare `git merge`):
+  `git merge*` also denied the read-only `git merge-base`. `tools/sync_claude_files.py` drops the
+  retired patterns (`claude_templates.RETIRED_RULES`) from a project's settings instead of keeping
+  them as the project's own.
+
+## Reading the latest results, and policies without their scripts (2026-10-05)
+
+REQ-000000390. `GET /v1/policy_check_results` takes `latest=true`, which keeps only the newest result of
+each policy and project (picked in the store), `outcome`, which then keeps those of that outcome (a
+policy failing now, not one that failed once), and `checked_since`, the results recorded since a time.
+`GET /v1/policies?view=summary` leaves out each policy's test script. The Dashboard's attention banner,
+on every page, read the whole history (1,642 results, 1.4 MB, on 2026-10-05) and every script (118 KB of
+a 140 KB list) to show the 4 policies failing; it now reads the latest failing results and the
+summaries, its policies pages the latest results, and its statistics the results recorded since their
+last count (REQ-000000391). Without a parameter both answer as before.
+
+
+
+## Policy bypass: the user's temporary exception (2026-10-05)
+
+The project owner can lift the *gating* of policies for a few minutes, from their own terminal, when a gate is in
+the way and they accept the consequence. It never hides a problem: every check still runs, is recorded, counts in
+the Dashboard's statistics and is shown to the user.
+
+- **Raising the flag.** `sudo lws bypass_policies true [--time minutes]` sets the `bypass_policies` flag for
+  `--time` minutes (default 2). Above 30 (or below 1) it is *refused* with an error rather than clamped, so the
+  user is never given a window other than the one typed. Run again while TRUE, it restarts the timer from now (it
+  neither extends nor rejects). `lws bypass_policies false` lowers it and `status` reads it; neither needs sudo,
+  since lowering the flag only makes policies stricter. The flag is a row with an expiry in the Policy pillar's own
+  database (`policy_bypass`), TRUE exactly while `expires_at` is in the future, so it lapses by itself even across
+  a restart. Under `sudo` the CLI talks to the invoking user's pillars (`SUDO_USER`'s home), and the `lws` on
+  root's `secure_path` is needed (`sudo $(which lws) ...` otherwise).
+- **Origin tracking.** Every Job (`jobs.origin`) and every `policy evaluate` request carries one origin from
+  `common/origin.py`: `user_cli`, `claude`, `scheduled_job`, `ui_job`, `automation` (event triggers) or `unknown`.
+  The client that makes the request stamps it: `lws` (`user_cli` only when stdin and stderr are a terminal and the
+  process is not inside Claude Code, else `claude` or `unknown`), the MCP server (`claude`), the Dashboard
+  (`ui_job`), the scheduler (`scheduled_job`) and triggers (`automation`). Anything not positively the user's
+  terminal is not bypassable. A policy check result records its `origin` and whether it was `bypassed`.
+- **Telling Claude from the user.** The CLI refuses `bypass_policies true` when its environment carries a Claude
+  Code marker (`CLAUDECODE`, ...) or when any ancestor process is `claude` or runs with one (which survives
+  `sudo` clearing the environment), needs root with `SUDO_USER`, and the Policy pillar independently refuses any
+  origin but `user_cli`. A terminal is required for `user_cli`, which an unattended unit or Claude's tool shell
+  lacks. Accepted limit: the origin is a client's claim over a local socket owned by the same user, so a process
+  of that user determined to forge it could; the bypass defends against honest automation and agents, not
+  against the user's own account being compromised.
+- **Effect.** `GET /v1/policies/gating-for-job` and `POST /v1/policies/evaluate` take the request's `origin`.
+  While the flag is TRUE and the origin is `user_cli`, a policy that would gate answers `gating: false,
+  bypassed: true`: the check job still runs and records `fail`, the Job is not held, and `lws policy evaluate`
+  prints the violation marked BYPASSED and exits 0. Every other origin keeps its gating, flag or not. The bypass
+  applies to every policy (none is marked non-bypassable). The decision is taken when the Job is created, so a
+  Job started inside the window is not held even if the window lapses before it dispatches.
+- **Dashboard.** While TRUE, every page shows a warning bar, "bypass_policies is TRUE", with the remaining time
+  counting down and a "Set to FALSE now" button (`POST /policy-bypass/off`), after which the bar is gone. The
+  button can only lower the flag, which is why the Dashboard needs no authentication of its own for it; raising
+  it is only possible from the terminal.
+- **Audit.** `policy_bypass_log` records each enabling (with the sudo user), disabling, lapse and every violation
+  a bypass let through; `GET /v1/bypass/log` lists it.

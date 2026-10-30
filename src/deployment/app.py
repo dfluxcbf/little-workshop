@@ -14,10 +14,15 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from common import redeploy_plan
+from common.job_steps import StepReporter, reporting
 from common.paths import Paths
+from common.pillar_socket import resolve_pillar_socket
+from common.uds_client import client_for_socket
 from common.incident import install_incident_reporting
 from common.projectfiles import ProjectFilesClient
 from common.registry_client import ProjectResolutionError, resolve_project_path
@@ -65,13 +70,61 @@ def _load_manifest(paths: Paths, project_id: str) -> ServerManifest:
         raise DeploymentError(f"invalid {MANIFEST_FILENAME} for {project_id!r}: {exc}") from exc
 
 
+def core_live_pillars(paths: Paths) -> list[str]:
+    """The pillars Core runs (every one it does not report disabled); none when Core is unreachable."""
+    try:
+        with client_for_socket(paths.core_socket_path, timeout=5.0) as client:
+            response = client.get("/v1/status")
+        response.raise_for_status()
+        return [name for name, info in response.json().get("pillars", {}).items() if info.get("status") != "disabled"]
+    except (httpx.HTTPError, OSError, ValueError):
+        return []
+
+
+def create_orchestration_job(paths: Paths, template: dict) -> dict:
+    socket_path = resolve_pillar_socket(paths, "orchestration")
+    if socket_path is None:
+        return {"status": "failed", "error": "Orchestration is unreachable"}
+    try:
+        with client_for_socket(socket_path, timeout=330.0) as client:
+            response = client.post("/v1/jobs", json=template)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
 def build_app(
-    paths: Paths, conn: sqlite3.Connection, resolve: ResolveFn = resolve_project_path, flow: DeploymentFlow | None = None
+    paths: Paths, conn: sqlite3.Connection, resolve: ResolveFn = resolve_project_path, flow: DeploymentFlow | None = None,
+    *, live_pillars: Callable[[], list[str]] | None = None, create_job: Callable[[dict], object] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="little-workshop Deployment & Servers")
     install_incident_reporting(app, paths, pillar="deployment")
     lock = threading.Lock()
     flow = flow or DeploymentFlow(paths=paths)
+    live_pillars = live_pillars or (lambda: core_live_pillars(paths))
+    create_job = create_job or (lambda template: create_orchestration_job(paths, template))
+
+    db_row = conn.execute("PRAGMA database_list").fetchone()
+    db_file = db_row[2] if db_row else ""
+
+    def read(fn, *args, **kwargs):
+        """Reads must never queue behind `lock`: a deploy, stop or pillar
+        redeploy holds it for the whole operation (a cold `bazel run
+        //:install` takes minutes), and the Dashboard's server panel would
+        otherwise time out and show no server at all for exactly as long as
+        one is launching. A short-lived read-only connection (WAL) sidesteps
+        it — agent/app.py's same pattern; an in-memory database (tests) has
+        no file to reopen, so it falls back to the shared one."""
+        if not db_file:
+            with lock:
+                return fn(conn, *args, **kwargs)
+        reader = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
+        reader.row_factory = conn.row_factory
+        try:
+            return fn(reader, *args, **kwargs)
+        finally:
+            reader.close()
 
     @app.get("/v1/health")
     def health() -> dict:
@@ -82,7 +135,7 @@ def build_app(
         if not request.project_id:
             return {"outcome": "failed", "error": "missing project_id"}
         branch = request.params.get("branch", "dev")
-        with lock:
+        with lock, reporting(StepReporter(paths, request.job_id)):
             try:
                 manifest = _load_manifest(paths, request.project_id)
                 project_dir = resolve(paths, request.project_id)
@@ -95,6 +148,8 @@ def build_app(
             payload["exposure"] = result.exposure
         if result.confirm_message:
             payload["confirm_message"] = result.confirm_message
+        if result.cli_note:
+            payload["cli_note"] = result.cli_note
         return {"outcome": "succeeded", "result": payload}
 
     @app.post("/v1/jobs/deployment.stop")
@@ -159,6 +214,50 @@ def build_app(
                 return {"outcome": "failed", "error": str(exc)}
         return {"outcome": "succeeded", "result": {"seeded": True}}
 
+    @app.post("/v1/jobs/deployment.redeploy_changed_pillars")
+    def job_redeploy_changed_pillars(request: JobRequest) -> dict:
+        """Redeploy the pillars whose code differs between what they run and `params.commit` (default
+        HEAD), in dependency order: each live pillar is compared with the commit this pillar last
+        deployed it at, and one it never deployed is brought in. With `params.base`, every pillar is
+        compared with that commit instead. One `deployment.redeploy_pillar` Job per pillar, each
+        confirm-gated as any redeploy; nothing is redeployed when no pillar's code changed."""
+        repo = workshop_repo_dir()
+        commit = gitutil.run(["git", "rev-parse", request.params.get("commit") or "HEAD"], repo)
+        if commit.returncode != 0:
+            return {"outcome": "failed", "error": f"unknown commit: {commit.stderr.strip()}"}
+        sha = commit.stdout.strip()
+        base = request.params.get("base")
+        compared_with = base or "the commit each pillar runs"
+
+        def changed_since(reference: str, candidates: list[str]) -> list[str] | None:
+            diff = gitutil.run(["git", "diff", "--name-only", reference, sha, "--", "src"], repo)
+            return None if diff.returncode != 0 else redeploy_plan.changed_pillars(diff.stdout.splitlines(), candidates)
+
+        live = live_pillars()
+        if base:
+            pillars = changed_since(base, live)
+            if pillars is None:
+                return {"outcome": "failed", "error": f"could not compare {base} with {sha}"}
+        else:
+            pillars = []
+            for pillar in live:
+                deployed = read(db.get_pillar_deployment, pillar)
+                # Never deployed by this pillar, or at a commit git no longer knows: bring it in.
+                changed = changed_since(deployed["commit_sha"], [pillar]) if deployed else None
+                if changed is None or changed:
+                    pillars.append(pillar)
+            pillars.sort()
+        if not pillars:
+            return {"outcome": "succeeded", "result": {"commit": sha, "pillars": [], "compared_with": compared_with,
+                                                       "note": "no pillar's code changed"}}
+        plan = [[{"pillar": p} for p in batch] for batch in redeploy_plan.redeploy_batches(pillars)]
+        # The first batch's redeploys run inside their creation call, so the Jobs are created beside this answer.
+        threading.Thread(
+            target=redeploy_plan.submit_redeploy_batches, args=(create_job, pillars, sha),
+            kwargs={"created_by": f"job:{request.job_id}"}, daemon=True,
+        ).start()
+        return {"outcome": "succeeded", "result": {"commit": sha, "pillars": pillars, "batches": plan, "compared_with": compared_with}}
+
     @app.post("/v1/jobs/deployment.redeploy_pillar")
     def job_redeploy_pillar(request: JobRequest) -> dict:
         pillar = request.params.get("pillar")
@@ -166,7 +265,7 @@ def build_app(
             return {"outcome": "failed", "error": "missing params.pillar"}
         commit = request.params.get("commit", "HEAD")
         confirm_timeout = request.params.get("confirm_timeout_seconds")
-        with lock:
+        with lock, reporting(StepReporter(paths, request.job_id)):
             try:
                 result = flow.redeploy_pillar(conn, pillar, workshop_repo_dir(), commit, confirm_timeout_seconds=confirm_timeout)
             except SelfRedeployRequiresDispatch:
@@ -180,6 +279,8 @@ def build_app(
         payload = {"branch": result.branch, "version": result.version, "commit": result.commit, "how": result.how}
         if result.confirm_message:
             payload["confirm_message"] = result.confirm_message
+        if result.cli_note:
+            payload["cli_note"] = result.cli_note
         return {"outcome": "succeeded", "result": payload}
 
     @app.post("/v1/jobs/deployment.confirm")
@@ -222,8 +323,7 @@ def build_app(
             manifest = _load_manifest(paths, project_id)
         except DeploymentError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
-        with lock:
-            result = flow.status(conn, project_id, manifest)
+        result = read(flow.status, project_id, manifest)
         return {
             "name": result.name, "unit": result.unit, "pids": result.pids, "listening": result.listening,
             "tailscale": result.tailscale, "branch": result.branch, "version": result.version,
@@ -235,8 +335,7 @@ def build_app(
         """The commit each little-workshop pillar was last redeployed from,
         plus this checkout's own HEAD for comparison. A pillar with no row
         was never redeployed through this pillar (still on its initial install)."""
-        with lock:
-            rows = db.list_pillar_deployments(conn)
+        rows = read(db.list_pillar_deployments)
         try:
             head = gitutil.run(["git", "rev-parse", "HEAD"], workshop_repo_dir()).stdout.strip() or None
             commits = gitutil.recent_commits(workshop_repo_dir(), 10)
@@ -265,13 +364,11 @@ def build_app(
 
     @app.get("/v1/deployments/{project_id}")
     def deployments(project_id: str) -> list[dict]:
-        with lock:
-            return db.list_deployments(conn, project_id)
+        return read(db.list_deployments, project_id)
 
     @app.get("/v1/confirmations/{project_id}")
     def confirmation(project_id: str) -> dict:
-        with lock:
-            state = db.get_confirmation(conn, project_id)
+        state = read(db.get_confirmation, project_id)
         if state is None:
             raise HTTPException(status_code=404, detail="not confirm-gated (no state recorded)")
         return state

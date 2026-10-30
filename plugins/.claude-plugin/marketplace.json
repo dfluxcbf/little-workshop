@@ -1,0 +1,12 @@
+{
+  "name": "little-workshop",
+  "owner": { "name": "little-workshop" },
+  "metadata": { "description": "little-workshop's local plugins: hooks and scripts that do a repeated request without the model." },
+  "plugins": [
+    {
+      "name": "finish-branch",
+      "source": "./finish-branch",
+      "description": "/finish-branch [project|--all] [--push]: finishes the checked-out feature, improvement or hotfix branch through little-workshop, without the model."
+    }
+  ]
+}

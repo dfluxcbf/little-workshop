@@ -1,0 +1,17 @@
+#!/bin/sh
+# Installed by little-workshop (`lws version install-hooks`, also run by `lws version init`).
+# Runs every Policy & Compliance policy that gates `commit` for this project against
+# the commit being made -- its message, its staged files and VERSION -- in the policy
+# sandbox, and refuses the commit when one fails, printing what to fix. If lws, the
+# daemon or Docker is unavailable it warns and lets the commit through: the same
+# policies still gate the branch finish. little-workshop's own finish and bookkeeping
+# commits run with hooks off. See little-workshop's docs/pillars/policy_compliance.md.
+if ! command -v lws >/dev/null 2>&1; then
+    echo "commit-msg: lws not found; commit-time policies were not checked" >&2
+    exit 0
+fi
+if ! lws policy evaluate --help >/dev/null 2>&1; then
+    echo "commit-msg: this lws predates 'lws policy evaluate'; commit-time policies were not checked" >&2
+    exit 0
+fi
+exec lws policy evaluate --project-id 'little-workshop' --gate-point commit --commit-message-file "$1" --fail-open

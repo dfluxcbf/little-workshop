@@ -18,14 +18,15 @@ depend on the `lvx` tool or its `.lvx/config.json`.
 
 - `master` — production. Always releasable.
 - `dev` — integration. Work lands here before release.
-- `feature/<name>`, `improvement/<name>` — branched from `dev`, merged back
-  into `dev` (`--no-ff`).
+- `feature/<name>`, `improvement/<name>` — branched from `dev`, squash-merged
+  back into `dev`: one commit, no merge commit (amended 2026-10-07; it was `--no-ff`).
 - `release/<version>` — cut from `dev`, merged into `master` and back into
   `dev`.
 - `hotfix/<name>` — branched from `master`, merged into `master` and `dev`.
 - `support/<version>` — maintenance of an older release line.
 
-Merges use plain `git merge --no-ff`. No tool is required to create, merge or
+A hotfix or a release merges with plain `git merge --no-ff`; a feature or improvement with
+`git merge --squash` (amended 2026-10-07). No tool is required to create, merge or
 delete these branches.
 
 ## Version numbering
@@ -82,13 +83,15 @@ carry many commits that all claim the same version. That is no longer allowed.
 ### How this is enforced
 
 Two Policy & Compliance policies (`docs/pillars/policy_catalog.md`, section C),
-scoped to little-workshop and gating `branch_finish`:
+scoped to little-workshop and gating `commit` and `branch_finish`:
 
 - `commit-bumps-version` — rule 1;
 - `branch-commit-dev-suffix` — rule 2.
 
 Their test scripts live in `tools/policy_scripts/` and compare **only the newest
-commit with its immediate parent**. History is never re-audited: a mistake made
+commit with its immediate parent**: at `commit` (amended 2026-10-02) the commit
+being made, which `.githooks/commit-msg` refuses when it breaks a rule, and at
+`branch_finish` the branch's HEAD. History is never re-audited: a mistake made
 in the past does not fail the policy forever — it only means the next commit has
 to be right. When the parent's own version is malformed, the newest commit is
 required to be well-formed on its own and nothing more.

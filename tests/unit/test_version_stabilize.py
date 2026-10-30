@@ -240,3 +240,25 @@ def test_diverged_integration_needs_manual_resolution(tmp_path):
     assert result.status == "needs_manual_resolution"
     assert "not a fast-forward" in result.message
     assert _git(["rev-parse", "--abbrev-ref", "HEAD"], repo).stdout.strip() == "dev"
+
+
+# --- REQ-000000421: A branch squash-merged into its target counts as merged ---
+
+
+def test_a_squash_merged_remote_branch_is_deleted_on_execute(tmp_path):
+    repo = make_repo_with_remote(tmp_path)
+    _git(["checkout", "dev"], repo)
+    _git(["checkout", "-b", "feature/old"], repo)
+    (repo / "old.txt").write_text("old", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-m", "old work"], repo)
+    _git(["push", "-u", "origin", "feature/old"], repo)
+    _git(["checkout", "dev"], repo)
+    _git(["merge", "--squash", "feature/old"], repo)
+    _git(["commit", "-m", "feat (-1): old"], repo)
+    _git(["push", "origin", "dev"], repo)
+
+    result = stabilize(repo, execute=True)
+
+    assert "feature/old" in result.deleted_remote_branches
+    assert "origin/feature/old" not in _git(["branch", "-r"], repo).stdout

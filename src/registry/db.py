@@ -1,6 +1,6 @@
 """Registry & Portfolio's own SQLite file — `projects`, `project_sets`,
-`tickets` (docs/architecture.md's Data model). WAL mode, one file,
-opened only by this pillar.
+`tickets`, `backlog_entries` (docs/architecture.md's Data model). WAL mode,
+one file, opened only by this pillar.
 """
 
 from __future__ import annotations
@@ -42,7 +42,26 @@ CREATE TABLE IF NOT EXISTS tickets (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS backlog_entries (
+    id TEXT PRIMARY KEY,
+    project_name TEXT NOT NULL,
+    primary_entry TEXT NOT NULL,
+    refinement_notes TEXT NOT NULL DEFAULT '',
+    refined_entry TEXT NOT NULL DEFAULT '',
+    task_prompt TEXT NOT NULL DEFAULT '',
+    primary_updated_at TEXT NOT NULL,
+    notes_updated_at TEXT,
+    refined_at TEXT,
+    prompt_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS backlog_by_project ON backlog_entries (project_name, created_at);
 """
+
+# What Claude is doing for an entry, kept on the entry so that nothing has to read Jobs to know it.
+BACKLOG_ACTIVITY = ("refining_since", "refining_job", "refine_error", "prompting_since", "prompting_job", "prompt_error")
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -50,7 +69,15 @@ def connect(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # What is deleted is overwritten, not left in free pages: a deleted backlog entry leaves no trace.
+    conn.execute("PRAGMA secure_delete=ON")
     conn.executescript(SCHEMA)
+    present = {row["name"] for row in conn.execute("PRAGMA table_info(backlog_entries)")}
+    for column in BACKLOG_ACTIVITY:
+        if column not in present:
+            conn.execute(f"ALTER TABLE backlog_entries ADD COLUMN {column} TEXT")
+    if "assets_dir" not in {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}:
+        conn.execute("ALTER TABLE projects ADD COLUMN assets_dir TEXT")
     conn.commit()
     return conn
 
@@ -87,6 +114,7 @@ def _row_to_project(row: sqlite3.Row) -> Project:
         name=row["name"],
         path=row["path"],
         repo_url=row["repo_url"],
+        assets_dir=row["assets_dir"],
         status=ProjectStatus(row["status"]),
         created_at=_parse_iso(row["created_at"]),
         updated_at=_parse_iso(row["updated_at"]),
@@ -108,11 +136,26 @@ def list_projects(conn: sqlite3.Connection, *, status: ProjectStatus | None = No
     return [_row_to_project(row) for row in rows]
 
 
+def update_project_repo_url(conn: sqlite3.Connection, name: str, repo_url: str | None) -> None:
+    conn.execute(
+        "UPDATE projects SET repo_url = ?, updated_at = ? WHERE name = ?",
+        (repo_url, _iso(datetime.now(timezone.utc)), name),
+    )
+    conn.commit()
+
+
+def update_project_assets_dir(conn: sqlite3.Connection, name: str, assets_dir: str | None) -> None:
+    conn.execute("UPDATE projects SET assets_dir = ?, updated_at = ? WHERE name = ?",
+                 (assets_dir, _iso(datetime.now(timezone.utc)), name))
+    conn.commit()
+
+
 def delete_project(conn: sqlite3.Connection, name: str) -> None:
     """Hard delete — no soft-delete, no undo (docs/open_questions.md OQ-7)."""
     conn.execute("DELETE FROM projects WHERE name = ?", (name,))
     conn.execute("DELETE FROM project_set_members WHERE project_name = ?", (name,))
     conn.execute("DELETE FROM tickets WHERE project_name = ?", (name,))
+    conn.execute("DELETE FROM backlog_entries WHERE project_name = ?", (name,))
     conn.commit()
 
 
@@ -223,3 +266,75 @@ def update_ticket_status(conn: sqlite3.Connection, ticket_id: str, status: Ticke
 
 def new_ticket_id() -> str:
     return uuid.uuid4().hex
+
+
+# -- backlog_entries -------------------------------------------------------
+
+# The fields a backlog entry's owner may edit directly; the refined entry and the task prompt are Claude's.
+BACKLOG_EDITABLE = ("primary_entry", "refinement_notes")
+
+
+def new_backlog_id() -> str:
+    return uuid.uuid4().hex
+
+
+def insert_backlog_entry(conn: sqlite3.Connection, entry_id: str, project_name: str, primary_entry: str) -> dict:
+    now = _iso(datetime.now(timezone.utc))
+    conn.execute(
+        """INSERT INTO backlog_entries (id, project_name, primary_entry, primary_updated_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (entry_id, project_name, primary_entry, now, now, now),
+    )
+    conn.commit()
+    return get_backlog_entry(conn, entry_id)
+
+
+def get_backlog_entry(conn: sqlite3.Connection, entry_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM backlog_entries WHERE id = ?", (entry_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_backlog_entries(conn: sqlite3.Connection, *, project_name: str | None = None) -> list[dict]:
+    if project_name is None:
+        rows = conn.execute("SELECT * FROM backlog_entries ORDER BY created_at").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM backlog_entries WHERE project_name = ? ORDER BY created_at", (project_name,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_backlog_entry(conn: sqlite3.Connection, entry_id: str, **fields) -> dict | None:
+    """Set the given fields (`primary_entry`, `refinement_notes`, `refined_entry`, `task_prompt`), with
+    the time each changed. None when the entry no longer exists: nothing is written then."""
+    stamps = {"primary_entry": "primary_updated_at", "refinement_notes": "notes_updated_at",
+              "refined_entry": "refined_at", "task_prompt": "prompt_at"}
+    unknown = set(fields) - set(stamps)
+    if unknown:
+        raise ValueError(f"not a backlog entry field: {', '.join(sorted(unknown))}")
+    now = _iso(datetime.now(timezone.utc))
+    values = {**fields, **{stamps[key]: now for key in fields}, "updated_at": now}
+    assignments = ", ".join(f"{key} = ?" for key in values)
+    changed = conn.execute(f"UPDATE backlog_entries SET {assignments} WHERE id = ?", (*values.values(), entry_id)).rowcount
+    conn.commit()
+    return get_backlog_entry(conn, entry_id) if changed else None
+
+
+def set_backlog_activity(conn: sqlite3.Connection, entry_id: str, **fields) -> bool:
+    """Record what Claude is doing for the entry (`BACKLOG_ACTIVITY` columns). Not an edit of the entry:
+    its update time stays. False when the entry no longer exists."""
+    unknown = set(fields) - set(BACKLOG_ACTIVITY)
+    if unknown:
+        raise ValueError(f"not a backlog activity field: {', '.join(sorted(unknown))}")
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+    changed = conn.execute(f"UPDATE backlog_entries SET {assignments} WHERE id = ?", (*fields.values(), entry_id)).rowcount
+    conn.commit()
+    return bool(changed)
+
+
+def delete_backlog_entry(conn: sqlite3.Connection, entry_id: str) -> bool:
+    """Delete the entry and everything it holds; the write-ahead log is folded back too, so no copy
+    of it outlives the deletion in the database's files."""
+    deleted = conn.execute("DELETE FROM backlog_entries WHERE id = ?", (entry_id,)).rowcount
+    conn.commit()
+    if deleted:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    return bool(deleted)

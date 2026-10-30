@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import uvicorn
-
+from common import serving
 from common.paths import Paths
 from policy import db
 from policy.app import build_app
@@ -15,12 +14,10 @@ def main() -> None:
 
     conn = db.connect(paths.pillar_db_path("policy"))
     app = build_app(conn, paths)
+    # Before serving, so no new check is taken for one the last stop cut short (REQ-000000405).
+    app.state.rerun_interrupted_checks()
 
-    socket_path = paths.socket_path("policy")
-    if socket_path.exists():
-        socket_path.unlink()
-
-    uvicorn.run(app, uds=str(socket_path), log_level="info")
+    serving.serve(app, paths.socket_path("policy"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,32 @@
+{% macro job_steps(job_id, steps) -%}
+    <ol class="steps">
+      {% for s in steps %}
+      <li class="step s-{{ s.state }}" data-state="{{ s.state }}"
+          {% if s.state == "running" or s.state == "attention" %}data-runtime="{{ s.runtime_seconds or 0 }}" data-ticks="{{ 1 if s.state == 'running' else 0 }}"{% endif %}>
+        <span class="step-icon" role="img" aria-label="{{ {'pending': 'not started', 'running': 'running', 'succeeded': 'finished OK', 'failed': 'did not finish OK', 'attention': 'needs your attention'}[s.state] }}"></span>
+        <div class="step-main">
+          <div class="step-title">{{ s.title }}</div>
+          {% if s.detail %}<div class="step-detail">{{ s.detail }}</div>{% endif %}
+          <div class="step-times">
+            {% if s.runtime_seconds is not none %}<span>runtime <b class="step-rt">{{ s.runtime_seconds | secs }}</b></span>{% endif %}
+            {% if s.expected_seconds %}<span>expected {{ s.expected_seconds | secs }}</span>{% endif %}
+          </div>
+          {% if s.state == "attention" and s.prompt %}
+          <div class="step-ask">
+            <p>{{ s.prompt.question }}</p>
+            <p class="muted">Waiting since {{ s.attention_since | reltime }}; the job fails if nobody answers within 12 hours.</p>
+            <div class="decision-actions">
+              {% for o in s.prompt.options %}
+              <form method="post" action="/jobs/{{ job_id }}/steps/{{ s.key }}/answer">
+                <input type="hidden" name="choice" value="{{ o.id }}">
+                <button type="submit" class="{{ 'primary' if loop.first else '' }}">{{ o.label }}</button>
+              </form>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+{%- endmacro %}

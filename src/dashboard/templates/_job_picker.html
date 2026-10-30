@@ -1,0 +1,111 @@
+{# Project -> job -> arguments, from dashboard/job_catalog.py. Used by New job. #}
+<label for="project">Project</label>
+<select name="project" id="project" required>
+  <option value="" {{ 'selected' if not chosen.project }} disabled>Choose a project…</option>
+  {% for p in projects %}<option value="{{ p }}" {{ 'selected' if p == chosen.project }}>{{ p }}</option>{% endfor %}
+</select>
+<label for="job">Job</label>
+<select name="job" id="job" required>
+  <option value="" {{ 'selected' if not chosen.job }} disabled>Choose a job…</option>
+  {% for spec in catalog %}<option value="{{ spec.key }}"{% if spec.projects %} data-projects="{{ spec.projects|join(',') }}"{% endif %} {{ 'selected' if spec.key == chosen.job }}>{{ spec.label }}</option>{% endfor %}
+</select>
+{% for spec in catalog %}
+<div class="job-args" data-job="{{ spec.key }}" hidden>
+  <p class="muted job-desc">{{ spec.description }}</p>
+  {% for arg in spec.args %}
+  {% if arg.group and (loop.first or loop.previtem.group != arg.group) %}<h3 class="job-group">{{ arg.group }}</h3>{% endif %}
+  {% if arg.kind == 'flag' %}
+  <label class="job-flag"><input type="checkbox" name="arg_{{ arg.name }}" value="on"> {{ arg.label }}</label>
+  {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
+  {% elif arg.kind == 'number' %}
+  <label for="arg-{{ spec.key }}-{{ arg.name }}">{{ arg.label }}</label>
+  <input type="number" id="arg-{{ spec.key }}-{{ arg.name }}" name="arg_{{ arg.name }}" min="0" step="1" inputmode="numeric" value="{{ arg.default or 0 }}">
+  {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
+  {% elif arg.kind == 'choice' %}
+  <label for="arg-{{ spec.key }}-{{ arg.name }}">{{ arg.label }}</label>
+  <select id="arg-{{ spec.key }}-{{ arg.name }}" name="arg_{{ arg.name }}" {{ 'required' if arg.required }}>
+    {% if not arg.default %}<option value="" selected disabled>Choose…</option>{% endif %}
+    {% for value, text in arg.options %}<option value="{{ value }}" {{ 'selected' if value == arg.default }}>{{ text }}</option>{% endfor %}
+  </select>
+  {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
+  {% else %}
+  <div class="job-multi" role="group" aria-labelledby="arg-{{ spec.key }}-{{ arg.name }}" data-choices="{{ arg.name }}">
+    <div class="job-multi-head">
+      <span class="job-multi-label" id="arg-{{ spec.key }}-{{ arg.name }}">{{ arg.label }}</span>
+      <button type="button" class="small job-select-all" hidden>Select all</button>
+    </div>
+    {% if arg.help %}<p class="muted job-help">{{ arg.help }}</p>{% endif %}
+    <div class="job-choices"><p class="muted">Choose a project first.</p></div>
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endfor %}
+<script>
+(function () {
+  var project = document.getElementById("project"), job = document.getElementById("job");
+  var loaded = {};
+  function esc(s) { var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+  function choiceInputs(box) { return box.querySelectorAll(".job-choices input:not(:disabled)"); }
+  // "Select all" shows once there is something to select, and turns into "Select none" when all are.
+  function syncSelectAll(box) {
+    var btn = box.querySelector(".job-select-all"), inputs = choiceInputs(box);
+    btn.hidden = !inputs.length;
+    btn.textContent = inputs.length && Array.prototype.every.call(inputs, function (i) { return i.checked; }) ? "Select none" : "Select all";
+  }
+  function show(box, html) { box.querySelector(".job-choices").innerHTML = html; syncSelectAll(box); }
+  document.querySelectorAll("[data-choices]").forEach(function (box) {
+    box.querySelector(".job-select-all").addEventListener("click", function () {
+      var inputs = choiceInputs(box), all = Array.prototype.every.call(inputs, function (i) { return i.checked; });
+      inputs.forEach(function (i) { i.checked = !all; });
+      syncSelectAll(box);
+    });
+    box.querySelector(".job-choices").addEventListener("change", function () { syncSelectAll(box); });
+  });
+  function loadChoices(box) {
+    var arg = box.dataset.choices;
+    if (!project.value) { show(box, '<p class="muted">Choose a project first.</p>'); return; }
+    var key = arg + "|" + project.value;
+    if (loaded[key]) { show(box, loaded[key]); return; }
+    show(box, '<p class="muted job-loading">Finding tests…</p>');
+    fetch("/jobs/catalog/choices/" + encodeURIComponent(arg) + "?project=" + encodeURIComponent(project.value), { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (key !== arg + "|" + project.value) return;  // the project changed meanwhile
+        if (d.error) { show(box, '<p class="muted job-error">Could not list them: ' + esc(d.error) + "</p>"); return; }
+        if (!d.choices.length) { show(box, '<p class="muted">None in this project.</p>'); return; }
+        var html = d.choices.map(function (c) {
+          return '<label class="job-choice' + (c.disabled ? " is-disabled" : "") + '"><input type="checkbox" class="pick" name="arg_' + esc(arg) +
+            '" value="' + esc(c.value) + '"' + (c.disabled ? " disabled" : "") + '><span class="job-choice-name">' + esc(c.label).replace(/_/g, "_<wbr>") +
+            '</span><span class="dim">' + esc(c.detail || "") + "</span></label>";
+        }).join("");
+        loaded[key] = html;
+        show(box, html);
+      })
+      .catch(function () { show(box, '<p class="muted job-error">Could not list them right now.</p>'); });
+  }
+  // A job limited to some projects is offered only while one of them is chosen.
+  function offerJobs() {
+    Array.prototype.forEach.call(job.options, function (o) {
+      if (!o.dataset.projects) return;
+      var offered = o.dataset.projects.split(",").indexOf(project.value) !== -1;
+      o.hidden = !offered;
+      o.disabled = !offered;
+      if (!offered && o.selected) job.value = "";
+    });
+  }
+  function sync() {
+    offerJobs();
+    document.querySelectorAll(".job-args").forEach(function (el) {
+      var on = el.dataset.job === job.value;
+      el.hidden = !on;
+      // A hidden job's fields are disabled, so its required ones never block submitting another job.
+      el.querySelectorAll("input, select").forEach(function (i) { i.disabled = !on || i.closest(".is-disabled") !== null; });
+      if (on) el.querySelectorAll("[data-choices]").forEach(loadChoices);
+    });
+  }
+  project.addEventListener("change", sync);
+  job.addEventListener("change", sync);
+  sync();
+})();
+</script>

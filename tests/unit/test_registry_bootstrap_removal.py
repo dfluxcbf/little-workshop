@@ -140,7 +140,7 @@ def test_bootstrap_project_skips_labels_when_ensure_labels_is_false(conn, paths,
 def test_bootstrap_project_creates_github_repo_via_gh_cli_when_no_token(conn, paths, tmp_path, monkeypatch):
     from registry import bootstrap as bootstrap_module
 
-    calls = {}
+    calls = {"labels": []}
 
     monkeypatch.setattr(bootstrap_module.github, "gh_available", lambda: True)
 
@@ -151,8 +151,12 @@ def test_bootstrap_project_creates_github_repo_via_gh_cli_when_no_token(conn, pa
     def fake_add_remote_and_push(path, remote_url):
         calls["push"] = (path, remote_url)
 
+    def fake_ensure_label_with_gh(repo, name, color, description):
+        calls["labels"].append((repo, name))
+
     monkeypatch.setattr(bootstrap_module.github, "create_repository_with_gh", fake_create_repository_with_gh)
     monkeypatch.setattr(bootstrap_module.gitops, "add_remote_and_push", fake_add_remote_and_push)
+    monkeypatch.setattr(bootstrap_module.github, "ensure_label_with_gh", fake_ensure_label_with_gh)
 
     dest_dir = tmp_path / "workdir"
     dest_dir.mkdir()
@@ -163,6 +167,8 @@ def test_bootstrap_project_creates_github_repo_via_gh_cli_when_no_token(conn, pa
     assert result.github_created is True
     assert calls["create_gh"] == ("little-widget", "dfluxcbf", True, "")
     assert result.repo_url == "https://github.com/dfluxcbf/little-widget"
+    assert result.labels_created == [name for name, _, _ in bootstrap_module.github.BOOTSTRAP_LABELS]
+    assert calls["labels"] == [("dfluxcbf/little-widget", name) for name, _, _ in bootstrap_module.github.BOOTSTRAP_LABELS]
 
 
 def test_remove_project_deletes_registry_row_and_project_files(conn, paths, tmp_path):

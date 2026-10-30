@@ -68,6 +68,39 @@ def test_project_bootstrap_honors_ensure_labels_false(paths, fake_create_job):
     assert call["params"]["ensure_labels"] is False
 
 
+def test_project_bootstrap_passes_template_defaulting_to_python(paths, fake_create_job):
+    """REQ-000000274."""
+    handler = tools_mod.TOOLS_BY_NAME["workshop_project_bootstrap"].handler
+    handler(paths, {"name": "g", "dest_dir": "/mnt/c/little-projects", "template": "unity"})
+    handler(paths, {"name": "w", "dest_dir": "/tmp"})
+    assert [c["params"]["template"] for c in fake_create_job] == ["unity", "python"]
+    schema = tools_mod.TOOLS_BY_NAME["workshop_project_bootstrap"].input_schema
+    assert schema["properties"]["template"]["enum"] == ["python", "unity"]
+
+
+def test_project_configure_assets_builds_registry_job(paths, fake_create_job):
+    """REQ-000000426."""
+    tools_mod.TOOLS_BY_NAME["workshop_project_configure_assets"].handler(paths, {"project_id": "ethereal-lands", "assets_dir": "blender_development"})
+    tools_mod.TOOLS_BY_NAME["workshop_project_configure_assets"].handler(paths, {"project_id": "ethereal-lands", "mcp": False})
+    first, second = fake_create_job
+    assert (first["type"], first["target_pillar"], first["project_id"], first["queue_key"]) == ("project.configure_assets", "registry", "ethereal-lands", "ethereal-lands")
+    assert first["params"] == {"assets_dir": "blender_development", "mcp": True}
+    assert second["params"] == {"assets_dir": "", "mcp": False}
+
+
+def test_project_connect_github_builds_registry_job(paths, fake_create_job):
+    """REQ-000000282."""
+    tools_mod.TOOLS_BY_NAME["workshop_project_connect_github"].handler(paths, {"name": "ethereal-lands", "public": True})
+    call = fake_create_job[0]
+    assert call["type"] == "project.connect_github"
+    assert call["target_pillar"] == "registry"
+    assert call["project_id"] == "ethereal-lands"
+    assert call["queue_key"] == "ethereal-lands"
+    assert call["params"]["public"] is True
+    assert call["params"]["owner"] == "dfluxcbf"
+    assert call["params"]["ensure_labels"] is True
+
+
 def test_project_import_builds_registry_job(paths, fake_create_job):
     tools_mod.TOOLS_BY_NAME["workshop_project_import"].handler(
         paths, {"name": "little-widget", "path": "/repos/little-widget"}
@@ -148,6 +181,23 @@ def test_agent_run_task_omits_branching_when_no_branch_mode(paths, fake_create_j
     assert "branching" not in call["params"]
     assert call["params"]["intent"] == "task"
     assert call["params"]["review_mode"] == "manual"
+
+
+def test_agent_run_task_playwright_mcp_is_on_unless_turned_off(paths, fake_create_job):
+    handler = tools_mod.TOOLS_BY_NAME["workshop_agent_run_task"].handler
+    handler(paths, {"project_id": "little-meals", "title": "t"})
+    handler(paths, {"project_id": "little-meals", "title": "t", "playwright_mcp": True})
+    handler(paths, {"project_id": "little-meals", "title": "t", "playwright_mcp": False})
+    assert [c["params"].get("playwright_mcp") for c in fake_create_job] == [None, None, False]
+
+
+def test_agent_run_task_standards_copy_is_on_unless_turned_off(paths, fake_create_job):
+    """REQ-000000288."""
+    handler = tools_mod.TOOLS_BY_NAME["workshop_agent_run_task"].handler
+    handler(paths, {"project_id": "little-meals", "title": "t"})
+    handler(paths, {"project_id": "little-meals", "title": "t", "include_standards": True})
+    handler(paths, {"project_id": "little-meals", "title": "t", "include_standards": False})
+    assert [c["params"].get("include_standards") for c in fake_create_job] == [None, None, False]
 
 
 def test_agent_run_task_includes_branching_when_branch_mode_given(paths, fake_create_job):
@@ -363,7 +413,7 @@ def test_core_status_calls_client_core_status(paths, monkeypatch):
 def test_job_list_calls_client_list_jobs_with_status(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "list_jobs", result=[{"id": "j1"}])
     result = tools_mod.TOOLS_BY_NAME["workshop_job_list"].handler(paths, {"status": "queued"})
-    assert calls[0] == ((paths,), {"status": "queued"})
+    assert calls[0] == ((paths,), {"status": "queued", "types": None, "limit": 50, "full": False})
     assert result == [{"id": "j1"}]
 
 
@@ -372,6 +422,91 @@ def test_job_status_calls_client_job_status(paths, monkeypatch):
     result = tools_mod.TOOLS_BY_NAME["workshop_job_status"].handler(paths, {"job_id": "j1"})
     assert calls[0] == ((paths, "j1"), {})
     assert result == {"id": "j1"}
+
+
+# --- REQ-000000322: A caller waits for a Job in one call ---
+
+
+def test_job_wait_calls_client_job_wait(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "job_wait", result={"id": "j1", "status": "succeeded"})
+    tool = tools_mod.TOOLS_BY_NAME["workshop_job_wait"]
+    assert tool.handler(paths, {"job_id": "j1", "timeout_seconds": 60}) == {"id": "j1", "status": "succeeded"}
+    tool.handler(paths, {"job_id": "j1"})
+    assert calls == [((paths, "j1", 60), {}), ((paths, "j1", None), {})]
+
+
+# --- REQ-000000334: Usage is read through lws, the MCP server and the Dashboard ---
+
+
+def test_usage_summary_returns_the_week_without_the_per_day_series(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "usage_summary", result={"week": "2026-09-28", "total": {"requests": 3}, "days": [1], "pays_for_itself": [2]})
+    result = tools_mod.TOOLS_BY_NAME["workshop_usage_summary"].handler(paths, {"project": "little-meals", "week": "2026-10-01"})
+    assert calls[0] == ((paths,), {"project": "little-meals", "week": "2026-10-01", "origin": None})
+    assert result == {"week": "2026-09-28", "total": {"requests": 3}}
+
+
+def test_usage_jobs_go_to_the_usage_pillar(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_usage_doctor"].handler(paths, {})
+    tools_mod.TOOLS_BY_NAME["workshop_usage_ingest_transcripts"].handler(paths, {})
+    tools_mod.TOOLS_BY_NAME["workshop_usage_configure_claude"].handler(paths, {})
+    tools_mod.TOOLS_BY_NAME["workshop_usage_configure_claude"].handler(paths, {"apply": True})
+    assert [(c["type"], c["params"]) for c in fake_create_job] == [
+        ("usage.doctor", {}), ("usage.ingest_transcripts", {}),
+        ("usage.configure_claude", {"apply": False}), ("usage.configure_claude", {"apply": True})]
+    assert all(c["target_pillar"] == "usage" and c["project_id"] is None for c in fake_create_job)
+
+
+# --- REQ-000000340: Findings are read through lws, the MCP server and the Dashboard ---
+
+
+def test_usage_findings_calls_the_client_and_analyze_is_a_usage_job(paths, monkeypatch, fake_create_job):
+    calls = _fake_client_call(monkeypatch, "usage_findings", result=[{"detector": "D1"}])
+    assert tools_mod.TOOLS_BY_NAME["workshop_usage_findings"].handler(paths, {"project": "little-meals"}) == [{"detector": "D1"}]
+    tools_mod.TOOLS_BY_NAME["workshop_usage_findings"].handler(paths, {"state": "all"})
+    assert calls == [((paths,), {"project": "little-meals", "state": "open"}), ((paths,), {"project": None, "state": "all"})]
+    tools_mod.TOOLS_BY_NAME["workshop_usage_analyze"].handler(paths, {})
+    assert (fake_create_job[0]["type"], fake_create_job[0]["target_pillar"]) == ("usage.analyze", "usage")
+
+
+# --- REQ-000000347: Candidates, triggers and the new Jobs are reached through lws, the MCP server and the Dashboard ---
+
+
+def test_candidates_and_triggers_are_read_through_the_client(paths, monkeypatch):
+    candidates = _fake_client_call(monkeypatch, "usage_candidates", result=[{"signature": "x"}])
+    listed = _fake_client_call(monkeypatch, "list_triggers", result=[{"id": "t1"}])
+    assert tools_mod.TOOLS_BY_NAME["workshop_usage_candidates"].handler(paths, {}) == [{"signature": "x", "examples": []}]
+    assert tools_mod.TOOLS_BY_NAME["workshop_trigger_list"].handler(paths, {}) == [{"id": "t1"}]
+    assert candidates[0] == ((paths,), {"state": "open", "limit": 10}) and listed[0] == ((paths,), {})
+
+
+def test_plugin_proposals_are_read_through_the_client(paths, monkeypatch):
+    """REQ-000000419."""
+    proposals = _fake_client_call(monkeypatch, "usage_plugin_proposals", result=[{"name": "finish-branch", "examples": [1, 2]}])
+    assert tools_mod.TOOLS_BY_NAME["workshop_usage_plugin_proposals"].handler(paths, {"limit": 500}) == [{"name": "finish-branch", "examples": [1]}]
+    assert proposals[0] == ((paths,), {"state": "open", "limit": 50})
+
+
+def test_trigger_add_and_remove_build_the_orchestration_calls(paths, monkeypatch):
+    added = _fake_client_call(monkeypatch, "add_trigger", result={"id": "t1"})
+    removed = _fake_client_call(monkeypatch, "remove_trigger", result={"removed": "t1"})
+    tools_mod.TOOLS_BY_NAME["workshop_trigger_add"].handler(paths, {
+        "name": "after finish", "event": "version.branch_finished", "filter": {"project_id": "little-meals"},
+        "type": "requirements.sync_markers", "target_pillar": "requirements", "params": {"dry_run": True}})
+    assert added[0][1] == {"name": "after finish", "event": "version.branch_finished", "event_filter": {"project_id": "little-meals"},
+                           "job_template": {"type": "requirements.sync_markers", "target_pillar": "requirements", "project_id": None,
+                                            "params": {"dry_run": True}, "queue_key": None, "depends_on": []}}
+    tools_mod.TOOLS_BY_NAME["workshop_trigger_remove"].handler(paths, {"trigger_id": "t1"})
+    assert removed[0] == ((paths, "t1"), {})
+
+
+def test_the_jobs_that_replace_hand_work_are_one_call_each(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_usage_mine_automation"].handler(paths, {})
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_sync_markers"].handler(paths, {"project_id": "little-meals", "dry_run": True})
+    tools_mod.TOOLS_BY_NAME["workshop_deployment_redeploy_changed_pillars"].handler(paths, {"commit": "abc"})
+    assert [(c["type"], c["target_pillar"], c["project_id"], c["params"]) for c in fake_create_job] == [
+        ("usage.mine_automation", "usage", None, {}),
+        ("requirements.sync_markers", "requirements", "little-meals", {"dry_run": True}),
+        ("deployment.redeploy_changed_pillars", "deployment", None, {"commit": "abc"})]
 
 
 def test_project_list_calls_client_list_projects(paths, monkeypatch):
@@ -526,6 +661,53 @@ def test_job_stop_calls_client_stop_job(paths, monkeypatch):
     result = tools_mod.TOOLS_BY_NAME["workshop_job_stop"].handler(paths, {"job_id": "j1"})
     assert calls[0] == ((paths, "j1"), {})
     assert result["stopped"] is True
+
+
+# --- REQ-000000311: An action that needs the user asks, and times out after 12 hours ---
+
+def test_job_answer_sends_the_users_choice_for_the_step(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "answer_step", result={"state": "running"})
+    result = tools_mod.TOOLS_BY_NAME["workshop_job_answer"].handler(paths, {"job_id": "j1", "step": "check_clean_tree", "choice": "commit"})
+    assert calls[0] == ((paths, "j1", "check_clean_tree", "commit"), {})
+    assert result == {"state": "running"}
+
+
+def test_a_version_finish_waits_for_the_job_when_it_may_ask(paths, monkeypatch):
+    job = {"id": "j1", "status": "running", "steps": [{"key": "a", "state": "running", "needs_attention": True}]}
+    monkeypatch.setattr(tools_mod.client, "create_job", lambda p, **fields: job)
+    seen = []
+    monkeypatch.setattr(tools_mod.client, "await_job", lambda p, j, timeout: seen.append((j, timeout)) or {"waited": True})
+    result = tools_mod.TOOLS_BY_NAME["workshop_version_feature_finish"].handler(paths, {"project_id": "little-widget"})
+    assert result == {"waited": True} and seen == [(job, 120.0)]
+
+
+# --- REQ-000000314: Pillars are redeployed in batches ordered by their dependencies ---
+
+def test_redeploy_pillars_returns_the_plan_and_creates_the_jobs_in_batches(paths, monkeypatch):
+    import threading
+
+    created, done = [], threading.Event()
+
+    def create_job(p, **fields):
+        created.append(fields)
+        if len(created) == 3:
+            done.set()
+        return {"id": fields["id"]}
+
+    monkeypatch.setattr(tools_mod.client, "core_status", lambda p: {"pillars": {n: {"status": "healthy"} for n in ("orchestration", "version", "policy")} | {"mcp": {"status": "disabled"}}})
+    monkeypatch.setattr(tools_mod.client, "create_job", create_job)
+    result = tools_mod.TOOLS_BY_NAME["workshop_deployment_redeploy_pillars"].handler(paths, {"commit": "abc"})
+    assert result["batches"] == [[{"pillar": "orchestration"}], [{"pillar": "policy"}, {"pillar": "version"}]]
+    assert done.wait(5)
+    by_pillar = {f["project_id"]: f for f in created}
+    assert by_pillar["orchestration"]["depends_on"] == [] and by_pillar["policy"]["depends_on"] == [by_pillar["orchestration"]["id"]]
+    assert {f["created_by"] for f in created} == {"mcp"}
+
+
+def test_redeploy_pillars_names_the_pillars_it_does_not_know(paths, monkeypatch):
+    monkeypatch.setattr(tools_mod.client, "core_status", lambda p: {"pillars": {"policy": {"status": "healthy"}}})
+    result = tools_mod.TOOLS_BY_NAME["workshop_deployment_redeploy_pillars"].handler(paths, {"commit": "abc", "pillars": ["policy", "ghost"]})
+    assert result["success"] is False and "ghost" in result["message"]
 
 
 def test_schedule_add_recurring_builds_the_right_payload(paths, monkeypatch):
@@ -732,6 +914,14 @@ def test_requirements_report_calls_client(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "requirements_report", result={"done_count": 0})
     tools_mod.TOOLS_BY_NAME["workshop_requirements_report"].handler(paths, {"project_id": "p1"})
     assert calls[0] == ((paths, "p1"), {})
+
+
+# --- REQ-000000468: Requirement conflicts are found by code and resolved by a Claude task the user directs ---
+
+def test_requirements_conflicts_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "requirements_conflicts", result=[])
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_conflicts"].handler(paths, {"project_id": "p1", "status": "open"})
+    assert calls[0] == ((paths, "p1"), {"status": "open"})
 
 
 def test_build_run_builds_job(paths, fake_create_job):
@@ -945,6 +1135,12 @@ def test_policy_gating_for_job_calls_client(paths, monkeypatch):
     assert calls[0] == ((paths, "proj-a", ["server_launch"]), {})
 
 
+def test_policy_evaluate_calls_client(paths, monkeypatch):
+    calls = _fake_client_call(monkeypatch, "policy_evaluate", result={"blocking": []})
+    tools_mod.TOOLS_BY_NAME["workshop_policy_evaluate"].handler(paths, {"project_id": "proj-a", "gate_point": "branch_finish"})
+    assert calls[0] == ((paths, "proj-a", "branch_finish"), {})
+
+
 def test_policy_draft_import_builds_job(paths, fake_create_job):
     drafts = [{"topic": "t", "ears_text": "x", "test_script": "s", "target_pillar": "version"}]
     tools_mod.TOOLS_BY_NAME["workshop_policy_draft_import"].handler(paths, {"drafts": drafts})
@@ -972,3 +1168,30 @@ def test_no_tool_can_approve_a_draft():
     assert not [n for n in tools_mod.TOOLS_BY_NAME if "approve" in n]
     for spec in tools_mod.TOOLS.values() if isinstance(tools_mod.TOOLS, dict) else tools_mod.TOOLS:
         assert "approve_draft" not in spec.description
+
+
+# --- REQ-000000369: Each project has a backlog ---
+
+
+def test_backlog_tools_list_get_add_and_delete_within_the_named_project(paths, monkeypatch):
+    entry = {"id": "e1", "project_name": "little-meals", "title": "Export", "refined_entry": "r", "task_prompt": "",
+             "updated_at": "2026-10-04T20:00:00+00:00", "primary_entry": "Export"}
+    _fake_client_call(monkeypatch, "backlog_list", result=[entry])
+    listed = tools_mod.TOOLS_BY_NAME["workshop_project_backlog_list"].handler(paths, {"project_id": "little-meals"})
+    assert listed == [{"id": "e1", "title": "Export", "refined": True, "task_prompt": False, "updated_at": entry["updated_at"]}]
+
+    _fake_client_call(monkeypatch, "backlog_get", result=entry)
+    assert tools_mod.TOOLS_BY_NAME["workshop_project_backlog_get"].handler(paths, {"project_id": "little-meals", "entry_id": "e1"}) == entry
+    with pytest.raises(ValueError, match="not in little-home's backlog"):
+        tools_mod.TOOLS_BY_NAME["workshop_project_backlog_get"].handler(paths, {"project_id": "little-home", "entry_id": "e1"})
+
+    added = _fake_client_call(monkeypatch, "backlog_add", result=entry)
+    assert tools_mod.TOOLS_BY_NAME["workshop_project_backlog_add"].handler(paths, {"project_id": "little-meals", "text": "Export"}) == {
+        "id": "e1", "title": "Export", "project": "little-meals"}
+    assert added[0][0] == (paths, "little-meals", "Export")
+
+    deleted = _fake_client_call(monkeypatch, "backlog_delete", result={"deleted": True, "id": "e1"})
+    with pytest.raises(ValueError):
+        tools_mod.TOOLS_BY_NAME["workshop_project_backlog_delete"].handler(paths, {"project_id": "little-home", "entry_id": "e1"})
+    assert deleted == []  # another project's entry is never deleted
+    assert tools_mod.TOOLS_BY_NAME["workshop_project_backlog_delete"].handler(paths, {"project_id": "little-meals", "entry_id": "e1"})["deleted"]

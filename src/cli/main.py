@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -51,7 +52,8 @@ def cmd_job_create(args: argparse.Namespace) -> int:
 
 def cmd_job_list(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
-    _print(client.list_jobs(paths, status=args.status))
+    _print(client.list_jobs(paths, status=args.status, types=args.type, newest_first=True, limit=args.limit or None,
+                            summary=not args.full))
     return 0
 
 
@@ -71,6 +73,41 @@ def cmd_job_stop(args: argparse.Namespace) -> int:
         return 1
     _print(result)
     return 0 if result.get("stopped") else 1
+
+
+def cmd_job_answer(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.answer_step(paths, args.job_id, args.step, args.choice)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0
+
+
+def cmd_job_wait(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        result = client.job_wait(paths, args.job_id, args.timeout)
+    except client.DaemonUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("job") is not None else 1
+
+
+def cmd_job_watch(args: argparse.Namespace) -> int:
+    from cli import progress
+
+    paths = Paths.from_env()
+    try:
+        job = progress.watch(paths, args.job_id)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(job)
+    return 0 if job.get("status") == "succeeded" else 1
 
 
 def cmd_job_policy_confirm(args: argparse.Namespace) -> int:
@@ -222,6 +259,7 @@ def cmd_project_bootstrap(args: argparse.Namespace) -> int:
     params = {
         "name": args.name,
         "dest_dir": args.dest_dir,
+        "template": args.template,
         "owner": args.owner,
         "description": args.description,
         "create_github_repo": args.create_github_repo,
@@ -268,14 +306,125 @@ def cmd_project_import(args: argparse.Namespace) -> int:
     return 0 if result.get("status") == "succeeded" else 1
 
 
+def cmd_project_connect_github(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    params = {
+        "name": args.name,
+        "owner": args.owner,
+        "description": args.description,
+        "public": args.public,
+        "remote_host": args.remote_host,
+        "github_token": args.github_token,
+        "ensure_labels": args.ensure_labels,
+    }
+    try:
+        result = client.create_job(
+            paths,
+            type="project.connect_github",
+            target_pillar="registry",
+            project_id=args.name,
+            params=params,
+            queue_key=args.name,
+            depends_on=[],
+            created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_project_configure_assets(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    if not args.off and not args.dir:
+        print("error: give --dir <folder> or --off", file=sys.stderr)
+        return 2
+    try:
+        result = client.create_job(
+            paths, type="project.configure_assets", target_pillar="registry", project_id=args.project_id,
+            params={"assets_dir": "" if args.off else args.dir, "mcp": not args.no_mcp},
+            queue_key=args.project_id, depends_on=[], created_by="lws",
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(result)
+    return 0 if result.get("status") == "succeeded" else 1
+
+
+def cmd_asset_mcp_serve(args: argparse.Namespace) -> int:
+    from asset_mcp.server import serve
+
+    return serve(Paths.from_env(), args.project_id)
+
+
 def cmd_project_list(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     _print(client.list_projects(paths, status=args.status))
     return 0
 
 
+def _backlog_entry_of(paths: Paths, project_id: str, entry_id: str) -> dict:
+    """The entry, refused unless it is in this project's backlog (a session may act on its own project only)."""
+    entry = client.backlog(paths, "GET", f"/{entry_id}")
+    if entry.get("project_name") != project_id:
+        raise client.DaemonUnavailable(f"backlog entry {entry_id} is not in {project_id}'s backlog")
+    return entry
+
+
+def cmd_project_backlog_list(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        entries = client.backlog(paths, "GET", params={"project_name": args.project_id})
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print([{"id": e["id"], "title": e["title"], "refined": bool(e["refined_entry"]), "task_prompt": bool(e["task_prompt"]),
+             "updated_at": e["updated_at"]} for e in entries])
+    return 0
+
+
+def cmd_project_backlog_show(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _print(_backlog_entry_of(paths, args.project_id, args.entry_id))
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_project_backlog_add(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    text = sys.stdin.read() if args.text == "-" else args.text
+    try:
+        entry = client.backlog(paths, "POST", json={"project_name": args.project_id, "primary_entry": text})
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print({"id": entry["id"], "title": entry["title"], "project": entry["project_name"]})
+    return 0
+
+
+def cmd_project_backlog_delete(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _backlog_entry_of(paths, args.project_id, args.entry_id)
+        _print(client.backlog(paths, "DELETE", f"/{args.entry_id}"))
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+# A branch finish merges, tags and back-merges for real; the client's plain 30s wait is too short for it.
+VERSION_FINISH_TIMEOUT_SECONDS = 120.0
+
+
 def _version_job(args: argparse.Namespace, job_type: str, params: dict) -> int:
     paths = Paths.from_env()
+    extra = {"timeout": VERSION_FINISH_TIMEOUT_SECONDS} if job_type.endswith("_finish") else {}
     try:
         result = client.create_job(
             paths,
@@ -286,12 +435,14 @@ def _version_job(args: argparse.Namespace, job_type: str, params: dict) -> int:
             queue_key=args.project_id,  # serialize gitflow operations per project
             depends_on=[],
             created_by="lws",
+            **extra,
         )
     except client.DaemonUnavailable as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     _print(result)
-    return 0 if result.get("status") == "succeeded" else 1
+    # queued/running: accepted, still behind its policy checks or queue_key.
+    return 0 if result.get("status") in ("succeeded", "queued", "running") else 1
 
 
 def cmd_version_init(args: argparse.Namespace) -> int:
@@ -303,7 +454,44 @@ def cmd_version_init(args: argparse.Namespace) -> int:
 
 
 def cmd_version_sync_version_files(args: argparse.Namespace) -> int:
-    return _version_job(args, "version.sync_version_files", {})
+    """Runs in-process, synchronously, on the checkout the caller is in --
+    never as a daemon Job. Its only caller is the pre-commit hook, which
+    needs VERSION written and staged *before* git builds the commit; a Job
+    sits behind the project's queue_key, and an agent.run_task holding that
+    queue (the very task making the commit) meant the sync ran only after
+    the run ended, left VERSION staged-but-uncommitted, and blocked the
+    run's own finish on a dirty tree (2026-09-24). A Job also acted on the
+    registered checkout, not necessarily the worktree committing.
+    `--project-id` stays accepted: installed hooks pass it."""
+    from version.commands.sync_version_files import cmd_sync_version_files
+
+    toplevel = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if toplevel.returncode != 0:
+        print(f"error: not inside a git checkout: {toplevel.stderr.strip()}", file=sys.stderr)
+        return 1
+    try:
+        result = cmd_sync_version_files(Path(toplevel.stdout.strip()))
+    except Exception as exc:  # noqa: BLE001 -- the hook reports and never blocks
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print({"success": result.success, "message": result.message, "data": result.data})
+    return 0 if result.success else 1
+
+
+def cmd_version_install_hooks(args: argparse.Namespace) -> int:
+    """Install (or refresh) the project's git hooks in the current checkout: the
+    pre-commit VERSION sync and the commit-msg policy check. In-process, like
+    sync-version-files: it writes `.githooks/` and `core.hooksPath` where the caller is,
+    and touches nothing else (`lws version init` also rewrites `.lvx/config.json`)."""
+    from version.commands.sync_version_files import install_git_hooks
+
+    toplevel = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if toplevel.returncode != 0:
+        print(f"error: not inside a git checkout: {toplevel.stderr.strip()}", file=sys.stderr)
+        return 1
+    installed = install_git_hooks(Path(toplevel.stdout.strip()), args.project_id)
+    _print({"success": True, "hooks": [str(path) for path in installed], "core.hooksPath": ".githooks"})
+    return 0
 
 
 def cmd_version_topic_start(args: argparse.Namespace) -> int:
@@ -587,6 +775,13 @@ def cmd_requirements_run_tests(args: argparse.Namespace) -> int:
     if args.test_command:
         params["test_command"] = args.test_command.split()
     return _requirements_job(args, "requirements.run_tests", params, timeout=600.0)
+
+
+def cmd_requirements_sync_markers(args: argparse.Namespace) -> int:
+    params = {"dry_run": bool(args.dry_run)}
+    if args.suite_id:
+        params["suite_id"] = args.suite_id
+    return _requirements_job(args, "requirements.sync_markers", params, timeout=120.0)
 
 
 def cmd_requirements_report(args: argparse.Namespace) -> int:
@@ -1109,6 +1304,150 @@ def cmd_policy_check_all(args: argparse.Namespace) -> int:
     return _policy_job(args, "policy.check_all", {"policy_id": args.policy_id})
 
 
+GATE_POINTS = (
+    "commit", "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
+    "release", "package_publish", "branch_finish", "project_removal", "project_registration",
+)
+
+
+def format_evaluation(result: dict) -> str:
+    """Readable for a person at a terminal and for Claude reading a refused commit:
+    one summary line, then every failure and error with its reason."""
+    results = result.get("results", [])
+    counts: dict[str, int] = {}
+    for entry in results:
+        counts[entry["outcome"]] = counts.get(entry["outcome"], 0) + 1
+    order = (("fail", "failed"), ("error", "could not run"), ("pass", "passed"), ("not_applicable", "not applicable"))
+    summary = ", ".join(f"{counts[k]} {label}" for k, label in order if counts.get(k)) or "no policy gates it"
+    lines = [f"little-workshop policies gating {result.get('gate_point')} for {result.get('project_id')}: {summary}"]
+    for entry in results:
+        if entry["outcome"] not in ("fail", "error"):
+            continue
+        tag = "FAIL" if entry["outcome"] == "fail" else "ERROR"
+        if entry.get("bypassed"):
+            gating = " (BYPASSED: policy bypass is on, reported but not blocking)"
+        else:
+            gating = "" if entry.get("gating", True) else " (gating off for this project: reported, never blocks)"
+        lines.append(f"\n{tag} {entry['topic']}{gating}\n  rule: {entry.get('ears_text', '')}")
+        lines.extend(f"  {line}" for line in str(entry.get("detail", "")).splitlines())
+    if result.get("bypassed"):
+        lines.append(f"\nPolicy bypass is on: {', '.join(result['bypassed'])} failed and would have blocked this. "
+                     "The violation is recorded and shown on the Dashboard.")
+    if result.get("blocking"):
+        lines.append(
+            f"\nBlocked by: {', '.join(result['blocking'])}. Fix what each failure says and try again; "
+            "the rule's script is shown by `lws policy list --topic <topic>`."
+        )
+    return "\n".join(lines)
+
+
+def cmd_policy_evaluate(args: argparse.Namespace) -> int:
+    """Exit 0: nothing blocks. 1: a gating policy fails. 2: policies could not be
+    evaluated (daemon or sandbox unavailable, request refused), unless --fail-open,
+    which a git hook passes so an unavailable daemon never stops a commit -- the
+    same policies still gate the branch finish."""
+    from cli.commit_info import checkout_root, pending_commit
+
+    paths = Paths.from_env()
+    commit = None
+    checkout = None
+    if args.gate_point == "commit":
+        if not args.commit_message_file:
+            print("error: --gate-point commit needs --commit-message-file (the hook's $1)", file=sys.stderr)
+            return 2
+        root = checkout_root()
+        if root is None:
+            print("error: --gate-point commit runs inside the checkout being committed to", file=sys.stderr)
+            return 2
+        commit = pending_commit(root, Path(args.commit_message_file))
+        checkout = str(root)
+    elif args.checkout:
+        checkout = str(Path(args.checkout).resolve())
+
+    def unavailable(reason: str) -> int:
+        if args.fail_open:
+            print(f"warning: policies gating {args.gate_point} were not checked: {reason}. "
+                  "They still gate the branch finish.", file=sys.stderr)
+            return 0
+        print(f"error: {reason}", file=sys.stderr)
+        return 2
+
+    try:
+        result = client.policy_evaluate(paths, args.project_id, args.gate_point, commit=commit, checkout=checkout)
+    except client.PolicyPillarUnavailable as exc:
+        return unavailable(str(exc))
+    except client.PolicyEvaluationRefused as exc:
+        return unavailable(f"Policy & Compliance refused the request: {exc}")
+
+    if args.json:
+        _print(result)
+    else:
+        print(format_evaluation(result), file=sys.stderr if result.get("blocking") else sys.stdout)
+    if result.get("blocking"):
+        return 1
+    if result.get("errors"):
+        return unavailable(f"{', '.join(result['errors'])} could not run")
+    return 0
+
+
+def _format_bypass(state: dict) -> str:
+    if not state.get("bypass_policies"):
+        return "bypass_policies is FALSE: policies gate as usual."
+    seconds = int(state.get("remaining_seconds", 0))
+    return (f"bypass_policies is TRUE for {seconds // 60}m{seconds % 60:02d}s more: failing checks run from this terminal are "
+            "reported but do not block. Claude, scheduled jobs and the Dashboard are still gated.")
+
+
+def _bypass_paths() -> Paths:
+    """Under `sudo` the home is root's: the pillars' state is the invoking user's."""
+    import pwd
+
+    sudo_user = os.environ.get("SUDO_USER")
+    if os.geteuid() != 0 or not sudo_user:
+        return Paths.from_env()
+    home = Path(pwd.getpwnam(sudo_user).pw_dir)
+    return Paths(config_home=home / ".config" / "little-workshop", state_home=home / ".local" / "state" / "little-workshop")
+
+
+def cmd_bypass_policies(args: argparse.Namespace) -> int:
+    """`sudo lws bypass_policies true [--time N]` raises the flag, `lws bypass_policies false` lowers it,
+    `lws bypass_policies status` reads it. Raising it needs the super user, a terminal and a session that is
+    not Claude's; the Policy pillar checks the origin again."""
+    from common import origin as origins
+    from policy import bypass
+
+    action = args.state
+    try:
+        if action == "status":
+            print(_format_bypass(client.policy_bypass_status(_bypass_paths())))
+            return 0
+        if action == "false":
+            print(_format_bypass(client.policy_bypass_set(_bypass_paths(), enabled=False, minutes=None, actor=os.environ.get("SUDO_USER", ""))))
+            return 0
+        if origins.invoked_by_claude():
+            print("error: the policy bypass is the user's alone; Claude may not turn it on. Ask the user to run "
+                  "`sudo lws bypass_policies true` in their own terminal.", file=sys.stderr)
+            return 1
+        if os.geteuid() != 0 or not os.environ.get("SUDO_USER"):
+            print("error: turning the policy bypass on needs the super user: run `sudo lws bypass_policies true "
+                  f"[--time minutes]` (default {bypass.DEFAULT_MINUTES}, at most {bypass.MAX_MINUTES}).", file=sys.stderr)
+            return 1
+        try:
+            minutes = bypass.validate_minutes(args.time)
+        except bypass.BypassRefused as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        state = client.policy_bypass_set(_bypass_paths(), enabled=True, minutes=minutes, actor=os.environ["SUDO_USER"])
+    except client.PolicyBypassRefused as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except client.PolicyPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(_format_bypass(state))
+    return 0
+
+
 def cmd_policy_results(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     _print(client.policy_check_results(paths, args.policy_id, args.project_id))
@@ -1270,6 +1609,49 @@ def cmd_deployment_redeploy_pillar(args: argparse.Namespace) -> int:
     return 0 if result.get("status") in ("succeeded", "running") else 1
 
 
+def cmd_deployment_redeploy_changed_pillars(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    params = {key: value for key, value in (("commit", args.commit), ("base", args.base)) if value}
+    try:
+        job = client.create_job(paths, type="deployment.redeploy_changed_pillars", target_pillar="deployment", project_id=None,
+                                params=params, queue_key="redeploy-changed-pillars", depends_on=[], created_by="cli")
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(job)
+    return 0 if job.get("status") == "succeeded" else 1
+
+
+def cmd_deployment_redeploy_pillars(args: argparse.Namespace) -> int:
+    """Several pillars in dependency order (common/redeploy_plan.py): batches, each starting once the one
+    before has succeeded. Without --pillar, every enabled pillar."""
+    from common import redeploy_plan
+
+    paths = Paths.from_env()
+    status = client.core_status(paths).get("pillars", {})
+    wanted = args.pillar or [name for name, info in status.items() if info.get("status") != "disabled"]
+    unknown = [p for p in wanted if p not in status]
+    if unknown:
+        print(f"error: not pillars of this installation: {', '.join(unknown)}", file=sys.stderr)
+        return 1
+    batches = redeploy_plan.redeploy_batches(wanted)
+    for number, batch in enumerate(batches, 1):
+        print(f"batch {number}/{len(batches)}: {', '.join(batch)}", file=sys.stderr)
+
+    def create(template: dict) -> None:
+        client.post_job(paths, timeout=330.0, **template)
+
+    try:
+        plan = redeploy_plan.submit_redeploy_batches(
+            create, wanted, args.commit, created_by="lws", confirm_timeout_seconds=args.confirm_timeout,
+        )
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print({"commit": args.commit, "batches": plan})
+    return 0
+
+
 def cmd_deployment_redeploy_pillar_worker(args: argparse.Namespace) -> int:
     """The self-redeploy escape hatch's worker: runs the redeploy directly
     against Deployment & Servers' own database, in its own independent
@@ -1295,6 +1677,8 @@ def cmd_deployment_redeploy_pillar_worker(args: argparse.Namespace) -> int:
         payload = {"branch": result.branch, "version": result.version, "commit": result.commit, "how": result.how}
         if result.confirm_message:
             payload["confirm_message"] = result.confirm_message
+        if result.cli_note:
+            payload["cli_note"] = result.cli_note
         succeeded, error = True, None
     except (DeploymentError, RuntimeError) as exc:
         # RuntimeError alongside DeploymentError: deployment.gitutil's own
@@ -1398,6 +1782,123 @@ def cmd_agent_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_usage_summary(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        summary = client.usage_summary(paths, project=args.project_id, week=args.week, origin=args.origin)
+    except client.UsagePillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not args.days:
+        for key in ("days", "previous_week", "next_week", "four_week_average", "pays_for_itself", "outcomes_by_week"):
+            summary.pop(key, None)
+    _print(summary)
+    return 0
+
+
+def _usage_job(job_type: str, params: dict) -> int:
+    paths = Paths.from_env()
+    try:
+        job = client.create_job(paths, type=job_type, target_pillar="usage", project_id=None, params=params,
+                                queue_key="usage", depends_on=[], created_by="cli", timeout=600.0)
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    _print(job)
+    return 0 if job.get("status") == "succeeded" else 1
+
+
+def cmd_usage_findings(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _print(client.usage_findings(paths, project=args.project_id, state=args.state))
+    except client.UsagePillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_usage_analyze(args: argparse.Namespace) -> int:
+    return _usage_job("usage.analyze", {})
+
+
+def cmd_usage_candidates(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _print(client.usage_candidates(paths, state=args.state, limit=args.limit))
+    except client.UsagePillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_usage_plugin_proposals(args: argparse.Namespace) -> int:
+    paths = Paths.from_env()
+    try:
+        _print(client.usage_plugin_proposals(paths, state=args.state, limit=args.limit))
+    except client.UsagePillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_usage_mine_automation(args: argparse.Namespace) -> int:
+    return _usage_job("usage.mine_automation", {})
+
+
+def _trigger(method: str, path: str = "", body: dict | None = None) -> int:
+    try:
+        _print(client.trigger_request(Paths.from_env(), method, path, json=body))
+    except client.DaemonUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_trigger_list(args: argparse.Namespace) -> int:
+    return _trigger("GET")
+
+
+def cmd_trigger_add(args: argparse.Namespace) -> int:
+    try:
+        params = json.loads(args.params) if args.params else {}
+        event_filter = json.loads(args.filter) if args.filter else {}
+    except ValueError as exc:
+        print(f"error: --params and --filter take a JSON object: {exc}", file=sys.stderr)
+        return 2
+    template = {"type": args.type, "target_pillar": args.target_pillar, "project_id": args.project_id, "params": params,
+                "queue_key": args.queue_key, "depends_on": []}
+    return _trigger("POST", body={"name": args.name, "on": {"event": args.event, "filter": event_filter}, "job_template": template})
+
+
+def cmd_trigger_remove(args: argparse.Namespace) -> int:
+    return _trigger("DELETE", f"/{args.trigger_id}")
+
+
+def cmd_trigger_enable(args: argparse.Namespace) -> int:
+    return _trigger("PATCH", f"/{args.trigger_id}", {"enabled": True})
+
+
+def cmd_trigger_disable(args: argparse.Namespace) -> int:
+    return _trigger("PATCH", f"/{args.trigger_id}", {"enabled": False})
+
+
+def cmd_trigger_install_defaults(args: argparse.Namespace) -> int:
+    return _trigger("POST", "/install-defaults")
+
+
+def cmd_usage_doctor(args: argparse.Namespace) -> int:
+    return _usage_job("usage.doctor", {})
+
+
+def cmd_usage_ingest_transcripts(args: argparse.Namespace) -> int:
+    return _usage_job("usage.ingest_transcripts", {})
+
+
+def cmd_usage_configure_claude(args: argparse.Namespace) -> int:
+    return _usage_job("usage.configure_claude", {"apply": bool(args.apply)})
+
+
 def cmd_agent_run_status(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -1493,8 +1994,8 @@ def cmd_agent_session_list(args: argparse.Namespace) -> int:
 def cmd_job_queue_show(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
-        running = client.list_jobs(paths, status="running")["jobs"]
-        queued = client.list_jobs(paths, status="queued")["jobs"]
+        running = client.list_jobs(paths, status="running", summary=True)["jobs"]
+        queued = client.list_jobs(paths, status="queued", summary=True)["jobs"]
     except Exception as exc:  # noqa: BLE001 — surfaced as a plain CLI error
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -1516,7 +2017,7 @@ def cmd_job_queue_show(args: argparse.Namespace) -> int:
 def cmd_job_queue_release(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
-        running = client.list_jobs(paths, status="running")["jobs"]
+        running = client.list_jobs(paths, status="running", summary=True)["jobs"]
     except Exception as exc:  # noqa: BLE001
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -1594,6 +2095,69 @@ def build_parser() -> argparse.ArgumentParser:
     core_status = core_sub.add_parser("status", help="Show every pillar's registered status")
     core_status.set_defaults(func=cmd_core_status)
 
+    usage = subparsers.add_parser("usage", help="Claude usage: Usage & Efficiency commands")
+    usage_sub = usage.add_subparsers(dest="usage_command", required=True)
+    u_summary = usage_sub.add_parser("summary", help="One week's Claude usage, for everything or one project")
+    u_summary.add_argument("--project-id", default=None)
+    u_summary.add_argument("--week", default=None, help="Any day of the week wanted (YYYY-MM-DD); default the current week")
+    u_summary.add_argument("--origin", default=None, choices=["interactive", "job", "query", "subagent"])
+    u_summary.add_argument("--days", action="store_true", help="Include the per-day series and the weeks compared")
+    u_summary.set_defaults(func=cmd_usage_summary)
+    u_findings = usage_sub.add_parser("findings", help="What the detectors found, ranked by estimated saving")
+    u_findings.add_argument("--project-id", default=None)
+    u_findings.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "resolved", "all"])
+    u_findings.set_defaults(func=cmd_usage_findings)
+    u_analyze = usage_sub.add_parser("analyze", help="Run the detectors now and measure the experiments that are due")
+    u_analyze.set_defaults(func=cmd_usage_analyze)
+    u_candidates = usage_sub.add_parser("candidates", help="Work Claude repeats that code could do, ranked by the estimated net saving")
+    u_candidates.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "done", "all"])
+    u_candidates.add_argument("--limit", type=int, default=20, help="How many, from the costliest (default 20)")
+    u_candidates.set_defaults(func=cmd_usage_candidates)
+    u_plugins = usage_sub.add_parser("plugin-proposals", help="Requests Claude repeats that a plugin of hooks and scripts could take "
+                                     "over, ranked by the net saving (installed plugins: `claude plugin list`)")
+    u_plugins.add_argument("--state", default="open", choices=["open", "accepted", "dismissed", "done", "all"])
+    u_plugins.add_argument("--limit", type=int, default=20, help="How many, from the costliest (default 20)")
+    u_plugins.set_defaults(func=cmd_usage_plugin_proposals)
+    u_mine = usage_sub.add_parser("mine-automation", help="Mine the last 14 days of tool calls into automation candidates and plugin proposals")
+    u_mine.set_defaults(func=cmd_usage_mine_automation)
+    u_doctor = usage_sub.add_parser("doctor", help="Check the configuration usage collection depends on")
+    u_doctor.set_defaults(func=cmd_usage_doctor)
+    u_ingest = usage_sub.add_parser("ingest-transcripts", help="Backfill usage from the local Claude transcripts")
+    u_ingest.set_defaults(func=cmd_usage_ingest_transcripts)
+    u_configure = usage_sub.add_parser("configure-claude", help="Show, or with --apply write, the Claude user profile")
+    u_configure.add_argument("--apply", action="store_true", help="Write ~/.claude/settings.json (a backup is kept)")
+    u_configure.set_defaults(func=cmd_usage_configure_claude)
+
+    bypass_policies = subparsers.add_parser(
+        "bypass_policies",
+        help="The user's temporary policy bypass: `sudo lws bypass_policies true --time 5`, `... false`, `... status`")
+    bypass_policies.add_argument("state", choices=["true", "false", "status"])
+    bypass_policies.add_argument("--time", type=int, default=None, metavar="MINUTES",
+                                 help="How long the bypass lasts (default 2, at most 30); with `true` only")
+    bypass_policies.set_defaults(func=cmd_bypass_policies)
+
+    trigger = subparsers.add_parser("trigger", help="Workshop triggers: an event starts a Job")
+    trigger_sub = trigger.add_subparsers(dest="trigger_command", required=True)
+    trigger_sub.add_parser("list", help="List the triggers").set_defaults(func=cmd_trigger_list)
+    t_add = trigger_sub.add_parser("add", help="Add a trigger")
+    t_add.add_argument("name")
+    t_add.add_argument("--event", required=True, help="job.settled, job.succeeded, job.failed, version.branch_finished, "
+                       "version.release_finished, claude.session_ended, usage.finding_opened, registry.project_registered")
+    t_add.add_argument("--filter", default=None, help="JSON object of event values that must match")
+    t_add.add_argument("--type", required=True, help="The Job type the trigger creates")
+    t_add.add_argument("--target-pillar", required=True)
+    t_add.add_argument("--project-id", default=None, help="The Job's project; omitted, the event's project")
+    t_add.add_argument("--params", default=None, help="JSON object; a value `$event.<key>` takes that value of the event")
+    t_add.add_argument("--queue-key", default=None)
+    t_add.set_defaults(func=cmd_trigger_add)
+    for name, func, text in (("remove", cmd_trigger_remove, "Remove a trigger"), ("enable", cmd_trigger_enable, "Enable a trigger"),
+                             ("disable", cmd_trigger_disable, "Disable a trigger")):
+        sub_parser = trigger_sub.add_parser(name, help=text)
+        sub_parser.add_argument("trigger_id")
+        sub_parser.set_defaults(func=func)
+    trigger_sub.add_parser("install-defaults", help="Add little-workshop's own triggers that are not there yet").set_defaults(
+        func=cmd_trigger_install_defaults)
+
     job = subparsers.add_parser("job", help="Orchestration Job commands")
     job_sub = job.add_subparsers(dest="job_command", required=True)
 
@@ -1606,8 +2170,13 @@ def build_parser() -> argparse.ArgumentParser:
     job_create.add_argument("--depends-on", action="append", default=None)
     job_create.set_defaults(func=cmd_job_create)
 
-    job_list = job_sub.add_parser("list", help="List Jobs")
-    job_list.add_argument("--status", default=None)
+    job_list = job_sub.add_parser(
+        "list", help="List Jobs, newest first, as summaries (large params and result values named under _omitted; "
+                     "`job status <id>` shows one in full)")
+    job_list.add_argument("--status", default=None, help="One or several statuses, comma-separated")
+    job_list.add_argument("--type", default=None, help="One or several job types, comma-separated")
+    job_list.add_argument("--limit", type=int, default=50, help="At most this many (default 50; 0 for every Job)")
+    job_list.add_argument("--full", action="store_true", help="Whole params and results instead of summaries")
     job_list.set_defaults(func=cmd_job_list)
 
     job_status = job_sub.add_parser("status", help="Show one Job")
@@ -1617,6 +2186,21 @@ def build_parser() -> argparse.ArgumentParser:
     job_stop = job_sub.add_parser("stop", help="Interrupt a currently running Job")
     job_stop.add_argument("job_id")
     job_stop.set_defaults(func=cmd_job_stop)
+
+    job_answer = job_sub.add_parser("answer", help="Answer a step that is waiting for your attention")
+    job_answer.add_argument("job_id")
+    job_answer.add_argument("step", help="The step's key, as the question printed it")
+    job_answer.add_argument("choice", help="One of the question's option ids")
+    job_answer.set_defaults(func=cmd_job_answer)
+
+    job_wait = job_sub.add_parser("wait", help="Wait until a Job settles, is held for a confirmation or asks a question")
+    job_wait.add_argument("job_id")
+    job_wait.add_argument("--timeout", type=float, default=None, help="Seconds to wait at most (default 120, at most 300)")
+    job_wait.set_defaults(func=cmd_job_wait)
+
+    job_watch = job_sub.add_parser("watch", help="Follow a Job's checklist until it ends")
+    job_watch.add_argument("job_id")
+    job_watch.set_defaults(func=cmd_job_watch)
 
     job_policy_confirm = job_sub.add_parser("policy-confirm", help="Confirm a policy-gated Job pending_confirmation, dispatching it")
     job_policy_confirm.add_argument("job_id")
@@ -1706,6 +2290,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_bootstrap = project_sub.add_parser("bootstrap", help="Scaffold and register a new project")
     project_bootstrap.add_argument("name")
     project_bootstrap.add_argument("--dest-dir", required=True)
+    project_bootstrap.add_argument("--template", choices=["python", "unity"], default="python")
     project_bootstrap.add_argument("--owner", default="dfluxcbf")
     project_bootstrap.add_argument("--description", default="")
     project_bootstrap.add_argument("--create-github-repo", action="store_true")
@@ -1714,6 +2299,27 @@ def build_parser() -> argparse.ArgumentParser:
     project_bootstrap.add_argument("--github-token", default=None)
     project_bootstrap.add_argument("--no-labels", dest="ensure_labels", action="store_false", default=True)
     project_bootstrap.set_defaults(func=cmd_project_bootstrap)
+
+    project_connect = project_sub.add_parser(
+        "connect-github", help="Create or adopt a registered project's GitHub repo, labels and repo_url"
+    )
+    project_connect.add_argument("name")
+    project_connect.add_argument("--owner", default="dfluxcbf")
+    project_connect.add_argument("--description", default="")
+    project_connect.add_argument("--public", action="store_true")
+    project_connect.add_argument("--remote-host", default="github.com")
+    project_connect.add_argument("--github-token", default=None)
+    project_connect.add_argument("--no-labels", dest="ensure_labels", action="store_false", default=True)
+    project_connect.set_defaults(func=cmd_project_connect_github)
+
+    project_assets = project_sub.add_parser(
+        "configure-assets", help="Choose the checkout folder whose assets the Dashboard shows, and give the project the asset-review MCP server"
+    )
+    project_assets.add_argument("--project-id", required=True)
+    project_assets.add_argument("--dir", default=None, help="Folder of the checkout, relative to its root")
+    project_assets.add_argument("--off", action="store_true", help="Turn asset review off for the project")
+    project_assets.add_argument("--no-mcp", action="store_true", help="Do not declare the MCP server in .mcp.json")
+    project_assets.set_defaults(func=cmd_project_configure_assets)
 
     project_import = project_sub.add_parser("import", help="Register an existing, already-conformant repository")
     project_import.add_argument("name")
@@ -1728,6 +2334,24 @@ def build_parser() -> argparse.ArgumentParser:
     project_remove.add_argument("name")
     project_remove.set_defaults(func=cmd_project_remove)
 
+    project_backlog = project_sub.add_parser("backlog", help="A project's backlog: entries to refine into tasks")
+    backlog_sub = project_backlog.add_subparsers(dest="backlog_command", required=True)
+    backlog_list = backlog_sub.add_parser("list", help="List the project's backlog entries")
+    backlog_list.add_argument("--project-id", required=True)
+    backlog_list.set_defaults(func=cmd_project_backlog_list)
+    backlog_show = backlog_sub.add_parser("show", help="Show one entry: primary entry, notes, refined entry, task prompt")
+    backlog_show.add_argument("--project-id", required=True)
+    backlog_show.add_argument("entry_id")
+    backlog_show.set_defaults(func=cmd_project_backlog_show)
+    backlog_add = backlog_sub.add_parser("add", help="Add an entry, as written (its primary entry)")
+    backlog_add.add_argument("--project-id", required=True)
+    backlog_add.add_argument("text", help="The entry's text, or - to read it from standard input")
+    backlog_add.set_defaults(func=cmd_project_backlog_add)
+    backlog_delete = backlog_sub.add_parser("delete", help="Delete an entry and everything it holds")
+    backlog_delete.add_argument("--project-id", required=True)
+    backlog_delete.add_argument("entry_id")
+    backlog_delete.set_defaults(func=cmd_project_backlog_delete)
+
     version = subparsers.add_parser("version", help="Version Control & Release commands")
     version_sub = version.add_subparsers(dest="version_command", required=True)
 
@@ -1741,8 +2365,15 @@ def build_parser() -> argparse.ArgumentParser:
         "sync-version-files",
         help="Compute and write the current working branch's VERSION, propagate it via version_hooks, and stage everything touched",
     )
-    sync_version_files.add_argument("--project-id", required=True)
+    sync_version_files.add_argument("--project-id", default=None, help="Accepted for installed hooks; the sync acts on the current checkout")
     sync_version_files.set_defaults(func=cmd_version_sync_version_files)
+
+    install_hooks = version_sub.add_parser(
+        "install-hooks",
+        help="Install the project's git hooks in this checkout: VERSION sync (pre-commit) and policy check (commit-msg)",
+    )
+    install_hooks.add_argument("--project-id", required=True, help="Baked into the hooks")
+    install_hooks.set_defaults(func=cmd_version_install_hooks)
 
     def _add_topic_commands(prefix: str) -> None:
         start = version_sub.add_parser(f"{prefix}-start", help=f"Start a {prefix}/* branch")
@@ -1991,6 +2622,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_tests.add_argument("--test-command", default=None, help="Space-separated command, default: python3 -m pytest")
     run_tests.set_defaults(func=cmd_requirements_run_tests)
 
+    sync_markers = requirements_sub.add_parser(
+        "sync-markers", help="Create and link the requirements the tests' `# --- REQ-nnnnnnnnn: title ---` markers name")
+    sync_markers.add_argument("--project-id", required=True)
+    sync_markers.add_argument("--suite-id", default=None, help="The suite to link to (default: the suite named 'Unit tests')")
+    sync_markers.add_argument("--dry-run", action="store_true", help="Only report what would be created and linked")
+    sync_markers.set_defaults(func=cmd_requirements_sync_markers)
+
     report = requirements_sub.add_parser("report", help="Definition-of-done report for a project")
     report.add_argument("--project-id", required=True)
     report.add_argument("--csv", action="store_true", default=False, help="Also write a CSV report file")
@@ -2111,7 +2749,7 @@ def build_parser() -> argparse.ArgumentParser:
     policy_author.add_argument("--scope-target", default=None)
     policy_author.add_argument("--created-by", default="user", choices=["user", "framework"])
     policy_author.add_argument("--policy-id", default=None, help="Editing an existing policy: exclude it from conflict checks")
-    policy_author.add_argument("--gate-points", default=None, help="Comma-separated: build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
+    policy_author.add_argument("--gate-points", default=None, help="Comma-separated: commit,build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
     policy_author.add_argument("--save-draft", action="store_true", help="Keep the result as a draft to review and approve in the Dashboard")
     policy_author.add_argument("--source", default=None, help="With --save-draft: where the rule came from")
     policy_author.set_defaults(func=cmd_policy_author)
@@ -2163,8 +2801,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     policy_gating_for_job = policy_sub.add_parser("gating-for-job", help="Which policies currently gate a project for a given set of action categories")
     policy_gating_for_job.add_argument("--project-id", required=True)
-    policy_gating_for_job.add_argument("--categories", required=True, help="Comma-separated: build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
+    policy_gating_for_job.add_argument("--categories", required=True, help="Comma-separated: commit,build_install,server_launch,deploy_redeploy,self_redeploy,server_stop,release,package_publish,branch_finish,project_removal,project_registration")
     policy_gating_for_job.set_defaults(func=cmd_policy_gating_for_job)
+
+    policy_evaluate = policy_sub.add_parser(
+        "evaluate",
+        help="Run now, in the sandbox, every policy that gates a gate point for a project, without "
+             "recording or holding anything: the commit-msg hook's check, or a preflight before a gated action",
+    )
+    policy_evaluate.add_argument("--project-id", required=True)
+    policy_evaluate.add_argument("--gate-point", required=True, choices=GATE_POINTS)
+    policy_evaluate.add_argument("--commit-message-file", default=None,
+                                 help="With --gate-point commit: the message file git hands the commit-msg hook")
+    policy_evaluate.add_argument("--checkout", default=None,
+                                 help="Judge this checkout (a git worktree of the project) instead of the registered one")
+    policy_evaluate.add_argument("--fail-open", action="store_true",
+                                 help="Exit 0 with a warning when the policies cannot be evaluated (what git hooks pass)")
+    policy_evaluate.add_argument("--json", action="store_true", help="Print the raw result")
+    policy_evaluate.set_defaults(func=cmd_policy_evaluate)
 
     policy_catalog = policy_sub.add_parser("catalog", help="docs/pillars/policy_catalog.md's ~50 candidate framework policies (M13)")
     policy_catalog_sub = policy_catalog.add_subparsers(dest="policy_catalog_command", required=True)
@@ -2254,11 +2908,25 @@ def build_parser() -> argparse.ArgumentParser:
     d_branches.add_argument("--project-id", required=True)
     d_branches.set_defaults(func=cmd_deployment_branches)
 
+    d_changed = deployment_sub.add_parser(
+        "redeploy-changed-pillars", help="Redeploy the pillars whose code differs from a commit (default HEAD) from what they run")
+    d_changed.add_argument("--commit", default=None)
+    d_changed.add_argument("--base", default=None, help="Compare every pillar against this commit instead of the one it runs")
+    d_changed.set_defaults(func=cmd_deployment_redeploy_changed_pillars)
+
     d_redeploy = deployment_sub.add_parser("redeploy-pillar", help="Redeploy one of little-workshop's own pillars from a commit")
     d_redeploy.add_argument("pillar")
     d_redeploy.add_argument("--commit", default="HEAD")
     d_redeploy.add_argument("--confirm-timeout", type=int, default=None)
     d_redeploy.set_defaults(func=cmd_deployment_redeploy_pillar)
+
+    d_redeploy_many = deployment_sub.add_parser(
+        "redeploy-pillars", help="Redeploy several of little-workshop's own pillars (default: all) in dependency order, in batches"
+    )
+    d_redeploy_many.add_argument("--pillar", action="append", default=None, help="A pillar to redeploy; repeat for several")
+    d_redeploy_many.add_argument("--commit", default="HEAD")
+    d_redeploy_many.add_argument("--confirm-timeout", type=int, default=None)
+    d_redeploy_many.set_defaults(func=cmd_deployment_redeploy_pillars)
 
     d_redeploy_worker = deployment_sub.add_parser(
         "redeploy-pillar-worker", help="(internal) direct self-redeploy execution, dispatched to escape a doomed cgroup"
@@ -2358,6 +3026,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     mcp_serve = mcp_sub.add_parser("serve", help="Run the MCP server over stdio (what `claude mcp add` registers)")
     mcp_serve.set_defaults(func=cmd_mcp_serve)
+
+    asset_mcp = subparsers.add_parser("asset-mcp", help="The per-project asset-review MCP server (3D model and previews of Blender files)")
+    asset_mcp_sub = asset_mcp.add_subparsers(dest="asset_mcp_command", required=True)
+    asset_mcp_serve = asset_mcp_sub.add_parser("serve", help="Run the asset-review MCP server over stdio for one project")
+    asset_mcp_serve.add_argument("--project-id", required=True)
+    asset_mcp_serve.set_defaults(func=cmd_asset_mcp_serve)
 
     return parser
 

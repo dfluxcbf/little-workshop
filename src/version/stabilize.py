@@ -32,6 +32,7 @@ from version.gitops import (
     current_branch,
     delete_branch,
     is_dirty,
+    is_merged,
     is_merge_in_progress,
     is_rebase_in_progress,
     run as git_run,
@@ -161,10 +162,11 @@ def stabilize(repo_root: Path, *, execute: bool = False) -> StabilizeResult:
             result.pushed.append(branch)
 
     for base in {integration, production}:
-        merged = git_run(["git", "branch", "-r", "--merged", f"origin/{base}"], repo_root, check=False)
-        for line in merged.stdout.splitlines():
+        # Merged by history, or squash-merged (a finish's commits never become ancestors of the target).
+        remotes = git_run(["git", "branch", "-r"], repo_root, check=False)
+        for line in remotes.stdout.splitlines():
             ref = line.strip()
-            if not ref.startswith("origin/") or "->" in ref:
+            if "->" in ref or not ref.startswith("origin/") or not is_merged(repo_root, ref, f"origin/{base}"):
                 continue
             name = ref[len("origin/"):]
             if name in PROTECTED_NAMES or name.startswith(PROTECTED_PREFIXES) or name in {integration, production}:

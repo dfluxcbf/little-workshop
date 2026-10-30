@@ -43,16 +43,16 @@ def ready_jobs(conn: sqlite3.Connection) -> list[Job]:
 
 
 def cascade_dependency_failures(conn: sqlite3.Connection) -> list[Job]:
-    """A queued Job whose dependency has failed or was cancelled can never
-    become ready — fail it too, and repeat until nothing new changes so a
-    multi-level dependency chain fails all the way through."""
+    """A queued Job whose dependency has failed, was cancelled or was stopped
+    can never become ready — fail it too, and repeat until nothing new changes
+    so a multi-level dependency chain fails all the way through."""
     changed: list[Job] = []
     while True:
         round_changed: list[Job] = []
         for job in list_jobs(conn, status=JobStatus.QUEUED):
             for dep_id in job.depends_on:
                 dep = get_job(conn, dep_id)
-                if dep is not None and dep.status in (JobStatus.FAILED, JobStatus.CANCELLED):
+                if dep is not None and dep.status in (JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.STOPPED):
                     job.status = JobStatus.FAILED
                     job.error = f"dependency {dep_id} {dep.status.value}"
                     update_job(conn, job)

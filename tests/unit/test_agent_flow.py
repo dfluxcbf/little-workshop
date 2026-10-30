@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent import db
-from agent.flow import AgentFlow, AgentFlowError
+from agent.flow import STOPPED_BY_USER, AgentFlow, AgentFlowError
 from agent.github_adapter import GitHubAdapter
 from agent.version_client import VersionClientError
 from common.paths import Paths
@@ -576,6 +576,37 @@ def test_run_task_records_remote_control_session_when_enabled(paths, conn, tmp_p
     assert rows[0]["session_name"].startswith("lws-little-meals-run-")
 
 
+def _setup_run(paths, conn, tmp_path, monkeypatch, runner):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    return repo, AgentFlow(paths=paths, runner=runner, remote_control=True)
+
+
+# REQ-000000399: stopped_at is set when the run's Claude work ends, whichever way it ends.
+def test_run_task_sets_stopped_at_of_its_remote_control_session_when_claude_completes(paths, conn, tmp_path, monkeypatch):
+    repo, flow = _setup_run(paths, conn, tmp_path, monkeypatch, WritingClaudeRunner())
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new", "branch_type": "improvement"}})
+    assert result.status == db.AWAITING_FINISH
+    assert [r["stopped_at"] is not None for r in db.list_sessions(conn, result.run_id)] == [True]
+
+
+def test_run_task_sets_stopped_at_of_its_remote_control_session_when_claude_fails(paths, conn, tmp_path, monkeypatch):
+    repo, flow = _setup_run(paths, conn, tmp_path, monkeypatch, WritingClaudeRunner(claude_ok=False))
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new", "branch_type": "improvement"}})
+    assert result.status == db.FAILED
+    assert [r["stopped_at"] is not None for r in db.list_sessions(conn, result.run_id)] == [True]
+
+
+def test_run_task_sets_stopped_at_of_its_remote_control_session_when_stopped(paths, conn, tmp_path, monkeypatch):
+    runner = WritingClaudeRunner()
+    repo, flow = _setup_run(paths, conn, tmp_path, monkeypatch, runner)
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new", "branch_type": "improvement"}},
+                           should_stop=lambda: any(call[0] == "claude" for call in runner.calls))  # stopped once Claude ran
+    assert result.status == db.FAILED and db.get_run(conn, result.run_id)["summary"] == STOPPED_BY_USER
+    assert [r["stopped_at"] is not None for r in db.list_sessions(conn, result.run_id)] == [True]
+
+
 def test_run_task_invokes_screenshotter_when_deployment_manifest_given(paths, conn, tmp_path, monkeypatch):
     repo = make_repo(tmp_path)
     _git(["checkout", "dev"], repo)
@@ -866,3 +897,211 @@ def test_run_ci_check_passes_through_test_command_and_timeout(paths, conn, monke
     assert captured["params"]["test_command"] == "python3 -m pytest tests/unit"
     assert captured["params"]["commitish"] == "abc123"
     assert captured["timeout"] == 42.0
+
+
+# --- REQ-000000252: Agent runs get the Playwright MCP server ------------------
+
+
+class NpxClaudeRunner(WritingClaudeRunner):
+    """`npx` present or absent on the host, independent of the machine the tests run on."""
+
+    def __init__(self, *, npx: bool, **kw):
+        super().__init__(**kw)
+        self.npx = npx
+
+    def run(self, argv, timeout=None, cwd=None):
+        if argv == ["which", "npx"]:
+            self.calls.append(argv)
+            return CommandResult(0 if self.npx else 1, "", "")
+        return super().run(argv, timeout=timeout, cwd=cwd)
+
+
+def _claude_call(runner):
+    return next(c for c in runner.calls if c and c[0] == "claude")
+
+
+def test_run_task_attaches_the_playwright_mcp_server(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = NpxClaudeRunner(npx=True)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
+
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "restyle the menu", "branching": {"mode": "new"}})
+
+    argv = _claude_call(runner)
+    assert argv[-2] == "--mcp-config"  # last: it takes every value after it
+    server = json.loads(argv[-1])["mcpServers"]["playwright"]
+    assert server["command"] == "npx"
+    assert "@playwright/mcp@" in server["args"][1] and "--headless" in server["args"]
+    out_dir = Path(server["args"][server["args"].index("--output-dir") + 1])
+    assert out_dir == paths.state_home / "playwright-mcp" / f"run-{result.run_id}"
+    assert repo not in out_dir.parents  # snapshots never land in the checkout the run commits
+    assert "Playwright MCP server attached" in argv[2]
+    assert "tests/ui/" in argv[2]
+
+
+def test_run_task_without_npx_runs_without_playwright_and_says_so(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = NpxClaudeRunner(npx=False)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
+
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    argv = _claude_call(runner)
+    assert result.status == db.AWAITING_FINISH
+    assert "--mcp-config" not in argv
+    assert "not attached to this session" in argv[2]
+    assert "tests/ui/" in argv[2]
+
+
+def test_run_task_params_can_turn_playwright_off(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = NpxClaudeRunner(npx=True)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
+
+    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}, "playwright_mcp": False})
+
+    assert "--mcp-config" not in _claude_call(runner)
+    assert ["which", "npx"] not in runner.calls
+
+
+def test_run_task_server_is_pinned_in_memory_and_uses_the_hosts_chromium(paths, conn, tmp_path, monkeypatch):
+    from common import playwright
+
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    chromium = tmp_path / "browsers" / "chromium-1234" / "chrome-linux64" / "chrome"
+    monkeypatch.setattr(playwright, "installed_chromium", lambda root=None: chromium)
+    runner = NpxClaudeRunner(npx=True)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
+
+    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    args = json.loads(_claude_call(runner)[-1])["mcpServers"]["playwright"]["args"]
+    assert args[:2] == ["-y", playwright.MCP_PACKAGE]
+    assert "--isolated" in args  # an in-memory profile, nothing kept between runs
+    assert args[args.index("--executable-path") + 1] == str(chromium)
+
+
+# --- REQ-000000254: the agent is told to verify UI/UX in a browser and cover it with Playwright tests ---
+
+
+def _run_task_prompt(paths, conn, tmp_path, monkeypatch, *, npx: bool) -> str:
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = NpxClaudeRunner(npx=npx)
+    AgentFlow(paths=paths, runner=runner, remote_control=False).run_task(
+        conn, "little-meals", repo, None, {"title": "restyle the menu", "branching": {"mode": "new"}},
+    )
+    return _claude_call(runner)[2]
+
+
+def test_prompt_with_the_server_asks_for_a_browser_check_on_phone_and_desktop_and_ui_tests(paths, conn, tmp_path, monkeypatch):
+    prompt = _run_task_prompt(paths, conn, tmp_path, monkeypatch, npx=True)
+
+    assert "browser_navigate" in prompt
+    assert "phone viewport" in prompt and "412×915" in prompt and "desktop" in prompt
+    assert "pytest-playwright tests under `tests/ui/`" in prompt
+    assert 'relative URLs (`page.goto("/")`)' in prompt
+
+
+def test_prompt_without_the_server_still_asks_for_ui_tests_and_says_the_ui_went_unchecked(paths, conn, tmp_path, monkeypatch):
+    prompt = _run_task_prompt(paths, conn, tmp_path, monkeypatch, npx=False)
+
+    assert "browser_navigate" not in prompt
+    assert "pytest-playwright tests under `tests/ui/`" in prompt
+    assert 'relative URLs (`page.goto("/")`)' in prompt
+    assert "Say in the report that the UI was not checked in a browser." in prompt
+
+
+# --- the temporary copy of shared_project_standards -----------------------------
+
+def _standards_root(tmp_path: Path) -> Path:
+    root = tmp_path / "shared_project_standards"
+    (root / "little_meals_standards").mkdir(parents=True)
+    (root / "README.md").write_text("index", encoding="utf-8")
+    (root / "little_meals_standards" / "README.md").write_text("meals", encoding="utf-8")
+    return root
+
+
+class _SpyingRunner(WritingClaudeRunner):
+    """Records what the prompt names and what sits at that path while Claude runs."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.prompt = ""
+        self.seen: set[str] = set()
+        self.path: Path | None = None
+
+    def run(self, argv, timeout=None, cwd=None):
+        if argv and argv[0] == "claude":
+            self.prompt = argv[2]
+            lines = [ln.strip() for ln in self.prompt.splitlines()]
+            named = [ln for ln in lines if ln.endswith("shared_project_standards") and ln.startswith("/")]
+            if named:
+                self.path = Path(named[0])
+                self.seen = {str(p.relative_to(self.path)) for p in self.path.rglob("*") if p.is_file()}
+        return super().run(argv, timeout=timeout, cwd=cwd)
+
+
+def test_run_task_gives_claude_a_temporary_standards_copy_and_deletes_it(paths, conn, tmp_path, monkeypatch):
+    """REQ-000000286, REQ-000000287."""
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = _SpyingRunner()
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
+
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    assert result.status == db.AWAITING_FINISH
+    assert runner.seen == {"README.md", "little_meals_standards/README.md"}
+    assert "little_meals_standards/" in runner.prompt and "read-only copy" in runner.prompt
+    assert runner.path is not None and not runner.path.exists() and not runner.path.parent.exists()
+
+
+def test_run_task_deletes_the_standards_copy_when_the_task_fails(paths, conn, tmp_path, monkeypatch):
+    """REQ-000000287."""
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = _SpyingRunner(claude_ok=False)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
+
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    assert result.status == db.FAILED
+    assert runner.path is not None and not runner.path.parent.exists()
+
+
+def test_run_task_without_the_standards_option_makes_no_copy(paths, conn, tmp_path, monkeypatch):
+    """REQ-000000288."""
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = _SpyingRunner()
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
+
+    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}, "include_standards": False})
+
+    assert runner.path is None and "Shared project standards" not in runner.prompt and "shared_project_standards" not in runner.prompt
+
+
+def test_run_task_carries_on_when_no_standards_folder_can_be_found(paths, conn, tmp_path, monkeypatch):
+    """REQ-000000289: a missing source never fails a task."""
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = _SpyingRunner()
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=tmp_path / "missing")
+
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    assert result.status == db.AWAITING_FINISH and runner.path is None

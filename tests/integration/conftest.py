@@ -7,13 +7,23 @@ here, even though it looks natural and worked fine outside Bazel.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
+import warnings
 from pathlib import Path
 
 import pytest
 
+import helpers
 from helpers import SRC, WorkshopEnv  # noqa: F401 (re-exported: sys.path setup runs on import)
+
+# Beside a running live install, collect nothing here: these tests would stop its pillars (REQ-000000381,
+# helpers.live_pillar_units). Not a skip, which a test run would record as a result.
+_in_the_way = helpers.units_in_the_way(os.environ, helpers.live_pillar_units())
+collect_ignore_glob = ["test_*.py", "*/test_*.py"] if _in_the_way else []
+if _in_the_way:
+    warnings.warn(helpers.left_out_reason(_in_the_way), UserWarning, stacklevel=1)
 
 
 @pytest.fixture

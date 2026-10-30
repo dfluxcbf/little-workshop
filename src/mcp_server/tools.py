@@ -23,8 +23,10 @@ other pillars to call, not for a human or agent session.
 from __future__ import annotations
 
 import dataclasses
+import threading
 from typing import Any, Callable
 
+from common import redeploy_plan
 from common.paths import Paths
 from mcp_server import client
 
@@ -49,7 +51,7 @@ _FORCE = _prop("boolean", "Proceed even if the working tree is dirty. Default: f
 _ACTION = _prop("string", "Resume ('continue') or cancel ('abort') a finish paused by a conflict.", enum=["continue", "abort"])
 _ISSUE = _prop("integer", "Tracker issue number to link to this branch.")
 _GATE_POINT_VALUES = [
-    "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
+    "commit", "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
     "release", "package_publish", "branch_finish", "project_removal", "project_registration",
 ]
 _GATE_POINTS = _prop(
@@ -79,15 +81,25 @@ def _core_status(paths: Paths, args: JSONDict) -> Any:
 
 
 def _job_list(paths: Paths, args: JSONDict) -> Any:
-    return client.list_jobs(paths, status=args.get("status"))
+    limit = args.get("limit", 50)
+    return client.list_jobs(paths, status=args.get("status"), types=args.get("type"),
+                            limit=limit if limit and limit > 0 else None, full=bool(args.get("full")))
 
 
 def _job_status(paths: Paths, args: JSONDict) -> Any:
     return client.job_status(paths, args["job_id"])
 
 
+def _job_wait(paths: Paths, args: JSONDict) -> Any:
+    return client.job_wait(paths, args["job_id"], args.get("timeout_seconds"))
+
+
 def _job_stop(paths: Paths, args: JSONDict) -> Any:
     return client.stop_job(paths, args["job_id"])
+
+
+def _job_answer(paths: Paths, args: JSONDict) -> Any:
+    return client.answer_step(paths, args["job_id"], args["step"], args["choice"])
 
 
 def _schedule_add(paths: Paths, args: JSONDict) -> Any:
@@ -145,6 +157,7 @@ def _project_bootstrap(paths: Paths, args: JSONDict) -> Any:
     params = {
         "name": args["name"],
         "dest_dir": args["dest_dir"],
+        "template": args.get("template", "python"),
         "owner": args.get("owner", "dfluxcbf"),
         "description": args.get("description", ""),
         "create_github_repo": args.get("create_github_repo", False),
@@ -166,6 +179,30 @@ def _project_import(paths: Paths, args: JSONDict) -> Any:
     )
 
 
+def _project_connect_github(paths: Paths, args: JSONDict) -> Any:
+    params = {
+        "name": args["name"],
+        "owner": args.get("owner", "dfluxcbf"),
+        "description": args.get("description", ""),
+        "public": args.get("public", False),
+        "remote_host": args.get("remote_host", "github.com"),
+        "github_token": args.get("github_token"),
+        "ensure_labels": args.get("ensure_labels", True),
+    }
+    return client.create_job(
+        paths, type="project.connect_github", target_pillar="registry", project_id=args["name"],
+        params=params, queue_key=args["name"], depends_on=[], created_by="mcp",
+    )
+
+
+def _project_configure_assets(paths: Paths, args: JSONDict) -> Any:
+    return client.create_job(
+        paths, type="project.configure_assets", target_pillar="registry", project_id=args["project_id"],
+        params={"assets_dir": args.get("assets_dir") or "", "mcp": args.get("mcp", True)},
+        queue_key=args["project_id"], depends_on=[], created_by="mcp",
+    )
+
+
 def _project_remove(paths: Paths, args: JSONDict) -> Any:
     return client.create_job(
         paths, type="project.remove", target_pillar="registry", project_id=args["name"],
@@ -181,15 +218,48 @@ def _project_get(paths: Paths, args: JSONDict) -> Any:
     return client.get_project(paths, args["name"])
 
 
+def _backlog_entry_of(paths: Paths, args: JSONDict) -> JSONDict:
+    """The entry, refused unless it is in the named project's backlog (a session acts on its own project only)."""
+    entry = client.backlog_get(paths, args["entry_id"])
+    if entry.get("project_name") != args["project_id"]:
+        raise ValueError(f"backlog entry {args['entry_id']} is not in {args['project_id']}'s backlog")
+    return entry
+
+
+def _backlog_list(paths: Paths, args: JSONDict) -> Any:
+    return [{"id": e["id"], "title": e["title"], "refined": bool(e["refined_entry"]), "task_prompt": bool(e["task_prompt"]),
+             "updated_at": e["updated_at"]} for e in client.backlog_list(paths, args["project_id"])]
+
+
+def _backlog_get(paths: Paths, args: JSONDict) -> Any:
+    return _backlog_entry_of(paths, args)
+
+
+def _backlog_add(paths: Paths, args: JSONDict) -> Any:
+    entry = client.backlog_add(paths, args["project_id"], args["text"])
+    return {"id": entry["id"], "title": entry["title"], "project": entry["project_name"]}
+
+
+def _backlog_delete(paths: Paths, args: JSONDict) -> Any:
+    _backlog_entry_of(paths, args)
+    return client.backlog_delete(paths, args["entry_id"])
+
+
 # ---------------------------------------------------------------------------
 # Version Control & Release
 # ---------------------------------------------------------------------------
 
+# A branch finish merges, tags and back-merges for real; the client's plain 30s wait is too short for it.
+VERSION_FINISH_TIMEOUT_SECONDS = 120.0
+
+
 def _version_job(paths: Paths, job_type: str, project_id: str, params: JSONDict) -> Any:
-    return client.create_job(
+    extra = {"timeout": VERSION_FINISH_TIMEOUT_SECONDS} if job_type.endswith("_finish") else {}
+    job = client.create_job(
         paths, type=job_type, target_pillar="version", project_id=project_id,
-        params=params, queue_key=project_id, depends_on=[], created_by="mcp",
+        params=params, queue_key=project_id, depends_on=[], created_by="mcp", **extra,
     )
+    return client.await_job(paths, job, timeout=VERSION_FINISH_TIMEOUT_SECONDS)
 
 
 def _version_init(paths: Paths, args: JSONDict) -> Any:
@@ -358,6 +428,32 @@ def _deployment_redeploy_pillar(paths: Paths, args: JSONDict) -> Any:
     )
 
 
+def _deployment_redeploy_pillars(paths: Paths, args: JSONDict) -> Any:
+    """Several pillars in dependency order: the plan (batches, and each Job's id) comes back at once; the
+    Jobs are created in the background, because the first batch runs inside its creation call."""
+    status = client.core_status(paths).get("pillars", {})
+    live = [name for name, info in status.items() if info.get("status") != "disabled"]
+    wanted = args.get("pillars") or live
+    unknown = [p for p in wanted if p not in status]
+    if unknown:
+        return {"success": False, "message": f"not pillars of this installation: {', '.join(unknown)}"}
+
+    def create(template: dict) -> None:
+        client.create_job(paths, timeout=330.0, **template)
+
+    plan_holder: list = []
+
+    def submit() -> None:
+        plan_holder.append(redeploy_plan.submit_redeploy_batches(
+            create, wanted, args["commit"], created_by="mcp", confirm_timeout_seconds=args.get("confirm_timeout_seconds"),
+        ))
+
+    # The plan is decided before anything runs, so it can be returned while the first batch is still going.
+    plan = [[{"pillar": p} for p in batch] for batch in redeploy_plan.redeploy_batches(wanted)]
+    threading.Thread(target=submit, daemon=True).start()
+    return {"commit": args["commit"], "batches": plan, "note": "batches run one after another; each starts when the one before has succeeded. Follow them with workshop_job_list."}
+
+
 def _deployment_status(paths: Paths, args: JSONDict) -> Any:
     return client.deployment_status(paths, args["project_id"])
 
@@ -477,6 +573,10 @@ def _requirements_run_tests(paths: Paths, args: JSONDict) -> Any:
 
 def _requirements_report(paths: Paths, args: JSONDict) -> Any:
     return client.requirements_report(paths, args["project_id"])
+
+
+def _requirements_conflicts(paths: Paths, args: JSONDict) -> Any:
+    return client.requirements_conflicts(paths, args["project_id"], status=args.get("status"))
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +703,10 @@ def _policy_gating_for_job(paths: Paths, args: JSONDict) -> Any:
     return client.policy_gating_for_job(paths, args["project_id"], args["categories"])
 
 
+def _policy_evaluate(paths: Paths, args: JSONDict) -> Any:
+    return client.policy_evaluate(paths, args["project_id"], args["gate_point"])
+
+
 def _policy_list(paths: Paths, args: JSONDict) -> Any:
     return client.policy_list(paths, args.get("topic"))
 
@@ -668,6 +772,10 @@ def _agent_run_task(paths: Paths, args: JSONDict) -> Any:
             "mode": args["branch_mode"], "branch_type": args.get("branch_type"),
             "base": args.get("base"), "branch": args.get("branch"),
         }
+    if args.get("playwright_mcp") is False:
+        params["playwright_mcp"] = False
+    if args.get("include_standards") is False:
+        params["include_standards"] = False
     return client.create_job(
         paths, type="agent.run_task", target_pillar="agent", project_id=args["project_id"],
         params=params, queue_key=args["project_id"], depends_on=[], created_by="mcp",
@@ -686,6 +794,92 @@ def _agent_skip_task(paths: Paths, args: JSONDict) -> Any:
         paths, type="agent.skip_task", target_pillar="agent", project_id=args["project_id"],
         params={"run_id": args["run_id"]}, queue_key=args["project_id"], depends_on=[], created_by="mcp",
     )
+
+
+# -- Usage & Efficiency ------------------------------------------------------
+
+_USAGE_DROP = ("days", "previous_week", "next_week", "four_week_average", "pays_for_itself", "outcomes_by_week")
+
+
+def _usage_summary(paths: Paths, args: JSONDict) -> Any:
+    """The week's numbers without the per-day series the Dashboard plots: a session asks for the totals."""
+    summary = client.usage_summary(paths, project=args.get("project"), week=args.get("week"), origin=args.get("origin"))
+    return {key: value for key, value in summary.items() if key not in _USAGE_DROP} if isinstance(summary, dict) else summary
+
+
+def _usage_job(paths: Paths, job_type: str, params: JSONDict) -> Any:
+    return client.create_job(
+        paths, type=job_type, target_pillar="usage", project_id=None, params=params, queue_key="usage",
+        depends_on=[], created_by="mcp",
+    )
+
+
+def _usage_findings(paths: Paths, args: JSONDict) -> Any:
+    return client.usage_findings(paths, project=args.get("project"), state=args.get("state") or "open")
+
+
+def _usage_analyze(paths: Paths, args: JSONDict) -> Any:
+    return _usage_job(paths, "usage.analyze", {})
+
+
+_CANDIDATES_DEFAULT, _CANDIDATES_MAX = 10, 50
+
+
+def _usage_candidates(paths: Paths, args: JSONDict) -> Any:
+    """A short page with one example each: the whole list of a busy machine ran past what a tool result holds."""
+    limit = min(int(args.get("limit") or _CANDIDATES_DEFAULT), _CANDIDATES_MAX)
+    rows = client.usage_candidates(paths, state=args.get("state") or "open", limit=limit)
+    return [{**row, "examples": (row.get("examples") or [])[:1]} for row in rows] if isinstance(rows, list) else rows
+
+
+def _usage_plugin_proposals(paths: Paths, args: JSONDict) -> Any:
+    """A short page with one example each, as candidates come."""
+    limit = min(int(args.get("limit") or _CANDIDATES_DEFAULT), _CANDIDATES_MAX)
+    rows = client.usage_plugin_proposals(paths, state=args.get("state") or "open", limit=limit)
+    return [{**row, "examples": (row.get("examples") or [])[:1]} for row in rows] if isinstance(rows, list) else rows
+
+
+def _usage_mine_automation(paths: Paths, args: JSONDict) -> Any:
+    return _usage_job(paths, "usage.mine_automation", {})
+
+
+def _trigger_list(paths: Paths, args: JSONDict) -> Any:
+    return client.list_triggers(paths)
+
+
+def _trigger_add(paths: Paths, args: JSONDict) -> Any:
+    template = {"type": args["type"], "target_pillar": args["target_pillar"], "project_id": args.get("project_id"),
+                "params": args.get("params") or {}, "queue_key": args.get("queue_key"), "depends_on": []}
+    return client.add_trigger(paths, name=args["name"], event=args["event"], event_filter=args.get("filter") or {}, job_template=template)
+
+
+def _trigger_remove(paths: Paths, args: JSONDict) -> Any:
+    return client.remove_trigger(paths, args["trigger_id"])
+
+
+def _requirements_sync_markers(paths: Paths, args: JSONDict) -> Any:
+    params = {key: args[key] for key in ("suite_id", "dry_run") if args.get(key) is not None}
+    return _requirements_job(paths, "requirements.sync_markers", args["project_id"], params)
+
+
+def _deployment_redeploy_changed_pillars(paths: Paths, args: JSONDict) -> Any:
+    params = {key: args[key] for key in ("commit", "base") if args.get(key)}
+    return client.create_job(
+        paths, type="deployment.redeploy_changed_pillars", target_pillar="deployment", project_id=None,
+        params=params, queue_key="redeploy-changed-pillars", depends_on=[], created_by="mcp",
+    )
+
+
+def _usage_doctor(paths: Paths, args: JSONDict) -> Any:
+    return _usage_job(paths, "usage.doctor", {})
+
+
+def _usage_ingest_transcripts(paths: Paths, args: JSONDict) -> Any:
+    return _usage_job(paths, "usage.ingest_transcripts", {})
+
+
+def _usage_configure_claude(paths: Paths, args: JSONDict) -> Any:
+    return _usage_job(paths, "usage.configure_claude", {"apply": bool(args.get("apply", False))})
 
 
 def _agent_runs(paths: Paths, args: JSONDict) -> Any:
@@ -741,10 +935,31 @@ def _agent_session_status(paths: Paths, args: JSONDict) -> Any:
 
 TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_core_status", "Return every pillar's enabled/active status, as Core sees it.", _schema(), _core_status),
-    ToolSpec("workshop_job_list", "List Jobs known to Orchestration, optionally filtered by status.",
-             _schema({"status": _prop("string", "queued|running|pending_confirmation|succeeded|failed|cancelled")}), _job_list),
-    ToolSpec("workshop_job_status", "Get one Job's current status and result by id.",
+    ToolSpec("workshop_job_list", "List Jobs known to Orchestration, newest first, as summaries: each Job's large params and "
+             "result values are only named, under _omitted (workshop_job_status gives one Job in full).",
+             _schema({"status": _prop("string", "One or several of queued|running|pending_confirmation|succeeded|failed|cancelled|stopped, comma-separated"),
+                      "type": _prop("string", "One or several job types, comma-separated (e.g. agent.run_task)"),
+                      "limit": _prop("integer", "At most this many. Default: 50; 0 for every Job."),
+                      "full": _prop("boolean", "Whole params and results instead of summaries. Default: false.")}), _job_list),
+    ToolSpec("workshop_job_status", "Get one Job's current status and result by id (to wait for it, use workshop_job_wait), with its `steps` checklist "
+             "(each step's state, runtime and expected runtime; a step in state `attention` carries the "
+             "question the user must answer, see workshop_job_answer).",
              _schema({"job_id": _prop("string", "The Job id.")}, ["job_id"]), _job_status),
+    ToolSpec("workshop_job_wait", "Wait for a Job in one call: returns the Job (as workshop_job_status does) as soon "
+             "as it has settled, is held in `pending_confirmation`, or has a step in state `attention`, and "
+             "otherwise when the timeout passes (the Job is then still queued or running: call again). Use "
+             "this instead of repeating workshop_job_status or sleeping.",
+             _schema({"job_id": _prop("string", "The Job id."),
+                      "timeout_seconds": _prop("number", "How long to wait at most. Default 120, at most 300.")},
+                     ["job_id"]), _job_wait),
+    ToolSpec("workshop_job_answer", "Answer a Job step that is waiting for the user's attention (a step in "
+             "state `attention` in a Job's `steps`, with its `prompt` question and options). Only relay the "
+             "choice the USER made: never pick an option on their behalf. An unanswered step fails its Job "
+             "after 12 hours.",
+             _schema({"job_id": _prop("string", "The Job id."),
+                      "step": _prop("string", "The step's key."),
+                      "choice": _prop("string", "One of the prompt's option ids.")}, ["job_id", "step", "choice"]),
+             _job_answer),
     ToolSpec("workshop_job_stop", "Interrupt a Job that is currently running. Most Job types have no safe "
              "mid-flight interruption point and report back that they are not stoppable, rather than being "
              "silently ignored or left to hang.",
@@ -796,6 +1011,8 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({
                  "name": _prop("string", "The new project's name."),
                  "dest_dir": _prop("string", "Directory the project should be scaffolded into."),
+                 "template": _prop("string", "Project layout: python (default) or unity (a Windows Unity game).",
+                                   enum=["python", "unity"]),
                  "owner": _prop("string", "GitHub owner/org for the new repo. Default: dfluxcbf."),
                  "description": _prop("string", "One-line project description."),
                  "create_github_repo": _prop("boolean", "Create and push a GitHub repo. Default: false."),
@@ -814,12 +1031,45 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "name": _prop("string", "The project's name to register it under."),
                  "path": _prop("string", "Absolute path to the existing, already-checked-out git repository."),
              }, ["name", "path"]), _project_import),
+    ToolSpec("workshop_project_connect_github", "Give an already-registered project its GitHub setup without "
+             "re-importing it: with no `origin` remote, create the repo (private by default) and push master and dev; "
+             "with an `origin` already there, adopt it. Either way ensure the bootstrap labels and record repo_url. "
+             "Safe to re-run.",
+             _schema({
+                 "name": _prop("string", "The registered project's name (also the GitHub repo name)."),
+                 "owner": _prop("string", "GitHub owner/org for a new repo. Default: dfluxcbf."),
+                 "description": _prop("string", "Description for a new repo."),
+                 "public": _prop("boolean", "Make a new repo public. Default: false."),
+                 "remote_host": _prop("string", "Git remote host. Default: github.com."),
+                 "github_token": _prop("string", "GitHub token; omit to use the logged-in gh CLI."),
+                 "ensure_labels": _prop("boolean", "Ensure the bootstrap GitHub labels exist. Default: true."),
+             }, ["name"]), _project_connect_github),
+    ToolSpec("workshop_project_configure_assets", "Turn on asset review for a project: only `assets_dir` (a folder of its checkout) "
+             "and its subfolders are shown on the Dashboard's Assets pages, and the project's `.mcp.json` declares the `asset-review` MCP "
+             "server that generates a Blender file's 3D model and preview images. An empty `assets_dir` turns asset review off.",
+             _schema({
+                 "project_id": _PROJECT_ID,
+                 "assets_dir": _prop("string", "Folder of the checkout, relative to its root (for example blender_development). Empty: off."),
+                 "mcp": _prop("boolean", "Declare the asset-review MCP server in .mcp.json. Default: true."),
+             }, ["project_id"]), _project_configure_assets),
     ToolSpec("workshop_project_remove", "Hard-delete a registered project: cascades to every pillar's own data for it.",
              _schema({"name": _prop("string", "The project's name.")}, ["name"]), _project_remove),
     ToolSpec("workshop_project_list", "List every registered project, with its overall status.",
              _schema({"status": _prop("string", "Filter by status, e.g. active.")}), _project_list),
     ToolSpec("workshop_project_get", "Get one registered project's full record by name.",
              _schema({"name": _prop("string", "The project's name.")}, ["name"]), _project_get),
+    ToolSpec("workshop_project_backlog_list", "List a project's backlog: each entry's id, title, and whether it has been "
+             "refined and has a task prompt.", _schema({"project_id": _PROJECT_ID}, ["project_id"]), _backlog_list),
+    ToolSpec("workshop_project_backlog_get", "Read one backlog entry: its primary entry (as the owner wrote it), refinement "
+             "notes, refined entry and task prompt.",
+             _schema({"project_id": _PROJECT_ID, "entry_id": _prop("string", "The backlog entry's id.")}, ["project_id", "entry_id"]), _backlog_get),
+    ToolSpec("workshop_project_backlog_add", "Add an entry to a project's backlog, as written: something to build or fix later. "
+             "The owner refines it on the Dashboard (Documentation, Backlog).",
+             _schema({"project_id": _PROJECT_ID, "text": _prop("string", "The entry, as the owner asked for it.")}, ["project_id", "text"]),
+             _backlog_add),
+    ToolSpec("workshop_project_backlog_delete", "Delete a backlog entry and everything it holds. A task prompt made from "
+             "an entry asks for this once its work is done, so the entry is not done twice.",
+             _schema({"project_id": _PROJECT_ID, "entry_id": _prop("string", "The backlog entry's id.")}, ["project_id", "entry_id"]), _backlog_delete),
 
     ToolSpec("workshop_version_init", "Initialize a repository for lvx-managed Gitflow.",
              _schema({"project_id": _PROJECT_ID, "production_branch": _prop("string", "main or master; auto-detected if omitted."),
@@ -905,6 +1155,15 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"pillar": _prop("string", "The pillar tag to redeploy, e.g. deployment."), "commit": _prop("string", "Commit/ref to deploy."),
                        "confirm_timeout_seconds": _prop("integer", "Override the default confirm-gate timeout.")}, ["pillar", "commit"]),
              _deployment_redeploy_pillar),
+    ToolSpec("workshop_deployment_redeploy_pillars", "Redeploy several of little-workshop's own pillars (default: every "
+             "enabled one) to a commit, in dependency order: the pillars are split into batches (for all of them: "
+             "orchestration; then build, agent, dashboard; then policy, registry, requirements, version, usage (and mcp); then "
+             "deployment), the redeploys of a batch run side by side and a batch starts once the one before it "
+             "has succeeded. Two pillars with nothing to wait for between them are one batch.",
+             _schema({"commit": _prop("string", "Commit/ref to deploy."),
+                      "pillars": _prop("array", "Pillar tags to redeploy; omit for every enabled pillar.", items={"type": "string"}),
+                      "confirm_timeout_seconds": _prop("integer", "Override the default confirm-gate timeout.")}, ["commit"]),
+             _deployment_redeploy_pillars),
     ToolSpec("workshop_deployment_status", "Get a project's current deployment status.",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _deployment_status),
     ToolSpec("workshop_deployment_history", "List a project's past deployments.",
@@ -984,6 +1243,12 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_requirements_report", "Definition-of-done report for a project: for each requirement, "
              "whether it is published, tested, passing, and therefore done.",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _requirements_report),
+    ToolSpec("workshop_requirements_conflicts", "The conflicts Requirements & Quality's periodic analysis found "
+             "between two of a project's requirements (same key, a contradiction, or different values): "
+             "open, resolving (a fix was started) or resolved (no longer found).",
+             _schema({"project_id": _PROJECT_ID,
+                      "status": _prop("string", "open, resolving or resolved. Default: all.")}, ["project_id"]),
+             _requirements_conflicts),
 
     ToolSpec("workshop_build_run", "Run a build/test command sandboxed, in a fresh Deployment & Servers "
              "worktree of a given commit — never the project's own working checkout. Mark from_fork true for "
@@ -1111,6 +1376,15 @@ TOOLS: tuple[ToolSpec, ...] = (
              "of action categories — what Orchestration itself consults before dispatching a Job.",
              _schema({"project_id": _PROJECT_ID, "categories": _GATE_POINTS}, ["project_id", "categories"]),
              _policy_gating_for_job),
+    ToolSpec("workshop_policy_evaluate", "Run now, in the policy sandbox, every policy that would gate "
+             "a gate point for a project, and return each verdict with its reason; `blocking` lists what the "
+             "real gate would hold. Nothing is recorded or held. Use it before a gated action (branch_finish "
+             "before workshop_version_*_finish, release before a release) to fix failures first. A "
+             "branch_finish run includes policies that run the project's test suite and can take minutes.",
+             _schema({"project_id": _PROJECT_ID,
+                      "gate_point": _prop("string", "The gate point to evaluate.",
+                                          enum=[g for g in _GATE_POINT_VALUES if g != "commit"])},
+                     ["project_id", "gate_point"]), _policy_evaluate),
     ToolSpec("workshop_policy_catalog_list", "List every candidate framework policy in "
              "docs/pillars/policy_catalog.md (M13) — none is active until authored and activated.",
              _schema(), _policy_catalog_list),
@@ -1132,6 +1406,8 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "branch_type": _prop("string", "Branch-type prefix to use when branch_mode is 'new', e.g. feature."),
                  "base": _prop("string", "Base branch/commit to branch from."),
                  "branch": _prop("string", "Explicit branch name (branch_mode 'existing') or override (branch_mode 'new')."),
+                 "playwright_mcp": _prop("boolean", "Attach the Playwright MCP server so the agent can drive the app in a browser (default true)."),
+                 "include_standards": _prop("boolean", "Give the agent a temporary read-only copy of little-workshop's shared_project_standards (default true)."),
              }, ["project_id", "title"]), _agent_run_task),
     ToolSpec("workshop_agent_finish_task", "Explicitly finish a run awaiting review: publish its branch/PR and report.",
              _schema({"project_id": _PROJECT_ID, "run_id": _prop("string", "The run's id.")}, ["project_id", "run_id"]), _agent_finish_task),
@@ -1140,6 +1416,82 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_agent_runs", "List a project's agent runs, optionally filtered by status.",
              _schema({"project_id": _PROJECT_ID, "status": _prop("string", "running|awaiting_finish|finished|failed|skipped")},
                       ["project_id"]), _agent_runs),
+    ToolSpec("workshop_usage_summary", "Claude usage of one week (default: the current one, weeks start on Monday): "
+             "weighted tokens (list-price dollars as a common unit, not money spent), cache hit ratio, average "
+             "context per request, long-context share, startup context, per-project totals and the heaviest "
+             "sessions. Collected for every Claude session on this machine.",
+             _schema({"project": _prop("string", "Only this project (a registered id, `little-projects` for the workspace, or `unattributed`)."),
+                      "week": _prop("string", "Any day of the week wanted, YYYY-MM-DD."),
+                      "origin": _prop("string", "Only this origin.", enum=["interactive", "job", "query", "subagent"])}),
+             _usage_summary),
+    ToolSpec("workshop_usage_findings", "Claude-usage findings: what the detectors measured (long contexts, startup "
+             "growth, cache misses, polling, large command output, files reread, routes not taken), each with its "
+             "evidence, the estimated weekly saving and the recommended action, ranked by saving. Check these before "
+             "optimizing anything.",
+             _schema({"project": _prop("string", "Only this project's findings (plus the machine-wide ones)."),
+                      "state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "resolved", "all"])}),
+             _usage_findings),
+    ToolSpec("workshop_usage_analyze", "Run the Claude-usage detectors now over the last 14 days: opens, refreshes and "
+             "resolves findings, and measures the experiments that are due. No Claude involved.", _schema(), _usage_analyze),
+    ToolSpec("workshop_usage_candidates", "Automation candidates: work Claude sessions repeat with the same shape "
+             "(a tool call, or a short sequence), each with a determinism score, its class (deterministic, hybrid, "
+             "heuristic), the estimated net saving per week of automating it (if Claude calls the replacement, and if a "
+             "trigger runs it instead), the proposed form (job, MCP tool, hook, trigger) and a recommended schedule. "
+             "Ranked by that saving; work automating would not save tokens on is not listed.",
+             _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"]),
+                      "limit": _prop("integer", "How many, from the costliest. Default 10, at most 50.")}),
+             _usage_candidates),
+    ToolSpec("workshop_usage_plugin_proposals", "Plugin proposals: whole requests Claude handles the same way, mostly "
+             "without judgment, proposed as a Claude Code plugin of hooks and scripts that calls Claude only at its "
+             "fallback points. Each gives its scope (one project or all), the steps it covers, how often and at which step "
+             "Claude would still be needed, the calls, turns and tokens per occurrence, the weekly cost today and with the "
+             "plugin, the candidates it absorbs and how to install it. Ranked by the net saving per week. The plugins "
+             "installed are listed by Claude Code itself (`claude plugin list`, `/plugin`).",
+             _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"]),
+                      "limit": _prop("integer", "How many, from the costliest. Default 10, at most 50.")}),
+             _usage_plugin_proposals),
+    ToolSpec("workshop_usage_mine_automation", "Mine the last 14 days of tool calls into automation candidates and plugin "
+             "proposals now. No Claude involved, and nothing is implemented from it.", _schema(), _usage_mine_automation),
+    ToolSpec("workshop_trigger_list", "List the workshop triggers: each fires a Job when an event happens (a Job "
+             "settling, a branch finishing, a Claude session ending, a finding opening).", _schema(), _trigger_list),
+    ToolSpec("workshop_trigger_add", "Add a workshop trigger: when `event` happens (job.settled, job.succeeded, "
+             "job.failed, version.branch_finished, version.release_finished, claude.session_ended, "
+             "usage.finding_opened, registry.project_registered) and every `filter` key equals the event's value, "
+             "create the Job. Refused for a Job type that merges, finishes, releases, removes or deletes. Add one "
+             "only when the USER asked for it.",
+             _schema({"name": _prop("string", "What the trigger is for."), "event": _prop("string", "The event name."),
+                      "filter": {"type": "object", "description": "Event values that must match, e.g. {\"project_id\": \"little-workshop\"}."},
+                      "type": _prop("string", "The Job type to create."), "target_pillar": _prop("string", "The pillar that runs it."),
+                      "project_id": _prop("string", "The Job's project; omitted, the event's project."),
+                      "params": {"type": "object", "description": "The Job's params; a value `$event.<key>` takes that value of the event."},
+                      "queue_key": _prop("string", "The Job's queue.")},
+                     ["name", "event", "type", "target_pillar"]), _trigger_add),
+    ToolSpec("workshop_trigger_remove", "Remove a workshop trigger by id.",
+             _schema({"trigger_id": _prop("string", "The trigger's id.")}, ["trigger_id"]), _trigger_remove),
+    ToolSpec("workshop_requirements_sync_markers", "Bring the Requirements pillar in line with the "
+             "`# --- REQ-nnnnnnnnn: title ---` markers of the project's test files, in one call: a marked requirement "
+             "the pillar lacks is created from its docs/requirements.md row, and every marked requirement is linked "
+             "to the suite. Use this instead of one workshop_requirements_create and _link_suite call per requirement.",
+             _schema({"project_id": _PROJECT_ID, "suite_id": _prop("string", "The suite to link to. Default: the suite named 'Unit tests'."),
+                      "dry_run": _prop("boolean", "Only report what would be created and linked.")}, ["project_id"]),
+             _requirements_sync_markers),
+    ToolSpec("workshop_deployment_redeploy_changed_pillars", "Redeploy the pillars of little-workshop whose code "
+             "differs from a commit (default HEAD): each pillar is compared with the commit it runs, so after a branch "
+             "finish exactly the pillars that need it are redeployed, in dependency order. One call; nothing to list by hand.",
+             _schema({"commit": _prop("string", "Commit/ref to deploy. Default HEAD."),
+                      "base": _prop("string", "Compare every pillar against this commit instead of the one it runs.")}),
+             _deployment_redeploy_changed_pillars),
+    ToolSpec("workshop_usage_doctor", "Check the configuration Claude usage collection depends on: the intake, the "
+             "user profile in ~/.claude/settings.json, `claude doctor`, the language servers, and whether data "
+             "arrived recently. Read-only: reports each check with a hint.", _schema(), _usage_doctor),
+    ToolSpec("workshop_usage_ingest_transcripts", "Backfill Claude usage from the local transcripts "
+             "(~/.claude/projects) into the usage store and rebuild the rollups. Counts nothing twice.",
+             _schema(), _usage_ingest_transcripts),
+    ToolSpec("workshop_usage_configure_claude", "Show what the Claude usage user profile would change in "
+             "~/.claude/settings.json (telemetry environment, session hooks, statusline, transcript retention). "
+             "With `apply` true it writes the change, keeping a backup and every entry of the user's own. Apply "
+             "only when the USER asked for it.",
+             _schema({"apply": _prop("boolean", "Write the profile. Default false: a dry run.")}), _usage_configure_claude),
     ToolSpec("workshop_agent_run_status", "Get one agent run's full status and result by id.",
              _schema({"project_id": _PROJECT_ID, "run_id": _prop("string", "The run's id.")}, ["project_id", "run_id"]), _agent_run_status),
     ToolSpec("workshop_agent_ci_check", "Test a pull request's real head branch in an isolated worktree and post "

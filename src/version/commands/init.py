@@ -1,14 +1,15 @@
 """`version.init` — ported from `little-versions`' `commands/init.py`, plus
-one addition with no little-versions equivalent: installing the
-`.githooks/pre-commit` hook (`sync_version_files.install_pre_commit_hook`)
-that keeps VERSION correct on every working-branch commit going forward."""
+one addition with no little-versions equivalent: installing the project's
+git hooks (`sync_version_files.install_git_hooks`): `.githooks/pre-commit`,
+which keeps VERSION correct on every working-branch commit, and
+`.githooks/commit-msg`, which runs the policies gating `commit`."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from version.branches import INTEGRATION_BRANCHES, PRODUCTION_BRANCHES
-from version.commands.sync_version_files import install_pre_commit_hook
+from version.commands.sync_version_files import install_git_hooks
 from version.common import CommandResult
 from version.configstore import write_config
 from version.gitops import branch_exists, has_commits, is_git_repo
@@ -62,12 +63,12 @@ def cmd_init(
 
     hook_installed = False
     if project_id:
-        install_pre_commit_hook(repo_root, project_id)
+        install_git_hooks(repo_root, project_id)
         hook_installed = True
 
     message = f"Initialized version control: production={production_branch!r}, integration={integration_branch!r}"
     if hook_installed:
-        message += "; installed .githooks/pre-commit (core.hooksPath)"
+        message += "; installed .githooks/pre-commit and .githooks/commit-msg (core.hooksPath)"
     return CommandResult(
         success=True,
         message=message,

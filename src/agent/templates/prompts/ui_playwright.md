@@ -1,0 +1,3 @@
+Playwright is this ecosystem's standard for anything a user sees or touches. The Playwright MCP server is not attached to this session (the host has no `npx`, or this run turned it off), so you cannot drive a browser yourself.
+
+When the task changes a UI or UX in any way, still cover the behaviour with Playwright tests: pytest-playwright tests under `tests/ui/`, using the `page` fixture and relative URLs (`page.goto("/")`) so they run against whatever `--base-url` they are given — little-workshop starts the branch's app and passes `--base-url` when it runs a project's `tests/ui/` tests. Say in the report that the UI was not checked in a browser.

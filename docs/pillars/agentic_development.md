@@ -164,15 +164,52 @@ or failed. Different projects run fully in parallel.
 
 ## Watching a run: Remote Control
 
-Every `agent.run_task` Job runs under Claude Code's Remote Control,
-named for the project and task so it's identifiable in the Claude app —
-this is the same mechanism `docs/pillars/policy_compliance.md`'s OQ-9
-resolution reuses for a second purpose (delivering a time-sensitive
-notification), not a coincidence: it's this pillar's own proven
-capability, called from elsewhere exactly the way "a new capability maps
-to an existing pillar's interface" already requires. The agent also gets
-the user-messaging tool, so it can ask a genuine question mid-run — which
-plan to take, which of two designs to use — instead of guessing.
+An `agent.run_task` Job's Claude is started with Claude Code's Remote Control
+by default, named `lws-<project>-run-<run id>` so it is identifiable in the
+Claude app, and an update-docs session started with its Remote Control
+option has it too; both are recorded in `remote_control_sessions`. This is
+the same mechanism `docs/pillars/policy_compliance.md`'s OQ-9 resolution
+reuses for a second purpose (delivering a time-sensitive notification), not
+a coincidence: it's this pillar's own proven capability, called from
+elsewhere exactly the way "a new capability maps to an existing pillar's
+interface" already requires. The agent also gets the user-messaging tool, so
+it can ask a genuine question mid-run — which plan to take, which of two
+designs to use — instead of guessing.
+
+### Activating Remote Control on a running Job
+
+Any Job whose Claude is running (a task, an update-docs session, an
+`agent.query` such as a backlog refinement or a policy authoring) can be taken
+over from the Claude app even when it was started without Remote Control. Its
+own page (`/tasks/<project>/<run>` and `/jobs/<id>`, never the lists) shows,
+only while Claude runs it, an **Activate remote-control** button. The agent
+(`src/agent/remote_control.py`, `/v1/remote-control/<job id>[/activate|/deactivate]`)
+then **resumes** the Job's session — `claude --resume <session id>
+--remote-control lws-<project>-rc-<id>` under `dtach`, in its own systemd scope
+(`lws-rc-<id>`), in the folder the session ran in. Remote Control is never added
+to the live process, and nothing that runs the work is stopped or restarted.
+No link, URL or QR code is captured or shown: the page shows the status and the
+session name, to be found in the Claude Code app. There is no user check.
+
+- **Existing session.** A session that already has a row in
+  `remote_control_sessions` (a task started with `--remote-control`) is reported as
+  already set up and is never duplicated. It has no deactivate control: its
+  connection cannot be dropped without ending the Claude that is working.
+- **Deactivate.** A session this button activated can be deactivated from the page;
+  that stops only its own scope and sets `stopped_at`. The Job keeps running.
+- **Active.** A session is active from `started_at` until `stopped_at`, and counts as
+  active only while its Job runs. `stopped_at` is set (`record_session_stop`,
+  `stop_open_sessions`) when the user deactivates and when the Job's Claude work
+  ends — a task's Claude exits (completed, failed, stopped), an update-docs session
+  is finalized or stopped, a query ends — which also ends an activated scope.
+  Rows are keyed by `agent_run_id`: the run's id for a task, the Job's id for any
+  other Job (the schema is unchanged).
+- **History.** After deactivation and after the Job ends, the status and name stay
+  on the page.
+- **Live.** The page follows `job:<id>`, so the button appears and disappears with the
+  Job's status without a refresh.
+- **Not covered.** Ad-hoc project sessions (`agent.session_start`) are not Jobs with a
+  page of their own; they always run with Remote Control.
 
 ## GitHub adapter: two techniques worth keeping exactly as proven
 
@@ -310,3 +347,295 @@ repos" convention, posting over little-workshop's own Agentic Development Unix s
 `~/.local/state/little-workshop/sockets/agent.sock`). Delivered as a tested, ready-to-adopt
 module in this pass; wiring it into each child project's own repository is that project's
 own follow-up commit, not part of little-workshop's own codebase.
+
+## Playwright as standard: the agent drives a real browser (2026-09-24)
+
+Playwright is this ecosystem's standard for anything a user sees or touches, so every Claude Code
+session this pillar launches on a project — each `agent.run_task` run, and each ad-hoc session
+(`agent.session_start`) — gets the **Playwright MCP server** attached through `claude --mcp-config`
+(`common/playwright.py`). The agent can then launch the project's app (the project's
+`[server.screenshot].command` starts this branch on a scratch port) and navigate, click, type, resize to
+a phone viewport and take snapshots with the `browser_*` tools.
+
+- **Pinned, not `@latest`**: `@playwright/mcp@0.0.82`, run through `npx -y`, so a run is reproducible and
+  an upstream release can't change agent behaviour overnight. Bumping it is a one-line change.
+- **Headless, in-memory profile** (`--headless --isolated`): a run is unattended under systemd, and nothing
+  one run does in the browser (logins, cookies) leaks into the next.
+- **Uses the host's own Chromium**: `--executable-path` points at the newest `chromium-*` the host's
+  Playwright install already downloaded (`~/.cache/ms-playwright`, or `PLAYWRIGHT_BROWSERS_PATH`), so no
+  second ~150 MB browser download is needed. Without one, the MCP server uses its own; the prompt tells the
+  agent how to install it (`npx -y @playwright/mcp@0.0.82 install-browser chrome-for-testing`).
+- **Snapshots outside the checkout**: `--output-dir` is under the state directory
+  (`playwright-mcp/run-<run_id>` for a run, `sessions/playwright-mcp/<project>` for a session), never the
+  project checkout, whose leftovers `_publish` would otherwise commit.
+- **Never a failed run for lack of Node**: without `npx` on `PATH`, the session is launched as before,
+  without the server, and the prompt says so. A run's own `playwright_mcp: false` param (also on the
+  `workshop_agent_run_task` MCP tool) turns it off for that run.
+
+The prompt (`templates/prompts/ui_playwright_mcp.md`, or `ui_playwright.md` without the server) asks the
+agent, for any UI/UX change, to check it in the browser (desktop and phone viewports), never touch whatever
+is serving on the project's real port, and cover the behaviour with pytest-playwright tests under
+`tests/ui/` using relative URLs — which Requirements & Quality then runs against the branch's own app
+(`docs/pillars/requirements_quality.md`, "UI tests with Playwright").
+
+## Documentation review: comments and the update-doc job (2026-09-28)
+
+The backend of the Dashboard's Docs pages (`docs/pillars/dashboard.md`).
+
+- **Docs** (`GET /v1/docs/{project}`, `/file?path=`, `/image?path=`): the
+  project checkout's markdown files (tracked or untracked, never ignored),
+  its current branch and branches, and one file's source or an image it
+  shows. Paths are confined to the project; `.git/` and `.review/` are off
+  limits. `agent.docs_checkout` (a Job) switches the checkout's branch —
+  git itself refuses when local changes would be overwritten.
+- **Comments** live in the project, in `.review/comments.json`
+  (`agent/review_store.py`), never committed: `.review/` goes into the
+  repository's `info/exclude` on the first save, and the update-doc job
+  adds it to `.gitignore` in its commit (new projects get it from
+  `project.bootstrap`'s `.gitignore` template). Each comment has a UUID,
+  the `branch` it was written on, its file, an anchor (source line range
+  plus the exact highlighted text and ~32 characters either side, so it
+  is found again after lines move), its markdown body, `open`/`done`,
+  and — once done — the `change` the job made (`edited`: the new lines
+  and their text; `removed`: where the section was) and the job's `note`.
+  `GET/PUT/DELETE /v1/reviews/{project}[/comments/{id}]` are direct reads
+  and writes, not Jobs — the same exception `/v1/incidents` makes: the
+  Dashboard autosaves two seconds after typing stops, which as Jobs would
+  bury the Jobs page. For one file, a done comment's `change` is located
+  in the file as it is now (`found: false` when its text is gone).
+- **`agent.update_docs`** (`agent/doc_update.py`), params `branch`,
+  `remote_control`; the Dashboard's queue key is `{project}:docs:{branch}`
+  and it refuses a second job for the same project and branch.
+  1. Start (synchronous): refuse if one is already running for that
+     project and branch; claim every open, non-empty comment on the branch
+     (`job_id` set — read-only until the job ends; comments written later
+     are not part of it). Nothing to claim fails the Job.
+     Certified comments (`certified: true`, set by the reviewer with Ctrl+I) are
+     not claimed and are read-only; their text is never sent to Claude. The job
+     file's `certified_sections` lists only their file, lines, highlighted text and
+     source, and the prompt tells Claude the section is well written by the
+     reviewer's standards: not to change it unless absolutely necessary, and then
+     without losing or altering its content, saying so in the note of the comment
+     that forced it.
+  2. The comments go to `update-doc-job.json` (id, path, lines,
+     highlighted text, the source lines verbatim, the comment) and are
+     repeated in the prompt (`templates/prompts/update_docs.md`), which
+     tags the file with `@`.
+  3. Without Remote Control, Deployment & Servers provisions a detached
+     worktree at the branch's tip and Claude runs headless (`claude -p`,
+     which has no trust prompt to hang on) as its own transient
+     `systemd --user` service. With Remote Control, print mode cannot
+     register with the Claude app, so an interactive
+     `claude --worktree lws-docs-<job> --remote-control <name> ... -- "<prompt>"`
+     runs under `dtach` (in a `systemd --user` scope) from the project
+     folder, which Claude Code must already trust: Claude creates and owns
+     the worktree under `.claude/worktrees/`, is told first to move it to
+     the branch's tip with `git switch --detach <sha>` (REQ-000000319: never
+     `git reset --hard`, which the project's own guard and deny rules refuse), and nothing is pre-approved, so permission requests
+     are answered from the app. The job files live in `doc-jobs/<job>/` in
+     the pillar's state. Either way the session survives this pillar
+     restarting, and a restart resumes watching it (`resume_doc_updates`).
+     Claude commits but never pushes; publishing refuses commits that are
+     not based on the branch's tip.
+  4. The done signal is Claude writing `.review/update-doc-result.json`
+     (per comment: `edited` with the new lines, `removed`, or `unchanged`
+     with a note). Without it — the session was interrupted, or hung —
+     the work counts as done once the worktree and the session's
+     transcript have been idle for 5 hours.
+  5. Finalize: stop the session, commit anything left, push `HEAD` to the
+     branch, fast-forward the local branch (merge in the checkout when
+     it is on that branch, else move the ref); if neither took it, the
+     commit is kept on `docs-review/<job>`. Then each claimed comment is
+     updated individually by id — `done` with its change, whose text is
+     read from the committed file (never copied from Claude), or back to
+     plain `open` — and the worktree is removed. Claude never edits the
+     comments file.
+  6. Stop (`POST /v1/jobs/{id}/stop`, this pillar's only stoppable Job):
+     the session is killed and the worktree removed with every change in
+     it; the comments are released untouched.
+
+## Shared project standards copy (2026-10-01)
+
+Every `agent.run_task` run is given a **temporary, read-only copy of little-workshop's
+`shared_project_standards/`** (`src/agent/standards.py`; REQ-000000286..289).
+
+- **What is copied**: every Markdown file at the root of `shared_project_standards/` plus the Markdown files
+  of the run's own project folder (`<project id, hyphens as underscores>_standards/`). Other projects'
+  folders and non-Markdown files are left out. A project with no folder gets the root files alone.
+- **Where it lives**: `tempfile.mkdtemp("lws-standards-<run_id>-")/shared_project_standards`, outside every
+  checkout so `_publish` can never commit it. `AgentFlow.run_task` removes the directory in a `finally`, so
+  it is gone whether the run finishes, fails or is stopped. The original is never modified.
+- **How Claude learns of it**: the prompt template `standards.md`, filled into `{standards_instructions}` of
+  `common.md`, names the path, says to read what applies, never edit or commit it, and to prefer the
+  project's own documents on a disagreement.
+- **Source**: the registered `little-workshop` checkout's `shared_project_standards/`
+  (`AgentFlow.standards_root` overrides it for tests). If it cannot be found or copied the run proceeds without
+  the copy; a missing source never fails a task.
+- **Opt-out**: the `include_standards` param, default true. The New task form shows it as a checkbox, checked by
+  default; the choice is carried through scheduling and retry; `workshop_agent_run_task` takes
+  `include_standards: false`. The "Update Standards Documentation" job sets it false, since it edits the
+  original folder.
+
+## Claude usage of the runs this pillar starts (2026-10-04)
+
+M18 of `docs/milestones.md` (REQ-000000320, REQ-000000321); the reasons are in
+[../claude_usage_optimization.md](../claude_usage_optimization.md), §3 (F4, F5).
+
+- **Stored usage.** Every `claude -p` result JSON carries what the run used. `claude_invoke.usage_from_raw`
+  reads it and `db.record_usage` stores one `claude_usage` row per Claude call: kind (`run`, `query`,
+  `doc_update`), the run or Job it belongs to, project, session id, main model, the four token counts, the
+  estimated cost (list price, not a bill), turns, duration and the per-model split. A failed run is stored too.
+  A headless update-doc session's row comes from the result JSON that ends `.review/session.log`; a Remote
+  Control session writes none. `GET /v1/runs/{project}/{run}` returns the run's summed `usage`, and
+  `GET /v1/usage?project_id=&kind=&since=` lists the rows.
+- **`agent.query`.** Each query runs in `<state home>/agent-query`, the same directory every time (unless it
+  reads a project's checkout: "A query that reads a project's checkout" below), because
+  Claude's prompt cache is scoped to the working directory; with `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, because a
+  one-request call gains nothing from a 1-hour cache write; and with `--strict-mcp-config
+  --disable-slash-commands`, because a text-in/text-out call uses neither MCP servers nor skills. Checked on a real query
+  (2026-10-04, decision 9 of the proposal): the answer was the same with and without the two flags, and the
+  context the call starts with fell from about 30k to about 11k tokens.
+
+## Launch defaults per job type (2026-10-04)
+
+M22 (REQ-000000348). `agent/launch.py` holds one `Launch(model, effort, max_budget_usd)` per job type
+(`agent.run_task`, `agent.query`, `agent.update_docs`, `agent.session`) in place of the single default every run
+shared. All four start from `claude-sonnet-5-5` at effort `medium`; a query is bounded at $1.00
+(`--max-budget-usd`: Claude Code's estimate at list price, a stop for a run that keeps going, not money
+spent). `<config>/agent/launch.json` overrides any of it per job type:
+
+```json
+{"agent.query": {"model": "claude-haiku-4-5-20251001", "effort": "low", "max_budget_usd": 0.25}}
+```
+
+A task run's own `model` and `max_budget_usd` (an `AgentFlow` built with them) win over the table. The budget a
+run was given is stored with its usage (`claude_usage.budget_usd`), and a run's status carries `budget_usd` and
+`budget_used`. Claude Code 2.1.289 has no `--max-turns` option, so a bound on turns is not set. The launch
+environment a run gets for attribution is described in `docs/pillars/usage.md`, "Configuration".
+
+Since 2026-10-05 the table has a fifth line, `agent.query.checkout`: not a Job type, but an `agent.query` that
+reads a project's checkout (next section), bounded at $3.00 because it reads for several turns.
+
+## A query that reads a project's checkout (2026-10-05)
+
+REQ-000000397. A backlog entry's refinement and task prompt were written from the entry's text alone, in
+the query folder, so they could not say where a change went or how that part worked. `agent.query` with
+`params.read_checkout: true` (and the Job's `project_id`) now runs Claude in that project's registered
+checkout, resolved through Registry & Portfolio and symlinks followed, where it can read and nothing else:
+
+- `claude_argv(read_only=True)` gives `--restricted --tools Read,Grep,Glob` in place of
+  `--dangerously-skip-permissions`. Only the tools that read are there; `--restricted` confines them to
+  the working directory, skips every settings file (so no hooks either) and refuses to bypass permissions,
+  which reads inside the working directory never need. The project's own instructions (`AGENTS.md`)
+  still load, so Claude knows its conventions. `--strict-mcp-config --disable-slash-commands` stay.
+  The Usage pillar's hooks live in the user's settings, so they do not run for it (`docs/pillars/usage.md`,
+  S3: its end reason and compactions go unrecorded); its run result (S1) and telemetry (S2, through the
+  launch environment) count it as before, and the daily `usage.ingest_transcripts` reads its transcript
+  in place of the session-end hook (S5). Confinement that no settings file can widen is worth that.
+- Launch defaults `agent.query.checkout` ($3.00) and a 600 s ceiling (`CHECKOUT_QUERY_TIMEOUT_SECONDS`)
+  in place of the query's $1.00 and 300 s.
+- A project that cannot be resolved, or whose checkout is not a directory, fails the query before
+  Claude starts. Any other query runs as before: policy authoring needs no checkout.
+- The session records where it ran (`query_sessions.cwd`), since Claude keeps a transcript under its
+  working directory: the peek and `forget` read it there, and `forget` deletes only that session's files
+  among the owner's own sessions of that checkout. A row from before has no `cwd` and means the query folder.
+
+Checked on real runs. With Haiku in a scratch folder: reads inside the working directory needed no
+permission, `AGENTS.md` was followed, a read outside the folder was refused, and with no Write tool
+there was nothing to create a file with. With the defaults, refining a little-workshop backlog entry in
+its checkout took 28 s, 8 turns and $0.07 (7 Grep and Read calls), and wrote a refined entry that named
+the functions involved (`src/orchestration/dispatch.py`) and kept the decisions as open questions. The
+transcript was where the session recorded it.
+
+The checkout is read as it is, on its current branch and with any uncommitted work, not as `dev`, where a
+task branches from. That is enough to know the code; a worktree at `dev` would cost one per query and the
+prompt cache.
+
+## A task never outlives its worker (2026-10-04)
+
+REQ-000000363..365, found when the Usage pillar's "Automate repeated Claude work" task held
+little-workshop's queue for hours on 2026-10-04: it named the intent `improvement`, which has no prompt
+(`templates/prompts/improvement.md`), so the worker thread died on a `FileNotFoundError` before Claude
+started, and neither the run nor its Job was ever settled.
+
+- **Intents.** The intents are those with a prompt: `bug`, `docs`, `milestone`, `task`
+  (`flow.INTENTS`). `agent.run_task` refuses any other at once, before a run exists, naming them
+  (`flow.intent_error`); `AgentFlow.run_task` refuses it too. The Usage pillar's tasks use `task`.
+- **A crash ends the run.** An exception escaping the worker of `agent.run_task` marks its run failed
+  ("the task crashed: …"), reports the Job failed to Orchestration and records an incident; building the
+  prompt is part of the `run_claude` step, so its failure shows on that step.
+- **Stopping a task.** Each run gets its Claude session id up front (`--session-id`, stored as
+  `agent_runs.session_id`). Orchestration's stop of an `agent.run_task` Job (it now says the Job's type,
+  and whether the user forced it) is answered here: a live worker is told to stop and every process of
+  its Claude — the one whose command line names the session, and its descendants (`agent/procs.py`) — is
+  sent SIGTERM; the run ends `stopped` ("stopped by user"), its branch and any commits left as they are,
+  and nothing is published. A worker still waiting for the run lock starts nothing. A run whose worker is
+  gone (it crashed, or the pillar restarted) is marked `stopped` at once. An update-doc job is stopped as
+  before; anything else is "not stoppable", which a force stop overrides at Orchestration.
+
+## Incidents beyond a request's exception (2026-10-04)
+
+REQ-000000367, REQ-000000368. An incident now has a **kind**: `exception` (as before), `crash` or
+`unexpected` (behaviour no exception names); `POST /v1/incidents` takes it, and the Incidents pages show
+it. `common/incident.py` adds two ways in besides the request middleware:
+
+- `install_incident_reporting` also installs a `threading.excepthook` in the pillar's process (once): an
+  exception that escapes any background thread — a Job's worker, a scheduler loop — is reported with
+  the thread's name, then handed to the hook that was there before.
+- `report_problem` records an incident with no exception: Orchestration reports a Job it failed for
+  running past its limit (`StuckJob`, kind unexpected), and Core reports a pillar systemd restarted after
+  it failed (`PillarCrashed`, kind crash; Core compares each unit's `NRestarts` at every reconcile, and
+  the detail is the end of the pillar's journal). (2026-10-05: Core reads the journal instead, see below.)
+
+Confirming one starts the bug task as before, its description worded for its kind.
+`GET /v1/incidents/version` changes with every incident recorded or decided (the Dashboard's live pages
+watch it).
+
+## Pillar outages and cut work become incidents (2026-10-05)
+
+REQ-000000400 to REQ-000000403. On 2026-10-04 a redeploy killed Orchestration and Policy after their stops
+overran systemd's 90 seconds, and on 2026-10-05 the Dashboard showed pillars as crashed while a redeploy
+restarted them; neither became an incident, because `NRestarts` sees neither a unit started anew nor a
+stop that ends in SIGKILL. Where incidents come from now:
+
+- **Core, from systemd's journal** (`core/journal.py`): every run of a pillar's unit, or of Core's own
+  installed unit, that ended abnormally ("Failed with result …": an exit with a failure, a signal, a
+  core dump, the out-of-memory killer, a start or stop timeout, a crash loop). The journal is read from
+  where Core last stopped reading, a position kept in `pillars/core-journal.json` under the state
+  directory, so a failure while Core was down, Core's own crash among them, is found when it is back.
+- **Core, per outage** (`core/supervisor.py`): from the first check that finds a pillar down, or its
+  first logged failure, until it answers again or is marked faulted, Core keeps the unit's state and the
+  probe's error at each check and what each relaunch did, and then files one incident with all of it
+  and the journal's lines: `PillarCrashed`, `PillarKilled`, `PillarTimedOut`, `PillarOutOfMemory`,
+  `PillarCrashLoop` or `PillarHung` by systemd's result, `PillarFaulted` for a pillar Core gave up on, and
+  `PillarUnavailable` for an outage in which no process failed (a pillar caught while a redeploy was
+  stopping it, which the incident says). The detail ends with what the process logged last in that run,
+  its access log left out. `PillarHung` is also an outage in which Core stopped and restarted a unit that
+  had run for two minutes without answering (REQ-000000408).
+- **Version Control & Release**: a Job it had accepted that a restart cut part-way, failed at its next
+  start (`InterruptedJob`, REQ-000000410).
+- **Orchestration**: a pillar that took a Job and did not answer within the Job type's dispatch timeout
+  (`DispatchTimeout`, kind unexpected, at most once an hour per Job type and pillar: the requeued Job may
+  run twice), a pillar that dropped a Job's request unanswered (`DispatchDropped`, REQ-000000407), and
+  the Jobs a restart of Orchestration left half-dispatched, failed at its start (`InterruptedDispatch`).
+
+## Claude peek: following a running session (2026-10-04)
+
+REQ-000000380. `GET /v1/peek/{job_id}?after=<byte>&limit=` reads the transcript Claude Code writes as it
+works — the run's session (`~/.claude/projects/<its directory>/<session id>.jsonl`) for an
+`agent.run_task` Job, the newest session of the worktree for an update-doc job — and answers
+`{available, running, source, events, next, skipped}` (`agent/peek.py`). Events are short: each message
+of Claude, each tool call with the gist of its input (a command, a file, a pattern), each failed result
+named by its tool, the prompt and compactions; thinking is left out. Reading starts at byte `after`, a
+half-written last line waits for the next read, `after=-1` gives only where the file ends, and a first
+read of a long transcript reads its last 4 MB. `GET /v1/runs/by-job/{job_id}` gives the run a Job
+started.
+
+Since 2026-10-05 (REQ-000000386) each `agent.query` runs under a session id of its own, recorded in
+`query_sessions` against the Job that asked (`job_id`) and what it worked on (`params.ref`, such as
+`backlog:<entry id>`), so the peek of that Job reads it (`source: "query"`): a backlog entry's refinement
+or task prompt, a policy's authoring (Policy & Compliance passes the Job it runs under). `POST
+/v1/query-sessions/forget {"ref"}` deletes the transcripts of every session recorded under `ref` (and its
+subagents'), and their records (REQ-000000387): what a deleted backlog entry leaves here. Both look under
+the directory the session ran in (`query_sessions.cwd`, a project's checkout for a query that reads it);
+`forget`, should a transcript not be there, deletes it wherever Claude put it.

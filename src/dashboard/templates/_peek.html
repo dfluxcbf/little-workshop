@@ -1,0 +1,13 @@
+{#- The Claude peek: what a task's (or an update-doc job's) Claude has done so far, growing while it works.
+    Needs `peek` (the agent's /v1/peek answer plus job_id); kept outside any live region: static/peek.js appends to it. -#}
+{% macro peek_card(peek) %}
+{% if peek %}
+<section class="dcard peek" data-peek-job="{{ peek.job_id }}" data-peek-running="{{ 1 if peek.running else 0 }}">
+  <div class="dcard-head"><span class="dcard-title">Claude peek</span><span class="dcard-note peek-state">{{ 'live' if peek.running else 'finished' }}</span></div>
+  <p class="muted peek-empty"{% if peek.events %} hidden{% endif %}>{% if not peek.available %}No transcript yet{% if peek.running %}: Claude has not started writing one{% endif %}.{% else %}Nothing to show yet.{% endif %}</p>
+  <ol class="peek-feed" aria-live="polite"></ol>
+  <script type="application/json" class="peek-data">{{ peek | tojson }}</script>
+</section>
+<script src="/static/peek.js?v={{ static_v }}" defer></script>
+{% endif %}
+{% endmacro %}

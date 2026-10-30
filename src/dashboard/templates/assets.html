@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Assets · {{ project }} — little-workshop{% endblock %}
+{% macro file_url(p) %}/assets/{{ project }}/file?path={{ p | urlencode }}{% endmacro %}
+{% macro tree_nodes(nodes) %}
+{% for n in nodes %}
+  {% if n.type == 'dir' %}
+  <details class="as-dir" {{ 'open' if path.startswith(n.path ~ '/') or not path }}>
+    <summary><span class="as-ico as-ico-dir"></span>{{ n.name }}</summary>
+    <div class="as-children">{{ tree_nodes(n.children) }}</div>
+  </details>
+  {% else %}
+  <a class="as-file {{ 'is-selected' if n.path == path }}" href="/assets/{{ project }}?path={{ n.path | urlencode }}">
+    <span class="as-ico as-ico-{{ n.kind }}"></span>
+    <span class="as-name">{{ n.name }}</span>
+    {% if n.kind == 'blend' %}<span class="as-dot as-dot-{{ n.bundle }}" title="{{ {'ready': 'Model and previews are current', 'stale': 'The file changed after the last export', 'none': 'Not exported yet'}[n.bundle] }}"></span>{% endif %}
+    {% if n.commented %}<span class="as-note" title="Has a comment"></span>{% endif %}
+  </a>
+  {% endif %}
+{% endfor %}
+{% endmacro %}
+{% block content %}
+<p class="as-crumbs"><a href="/docs/{{ project }}">&larr; {{ project }} docs</a></p>
+<h1>{{ project }} <span class="muted" style="font-weight:normal">assets</span></h1>
+{% if error %}
+<div class="card fail"><p style="margin:0">{{ error }}</p></div>
+{% else %}
+<div class="as-layout">
+  <aside class="as-side panel" aria-label="Asset folder">
+    <div class="as-side-head"><span class="section-label" style="margin:0">{{ assets_dir }}</span></div>
+    <div class="as-tree">{{ tree_nodes(tree) }}</div>
+    {% if not tree %}<p class="muted" style="padding:14px">Nothing to show yet: the folder has no Blender files, models, images or Markdown files.</p>{% endif %}
+  </aside>
+
+  <section class="as-main">
+  {% if not details %}
+    <div class="panel as-hint">
+      <h2>Pick an asset</h2>
+      <p class="muted">Blender files show their 3D model and the ten preview renders. Models, images and Markdown files open as they are. The dot beside a Blender file tells whether its model and previews are current:
+        <span class="as-dot as-dot-ready"></span> current, <span class="as-dot as-dot-stale"></span> the file changed since, <span class="as-dot as-dot-none"></span> not exported yet.</p>
+    </div>
+  {% else %}
+    <div class="panel as-head">
+      <div>
+        <h2 class="as-title">{{ details.name }}</h2>
+        <p class="muted as-sub">{{ details.path }} · {{ (details.size / 1024) | round | int }} KB</p>
+      </div>
+      {% if details.kind == 'blend' %}
+      <div class="as-state">
+        <span class="pill {{ 'ok' if exporting else {'ready': 'ok', 'stale': 'warn', 'none': 'idle'}[details.bundle.state] }}">{{ 'exporting…' if exporting else {'ready': 'exported', 'stale': 'changed since export', 'none': 'not exported'}[details.bundle.state] }}</span>
+        {% if exporting %}
+        <span class="muted as-wait" data-reload="4000">Blender is working on it…</span>
+        {% else %}
+        <form method="post" action="/assets/{{ project }}/export">
+          <input type="hidden" name="path" value="{{ details.path }}">
+          <button type="submit" class="{{ 'primary' if details.bundle.state != 'ready' }}" data-busy="Starting…">{{ {'ready': 'Export again', 'stale': 'Update export', 'none': 'Export'}[details.bundle.state] }}</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+    {% if message %}<div class="card"><p style="margin:0">{{ message }}</p></div>{% endif %}
+
+    {% if details.kind == 'blend' %}
+      {% set b = details.bundle %}
+      {% if b.model %}
+      <div class="panel as-stage"><model-viewer src="{{ file_url(b.model) }}" alt="{{ details.name }}" camera-controls touch-action="pan-y" auto-rotate shadow-intensity="0.8" exposure="1.1" interaction-prompt="none"></model-viewer></div>
+      {% else %}
+      <div class="panel as-hint"><h2>No 3D model yet</h2>
+        <p class="muted">Press <strong>Export</strong> above: Blender runs on the server and writes <code>{{ details.name.rsplit('.', 1)[0] }}.view/</code> beside the file. If it stays not exported, the Jobs page shows why. Claude can also do it with the <code>asset_export</code> tool of the project's <code>asset-review</code> MCP server.</p></div>
+      {% endif %}
+      {% if b.errors %}<div class="card fail"><p style="margin:0 0 6px"><strong>The last export reported:</strong></p>{% for e in b.errors %}<pre class="as-err">{{ e }}</pre>{% endfor %}</div>{% endif %}
+      {% if b.views %}
+      <h3 class="section-label">Views</h3>
+      <div class="as-grid">
+        {% for v in b.views %}<a class="as-thumb" href="{{ file_url(v.path) }}" target="_blank" rel="noopener"><img loading="lazy" src="{{ file_url(v.path) }}" alt="{{ v.name }}"><span>{{ v.name.replace('_', ' ') }}</span></a>{% endfor %}
+      </div>
+      {% endif %}
+      {% if b.uv or b.textures %}
+      <h3 class="section-label">UV layout and textures</h3>
+      <div class="as-grid as-grid-tex">
+        {% for v in b.uv %}<a class="as-thumb as-thumb-tex" href="{{ file_url(v.path) }}" target="_blank" rel="noopener"><img loading="lazy" src="{{ file_url(v.path) }}" alt="{{ v.name }}"><span>UV · {{ v.name.replace('uv_', '') }}</span></a>{% endfor %}
+        {% for v in b.textures %}<a class="as-thumb as-thumb-tex" href="{{ file_url(v.path) }}" target="_blank" rel="noopener"><img loading="lazy" src="{{ file_url(v.path) }}" alt="{{ v.name }}"><span>{{ v.name }}</span></a>{% endfor %}
+      </div>
+      {% endif %}
+    {% elif details.kind == 'model' %}
+      <div class="panel as-stage"><model-viewer src="{{ file_url(details.path) }}" alt="{{ details.name }}" camera-controls touch-action="pan-y" auto-rotate shadow-intensity="0.8" interaction-prompt="none"></model-viewer></div>
+    {% elif details.kind == 'image' %}
+      <div class="panel as-stage as-stage-img"><img src="{{ file_url(details.path) }}" alt="{{ details.name }}"></div>
+    {% elif details.kind == 'doc' %}
+      <div class="panel"><article class="md">{{ doc_html | safe }}</article></div>
+    {% endif %}
+
+    {% if details.kind != 'doc' %}
+    <h3 class="section-label">Comment</h3>
+    <form class="panel as-comment" method="post" action="/assets/{{ project }}/comment">
+      <input type="hidden" name="path" value="{{ details.path }}">
+      <label for="as-comment" class="muted" style="margin:0">Markdown, saved beside the asset as <code>{{ details.comment_path }}</code></label>
+      <textarea id="as-comment" name="body" rows="7" placeholder="What works, what to change…">{{ details.comment }}</textarea>
+      <div class="row"><button type="submit" class="primary" data-busy="Saving…">Save comment</button>{% if saved %}<span class="muted">Saved.</span>{% endif %}</div>
+    </form>
+    {% endif %}
+  {% endif %}
+  </section>
+</div>
+<script type="module" src="/static/vendor/model-viewer.min.js"></script>
+<script>
+(function () {
+  var wait = document.querySelector("[data-reload]");
+  if (wait) setTimeout(function () { location.reload(); }, parseInt(wait.dataset.reload, 10));
+})();
+</script>
+{% endif %}
+{% endblock %}

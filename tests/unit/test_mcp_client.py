@@ -617,3 +617,41 @@ def test_policy_gating_for_job_success(paths, monkeypatch):
 
     _rig(paths, monkeypatch, "policy", app)
     assert client.policy_gating_for_job(paths, "proj-a", ["server_launch"]) == [{"id": "pol1", "categories": "server_launch"}]
+
+
+# --- REQ-000000311: An action that needs the user asks, and times out after 12 hours ---
+
+def _asking(state, status="running"):
+    return {"id": "j1", "status": status, "steps": [{"key": "a", "state": state, "needs_attention": True}]}
+
+
+def test_await_job_returns_other_jobs_untouched(paths):
+    plain = {"id": "j1", "status": "running", "steps": [{"key": "run", "state": "running", "needs_attention": False}]}
+    assert client.await_job(paths, plain) is plain
+    done = _asking("succeeded", status="succeeded")
+    assert client.await_job(paths, done) is done
+
+
+def test_await_job_waits_until_the_job_ends_or_a_step_asks(paths, monkeypatch):
+    snapshots = iter([_asking("running"), _asking("attention")])
+    monkeypatch.setattr(client, "job_status", lambda p, job_id: next(snapshots))
+    assert client.await_job(paths, _asking("running"), poll_seconds=0)["steps"][0]["state"] == "attention"
+    ended = iter([_asking("running"), _asking("succeeded", status="succeeded")])
+    monkeypatch.setattr(client, "job_status", lambda p, job_id: next(ended))
+    assert client.await_job(paths, _asking("running"), poll_seconds=0)["status"] == "succeeded"
+
+
+def test_await_job_gives_up_after_the_timeout_and_survives_a_blip(paths, monkeypatch):
+    def blip(p, job_id):
+        raise client.PillarUnavailable("down")
+
+    monkeypatch.setattr(client, "job_status", blip)
+    job = _asking("running")
+    assert client.await_job(paths, job, timeout=0.05, poll_seconds=0.01) is job
+
+
+def test_answer_step_posts_the_choice(paths, monkeypatch):
+    sent = []
+    monkeypatch.setattr(client, "_mutate", lambda p, pillar, method, path, **kw: sent.append((pillar, method, path, kw)) or {"ok": 1})
+    assert client.answer_step(paths, "j1", "a", "go") == {"ok": 1}
+    assert sent == [("orchestration", "POST", "/v1/jobs/j1/steps/a/answer", {"json": {"choice": "go"}, "timeout": 10.0})]

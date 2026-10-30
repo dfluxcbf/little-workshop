@@ -233,6 +233,15 @@ def test_project_bootstrap_passes_all_flags_through_as_params(paths, monkeypatch
     assert params["remote_host"] == "example.com"
     assert params["github_token"] == "tok"
     assert params["ensure_labels"] is True
+    assert params["template"] == "python"
+
+
+def test_project_bootstrap_passes_template_through(paths, monkeypatch):
+    """REQ-000000274."""
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: captured.update(kw) or {"status": "succeeded"})
+    main.main(["project", "bootstrap", "g", "--dest-dir", "/mnt/c/little-projects", "--template", "unity"])
+    assert captured["params"]["template"] == "unity"
 
 
 def test_project_bootstrap_no_labels_flag(paths, monkeypatch):
@@ -741,7 +750,7 @@ def test_agent_session_list_loops_registry(paths, monkeypatch, capsys):
 
 
 def test_job_queue_show_groups_by_queue_key(paths, monkeypatch, capsys):
-    def fake_list_jobs(p, *, status=None):
+    def fake_list_jobs(p, *, status=None, **kw):
         if status == "running":
             return {"jobs": [{"id": "j1", "queue_key": "little-widget", "type": "agent.run_task"}]}
         return {"jobs": [{"id": "j2", "queue_key": "little-widget", "type": "agent.ci_check"}]}
@@ -753,7 +762,7 @@ def test_job_queue_show_groups_by_queue_key(paths, monkeypatch, capsys):
 
 
 def test_job_queue_show_filters_by_queue_key(paths, monkeypatch, capsys):
-    def fake_list_jobs(p, *, status=None):
+    def fake_list_jobs(p, *, status=None, **kw):
         if status == "running":
             return {"jobs": [
                 {"id": "j1", "queue_key": "a", "type": "x"}, {"id": "j3", "queue_key": "b", "type": "x"},
@@ -769,7 +778,7 @@ def test_job_queue_show_filters_by_queue_key(paths, monkeypatch, capsys):
 def test_job_queue_release_stops_and_pumps(paths, monkeypatch, capsys):
     monkeypatch.setattr(
         main.client, "list_jobs",
-        lambda p, *, status=None: {"jobs": [{"id": "j1", "queue_key": "little-widget", "type": "agent.run_task"}]},
+        lambda p, *, status=None, **kw: {"jobs": [{"id": "j1", "queue_key": "little-widget", "type": "agent.run_task"}]},
     )
     captured = {}
     monkeypatch.setattr(main.client, "stop_job", lambda p, job_id, **kw: (captured.update(job_id=job_id), {"stopped": True, "reason": None})[1])
@@ -779,7 +788,7 @@ def test_job_queue_release_stops_and_pumps(paths, monkeypatch, capsys):
 
 
 def test_job_queue_release_errors_when_no_holder(paths, monkeypatch):
-    monkeypatch.setattr(main.client, "list_jobs", lambda p, *, status=None: {"jobs": []})
+    monkeypatch.setattr(main.client, "list_jobs", lambda p, *, status=None, **kw: {"jobs": []})
     assert main.main(["job", "queue", "release", "little-widget"]) == 1
 
 

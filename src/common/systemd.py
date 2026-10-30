@@ -21,8 +21,25 @@ from pathlib import Path
 from common.shell import CommandRunner, CommandResult, DEFAULT_RUNNER
 
 
+# On a real install Core is not a transient unit: it is this installed one, running `python -m core`.
+INSTALLED_CORE_UNIT = "little-workshop.service"
+
+
 def unit_name(pillar: str) -> str:
     return f"little-workshop-{pillar}.service"
+
+
+def unit_state(pillar: str, *, runner: CommandRunner = DEFAULT_RUNNER) -> dict[str, str]:
+    """The unit's ActiveState and SubState (`deactivating`/`stop-sigterm` while it is being stopped),
+    its current run's InvocationID, its LoadState and when it became active
+    (ActiveEnterTimestampMonotonic, microseconds on the clock of `time.monotonic`); empty when systemd
+    cannot be asked."""
+    result = runner.run(["systemctl", "--user", "show", unit_name(pillar),
+                         "-p", "ActiveState", "-p", "SubState", "-p", "InvocationID", "-p", "LoadState",
+                         "-p", "ActiveEnterTimestampMonotonic"])
+    if not result.ok:
+        return {}
+    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
 
 
 def user_path_env() -> str:

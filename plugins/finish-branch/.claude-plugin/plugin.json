@@ -1,0 +1,6 @@
+{
+  "name": "finish-branch",
+  "version": "1.0.0",
+  "description": "/finish-branch [project|--all] [--push]: commits, registers the markers, runs the tests and the policy preflight and finishes the checked-out branch through little-workshop, calling Claude only where judgment is needed.",
+  "author": { "name": "little-workshop" }
+}

@@ -85,6 +85,31 @@ CREATE TABLE IF NOT EXISTS test_results (
 -- little-workshop's own 41k+ accumulated rows made that report take
 -- ~9.7s, the dominant cost of the Dashboard's home page).
 CREATE INDEX IF NOT EXISTS idx_test_results_suite_executed ON test_results (suite_id, executed_at);
+
+-- Conflicts between two requirements found by `requirements/conflicts.py`: one row per conflict id, kept while
+-- the analysis still finds it (`open`, or `resolving` once the user chose a resolution) and `resolved` once a
+-- later analysis no longer does.
+CREATE TABLE IF NOT EXISTS requirement_conflicts (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    older_requirement_id TEXT NOT NULL,
+    newer_requirement_id TEXT NOT NULL,
+    older_key TEXT NOT NULL,
+    newer_key TEXT NOT NULL,
+    older_text TEXT NOT NULL,
+    newer_text TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    status TEXT NOT NULL,
+    decision TEXT,
+    guidance TEXT NOT NULL DEFAULT '',
+    job_id TEXT,
+    detected_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    decided_at TEXT,
+    resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_requirement_conflicts_project ON requirement_conflicts (project_id, status);
 """
 
 
@@ -435,3 +460,83 @@ def latest_results_for_suites(conn: sqlite3.Connection, suite_ids: list[str]) ->
         suite_id: _row_to_result(min(batch, key=lambda r: priority[TestVerdict(r["verdict"])]))
         for suite_id, batch in by_suite.items()
     }
+
+
+# -- requirement conflicts ---------------------------------------------------------
+
+CONFLICT_OPEN = "open"
+CONFLICT_RESOLVING = "resolving"
+CONFLICT_RESOLVED = "resolved"
+CONFLICT_STATUSES = (CONFLICT_OPEN, CONFLICT_RESOLVING, CONFLICT_RESOLVED)
+
+
+def record_conflict_analysis(conn: sqlite3.Connection, project_id: str, found: list) -> dict:
+    """Bring a project's conflicts in line with an analysis (`conflicts.find_conflicts`' answer for it): a new
+    one is recorded `open`, one resolved earlier and found again is `open` again, one no longer found is
+    `resolved`. Answers {found, new, reopened, resolved} counts."""
+    now = _iso(datetime.now(timezone.utc))
+    known = {row["id"]: row["status"] for row in conn.execute(
+        "SELECT id, status FROM requirement_conflicts WHERE project_id = ?", (project_id,))}
+    new = reopened = 0
+    for c in found:
+        status = known.get(c.id)
+        if status is None:
+            new += 1
+            conn.execute(
+                """INSERT INTO requirement_conflicts (id, project_id, kind, older_requirement_id, newer_requirement_id,
+                   older_key, newer_key, older_text, newer_text, summary, status, detected_at, last_seen_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (c.id, project_id, c.kind, c.older.id, c.newer.id, c.older.key, c.newer.key, c.older_text,
+                 c.newer_text, c.summary, CONFLICT_OPEN, now, now),
+            )
+        elif status == CONFLICT_RESOLVED:
+            reopened += 1
+            conn.execute(
+                """UPDATE requirement_conflicts SET status = ?, decision = NULL, guidance = '', job_id = NULL,
+                   decided_at = NULL, resolved_at = NULL, detected_at = ?, last_seen_at = ? WHERE id = ?""",
+                (CONFLICT_OPEN, now, now, c.id),
+            )
+        else:
+            conn.execute("UPDATE requirement_conflicts SET last_seen_at = ? WHERE id = ?", (now, c.id))
+    gone = [cid for cid, status in known.items() if status != CONFLICT_RESOLVED and cid not in {c.id for c in found}]
+    conn.executemany(
+        "UPDATE requirement_conflicts SET status = ?, resolved_at = ? WHERE id = ?",
+        [(CONFLICT_RESOLVED, now, cid) for cid in gone],
+    )
+    conn.commit()
+    return {"found": len(found), "new": new, "reopened": reopened, "resolved": len(gone)}
+
+
+def list_conflicts(conn: sqlite3.Connection, *, project_id: str | None = None, status: str | None = None) -> list[dict]:
+    query, params = "SELECT * FROM requirement_conflicts WHERE 1=1", []
+    if project_id is not None:
+        query += " AND project_id = ?"
+        params.append(project_id)
+    if status is not None:
+        query += " AND status = ?"
+        params.append(status)
+    rows = conn.execute(query + " ORDER BY detected_at, id", params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_conflict(conn: sqlite3.Connection, conflict_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM requirement_conflicts WHERE id = ?", (conflict_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def decide_conflict(conn: sqlite3.Connection, conflict_id: str, *, decision: str, guidance: str, job_id: str | None) -> None:
+    """The user chose how to resolve a conflict and a Claude task is fixing it."""
+    conn.execute(
+        "UPDATE requirement_conflicts SET status = ?, decision = ?, guidance = ?, job_id = ?, decided_at = ? WHERE id = ?",
+        (CONFLICT_RESOLVING, decision, guidance, job_id, _iso(datetime.now(timezone.utc)), conflict_id),
+    )
+    conn.commit()
+
+
+def conflicts_version(conn: sqlite3.Connection) -> str:
+    """Changes whenever a conflict is found, decided or resolved: a watcher's one cheap read."""
+    row = conn.execute(
+        """SELECT COUNT(*), COALESCE(SUM(status = 'open'), 0), COALESCE(MAX(detected_at), ''),
+           COALESCE(MAX(decided_at), ''), COALESCE(MAX(resolved_at), '') FROM requirement_conflicts"""
+    ).fetchone()
+    return ":".join(str(value) for value in tuple(row))

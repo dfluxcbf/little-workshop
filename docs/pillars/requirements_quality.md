@@ -151,3 +151,92 @@ refuse a description that is not in EARS form and reply with how to fix it (`req
 deterministic pattern check: an optional `While`/`When`/`Where`/`If … then` prefix, then a determiner, a
 system name and `shall`). A bulk import from another tool passes `imported: true` to skip the check; requirements
 recorded before the rule keep their wording until edited.
+
+## UI tests with Playwright (2026-09-24)
+
+A project's UI/UX tests are **pytest-playwright tests under a `ui` directory of its tests tree**
+(`tests/ui/test_menu.py`, `tests/ui/flows/test_checkout.py`), using relative URLs (`page.goto("/")`). They
+are ordinary pytest tests — collected, run and recorded like every other — with one thing added: they need
+the app they test to be running.
+
+When a sandboxed run (`requirements.run_tests`, by `suite_id` or `suite_ids`) includes any such file, the
+project's pytest has pytest-playwright (`pytest -VV`'s plugin listing), and the project's
+`manifest.deployment.toml` has a `[server.screenshot].command`, this pillar (`requirements/testrun.py`,
+`ui_app`):
+
+1. starts that command from the worktree on a free port (`{port}` substituted), its output to
+   `.requirements-ui-app.log` in the worktree;
+2. waits up to the manifest's `ready_timeout_seconds` for the port to listen — if it never does, the run
+   fails with the command and the log's tail, rather than reporting every UI test as a failure;
+3. runs pytest with `--base-url=http://127.0.0.1:<port>` added;
+4. stops the app again, whatever the outcome, before the worktree is released.
+
+The same scratch-port command Agentic Development's screenshots use is reused rather than adding a second
+"how to start this app" setting. A free port instead of the screenshot's fixed `port + 1000` means a test
+run never collides with an agent's screenshot or another test run. Without pytest-playwright or a launch
+command, the UI tests run exactly as they are — against whatever base URL their own configuration gives
+them — so a project that starts its own server in a fixture is unaffected.
+
+## Marker sync (2026-10-04)
+
+REQ-000000346. `requirements.sync_markers` reads the `# --- REQ-nnnnnnnnn: <title> ---` (or `// --- …`) section
+markers of the project's test files (`requirements/markers.py`; files git tracks or would track, in a test
+directory) and brings the pillar in line with them in one Job:
+
+- A marked requirement the pillar lacks is created as a draft from its row in the project's
+  `docs/requirements.md` (`| REQ-… | **Title.** text | status |`), EARS-checked like any other. A marker with
+  no such row, or whose text is not EARS, is reported under `missing_text` and not created.
+- Every marked requirement is linked to `params.suite_id`, or to the suite named "Unit tests".
+- Nothing is deleted or unlinked. `params.dry_run` only reports.
+
+It replaces one `workshop_requirements_create` and one `_link_suite` call per requirement.
+`lws requirements sync-markers --project-id <id>`, `workshop_requirements_sync_markers`.
+
+## A test Job's answer: counts, not every result (2026-10-05)
+
+REQ-000000384. `requirements.run_tests` and `requirements.import_junit` record every result in this
+pillar's store, as before, and answer their Job with `{suite_id, ran (imported for an import),
+verdicts: {verdict: count}, failing, failing_total}`: at most 50 failing tests (`failed` or `error`),
+each with the first 500 characters of its detail (`FAILING_SHOWN`, `DETAIL_SHOWN`). A run of several
+suites answers `{suites: [{suite_id, name, ran, verdicts}], ran, verdicts, failing, failing_total}`, each
+failing test naming its suite. Before, the answer carried every result (3,317 of them, 1.1 MB, for this
+project's unit suite), and every list of Jobs and every reader of the Job carried them too. The results
+themselves stay at `GET /v1/test_results`. Agentic Development's CI check reads the counts.
+
+## Requirement conflicts (2026-10-30)
+
+REQ-000000468. `requirements/conflicts.py` compares a project's requirements with code alone, so the same
+requirements always give the same conflicts. Each description is read as EARS statements: each sentence, and
+each `, and the <system> shall …` within one, keeping the sentence's `While`/`When`/`Where`/`If` clauses. Words
+are compared in lower case, without punctuation and without `a`/`an`/`the`. Two requirements of one project
+conflict when:
+
+- **Same key** (`duplicate_key`): each later copy of a key is paired with the first copy;
+- **Contradiction**: a statement in each has the same conditions, system and response, and one says `shall`
+  where the other says `shall not` or `shall never`;
+- **Different values**: same conditions, system and polarity, and the same response apart from its numbers.
+
+The older requirement is the one created first. A conflict's id hashes its kind, the two requirement ids and
+the statements involved, so every analysis finds a conflict under the same id. The table
+`requirement_conflicts` holds each one as `open`, then `resolving` once the user has chosen a resolution, then
+`resolved` when an analysis no longer finds it (because a requirement was changed or deleted). A resolved
+conflict that comes back is `open` again.
+
+The running pillar analyzes every project when it starts and every 15 minutes after that
+(`CONFLICT_SCAN_SECONDS`). `requirements.analyze_conflicts` does the same for one project, or for all of them
+when no project is given; it is in the Dashboard's New Job catalog as "Check requirement conflicts". Reads:
+`GET /v1/conflicts?project_id&status`, `GET /v1/conflicts/{id}` (with both requirements as they are now, or
+None once deleted), and `GET /v1/conflicts/version`, which the Dashboard's live stream polls. MCP:
+`workshop_requirements_conflicts`.
+
+On the Dashboard, each project with open conflicts is one item in the attention list, linking to
+`/requirements/conflicts` (Documentation → Conflicts). A conflict's page shows the two requirements side by side
+and offers **Older requirement wins**, **Newer requirement wins** or **Another approach**; the last one needs
+text saying what to do. Submitting starts Agentic Development's `agent.resolve_requirement_conflict` on the
+conflict's project. That job builds an ordinary `agent.run_task` (intent `task`, manual review unless the user
+chose auto-approve) from the conflict and the decision (`agent/requirement_conflicts.py`), then records the
+decision and the Job on the conflict through `requirements.decide_conflict`. The task tells Claude to change
+requirements only through this pillar: a draft can be edited, a published one is deleted and, where some of it
+still holds, replaced under the next free key. The conflict is resolved when the next analysis no longer finds
+it. A conflict still `resolving` can be resolved again from its page, for example when its task failed.
+

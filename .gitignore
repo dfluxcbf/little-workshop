@@ -10,3 +10,6 @@ MODULE.bazel.lock
 *.egg-info/
 .coverage
 htmlcov/
+.claude/settings.local.json
+.claude/worktrees/
+.review/

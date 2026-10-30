@@ -7,15 +7,17 @@ place a socket path is looked up" (docs/architecture.md's PI section).
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 import httpx
-import uvicorn
 
+from common import serving
 from common.paths import Paths
 from common.uds_client import client_for_socket
 from orchestration import db
 from orchestration.app import build_app
+from orchestration.dispatch import settle_interrupted_dispatches
 from orchestration.scheduler import DEFAULT_TICK_INTERVAL_SECONDS, SchedulerThread
 
 # Registry statuses that mean "this pillar is enabled and has a socket
@@ -49,7 +51,12 @@ def main() -> None:
 
     conn = db.connect(paths.pillar_db_path("orchestration"))
     socket_lookup = make_core_socket_lookup(paths)
-    app = build_app(conn, socket_lookup, paths)
+    # One lock for every db touch, requests and the tick loop alike.
+    lock = threading.Lock()
+    app = build_app(conn, socket_lookup, paths, lock=lock)
+    # Before the tick loop and before serving, so no Job this process claims is taken for one whose
+    # dispatch the previous process never finished (REQ-000000403).
+    settle_interrupted_dispatches(conn, socket_lookup)
 
     # docs/milestones.md M9: one tick loop per process, started here so
     # its one-time startup check (a firing missed while little-workshop
@@ -59,14 +66,10 @@ def main() -> None:
     # for real without waiting the production 10-minute interval;
     # production never sets it.
     tick_interval = float(os.environ.get("LWS_SCHEDULER_TICK_SECONDS", DEFAULT_TICK_INTERVAL_SECONDS))
-    scheduler_thread = SchedulerThread(conn, socket_lookup, interval_seconds=tick_interval)
+    scheduler_thread = SchedulerThread(conn, socket_lookup, interval_seconds=tick_interval, lock=lock)
     scheduler_thread.start()
 
-    socket_path = paths.socket_path("orchestration")
-    if socket_path.exists():
-        socket_path.unlink()
-
-    uvicorn.run(app, uds=str(socket_path), log_level="info")
+    serving.serve(app, paths.socket_path("orchestration"))
 
 
 if __name__ == "__main__":

@@ -169,3 +169,35 @@ def test_audit_as_dicts_matches_audit(tmp_path):
 
     dicts = audit_as_dicts(repo)
     assert dicts == [{"kind": "stale_merged", "branch": "feature/done", "detail": "already merged into dev.", "recommended_action": "delete: git branch -d feature/done (and the remote copy, if any)."}]
+
+
+# --- REQ-000000421: A branch squash-merged into its target counts as merged ---
+
+
+def test_a_squash_merged_topic_branch_is_stale_merged(tmp_path):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    _git(["checkout", "-b", "feature/done"], repo)
+    _commit(repo, "first part")
+    _commit(repo, "second part")
+    _git(["checkout", "dev"], repo)
+    _git(["merge", "--squash", "feature/done"], repo)
+    _git(["commit", "-m", "feat (-1): done"], repo)
+    _git(["checkout", "master"], repo)
+
+    violations = audit(repo)
+    assert [(v.kind, v.branch) for v in violations] == [("stale_merged", "feature/done")]
+
+
+def test_squash_detection_does_not_take_unmerged_work_for_merged(tmp_path):
+    from version import gitops
+
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    _git(["checkout", "-b", "feature/open"], repo)
+    _commit(repo, "not merged")
+    assert gitops.is_merged(repo, "feature/open", "dev") is False
+    _git(["checkout", "dev"], repo)
+    _git(["merge", "--squash", "feature/open"], repo)
+    _git(["commit", "-m", "feat (-1): open"], repo)
+    assert gitops.is_merged(repo, "feature/open", "dev") is True

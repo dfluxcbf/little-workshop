@@ -12,9 +12,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from common.job_steps import step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.worktree_client import provision_worktree, release_worktree
+
+
+class _CommandFailed(Exception):
+    """The build command exited non-zero: its step fails, the run still reports normally."""
 
 
 @dataclass
@@ -32,12 +37,22 @@ def run_build(
     runner: CommandRunner = DEFAULT_RUNNER,
     timeout: float = 1800.0,
 ) -> RunOutcome:
-    worktree_id, worktree_path = provision_worktree(paths, project_id, commitish)
+    with step("provision") as handle:
+        worktree_id, worktree_path = provision_worktree(paths, project_id, commitish)
+        handle.detail = commitish
     try:
-        result = runner.run(command, cwd=worktree_path, timeout=timeout)
+        try:
+            with step("run_command") as handle:
+                result = runner.run(command, cwd=worktree_path, timeout=timeout)
+                handle.detail = f"{' '.join(command)} exited {result.returncode}"
+                if result.returncode != 0:
+                    raise _CommandFailed(handle.detail)
+        except _CommandFailed:
+            pass  # the step is reported failed; the exit code is the outcome, not an error
         log = result.stdout
         if result.stderr:
             log += ("\n" if log else "") + result.stderr
         return RunOutcome(exit_code=result.returncode, log=log)
     finally:
-        release_worktree(paths, project_id, worktree_id)
+        with step("release"):
+            release_worktree(paths, project_id, worktree_id)

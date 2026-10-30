@@ -1,0 +1,7 @@
+Playwright is this ecosystem's standard for anything a user sees or touches. This session has the Playwright MCP server attached (its tools are named `browser_*`: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_take_screenshot`, …), running a headless Chromium.
+
+When the task changes a UI or UX in any way:
+
+- Launch the app from this checkout on a spare port and look at the change in the browser — navigate to the affected pages, exercise the new behaviour, check the phone viewport (`browser_resize` to 412×915) as well as a desktop one. If the project has a `manifest.deployment.toml`, its `[server.screenshot].command` is the command that starts this branch's app on a scratch port (`{port}`). Never stop or restart anything already running on the project's real port. Stop what you started before you finish.
+- Cover the behaviour with Playwright tests: pytest-playwright tests under `tests/ui/`, using the `page` fixture and relative URLs (`page.goto("/")`) so they run against whatever `--base-url` they are given — little-workshop starts the branch's app and passes `--base-url` when it runs a project's `tests/ui/` tests. Add `pytest-playwright` to the project's dev dependencies if it is not there yet.
+- If the browser tools report that the browser is not installed, run `npx -y {mcp_package} install-browser chrome-for-testing` once and retry. If a UI could still not be checked in a browser, say so in the report rather than claiming it was verified.

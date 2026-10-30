@@ -172,6 +172,13 @@ sh_binary(
 )
 
 sh_binary(
+    name = "usage_server",
+    srcs = ["scripts/bazel/run_server.sh"],
+    data = glob(["src/**"]) + ["pyproject.toml"],
+    args = ["usage", "$(location pyproject.toml)"],
+)
+
+sh_binary(
     name = "dashboard_server",
     srcs = ["scripts/bazel/run_server.sh"],
     data = glob(["src/**"]) + ["pyproject.toml"],

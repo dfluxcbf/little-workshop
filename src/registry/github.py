@@ -95,6 +95,59 @@ INTENT_LABELS = (
 BOOTSTRAP_LABELS = TRIGGER_AND_OUTCOME_LABELS + INTENT_LABELS
 
 
+class NoGitHubCredentials(GitHubError):
+    pass
+
+
+def create_repo(name: str, owner: str, *, token: str | None, private: bool, description: str) -> dict:
+    """Create `owner/name` through the token if one is given, else a
+    logged-in `gh` — shared by `project.bootstrap` and
+    `project.connect_github`."""
+    if token:
+        return create_repository(name, token, private=private, description=description)
+    if gh_available():
+        return create_repository_with_gh(name, owner, private=private, description=description)
+    raise NoGitHubCredentials("no way to create the GitHub repo: no token given and `gh` is not installed/logged in")
+
+
+def ensure_bootstrap_labels(full_name: str, token: str | None) -> list[str]:
+    """Ensure every BOOTSTRAP_LABELS label on `full_name` (idempotent);
+    returns the label names, in order."""
+    names: list[str] = []
+    for label_name, color, description in BOOTSTRAP_LABELS:
+        if token:
+            ensure_label(full_name, token, label_name, color, description)
+        elif gh_available():
+            ensure_label_with_gh(full_name, label_name, color, description)
+        names.append(label_name)
+    return names
+
+
+def web_url(remote: str) -> str:
+    """`git@host:owner/name.git`, `ssh://git@host/owner/name.git` or
+    `https://host/owner/name.git` -> `https://host/owner/name`; anything
+    else is returned unchanged."""
+    url = remote.strip()
+    if url.startswith("ssh://"):
+        url = url[len("ssh://"):]
+        user_host, _, rest = url.partition("/")
+        url = f"https://{user_host.rpartition('@')[2]}/{rest}"
+    elif "://" not in url and ":" in url:
+        user_host, _, rest = url.partition(":")
+        url = f"https://{user_host.rpartition('@')[2]}/{rest}"
+    if url.startswith(("https://", "http://")):
+        url = url.removesuffix("/").removesuffix(".git")
+    return url
+
+
+def full_name_from_url(url: str) -> str | None:
+    """`owner/name` from a URL `web_url` normalised, or None."""
+    if not url.startswith(("https://", "http://")):
+        return None
+    parts = url.split("://", 1)[1].split("/")
+    return f"{parts[1]}/{parts[2]}" if len(parts) == 3 and all(parts[1:]) else None
+
+
 def ensure_label_with_gh(repo: str, name: str, color: str, description: str) -> None:
     result = subprocess.run(
         ["gh", "label", "create", name, "--repo", repo, "--color", color, "--description", description, "--force"],

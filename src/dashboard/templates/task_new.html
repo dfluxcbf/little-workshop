@@ -3,8 +3,10 @@
 {% block content %}
 <h1>New task</h1>
 <p class="lede">Hands a task to Claude on the chosen project: a real branch, a change report, and your review before anything is finished. Choose whether it starts right away or on a schedule.</p>
+{% if prefill and prefill.source %}<p class="flash">Filled in from <a href="{{ prefill.source_href }}">{{ prefill.source }}</a>: read it, change it if you like, then start it.</p>{% endif %}
 <div class="panel" style="padding:18px 20px">
 <form method="post" action="/tasks/new" id="task-form">
+  {% if prefill and prefill.candidate_id %}<input type="hidden" name="candidate_id" value="{{ prefill.candidate_id }}">{% endif %}
   {% include "_task_fields.html" %}
   <label for="when">When</label>
   <select name="when" id="when">
@@ -28,21 +30,8 @@
 </form>
 </div>
 
-{% if scheduled %}
-<h2 class="section-label">Scheduled</h2>
-<div class="report-list">
-  {% for t in scheduled %}
-  <article class="report-item">
-    <span class="report-head"><span class="report-title">{{ t.name }}</span><span class="pill {{ 'ok' if t.state == 'active' else 'idle' }}">{{ t.state }}</span></span>
-    <span class="report-desc">
-      {% if t.schedule.kind == 'once' %}Once at {{ t.schedule.at }}{% else %}Every {% for d in t.schedule.days_of_week %}{{ weekdays[d] }}{{ ', ' if not loop.last }}{% endfor %} at {{ t.schedule.time_of_day }}{% endif %}
-      {% if t.next_run_at %} &middot; next {{ t.next_run_at }}{% endif %}
-    </span>
-    <form method="post" action="/tasks/schedule/{{ t.id }}/remove"><button type="submit" class="danger">Remove</button></form>
-  </article>
-  {% endfor %}
-</div>
-{% endif %}
+{% set detail_base = "/tasks/schedule" %}
+{% include "_scheduled_cards.html" %}
 <script>
 (function () {
   var when = document.getElementById("when");

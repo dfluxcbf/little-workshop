@@ -1,0 +1,13 @@
+{% macro job_gate_actions(job_id, next) -%}
+<div class="gate-actions">
+  <form method="post" action="/jobs/{{ job_id }}/gate/confirm" onsubmit="return confirm('Run this job even though a policy check failed?')">
+    <input type="hidden" name="next" value="{{ next }}"><button type="submit" class="btn">Confirm anyway</button>
+  </form>
+  <form method="post" action="/jobs/{{ job_id }}/gate/cancel">
+    <input type="hidden" name="next" value="{{ next }}"><button type="submit" class="btn">Cancel</button>
+  </form>
+  <form method="post" action="/jobs/{{ job_id }}/gate/fail">
+    <input type="hidden" name="next" value="{{ next }}"><button type="submit" class="btn">Mark as failed</button>
+  </form>
+</div>
+{%- endmacro %}

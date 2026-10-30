@@ -34,6 +34,8 @@ since blocking an action that already happened is meaningless.
 from __future__ import annotations
 
 import sqlite3
+import threading
+from contextlib import nullcontext
 from typing import Callable
 
 import httpx
@@ -62,6 +64,7 @@ JOB_TYPE_CATEGORIES: dict[str, set[str]] = {
     "version.release_candidate_cut": {"release"},
     "version.release_candidate_promote": {"release"},
     "version.release_finish": {"release", "branch_finish"},
+    "version.release": {"release", "branch_finish"},  # start + finish in one Job
     "version.feature_finish": {"branch_finish"},
     "version.improvement_finish": {"branch_finish"},
     "version.hotfix_finish": {"branch_finish"},
@@ -83,15 +86,18 @@ POST_COMPLETION_VERIFY_JOB_TYPES: dict[str, set[str]] = {
 }
 
 
-def resolve_gating_policies(socket_lookup: SocketLookup, project_id: str, categories: set[str], *, timeout: float = 10.0) -> list[dict]:
-    """[{"id": policy id, "gating": whether a failure may hold the Job}] —
-    every policy selected for this project that covers these categories."""
+def resolve_gating_policies(
+    socket_lookup: SocketLookup, project_id: str, categories: set[str], *, timeout: float = 10.0, origin: str = "unknown",
+) -> list[dict]:
+    """[{"id": policy id, "gating": whether a failure may hold the Job, "bypassed": whether the user's
+    policy bypass is what turned gating off}] — every policy selected for this project that covers these
+    categories. `origin` is the request's (`common.origin`): only the user's own CLI can be bypassed."""
     socket_path = socket_lookup("policy")
     if socket_path is None:
         return []
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.get("/v1/policies/gating-for-job", params={"project_id": project_id, "categories": ",".join(sorted(categories))})
+            response = client.get("/v1/policies/gating-for-job", params={"project_id": project_id, "categories": ",".join(sorted(categories)), "origin": origin})
         response.raise_for_status()
     except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
         # Policy & Compliance unreachable right now: this pass treats
@@ -101,7 +107,8 @@ def resolve_gating_policies(socket_lookup: SocketLookup, project_id: str, catego
         # section), not the spec's full fail-closed-on-unreachable
         # behavior.
         return []
-    return [{"id": p["id"], "gating": bool(p.get("gating", True))} for p in response.json()]
+    return [{"id": p["id"], "gating": bool(p.get("gating", True)), "bypassed": bool(p.get("bypassed", False))}
+            for p in response.json()]
 
 
 def attach_policy_gate(conn: sqlite3.Connection, socket_lookup: SocketLookup, job: Job) -> Job:
@@ -114,13 +121,14 @@ def attach_policy_gate(conn: sqlite3.Connection, socket_lookup: SocketLookup, jo
     categories = JOB_TYPE_CATEGORIES.get(job.type)
     if not categories or not job.project_id:
         return job
-    policies = resolve_gating_policies(socket_lookup, job.project_id, categories)
+    policies = resolve_gating_policies(socket_lookup, job.project_id, categories, origin=job.origin)
     if not policies:
         return job
     for policy in policies:
         check_job = Job(
             type="policy.check_project", target_pillar="policy", project_id=job.project_id,
-            params={"policy_id": policy["id"], "gating": policy["gating"]}, created_by="orchestration-gate",
+            params={"policy_id": policy["id"], "gating": policy["gating"], "bypassed": policy["bypassed"], "origin": job.origin},
+            created_by="orchestration-gate", origin=job.origin,
         )
         insert_job(conn, check_job)
         job.depends_on = [*job.depends_on, check_job.id]
@@ -144,7 +152,8 @@ def verify_after_completion(conn: sqlite3.Connection, socket_lookup: SocketLooku
     for policy in resolve_gating_policies(socket_lookup, job.project_id, categories):
         check_job = Job(
             type="policy.check_project", target_pillar="policy", project_id=job.project_id,
-            params={"policy_id": policy["id"], "gating": policy["gating"]}, created_by="orchestration-post-registration-verify",
+            params={"policy_id": policy["id"], "gating": policy["gating"], "origin": job.origin}, created_by="orchestration-post-registration-verify",
+            origin=job.origin,
         )
         insert_job(conn, check_job)
     return job
@@ -207,12 +216,18 @@ def maybe_gate(
     return True
 
 
-def confirm(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup) -> dict:
-    if job.status != JobStatus.PENDING_CONFIRMATION:
-        return {"confirmed": False, "reason": f"job is {job.status.value}, not pending confirmation"}
+def confirm(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, lock: threading.Lock | None = None) -> dict:
+    """`lock` (not held by the caller) guards the claim; the dispatch itself runs without it."""
     from orchestration.dispatch import dispatch_job, dispatch_timeout_for
 
-    dispatched = dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type))
+    with lock if lock is not None else nullcontext():
+        if lock is not None:
+            job = get_job(conn, job.id) or job
+        if job.status != JobStatus.PENDING_CONFIRMATION:
+            return {"confirmed": False, "reason": f"job is {job.status.value}, not pending confirmation"}
+        job.status = JobStatus.RUNNING  # claimed: a second confirm now finds it settled
+        update_job(conn, job)
+    dispatched = dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type), lock=lock)
     return {"confirmed": True, "job": dispatched.model_dump(mode="json")}
 
 

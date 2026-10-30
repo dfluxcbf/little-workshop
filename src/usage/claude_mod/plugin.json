@@ -1,0 +1,7 @@
+{
+  "name": "little-workshop-status",
+  "version": "1.0.0",
+  "description": "little-workshop's status of the session's project: icons on the phone, every topic on the desktop and in the terminal (/ws).",
+  "author": { "name": "little-workshop" },
+  "types": "./types/index.d.ts"
+}

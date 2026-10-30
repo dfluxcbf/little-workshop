@@ -8,8 +8,10 @@ itself) is explicitly not in scope here — docs/milestones.md M5.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sqlite3
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -17,6 +19,7 @@ from pathlib import Path
 from typing import Callable
 
 from common import systemd
+from common.job_steps import done, step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from core.health import HealthResult, probe_health
@@ -31,6 +34,13 @@ from deployment.workshop_repo import workshop_repo_dir
 # already used elsewhere in this project as the human-override window.
 DEFAULT_SELF_REDEPLOY_CONFIRM_SECONDS = 600
 SELF_REDEPLOY_GATED_BY_DEFAULT = ("core", "deployment")
+# On a real install Core is not a transient `little-workshop-core` unit like the pillars: it is the
+# installed unit below, running `python -m core` from the same environment as `lws`. Redeploying
+# it means refreshing that environment and restarting the unit. Launching a transient Core beside
+# it gave two Cores, and the rollback of that put an old Core on the socket (2026-10-04).
+CORE_PILLAR = "core"
+INSTALLED_CORE_UNIT = systemd.INSTALLED_CORE_UNIT
+INSTALLED_CORE_HOW = f"restarted the installed unit {INSTALLED_CORE_UNIT}"
 # Pillars whose process is the one waiting on the redeploy Job's HTTP reply
 # (Orchestration dispatches every Job): stopping it mid-request times the Job
 # out, re-queues it, and the retry restarts it again — a loop. Always dispatch
@@ -78,6 +88,7 @@ class UpResult:
     how: str
     exposure: str | None
     confirm_message: str | None = None
+    cli_note: str | None = None
 
 
 @dataclass
@@ -102,6 +113,41 @@ def _unit_key(project_id: str) -> str:
     return f"deploy-{project_id}"
 
 
+def _lws_python() -> Path | None:
+    """The interpreter of the venv `lws` is installed in (pipx), read from
+    the shim's own shebang; None when `lws` is not installed."""
+    shim = shutil.which("lws", path=systemd.user_path_env())
+    if shim is None:
+        return None
+    try:
+        first = Path(shim).read_text(encoding="utf-8", errors="replace").splitlines()[0]
+    except (OSError, IndexError):
+        return None
+    return Path(first[2:].strip()) if first.startswith("#!") else None
+
+
+def _pip_version(version: str) -> str:
+    """VERSION's gitflow form as pip reports it: 0.2.19-dev.1 -> 0.2.19.dev1."""
+    return version.replace("-dev.", ".dev").replace("-rc.", "rc")
+
+
+_PIP_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\.dev(\d+)|rc(\d+))?$")
+
+
+def _version_key(pip_version: str) -> tuple[int, ...] | None:
+    """Orders pip-form versions the gitflow way (dev < rc < stable); None
+    for anything else."""
+    match = _PIP_VERSION_RE.match(pip_version.strip())
+    if not match:
+        return None
+    major, minor, patch, dev, rc = match.groups()
+    stage, n = (0, int(dev)) if dev else (1, int(rc)) if rc else (2, 0)
+    return (int(major), int(minor), int(patch), stage, n)
+
+
+_CLI_REFRESH_LOCK = threading.Lock()
+
+
 @dataclass
 class DeploymentFlow:
     paths: Paths
@@ -111,6 +157,7 @@ class DeploymentFlow:
     clock: Callable[[], float] = time.monotonic
     own_cgroup: Callable[[], str] = _read_own_cgroup
     health_probe: Callable[..., HealthResult] = probe_health
+    cli_python: Callable[[], Path | None] = _lws_python
 
     # -- helpers --------------------------------------------------------
 
@@ -230,37 +277,52 @@ class DeploymentFlow:
         version and launch the new one once that succeeds. A bad
         build/install must never take a running server down."""
         worktree = self.paths.worktree_path(f"deploy-{project_id}")
-        gitutil.add_worktree(project_dir, commitish, worktree)
         try:
-            version = (worktree / "VERSION").read_text(encoding="utf-8").strip() if (worktree / "VERSION").exists() else "?"
-            commit = gitutil.current_commit(worktree)
-            self.install(manifest, cwd=worktree)
-            self.down(project_id, manifest, tailscale_off=False)
+            with step("install") as handle:
+                gitutil.add_worktree(project_dir, commitish, worktree)
+                version = (worktree / "VERSION").read_text(encoding="utf-8").strip() if (worktree / "VERSION").exists() else "?"
+                commit = gitutil.current_commit(worktree)
+                self.install(manifest, cwd=worktree)
+                handle.detail = f"version {version} at {commit[:12]}"
+            with step("stop_old"):
+                self.down(project_id, manifest, tailscale_off=False)
             # Not cwd=worktree: the worktree is removed right after this call
             # returns, but the launched process's working directory has to
             # keep existing for as long as the unit does (Restart=on-failure
             # cds into it again on every restart).
-            how = self.launch(project_id, manifest, cwd=self.paths.state_home)
+            with step("launch") as handle:
+                how = self.launch(project_id, manifest, cwd=self.paths.state_home)
+                handle.detail = how
         finally:
             gitutil.remove_worktree(project_dir, worktree)
         return version, commit, how
 
     def up(self, conn: sqlite3.Connection, project_id: str, manifest: ServerManifest, project_dir: Path, branch: str) -> UpResult:
-        self._refuse_external(manifest, "deploy")
-        gitutil.run(["git", "fetch", "origin", "--prune"], project_dir)
-        location = gitutil.branch_location(project_dir, branch)
-        if location is None:
-            raise DeploymentError(f"branch '{branch}' does not exist in {project_dir} or on origin; nothing was stopped")
+        with step("check_managed") as handle:
+            self._refuse_external(manifest, "deploy")
+            handle.detail = manifest.name
+        with step("fetch_branch") as handle:
+            gitutil.run(["git", "fetch", "origin", "--prune"], project_dir)
+            location = gitutil.branch_location(project_dir, branch)
+            if location is None:
+                raise DeploymentError(f"branch '{branch}' does not exist in {project_dir} or on origin; nothing was stopped")
+            commitish = gitutil.deploy_commitish(project_dir, branch)
+            handle.detail = f"{branch} ({location})" if isinstance(location, str) else branch
 
-        commitish = gitutil.deploy_commitish(project_dir, branch)
         version, commit, how = self._deploy(project_id, manifest, project_dir, commitish)
-        exposure = self.expose(manifest)
+        with step("expose") as handle:
+            exposure = self.expose(manifest)
+            handle.detail = exposure or "not exposed through Tailscale"
         db.save_server_state(conn, project_id, branch, version, commit)
         db.record_deployment(conn, project_id, branch, commit, version, "succeeded", how)
 
         confirm_message = None
         if manifest.confirm_timeout_seconds:
-            confirm_message = self.arm_confirm_gate(conn, project_id, branch, commit, version, manifest.confirm_timeout_seconds)
+            with step("confirm_gate") as handle:
+                confirm_message = self.arm_confirm_gate(conn, project_id, branch, commit, version, manifest.confirm_timeout_seconds)
+                handle.detail = confirm_message
+        else:
+            done("confirm_gate", "not confirm-gated")
 
         return UpResult(branch=branch, version=version, commit=commit, how=how, exposure=exposure, confirm_message=confirm_message)
 
@@ -366,6 +428,21 @@ class DeploymentFlow:
             if not self._wait(lambda: not self._pids_matching(match), stop_timeout_seconds):
                 self.runner.run(["pkill", "-A", "-KILL", "-f", match])
 
+    def _core_is_installed_unit(self) -> bool:
+        result = self.runner.run(["systemctl", "--user", "is-active", INSTALLED_CORE_UNIT])
+        return result.stdout.strip() == "active"
+
+    def _restart_installed_core(self) -> str:
+        """Restart the installed Core, which reconnects to the running pillars ("reconnect, don't
+        relaunch") and starts any the manifest newly names."""
+        result = self.runner.run(["systemctl", "--user", "restart", INSTALLED_CORE_UNIT])
+        if not result.ok:
+            raise DeploymentError(f"could not restart {INSTALLED_CORE_UNIT}: {(result.stderr or result.stdout).strip()}")
+        probed = self.health_probe(self.paths.core_socket_path, timeout=5.0, max_retries=20, sleep=self.sleep)
+        if not probed.ok:
+            raise DeploymentError(f"Core did not become healthy after restarting {INSTALLED_CORE_UNIT}: {probed.error}")
+        return INSTALLED_CORE_HOW
+
     def _xdg_env_for_own_paths(self) -> dict[str, str]:
         """Env vars that make a launched process's own `Paths.from_env()`
         resolve to this exact `self.paths` — not "whatever XDG_CONFIG_HOME
@@ -400,7 +477,7 @@ class DeploymentFlow:
         return how
 
     def redeploy_pillar_direct(
-        self, conn: sqlite3.Connection, pillar: str, workshop_repo_dir: Path, commit: str,
+        self, conn: sqlite3.Connection, pillar: str, workshop_repo_dir: Path, commit: str, *, refresh_cli: bool = True,
     ) -> UpResult:
         """Build-before-stop, generalized from an external project's server
         to one of little-workshop's own pillars: check out `commit` into a
@@ -414,35 +491,60 @@ class DeploymentFlow:
         worker, or the target isn't self-referential) use this directly;
         `redeploy_pillar`/`rollback_pillar_if_unconfirmed` are the checked
         entry points."""
-        resolved = gitutil.run(["git", "rev-parse", commit], workshop_repo_dir)
-        resolved_commit = resolved.stdout.strip() or commit
-
         worktree = self.paths.worktree_path(f"redeploy-{pillar}-{uuid.uuid4().hex[:8]}")
-        gitutil.add_worktree(workshop_repo_dir, resolved_commit, worktree)
         try:
-            check = self.runner.run(
-                ["python3", "-c", f"import sys; sys.path.insert(0, 'src'); import {pillar}"],
-                cwd=worktree, timeout=30,
-            )
-            if not check.ok:
-                raise DeploymentError(
-                    f"{pillar}: commit {resolved_commit[:12]} does not even import cleanly "
-                    f"({(check.stderr or check.stdout).strip()[:2000]}); the running version was left untouched"
+            with step("smoke_check") as handle:
+                resolved = gitutil.run(["git", "rev-parse", commit], workshop_repo_dir)
+                resolved_commit = resolved.stdout.strip() or commit
+                gitutil.add_worktree(workshop_repo_dir, resolved_commit, worktree)
+                check = self.runner.run(
+                    ["python3", "-c", f"import sys; sys.path.insert(0, 'src'); import {pillar}"],
+                    cwd=worktree, timeout=30,
                 )
-            version_file = worktree / "VERSION"
-            version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "?"
+                if not check.ok:
+                    raise DeploymentError(
+                        f"{pillar}: commit {resolved_commit[:12]} does not even import cleanly "
+                        f"({(check.stderr or check.stdout).strip()[:2000]}); the running version was left untouched"
+                    )
+                version_file = worktree / "VERSION"
+                version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "?"
+                handle.detail = f"version {version} at {resolved_commit[:12]}"
 
-            install_dir = self._pillar_install_dir(pillar, resolved_commit)
-            if install_dir.exists():
-                shutil.rmtree(install_dir)
-            shutil.copytree(worktree / "src", install_dir / "src")
+            with step("install") as handle:
+                install_dir = self._pillar_install_dir(pillar, resolved_commit)
+                if install_dir.exists():
+                    shutil.rmtree(install_dir)
+                shutil.copytree(worktree / "src", install_dir / "src")
+                handle.detail = str(install_dir)
+            # A rollback puts one pillar back on an older commit; `lws` is
+            # shared by all of them and stays where it is.
+            if refresh_cli:
+                with step("refresh_cli") as handle:
+                    cli_note = self._refresh_cli(worktree, version)
+                    handle.detail = cli_note or "lws already up to date"
+            else:
+                cli_note = None
+                done("refresh_cli", "skipped for a rollback")
         finally:
             gitutil.remove_worktree(workshop_repo_dir, worktree)
 
         previous = db.get_pillar_deployment(conn, pillar)
 
-        self._stop_pillar(pillar)
-        how = self._launch_pillar(pillar, install_dir)
+        if pillar == CORE_PILLAR and self._core_is_installed_unit():
+            done("stop_old", "the installed unit is restarted in place")
+            with step("launch") as handle:
+                how = self._restart_installed_core()
+                handle.detail = how
+            shutil.rmtree(install_dir, ignore_errors=True)  # Core runs from lws's environment, not from this copy
+            db.save_server_state(conn, pillar, commit, version, resolved_commit)
+            db.record_deployment(conn, pillar, commit, resolved_commit, version, "succeeded", how)
+            return UpResult(branch=commit, version=version, commit=resolved_commit, how=how, exposure=None, cli_note=cli_note)
+
+        with step("stop_old"):
+            self._stop_pillar(pillar)
+        with step("launch") as handle:
+            how = self._launch_pillar(pillar, install_dir)
+            handle.detail = how
 
         db.save_pillar_deployment(conn, pillar, str(install_dir), resolved_commit)
         db.save_server_state(conn, pillar, commit, version, resolved_commit)
@@ -451,7 +553,47 @@ class DeploymentFlow:
         if previous is not None and Path(previous["install_dir"]) != install_dir:
             shutil.rmtree(previous["install_dir"], ignore_errors=True)
 
-        return UpResult(branch=commit, version=version, commit=resolved_commit, how=how, exposure=None)
+        return UpResult(branch=commit, version=version, commit=resolved_commit, how=how, exposure=None, cli_note=cli_note)
+
+    def _refresh_cli(self, worktree: Path, version: str) -> str | None:
+        # Pillars of one batch are redeployed side by side; `lws` is shared, so one upgrades it at a time
+        # and the next finds it already current.
+        with _CLI_REFRESH_LOCK:
+            return self._refresh_cli_unlocked(worktree, version)
+
+    def _refresh_cli_unlocked(self, worktree: Path, version: str) -> str | None:
+        """Bring the installed `lws` to the commit being deployed. The
+        pre-commit hook, the MCP server and the self-redeploy workers all
+        run `lws`, which nothing else ever updated: a fix to any of them sat
+        undeployed until someone ran `bazel run //:install` (2026-09-24).
+        Upgraded in place with the venv's own pip -- recreating the venv
+        (`pipx install --force`) would pull it out from under the processes
+        running from it. Skipped when `lws` already has this version or a
+        newer one, and never run for a rollback. Never fails the redeploy:
+        returns a note instead."""
+        python = self.cli_python()
+        if python is None:
+            return "lws is not installed; nothing to refresh"
+        installed = self.runner.run(
+            [str(python), "-c", "import importlib.metadata as m; print(m.version('little-workshop'))"], timeout=30,
+        )
+        target = _pip_version(version)
+        installed_key = _version_key(installed.stdout) if installed.ok else None
+        target_key = _version_key(target)
+        if installed_key is not None and target_key is not None and target_key <= installed_key:
+            # Same version, or an older commit (redeploying one pillar back):
+            # `lws` is shared by every pillar and never moves backwards
+            # (2026-09-24: a rollback of `deployment` took it to 0.1.1).
+            return None
+        for argv in (
+            # The package itself, even at an unchanged version number; then any new dependency.
+            [str(python), "-m", "pip", "install", "--quiet", "--no-deps", "--force-reinstall", str(worktree)],
+            [str(python), "-m", "pip", "install", "--quiet", str(worktree)],
+        ):
+            result = self.runner.run(argv, timeout=600)
+            if not result.ok:
+                return f"lws was not refreshed to {version}: {(result.stderr or result.stdout).strip()[-1000:]}"
+        return f"lws refreshed to {version}"
 
     def redeploy_pillar(
         self, conn: sqlite3.Connection, pillar: str, workshop_repo_dir: Path, commit: str,
@@ -469,8 +611,16 @@ class DeploymentFlow:
         gate_timeout = confirm_timeout_seconds
         if gate_timeout is None and pillar in SELF_REDEPLOY_GATED_BY_DEFAULT:
             gate_timeout = DEFAULT_SELF_REDEPLOY_CONFIRM_SECONDS
+        if result.how == INSTALLED_CORE_HOW:
+            # Nothing to roll back to: the installed Core runs whatever `lws`'s environment holds,
+            # and that never moves backwards.
+            gate_timeout = None
         if gate_timeout:
-            result.confirm_message = self.arm_confirm_gate(conn, pillar, commit, result.commit, result.version, gate_timeout)
+            with step("confirm_gate") as handle:
+                result.confirm_message = self.arm_confirm_gate(conn, pillar, commit, result.commit, result.version, gate_timeout)
+                handle.detail = result.confirm_message
+        else:
+            done("confirm_gate", "not confirm-gated")
         return result
 
     def rollback_pillar_if_unconfirmed(
@@ -488,7 +638,7 @@ class DeploymentFlow:
             return reason
         assert state is not None
 
-        result = self.redeploy_pillar_direct(conn, pillar, workshop_repo_dir, state["confirmed_commit"])
+        result = self.redeploy_pillar_direct(conn, pillar, workshop_repo_dir, state["confirmed_commit"], refresh_cli=False)
         db.settle_after_rollback(conn, pillar)
         return f"{pillar}: rolled back to {state['confirmed_commit'][:10]} (version {result.version}, {result.how})"
 

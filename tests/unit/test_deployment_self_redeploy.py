@@ -283,3 +283,36 @@ def test_redeploying_the_job_dispatcher_always_dispatches_even_outside_its_cgrou
         flow.redeploy_pillar(conn, "orchestration", repo, "main")
     with pytest.raises(SelfRedeployRequiresDispatch):
         flow.rollback_pillar_if_unconfirmed(conn, "orchestration", repo, "deploy-id")
+
+
+# --- REQ-000000351: Redeploying Core restarts the installed Core instead of starting a second one ---
+
+
+def test_redeploying_an_installed_core_restarts_its_unit_and_arms_no_rollback(paths, conn, tmp_path):
+    repo = make_workshop_repo(tmp_path, pillar="core")
+    runner = FakeRunner()
+    runner.active["little-workshop.service"] = True  # Core runs as the installed unit, as on a real install
+    restarts = []
+    real_run = runner.run
+
+    def run(argv, timeout=None, cwd=None):
+        if argv[:3] == ["systemctl", "--user", "restart"]:
+            restarts.append(argv[3])
+            return CommandResult(0, "", "")
+        return real_run(argv, timeout=timeout, cwd=cwd)
+
+    runner.run = run
+    flow = make_flow(paths, runner)
+    result = flow.redeploy_pillar(conn, "core", repo, "main")
+    assert restarts == ["little-workshop.service"]
+    assert result.how == "restarted the installed unit little-workshop.service" and result.confirm_message is None
+    assert not any(call[0] == "systemd-run" for call in runner.calls)  # no second, transient Core
+    assert not any(call[0] == "pkill" for call in runner.calls)
+    assert db.get_confirmation(conn, "core") is None  # nothing a rollback timer could act on
+
+
+def test_a_core_that_is_not_installed_as_a_unit_is_redeployed_like_any_pillar(paths, conn, tmp_path):
+    repo = make_workshop_repo(tmp_path, pillar="core")
+    runner = FakeRunner()
+    result = make_flow(paths, runner).redeploy_pillar(conn, "core", repo, "main")
+    assert "little-workshop-core.service" in result.how and result.confirm_message is not None

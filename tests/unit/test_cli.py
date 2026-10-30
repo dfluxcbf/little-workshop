@@ -710,3 +710,29 @@ def test_policy_draft_list_falls_back_to_direct_db_read(tmp_path, capsys, monkey
     assert main.main(["policy", "draft", "list", "--status", "pending"]) == 0
     output = json.loads(capsys.readouterr().out)
     assert output["source"] == "fallback" and [d["topic"] for d in output["drafts"]] == ["t"]
+
+
+# --- REQ-000000314: Pillars are redeployed in batches ordered by their dependencies ---
+
+def test_deployment_redeploy_pillars_prints_the_batches_and_creates_the_jobs(monkeypatch, capsys):
+    from cli import client as cli_client
+    from cli import main
+
+    created = []
+    monkeypatch.setattr(cli_client, "core_status", lambda paths: {"pillars": {n: {"status": "healthy"} for n in ("orchestration", "policy", "agent")}})
+    monkeypatch.setattr(cli_client, "post_job", lambda paths, **fields: created.append(fields) or {})
+    code = main.main(["deployment", "redeploy-pillars", "--commit", "abc"])
+    out, err = capsys.readouterr()
+    assert code == 0 and "batch 1/3: orchestration" in err and "batch 3/3: policy" in err
+    by_pillar = {f["project_id"]: f for f in created}
+    assert by_pillar["agent"]["depends_on"] == [by_pillar["orchestration"]["id"]] and by_pillar["policy"]["depends_on"] == [by_pillar["agent"]["id"]]
+    assert '"batches"' in out
+
+
+def test_deployment_redeploy_pillars_refuses_an_unknown_pillar(monkeypatch, capsys):
+    from cli import client as cli_client
+    from cli import main
+
+    monkeypatch.setattr(cli_client, "core_status", lambda paths: {"pillars": {"policy": {"status": "healthy"}}})
+    assert main.main(["deployment", "redeploy-pillars", "--pillar", "ghost"]) == 1
+    assert "ghost" in capsys.readouterr().err

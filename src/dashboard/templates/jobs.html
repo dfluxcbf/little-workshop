@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Jobs — little-workshop{% endblock %}
+{% from "_job_json.html" import job_json %}
+{% from "_job_gate_actions.html" import job_gate_actions %}
+{% from "_job_steps.html" import job_steps %}
+{% from "_job_deps.html" import job_deps %}
+{% from "_job_subject.html" import job_subject %}
 {% macro fchip(label, href, count, on) -%}
 <a class="fchip{{ ' on' if on }}" href="{{ href }}">{{ label }}<span class="fchip-n">{{ count }}</span></a>
 {%- endmacro %}
@@ -7,7 +12,7 @@
 <form class="jobs-search" method="get" action="/jobs" role="search">
   {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
   <input type="search" name="q" value="{{ q }}" placeholder="Search type, project, id…" aria-label="Search jobs" autocomplete="off">
-  {% if active %}<span class="live" title="Refreshing every few seconds while jobs are active"><span class="live-dot"></span>live</span>{% endif %}
+  <span class="live" title="The list changes as the jobs do"><span class="live-dot"></span>live</span>
 </form>
 
 {% if all_count %}
@@ -51,7 +56,7 @@
 </script>
 {% endif %}
 
-<div id="jobs-live">
+<div id="jobs-live" data-live-region>
   <nav class="jobs-filters" aria-label="Filter by status">
     {{ fchip("All", "/jobs" ~ ("?q=" ~ q|urlencode if q else ""), all_count, not status) }}
     {% for name, label, n in counts %}
@@ -63,7 +68,7 @@
     {% for j in jobs %}
     {% set parts = j.type.split(".", 1) %}
     {% set finished = j.status in ("succeeded", "failed", "cancelled") %}
-    <details class="jobcard s-{{ j.status }}">
+    <details class="jobcard s-{{ j.status }}" data-key="{{ j.id }}"{{ " open" if j.status == "pending_confirmation" }}>
       <summary>
         <span class="job-line">
           <span class="job-type">{% if parts | length > 1 %}<span class="job-ns">{{ parts[0] }}.</span>{{ parts[1] }}{% else %}{{ j.type }}{% endif %}</span>
@@ -79,19 +84,28 @@
             <span class="job-meta">{{ [j.created_at | reltime, job_duration(j.created_at, j.updated_at) if finished else "", j.created_by] | select | join(" · ") }}</span>
           </span>
         </span>
+        {{ job_subject(subjects.get(j.id, [])) }}
+        {% if j.progress and j.progress.total > 1 %}
+        <span class="job-progress{{ ' asks' if j.progress.attention }}">
+          {{ j.progress.done }}/{{ j.progress.total }} actions{% if j.progress.current %} · {{ j.progress.current }}{% endif %}{% if j.progress.attention %} · <b>needs your answer</b>{% endif %}
+        </span>
+        {% endif %}
         {% if j.error %}<span class="job-error">{{ j.error }}</span>{% endif %}
       </summary>
       <div class="job-body">
+        <p><a class="btn" href="/jobs/{{ j.id }}">Open the job page</a>{% if task_runs.get(j.id) %} <a class="btn" href="/tasks/{{ task_runs[j.id].project_id }}/{{ task_runs[j.id].id }}">Open the task</a>{% endif %}</p>
+        {% if j.status == "pending_confirmation" %}{{ job_gate_actions(j.id, "/jobs?status=pending_confirmation") }}{% endif %}
+        {% if job_steps_of.get(j.id) %}<h4 class="job-h">Actions</h4>{{ job_steps(j.id, job_steps_of[j.id]) }}{% endif %}
         <dl class="kv">
           <dt>ID</dt><dd><code>{{ j.id }}</code></dd>
           <dt>Target</dt><dd>{{ j.target_pillar }}</dd>
           {% if j.queue_key %}<dt>Queue</dt><dd>{{ j.queue_key }}</dd>{% endif %}
           <dt>Created</dt><dd>{{ j.created_at }}</dd>
           <dt>Updated</dt><dd>{{ j.updated_at }}</dd>
-          {% if j.depends_on %}<dt>Waits on</dt><dd>{% for d in j.depends_on %}<code>{{ d[:8] }}</code> {% endfor %}</dd>{% endif %}
+          {% if dependencies.get(j.id) %}<dt>Waits on</dt><dd>{{ job_deps(dependencies[j.id]) }}</dd>{% endif %}
         </dl>
-        {% if j.params %}<h4 class="job-h">Params</h4><pre class="code">{{ j.params | pretty }}</pre>{% endif %}
-        {% if j.result %}<h4 class="job-h">Result</h4><pre class="code">{{ j.result | pretty }}</pre>{% endif %}
+        {% if j.params %}{{ job_json("Params", j.params, j.id) }}{% endif %}
+        {% if j.result %}{{ job_json("Result", j.result, j.id) }}{% endif %}
         {% if j.error %}<h4 class="job-h">Error</h4><pre class="code err">{{ j.error }}</pre>{% endif %}
       </div>
     </details>
@@ -110,24 +124,4 @@
   {% endif %}
 </div>
 
-{% if active %}
-<script>
-(function () {
-  var timer = setInterval(function () {
-    var region = document.getElementById("jobs-live");
-    var searching = document.activeElement && document.activeElement.name === "q";
-    if (!region || searching || region.querySelector("details[open]")) return;
-    fetch(location.href, { credentials: "same-origin", headers: { "X-Requested-With": "fetch" } })
-      .then(function (r) { return r.ok ? r.text() : null; })
-      .then(function (html) {
-        if (!html) return;
-        var fresh = new DOMParser().parseFromString(html, "text/html").getElementById("jobs-live");
-        if (fresh && !region.querySelector("details[open]")) region.innerHTML = fresh.innerHTML;
-      })
-      .catch(function () {});
-  }, 5000);
-  window.addEventListener("pagehide", function () { clearInterval(timer); });
-})();
-</script>
-{% endif %}
 {% endblock %}

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}{{ (c.older_key ~ " / " ~ c.newer_key) if c else "Conflict" }} — little-workshop{% endblock %}
+{% block content %}
+{% if c %}
+<div id="conflict-live" data-live-region>
+<section class="dcard summary">
+  <div class="dcard-top">
+    <span class="dcard-name">{{ conflict_kinds.get(c.kind, c.kind) }}: {{ c.older_key }} / {{ c.newer_key }}</span>
+    <span class="pill {{ {'open': 'fail', 'resolving': 'warn', 'resolved': 'ok'}.get(c.status, 'idle') }}">{{ {'open': 'to resolve', 'resolving': 'being resolved'}.get(c.status, c.status) }}</span>
+  </div>
+  <p class="dcard-ears">The two requirements conflict: {{ c.summary }}.</p>
+  <div class="polcard-meta">
+    <span class="chip">{{ c.project_id }}</span>
+    <span class="chip">found {{ c.detected_at | reltime }}</span>
+    <span class="chip">last seen {{ c.last_seen_at | reltime }}</span>
+    {% if c.resolved_at %}<span class="chip">resolved {{ c.resolved_at | reltime }}</span>{% endif %}
+  </div>
+  {% if c.status == "resolving" %}
+  <p class="muted">Chose “{{ decisions.get(c.decision, c.decision) }}” {{ c.decided_at | reltime }}{% if c.guidance %}: {{ c.guidance }}{% endif %}.
+  It is resolved once the next analysis no longer finds it.</p>
+  {% if c.job_id %}<a class="btn" href="/jobs/{{ c.job_id }}">Open the fix</a>{% endif %}
+  {% endif %}
+</section>
+
+<div class="conflict-pair">
+  {% for side, key, text, label in [("older", c.older_key, c.older_text, "Older"), ("newer", c.newer_key, c.newer_text, "Newer")] %}
+  {% set r = c[side] %}
+  <section class="dcard conflict-side">
+    <div class="dcard-top">
+      <span class="conflict-age">{{ label }}</span>
+      <span class="dcard-name">{{ key }}</span>
+      {% if r %}<span class="pill {{ 'ok' if r.status == 'published' else 'idle' }}">{{ r.status }}</span>{% else %}<span class="pill idle">deleted</span>{% endif %}
+    </div>
+    {% if r %}
+    <p class="conflict-title">{{ r.title }}</p>
+    <p class="muted">Created {{ r.created_at | reltime }}</p>
+    {% if r.description and r.description != text %}<p class="conflict-description">{{ r.description }}</p>{% endif %}
+    {% endif %}
+    <blockquote class="conflict-part">{{ text }}</blockquote>
+  </section>
+  {% if loop.first %}<div class="conflict-vs" aria-hidden="true">vs</div>{% endif %}
+  {% endfor %}
+</div>
+
+{% if c.status != "resolved" %}
+<section class="dcard">
+  <div class="dcard-head"><span class="dcard-title">{{ "Resolve it again" if c.status == "resolving" else "How should it be resolved?" }}</span></div>
+  <form method="post" action="/requirements/conflicts/{{ c.id }}/resolve" class="conflict-form">
+    <div class="conflict-choices" role="radiogroup" aria-label="Resolution">
+      {% for value, label in decisions.items() %}
+      <label class="conflict-choice">
+        <input type="radio" name="decision" value="{{ value }}" required>
+        <span class="conflict-choice-label">{{ label }}</span>
+        <span class="conflict-choice-hint">{{ {'older_wins': c.older_key ~ ' stays; ' ~ c.newer_key ~ ' changes to fit it.',
+                                              'newer_wins': c.newer_key ~ ' stays; ' ~ c.older_key ~ ' changes to fit it.',
+                                              'other': 'Say what Claude should do instead.'}[value] }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="conflict-guidance" id="conflict-guidance" hidden>
+      <label for="guidance">What should be done</label>
+      <textarea name="guidance" id="guidance" rows="4" placeholder="e.g. Keep both: the older one applies to drafts, the newer one to published requirements."></textarea>
+    </div>
+    <label for="review_mode">Once Claude is done</label>
+    <select name="review_mode" id="review_mode">
+      <option value="manual">Manual review — I finish it</option>
+      <option value="auto_approve">Auto-approve the fix</option>
+    </select>
+    <div class="decision-actions">
+      <button type="submit" class="primary">Start Claude on the fix</button>
+    </div>
+  </form>
+</section>
+<script>
+(function () {
+  var form = document.querySelector(".conflict-form");
+  if (!form) return;
+  var box = document.getElementById("conflict-guidance"), text = document.getElementById("guidance");
+  form.addEventListener("change", function () {
+    var other = (form.querySelector('input[name="decision"]:checked') || {}).value === "other";
+    box.hidden = !other;
+    text.required = other;
+    if (other) text.focus();
+  });
+})();
+</script>
+{% endif %}
+</div>
+{% else %}
+<p class="muted">Conflict not found{% if error %} — {{ error }}{% endif %}.</p>
+{% endif %}
+{% endblock %}

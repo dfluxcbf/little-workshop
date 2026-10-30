@@ -10,23 +10,37 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from datetime import datetime, timezone
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from common import playwright
+from common.job_steps import done, step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
-from agent import db, gitutil, report, requirements_client, templates_util, version_client
+from agent import db, gitutil, report, requirements_client, standards, templates_util, version_client
 from agent.branching import BranchingError, BranchingSpec, MODE_AUTO, MODE_EXISTING, MODE_NEW, resolve as resolve_branching
-from agent.claude_invoke import claude_argv, parse_claude_output, parse_status
+from agent import launch, usage_client
+from agent.claude_invoke import claude_argv, parse_claude_output, parse_status, usage_from_raw, with_budget, with_env
 from agent.github_adapter import GitHubAdapter, GitHubError, parse_github_slug
 from agent.requirements_client import RequirementsClientError
 from agent.screenshots import Screenshotter
 from agent.version_client import VersionClientError
 
 BRANCH_TYPE_FOR_INTENT = {"milestone": "feature", "docs": "improvement", "bug": "improvement", "task": "improvement"}
+# The kinds of work a task can be: each has its prompt, `templates/prompts/<intent>.md`.
+INTENTS = tuple(sorted(BRANCH_TYPE_FOR_INTENT))
+STOPPED_BY_USER = "stopped by user"
+
+
+def intent_error(intent: str) -> str | None:
+    """Why `intent` cannot run (there is no prompt for it), or None when it can."""
+    if intent in INTENTS:
+        return None
+    return f"unknown intent {intent!r}: the intents are {', '.join(INTENTS)}"
 
 
 class AgentFlowError(RuntimeError):
@@ -65,6 +79,11 @@ class AgentFlow:
     user_messages: bool = True
     model: str | None = None
     max_budget_usd: float | None = None
+    # Playwright as standard: every run gets the Playwright MCP server
+    # (common/playwright.py) unless a run's own params turn it off.
+    playwright_mcp: bool = True
+    # Where little-workshop's `shared_project_standards/` is; None asks the Registry.
+    standards_root: Path | None = None
 
     def __post_init__(self) -> None:
         if self.github is None:
@@ -136,25 +155,48 @@ class AgentFlow:
 
     # -- Claude --------------------------------------------------------------
 
-    def _render_prompt(self, *, project_id: str, project_dir: Path, title: str, description: str, intent: str, branch: str, specified: bool, integ: str, result_file: Path) -> str:
+    def _render_prompt(self, *, project_id: str, project_dir: Path, title: str, description: str, intent: str, branch: str, specified: bool, integ: str, result_file: Path, playwright_mcp: bool = False, standards_dir: Path | None = None) -> str:
         instructions = templates_util.render(
             templates_util.read_prompt("branching_specified.md" if specified else "branching_auto.md"),
             branch=branch, integration_branch=integ,
         ).strip()
+        standards_instructions = ""
+        if standards_dir is not None:
+            standards_instructions = templates_util.render(
+                templates_util.read_prompt("standards.md"),
+                standards_dir=str(standards_dir), project_folder=standards.project_folder_name(project_id), project_id=project_id,
+            ).strip() + "\n\n"
         return templates_util.render(
             templates_util.read_prompt("common.md"),
-            project_id=project_id, project_dir=str(project_dir), title=title, description=description or "(no description)",
+            standards_instructions=standards_instructions, project_id=project_id, project_dir=str(project_dir), title=title, description=description or "(no description)",
             intent=intent, branching_instructions=instructions, result_file=str(result_file),
             intent_instructions=templates_util.read_prompt(f"{intent}.md").strip(),
+            ui_instructions=templates_util.render(
+                templates_util.read_prompt("ui_playwright_mcp.md" if playwright_mcp else "ui_playwright.md"),
+                mcp_package=playwright.MCP_PACKAGE,
+            ).strip(),
         )
 
-    def _invoke_claude(self, project_dir: Path, prompt: str, session_name: str | None) -> tuple[str, bool]:
+    def _playwright_args(self, run_id: str, enabled: bool) -> tuple[str, ...]:
+        if not enabled:
+            return ()
+        return playwright.mcp_claude_args(self.runner, self.paths.state_home / "playwright-mcp" / f"run-{run_id}")
+
+    def _invoke_claude(
+        self, project_dir: Path, prompt: str, session_name: str | None, extra_args: tuple[str, ...] = (),
+        on_usage: Callable[[dict | None], object] = lambda usage: None, env: dict[str, str] | None = None,
+        session_id: str | None = None,
+    ) -> tuple[str, bool]:
+        """`on_usage` gets what the run reported using, before a failed run raises: a failure costs tokens too."""
+        chosen = launch.launch_for(launch.JOB_RUN_TASK, self.paths)
+        budget = self.max_budget_usd if self.max_budget_usd is not None else chosen.max_budget_usd
         argv = claude_argv(
-            prompt, session_name=session_name, model=self.model, max_budget_usd=self.max_budget_usd,
-            user_messages=self.user_messages,
+            prompt, session_name=session_name, model=self.model or chosen.model, effort=chosen.effort, max_budget_usd=budget,
+            user_messages=self.user_messages, extra_args=extra_args, session_id=session_id,
         )
-        result = self.runner.run(argv, cwd=project_dir, timeout=self.claude_timeout_seconds)
-        text, is_error, _raw = parse_claude_output(result.stdout)
+        result = self.runner.run(with_env(argv, env), cwd=project_dir, timeout=self.claude_timeout_seconds)
+        text, is_error, raw = parse_claude_output(result.stdout)
+        on_usage(with_budget(usage_from_raw(raw), budget))
         if not result.ok or is_error:
             raise AgentFlowError(f"Claude exited with {result.returncode}{' (is_error)' if is_error else ''}: {(text or result.stderr)[-4000:]}")
         return text, is_error
@@ -183,13 +225,43 @@ class AgentFlow:
 
     def run_task(
         self, conn: sqlite3.Connection, project_id: str, project_dir: Path, repo_url: str | None, params: dict,
-        *, run_id: str | None = None,
+        *, run_id: str | None = None, should_stop: Callable[[], bool] = lambda: False,
     ) -> RunTaskResult:
         """`run_id` may be supplied by the caller (the Job handler
         generates it up front, before dispatching this potentially
         hour-long call to a background thread, so it can hand the run_id
-        back in its immediate `accepted` response)."""
+        back in its immediate `accepted` response).
+
+        Unless `params["include_standards"]` is false, the task gets a temporary copy of
+        `shared_project_standards/` that is deleted when the task completes.
+
+        `should_stop` is asked before Claude starts and before anything is published: once it
+        says yes, the run ends failed ("stopped by user") without going further."""
+        refusal = intent_error(params.get("intent", "task"))
+        if refusal:
+            raise AgentFlowError(refusal)
         run_id = run_id or db.new_run_id()
+        standards_dir = self._standards_copy(project_id, params, run_id)
+        try:
+            return self._run_task(conn, project_id, project_dir, repo_url, params, run_id, standards_dir, should_stop)
+        finally:
+            standards.remove_copy(standards_dir)
+
+    def _standards_copy(self, project_id: str, params: dict, run_id: str) -> Path | None:
+        if not params.get("include_standards", True):
+            return None
+        root = self.standards_root or standards.resolve_standards_root(self.paths)
+        if root is None or not root.is_dir():
+            return None
+        try:
+            return standards.make_copy(root, project_id, run_id=run_id)
+        except OSError:
+            return None
+
+    def _run_task(
+        self, conn: sqlite3.Connection, project_id: str, project_dir: Path, repo_url: str | None, params: dict,
+        run_id: str, standards_dir: Path | None, should_stop: Callable[[], bool] = lambda: False,
+    ) -> RunTaskResult:
         title = params.get("title") or f"task for {project_id}"
         description = params.get("description", "")
         intent = params.get("intent", "task")
@@ -210,23 +282,36 @@ class AgentFlow:
                 auto_approve=(review_mode == "auto_approve"),
             )
 
-        db.create_run(conn, run_id, job_id=job_id, project_id=project_id, intent=intent, review_mode=review_mode, title=title, source=source)
+        db.create_run(conn, run_id, job_id=job_id, project_id=project_id, intent=intent, review_mode=review_mode, title=title, source=source, description=description)
+        # Chosen here, not by Claude: it names the run's transcript (the Dashboard's peek) and its processes (a stop).
+        session_id = str(uuid.uuid4())
+        db.update_run(conn, run_id, session_id=session_id)
+
+        def stopped(branch: str | None) -> RunTaskResult:
+            db.update_run(conn, run_id, status=db.FAILED, summary=STOPPED_BY_USER)
+            return RunTaskResult(run_id, db.FAILED, branch, "failed", None, None, STOPPED_BY_USER)
 
         try:
-            self._require_clean(project_dir)
-            cfg = version_client.get_config(self.paths, project_id)
-            resolved_spec = resolve_branching(spec, intent, cfg)
+            with step("check_checkout") as handle:
+                self._require_clean(project_dir)
+                cfg = version_client.get_config(self.paths, project_id)
+                resolved_spec = resolve_branching(spec, intent, cfg)
+                handle.detail = str(project_dir)
         except (AgentFlowError, BranchingError, VersionClientError) as exc:
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, None, "failed", None, None, str(exc))
 
         short_name = f"agent-{slugify(title)}"
         try:
-            branch = self._prepare_branch(project_id, project_dir, resolved_spec, cfg, short_name)
+            with step("prepare_branch") as handle:
+                branch = self._prepare_branch(project_id, project_dir, resolved_spec, cfg, short_name)
+                handle.detail = branch
         except (AgentFlowError, VersionClientError) as exc:
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, None, "failed", None, None, str(exc))
 
+        if should_stop():
+            return stopped(branch)
         base_sha = gitutil.head_sha(project_dir)
         session_name = remote_control_session_name(project_id, run_id) if self.remote_control else None
         if session_name:
@@ -234,16 +319,32 @@ class AgentFlow:
 
         integ = cfg["integration_branch"]
         result_file = report.result_path(self.paths.state_home, project_id, run_id)
-        prompt = self._render_prompt(
-            project_id=project_id, project_dir=project_dir, title=title, description=description, intent=intent,
-            branch=branch, specified=resolved_spec.specified, integ=integ, result_file=result_file,
-        )
+        playwright_args = self._playwright_args(run_id, bool(params.get("playwright_mcp", self.playwright_mcp)))
 
         try:
-            summary_text, _is_error = self._invoke_claude(project_dir, prompt, session_name)
+            with step("run_claude"):
+                # Inside the step: a prompt that cannot be built fails this step, not an unnamed moment between two.
+                prompt = self._render_prompt(
+                    project_id=project_id, project_dir=project_dir, title=title, description=description, intent=intent,
+                    branch=branch, specified=resolved_spec.specified, integ=integ, result_file=result_file,
+                    playwright_mcp=bool(playwright_args), standards_dir=standards_dir,
+                )
+                summary_text, _is_error = self._invoke_claude(
+                    project_dir, prompt, session_name, playwright_args,
+                    on_usage=lambda usage: db.record_usage(conn, db.USAGE_RUN, usage, ref_id=run_id, project_id=project_id, job_id=job_id),
+                    env=usage_client.launch_env(self.paths, project=project_id, job_id=job_id, job_type="agent.run_task", run_id=run_id),
+                    session_id=session_id,
+                )
         except AgentFlowError as exc:
+            if should_stop():
+                return stopped(branch)
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, branch, "failed", None, None, str(exc))
+        finally:
+            # Claude's work ended (completed, failed or stopped): its remote-control connection with it.
+            db.stop_open_sessions(conn, run_id)
+        if should_stop():
+            return stopped(branch)
 
         completion_status = parse_status(summary_text)
         agent_result = report.load_result(result_file) or report.AgentResult.from_summary(summary_text, completion_status)
@@ -251,9 +352,13 @@ class AgentFlow:
 
         rescued = False
         if resolved_spec.mode == MODE_AUTO:
-            fallback_type = BRANCH_TYPE_FOR_INTENT.get(intent, "improvement")
-            fallback_branch = f"{fallback_type}/{short_name}"
-            branch, rescued = self._detect_auto_branch(project_dir, integ, fallback_branch, base_sha)
+            with step("detect_branch") as handle:
+                fallback_type = BRANCH_TYPE_FOR_INTENT.get(intent, "improvement")
+                fallback_branch = f"{fallback_type}/{short_name}"
+                branch, rescued = self._detect_auto_branch(project_dir, integ, fallback_branch, base_sha)
+                handle.detail = branch
+        else:
+            done("detect_branch", "the branch was fixed by the task")
 
         branch_type = resolved_spec.branch_type
         if branch_type is None:
@@ -267,9 +372,15 @@ class AgentFlow:
         # caller that already has it to pass through params if it wants one.
         manifest = params.get("_deployment_manifest")
         if manifest is not None:
-            screenshots, screenshot_note = self.screenshotter.capture(manifest, project_dir, branch, run_id, github_repo)
+            with step("screenshots") as handle:
+                screenshots, screenshot_note = self.screenshotter.capture(manifest, project_dir, branch, run_id, github_repo)
+                handle.detail = f"{len(screenshots)} screenshot(s)"
+        else:
+            done("screenshots", "the project has no screenshot manifest here")
 
-        pr_url = self._publish(project_dir, branch, integ, title, summary_text, github_repo)
+        with step("publish") as handle:
+            pr_url = self._publish(project_dir, branch, integ, title, summary_text, github_repo)
+            handle.detail = pr_url or "nothing to publish"
 
         report_text = report.render_report(
             project_id=project_id, title=title, intent=intent, branch=branch, result=agent_result,
@@ -284,17 +395,23 @@ class AgentFlow:
             except GitHubError:
                 pass
 
-        db.update_run(
-            conn, run_id, branch=branch, branch_type=branch_type, completion_status=completion_status,
-            summary=summary_text, report=report_text, pr_url=pr_url, status=db.AWAITING_FINISH,
-        )
+        with step("record_run") as handle:
+            db.update_run(
+                conn, run_id, branch=branch, branch_type=branch_type, completion_status=completion_status,
+                summary=summary_text, report=report_text, pr_url=pr_url, status=db.AWAITING_FINISH,
+            )
+            handle.detail = f"run {run_id}: {completion_status}"
 
         if resolved_spec.auto_approve and completion_status == "done" and agent_result.test_results:
             try:
-                self.finish_task(conn, run_id, project_dir=project_dir)
+                with step("auto_finish") as handle:
+                    self.finish_task(conn, run_id, project_dir=project_dir)
+                    handle.detail = f"finished {branch}"
                 return RunTaskResult(run_id, db.FINISHED, branch, completion_status, report_text, pr_url)
             except AgentFlowError:
                 pass  # falls through: stays awaiting_finish, same as a refused auto-approve
+        else:
+            done("auto_finish", "not auto-approved or not done: awaiting your finish")
 
         return RunTaskResult(run_id, db.AWAITING_FINISH, branch, completion_status, report_text, pr_url)
 
@@ -340,6 +457,18 @@ class AgentFlow:
         db.update_run(conn, run_id, status=db.SKIPPED)
         return f"skipped {run['branch']!r}; the branch was left as-is for manual handling"
 
+    def dismiss_task(self, conn: sqlite3.Connection, run_id: str) -> str:
+        """Move a failed or stopped task from the user's attention list to the done list. The run keeps its
+        status, so it can still be retried; only `dismissed_at` says the user has seen it."""
+        run = db.get_run(conn, run_id)
+        if run is None:
+            raise AgentFlowError(f"no such run {run_id!r}")
+        if run["status"] not in (db.FAILED, "stopped"):
+            raise AgentFlowError(f"run {run_id!r} did not fail (status={run['status']!r}); there is nothing to dismiss")
+        if not run.get("dismissed_at"):
+            db.update_run(conn, run_id, dismissed_at=datetime.now(timezone.utc).isoformat())
+        return f"moved {run['title']!r} to the done list"
+
     # -- entry point: ci_check ----------------------------------------------
 
     def run_ci_check(self, conn: sqlite3.Connection, project_id: str, repo_url: str | None, params: dict) -> dict:
@@ -358,42 +487,54 @@ class AgentFlow:
         if not pr_number or not suite_id:
             raise AgentFlowError("agent.ci_check requires params.pr_number and params.suite_id")
 
-        try:
-            pr = self.github.pull_request(github_repo, pr_number)
-        except GitHubError as exc:
-            raise AgentFlowError(str(exc)) from exc
-        branch = pr.get("headRefName")
-        sha = pr.get("headRefOid")
-        if not branch or not sha:
-            raise AgentFlowError(f"could not resolve head branch/sha for pull request #{pr_number}")
+        with step("resolve_pr") as handle:
+            try:
+                pr = self.github.pull_request(github_repo, pr_number)
+            except GitHubError as exc:
+                raise AgentFlowError(str(exc)) from exc
+            branch = pr.get("headRefName")
+            sha = pr.get("headRefOid")
+            if not branch or not sha:
+                raise AgentFlowError(f"could not resolve head branch/sha for pull request #{pr_number}")
+            handle.detail = f"#{pr_number}: {branch} at {sha[:8]}"
 
         context = params.get("context", "little-workshop/ci")
-        self.github.post_status(github_repo, sha, state=db.CI_PENDING, context=context, description="running tests")
+        with step("post_pending"):
+            self.github.post_status(github_repo, sha, state=db.CI_PENDING, context=context, description="running tests")
 
         run_params = {"suite_id": suite_id, "commitish": sha}
         if params.get("test_command"):
             run_params["test_command"] = params["test_command"]
 
         try:
-            result = requirements_client.run_job(
-                self.paths, project_id, "requirements.run_tests", run_params,
-                timeout=params.get("timeout_seconds", 600.0),
-            )
+            with step("run_tests") as handle:
+                result = requirements_client.run_job(
+                    self.paths, project_id, "requirements.run_tests", run_params,
+                    timeout=params.get("timeout_seconds", 600.0),
+                )
+                handle.detail = f"{result.get('ran', 0)} test(s) ran"
         except RequirementsClientError as exc:
             self.github.post_status(github_repo, sha, state=db.CI_ERROR, context=context, description=str(exc)[:139])
             db.record_ci_check(conn, project_id, pr_number=pr_number, branch=branch, sha=sha, state=db.CI_ERROR, summary=str(exc))
             raise AgentFlowError(str(exc)) from exc
 
-        results = result.get("results", [])
         ran = result.get("ran", 0)
-        failed = [r for r in results if r.get("verdict") in ("failed", "error")]
+        if "verdicts" in result:  # a run's answer is its counts and the failures worth reading
+            verdicts = result.get("verdicts") or {}
+            failed_count = sum(verdicts.get(v, 0) for v in ("failed", "error"))
+            failing = result.get("failing") or []
+        else:  # an older Requirements pillar answered with every result
+            failing = [r for r in result.get("results", []) if r.get("verdict") in ("failed", "error")]
+            failed_count = len(failing)
         if ran == 0:
             state, summary = db.CI_ERROR, "no tests ran"
-        elif failed:
-            state, summary = db.CI_FAILURE, f"{len(failed)} of {ran} tests failed"
+        elif failed_count:
+            state, summary = db.CI_FAILURE, f"{failed_count} of {ran} tests failed"
         else:
             state, summary = db.CI_SUCCESS, f"all {ran} tests passed"
 
-        self.github.post_status(github_repo, sha, state=state, context=context, description=summary)
-        db.record_ci_check(conn, project_id, pr_number=pr_number, branch=branch, sha=sha, state=state, summary=summary)
-        return {"pr_number": pr_number, "branch": branch, "sha": sha, "state": state, "summary": summary, "ran": ran, "results": results}
+        with step("post_result") as handle:
+            self.github.post_status(github_repo, sha, state=state, context=context, description=summary)
+            db.record_ci_check(conn, project_id, pr_number=pr_number, branch=branch, sha=sha, state=state, summary=summary)
+            handle.detail = summary
+        return {"pr_number": pr_number, "branch": branch, "sha": sha, "state": state, "summary": summary, "ran": ran, "failing": failing[:50]}

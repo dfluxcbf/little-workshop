@@ -1,0 +1,23 @@
+{#- Scheduled tasks/jobs as cards; tapping one opens its detail page.
+    Needs: scheduled, weekdays, detail_base ("/tasks/schedule" or "/jobs/schedule"). -#}
+{% if scheduled %}
+<h2 class="section-label">Scheduled ({{ scheduled | length }})</h2>
+<div class="policy-list schedule-list">
+  {% for t in scheduled %}
+  <a class="polcard{{ ' is-off' if t.state != 'active' }}" href="{{ detail_base }}/{{ t.id }}">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ t.name }}</span>
+      {% if t.missed_run_at %}<span class="pill warn">missed</span>
+      {% else %}<span class="pill {{ 'ok' if t.state == 'active' else 'idle' }}">{{ t.state }}</span>{% endif %}
+    </span>
+    <span class="polcard-ears">{% include "_schedule_when.html" %}</span>
+    <span class="polcard-meta">
+      <span class="chip">{{ 'once' if t.schedule.kind == 'once' else 'recurring' }}</span>
+      {% if t.next_run_at %}<span class="chip">next {{ t.next_run_at[:16].replace('T', ' ') }}</span>{% endif %}
+      {% if t.job_template.project_id %}<span class="chip">{{ t.job_template.project_id }}</span>{% endif %}
+      {% if t.job_template.type != 'agent.run_task' %}<span class="chip">{{ t.job_template.type }}</span>{% endif %}
+    </span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}

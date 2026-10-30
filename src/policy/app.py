@@ -10,9 +10,14 @@ pillar's Pillar Interface already uses.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import subprocess
+import functools
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,19 +25,22 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from common.job_steps import StepReporter, done, reporting, step
+from common import serving
 from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.pillar_socket import resolve_pillar_socket
 from common.registry_client import ProjectResolutionError, resolve_project
 from common.uds_client import client_for_socket
-from policy import agent_client, db, gates, registry_client, sandbox
+from common import origin as origins
+from policy import agent_client, bypass, db, gates, registry_client, sandbox
 from policy.agent_client import AgentClientError
 from policy.models import (
     CheckOutcome, CreatedBy, DraftStatus, GatePoint, Policy, PolicyCheckResult, PolicyDraft, PolicyProject, ScopeLevel,
 )
 from policy.precedence import gating_enabled_for, resolve_winning_policy
 from policy.registry_client import RegistryReadError
-from policy.sandbox import SandboxUnavailable
+from policy.sandbox import SandboxInterrupted, SandboxUnavailable
 
 PILLAR_ITSELF = "policy"
 
@@ -41,6 +49,40 @@ class JobRequest(BaseModel):
     job_id: str
     project_id: str | None = None
     params: dict[str, Any] = {}
+
+
+class PendingCommit(BaseModel):
+    """The commit a `commit-msg` hook is about to let through, as the hook
+    itself sees it (its message, the paths it changes, its staged VERSION).
+    Computed by the caller from its own index, which may be a temporary one
+    git only exposes to the hook, so the sandbox never has to guess it."""
+    message: str
+    files: list[str] = []
+    version: str | None = None
+
+
+class EvaluateRequest(BaseModel):
+    project_id: str
+    gate_point: str
+    commit: PendingCommit | None = None
+    # The checkout to judge when it is not the registered one (a git worktree an agent or a
+    # session commits in). Accepted only if it shares the registered checkout's repository.
+    checkout: str | None = None
+    # Where the request came from (`common.origin`); only the user's terminal CLI can be bypassed.
+    origin: str = "unknown"
+
+
+class BypassRequest(BaseModel):
+    enabled: bool
+    minutes: int | None = None
+    origin: str = "unknown"
+    actor: str = ""
+
+
+# A script judging a pending commit finds it here (the sandbox's `/policy/input`):
+# `message`, `files` (one path per line) and, when the commit has one, `VERSION`.
+COMMIT_INPUT_DIR = "/policy/input"
+EVALUATE_WORKERS = 4
 
 
 def _require(params: dict, *names: str) -> str | None:
@@ -101,20 +143,49 @@ def _validate_gate_points_against_target(gate_points: list[GatePoint], target_pi
     open_questions.md`'s `OQ-15`): the project it would gate doesn't
     exist in the registry yet at the moment any project-bound check
     could try to mount its checkout, a genuine chicken-and-egg problem
-    a project-bound policy can never resolve. Every other gate point is
-    free to be either."""
+    a project-bound policy can never resolve. `commit` is the reverse: it
+    judges a pending commit in a project checkout, so it is project-bound
+    only. Every other gate point is free to be either."""
     if GatePoint.PROJECT_REGISTRATION in gate_points and target_pillar != PILLAR_ITSELF:
         return (
             "gate_points: 'project_registration' may only be used on a framework-bound policy "
             f"(target_pillar == {PILLAR_ITSELF!r}) — a project-bound policy has no project to check yet"
         )
+    if GatePoint.COMMIT in gate_points and target_pillar == PILLAR_ITSELF:
+        return (
+            "gate_points: 'commit' judges the commit being made in a project's checkout, so only a "
+            "project-bound policy may gate it"
+        )
     return None
 
 
+class _Refused(Exception):
+    """A job step that cannot go on; the route answers it as a failed outcome with this message."""
+
+
 def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
-    app = FastAPI(title="little-workshop Policy & Compliance")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        # Stopping: remove the containers of the checks still running; they run again at the next
+        # start (REQ-000000405).
+        await asyncio.to_thread(sandbox.remove_running_containers)
+
+    app = FastAPI(title="little-workshop Policy & Compliance", lifespan=lifespan)
     install_incident_reporting(app, paths, pillar="policy")
     lock = threading.Lock()
+
+    def _reported(route):
+        """Run a job route with its steps reported to Orchestration; a `_Refused` raised inside a
+        step fails that step and is answered as the job's failed outcome."""
+        @functools.wraps(route)
+        def wrapper(request: JobRequest) -> dict:
+            try:
+                with reporting(StepReporter(paths, request.job_id)):
+                    return route(request)
+            except _Refused as exc:
+                return {"outcome": "failed", "error": str(exc)}
+        return wrapper
 
     def query_fn(prompt: str) -> str:
         return agent_client.query(paths, prompt)
@@ -148,75 +219,88 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
 
     @app.get("/v1/health")
     def health() -> dict:
-        with lock:
-            count = len(db.list_policies(conn))
-        return {"ok": True, "policy_count": count}
+        with serving.held_or_busy(lock) as free:  # busy work never makes it look hung (REQ-000000409)
+            count = len(db.list_policies(conn)) if free else None
+        return {"ok": True, "policy_count": count, **({} if free else {"busy": True})}
 
     # -- authoring pipeline: Gates 1-3 + script drafting (never saves) -------
 
     @app.post("/v1/jobs/policy.author")
+    @_reported
     def job_author(request: JobRequest) -> dict:
-        error = _require(request.params, "ears_text", "topic", "target_pillar", "created_by")
-        if error:
-            return {"outcome": "failed", "error": error}
-        scope_level, scope_target, scope_error = _parse_scope(request.params)
-        if scope_error:
-            return {"outcome": "failed", "error": scope_error}
-        target_pillar = request.params["target_pillar"]
-        try:
-            created_by = CreatedBy(request.params["created_by"])
-        except ValueError:
-            return {"outcome": "failed", "error": "invalid 'created_by' (user|framework)"}
+        with step("validate_request") as handle:
+            error = _require(request.params, "ears_text", "topic", "target_pillar", "created_by")
+            if error:
+                raise _Refused(error)
+            scope_level, scope_target, scope_error = _parse_scope(request.params)
+            if scope_error:
+                raise _Refused(scope_error)
+            target_pillar = request.params["target_pillar"]
+            try:
+                created_by = CreatedBy(request.params["created_by"])
+            except ValueError:
+                raise _Refused("invalid 'created_by' (user|framework)")
 
-        if target_pillar == PILLAR_ITSELF and created_by != CreatedBy.FRAMEWORK:
-            return {"outcome": "failed", "error": "a user policy may never target Policy & Compliance itself"}
+            if target_pillar == PILLAR_ITSELF and created_by != CreatedBy.FRAMEWORK:
+                raise _Refused("a user policy may never target Policy & Compliance itself")
+            handle.detail = f"topic {request.params['topic']!r} for {target_pillar}"
 
         exclude_id = request.params.get("policy_id")  # editing: exclude the policy's own prior version
 
-        try:
-            gate1 = gates.gate1_ears_check(query_fn, request.params["ears_text"])
-            gate2 = gates.gate2_enforceability_check(query_fn, gate1.ears_text)
-        except AgentClientError as exc:
-            return {"outcome": "failed", "error": f"authoring pipeline could not reach Agentic Development: {exc}"}
+        with step("check_ears") as handle:
+            try:
+                gate1 = gates.gate1_ears_check(query_fn, request.params["ears_text"])
+            except AgentClientError as exc:
+                raise _Refused(f"authoring pipeline could not reach Agentic Development: {exc}")
+            handle.detail = "refined" if gate1.refined else "already well formed"
 
-        if not gate2.enforceable:
-            return {"outcome": "failed", "error": f"Gate 2 rejected: not mechanically enforceable — {gate2.reason}"}
+        with step("check_enforceable") as handle:
+            try:
+                gate2 = gates.gate2_enforceability_check(query_fn, gate1.ears_text)
+            except AgentClientError as exc:
+                raise _Refused(f"authoring pipeline could not reach Agentic Development: {exc}")
+            if not gate2.enforceable:
+                raise _Refused(f"Gate 2 rejected: not mechanically enforceable — {gate2.reason}")
+            handle.detail = "mechanically enforceable"
 
         topic = request.params["topic"]
-        with lock:
-            structural = db.find_by_scope(conn, topic=topic, scope_level=scope_level, scope_target=scope_target, exclude_id=exclude_id)
-            if structural is not None:
-                return {"outcome": "failed", "error": f"Gate 3a rejected: a policy already exists at this exact scope+topic (id={structural.id})"}
-            ownership = db.find_topic_owner_conflict(conn, topic=topic, target_pillar=target_pillar, exclude_id=exclude_id)
-            if ownership is not None:
-                return {
-                    "outcome": "failed",
-                    "error": f"Gate 3a rejected: topic {topic!r} already targets {ownership.target_pillar!r} (policy id={ownership.id})",
-                }
-            existing = [p for p in db.list_policies(conn) if p.id != exclude_id]
+        with step("check_unique") as handle:
+            with lock:
+                structural = db.find_by_scope(conn, topic=topic, scope_level=scope_level, scope_target=scope_target, exclude_id=exclude_id)
+                if structural is not None:
+                    raise _Refused(f"Gate 3a rejected: a policy already exists at this exact scope+topic (id={structural.id})")
+                ownership = db.find_topic_owner_conflict(conn, topic=topic, target_pillar=target_pillar, exclude_id=exclude_id)
+                if ownership is not None:
+                    raise _Refused(f"Gate 3a rejected: topic {topic!r} already targets {ownership.target_pillar!r} (policy id={ownership.id})")
+                existing = [p for p in db.list_policies(conn) if p.id != exclude_id]
+            handle.detail = f"{len(existing)} existing policies compared"
 
-        try:
-            gate3b = gates.gate3b_conflict_check(query_fn, gate1.ears_text, existing)
-        except AgentClientError as exc:
-            return {"outcome": "failed", "error": f"authoring pipeline could not reach Agentic Development: {exc}"}
-        if gate3b.conflicts:
-            return {
-                "outcome": "failed",
-                "error": f"Gate 3b rejected: conflicts with existing topic {gate3b.conflicting_topic!r} — {gate3b.detail}",
-            }
+        with step("check_conflicts") as handle:
+            try:
+                gate3b = gates.gate3b_conflict_check(query_fn, gate1.ears_text, existing)
+            except AgentClientError as exc:
+                raise _Refused(f"authoring pipeline could not reach Agentic Development: {exc}")
+            if gate3b.conflicts:
+                raise _Refused(f"Gate 3b rejected: conflicts with existing topic {gate3b.conflicting_topic!r} — {gate3b.detail}")
+            handle.detail = "no conflicts"
 
-        gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
-        if gate_points_error:
-            return {"outcome": "failed", "error": gate_points_error}
-        gate_points_target_error = _validate_gate_points_against_target(gate_points, target_pillar)
-        if gate_points_target_error:
-            return {"outcome": "failed", "error": gate_points_target_error}
+        with step("generate_script") as handle:
+            gate_points, gate_points_error = _parse_gate_points(request.params.get("gate_points"))
+            if gate_points_error:
+                raise _Refused(gate_points_error)
+            gate_points_target_error = _validate_gate_points_against_target(gate_points, target_pillar)
+            if gate_points_target_error:
+                raise _Refused(gate_points_target_error)
 
-        project_bound = target_pillar != PILLAR_ITSELF
-        try:
-            test_script = gates.generate_test_script(query_fn, gate1.ears_text, project_bound=project_bound)
-        except AgentClientError as exc:
-            return {"outcome": "failed", "error": f"authoring pipeline could not reach Agentic Development: {exc}"}
+            project_bound = target_pillar != PILLAR_ITSELF
+            try:
+                test_script = gates.generate_test_script(
+                    query_fn, gate1.ears_text, project_bound=project_bound,
+                    judges_commits=GatePoint.COMMIT in gate_points,
+                )
+            except AgentClientError as exc:
+                raise _Refused(f"authoring pipeline could not reach Agentic Development: {exc}")
+            handle.detail = f"{len(test_script.splitlines())} line check script"
 
         result = {
             "ears_text": gate1.ears_text, "ears_refined": gate1.refined, "test_script": test_script,
@@ -225,16 +309,20 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             "gate_points": [g.value for g in gate_points],
         }
         if request.params.get("save_draft"):
-            # Kept for a human to review and approve in the Dashboard; still nothing enforced.
-            draft, _ = _draft_from_params({**result, "source": request.params.get("source", "")})
-            with lock:
-                existing_draft = db.find_open_draft_by_topic(conn, topic)
-                if existing_draft is not None:
-                    draft.id = existing_draft.id
-                    db.replace_draft_content(conn, draft)
-                else:
-                    db.insert_draft(conn, draft)
-            result["draft_id"] = draft.id
+            with step("save_draft") as handle:
+                # Kept for a human to review and approve in the Dashboard; still nothing enforced.
+                draft, _ = _draft_from_params({**result, "source": request.params.get("source", "")})
+                with lock:
+                    existing_draft = db.find_open_draft_by_topic(conn, topic)
+                    if existing_draft is not None:
+                        draft.id = existing_draft.id
+                        db.replace_draft_content(conn, draft)
+                    else:
+                        db.insert_draft(conn, draft)
+                result["draft_id"] = draft.id
+                handle.detail = f"draft {draft.id}"
+        else:
+            done("save_draft", "no draft requested")
         return {"outcome": "succeeded", "result": result}
 
     # -- Gate 4: the only path that ever saves a policy row -----------------
@@ -313,13 +401,21 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         return {"outcome": "succeeded", "result": policy.model_dump(mode="json")}
 
     @app.post("/v1/jobs/policy.activate")
+    @_reported
     def job_activate(request: JobRequest) -> dict:
-        error = _require(request.params, "ears_text", "test_script", "topic", "target_pillar", "created_by")
-        if error:
-            return {"outcome": "failed", "error": error}
-        if not request.params.get("approved"):
-            return {"outcome": "failed", "error": "Gate 4 requires explicit human approval ('approved': true) — nothing is saved otherwise"}
-        return _save_policy(request.params)
+        with step("check_approval") as handle:
+            error = _require(request.params, "ears_text", "test_script", "topic", "target_pillar", "created_by")
+            if error:
+                raise _Refused(error)
+            if not request.params.get("approved"):
+                raise _Refused("Gate 4 requires explicit human approval ('approved': true) — nothing is saved otherwise")
+            handle.detail = "approved"
+        with step("save_policy") as handle:
+            outcome = _save_policy(request.params)
+            if outcome["outcome"] != "succeeded":
+                raise _Refused(outcome["error"])
+            handle.detail = f"policy {outcome['result']['id']}"
+        return outcome
 
     @app.post("/v1/jobs/policy.remove")
     def job_remove(request: JobRequest) -> dict:
@@ -358,34 +454,37 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         ), None
 
     @app.post("/v1/jobs/policy.draft_import")
+    @_reported
     def job_draft_import(request: JobRequest) -> dict:
         """Bring drafts (Gates 1-3 output, e.g. `docs/pending_policy_drafts/*.json`) into
         the app for review. Idempotent: a topic that already has a pending draft is
         refreshed in place; a topic that already has a real policy is skipped."""
-        raw = request.params.get("drafts")
-        if not isinstance(raw, list) or not raw:
-            return {"outcome": "failed", "error": "'drafts' must be a non-empty list"}
         created: list[str] = []
         updated: list[str] = []
         skipped: list[dict] = []
-        for entry in raw:
-            if not isinstance(entry, dict):
-                return {"outcome": "failed", "error": f"invalid draft entry: {entry!r}"}
-            draft, error = _draft_from_params(entry)
-            if error:
-                return {"outcome": "failed", "error": f"{entry.get('topic', '?')}: {error}"}
-            with lock:
-                if any(p.topic == draft.topic for p in db.list_policies(conn)):
-                    skipped.append({"topic": draft.topic, "reason": "a policy already exists for this topic"})
-                    continue
-                open_draft = db.find_open_draft_by_topic(conn, draft.topic)
-                if open_draft is not None:
-                    draft.id = open_draft.id
-                    db.replace_draft_content(conn, draft)
-                    updated.append(draft.topic)
-                else:
-                    db.insert_draft(conn, draft)
-                    created.append(draft.topic)
+        with step("import_drafts") as handle:
+            raw = request.params.get("drafts")
+            if not isinstance(raw, list) or not raw:
+                raise _Refused("'drafts' must be a non-empty list")
+            for entry in raw:
+                if not isinstance(entry, dict):
+                    raise _Refused(f"invalid draft entry: {entry!r}")
+                draft, error = _draft_from_params(entry)
+                if error:
+                    raise _Refused(f"{entry.get('topic', '?')}: {error}")
+                with lock:
+                    if any(p.topic == draft.topic for p in db.list_policies(conn)):
+                        skipped.append({"topic": draft.topic, "reason": "a policy already exists for this topic"})
+                        continue
+                    open_draft = db.find_open_draft_by_topic(conn, draft.topic)
+                    if open_draft is not None:
+                        draft.id = open_draft.id
+                        db.replace_draft_content(conn, draft)
+                        updated.append(draft.topic)
+                    else:
+                        db.insert_draft(conn, draft)
+                        created.append(draft.topic)
+            handle.detail = f"{len(created)} created, {len(updated)} refreshed, {len(skipped)} skipped"
         return {"outcome": "succeeded", "result": {"created": created, "updated": updated, "skipped": skipped}}
 
     @app.post("/v1/jobs/policy.approve_draft")
@@ -512,18 +611,42 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             return Path(__file__).resolve().parents[2]
         return Path(resolve_project(paths, project_id)["path"])
 
-    def _mounts_for_policy(policy: Policy, project_id: str) -> dict[Path, str | tuple[str, ...]]:
+    def _mounts_for_policy(
+        policy: Policy, project_id: str, checkout: Path | None = None,
+    ) -> dict[Path, str | tuple[str, ...]]:
         if policy.scope_level == ScopeLevel.ALL_PROJECTS and policy.target_pillar == PILLAR_ITSELF:
             # framework-bound: little-workshop's own enumerated source/docs
             repo_root = _project_root_for_policy(policy, project_id)
             return {repo_root / "src": "/framework/src", repo_root / "docs": "/framework/docs"}
-        project_dir = _project_root_for_policy(policy, project_id)
+        project_dir = checkout or _project_root_for_policy(policy, project_id)
         project_files_dir = paths.project_dir(project_id)
         mounts = sandbox.git_dir_mount(project_dir)
         mounts[project_dir] = ("/project", *((mounts[project_dir],) if project_dir in mounts else ()))
         if project_files_dir.exists():
             mounts[project_files_dir] = "/project-files"
         return mounts
+
+    def _git_common_dir(path: Path) -> Path | None:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return Path(proc.stdout.strip()).resolve() if proc.returncode == 0 and proc.stdout.strip() else None
+
+    def _checkout_of(project_id: str, checkout: str) -> Path:
+        """`checkout` if it is a checkout of this project's own repository (the registered one,
+        or a git worktree of it); a check must never read another project's files."""
+        candidate = Path(checkout)
+        if not candidate.is_absolute() or not candidate.is_dir():
+            raise ProjectResolutionError(f"checkout {checkout!r} is not an existing absolute directory")
+        registered = Path(resolve_project(paths, project_id)["path"])
+        common = _git_common_dir(candidate)
+        if common is None or common != _git_common_dir(registered):
+            raise ProjectResolutionError(f"{checkout!r} is not a checkout of project {project_id!r}")
+        return candidate.resolve()
 
     def _current_head_sha(repo_root: Path) -> str:
         """Cheap, host-side (no Docker) HEAD lookup — the state a
@@ -572,107 +695,165 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             pass
 
     @app.post("/v1/jobs/policy.check_project")
+    @_reported
     def job_check_project(request: JobRequest) -> dict:
-        error = _require(request.params, "policy_id") or (None if request.project_id else "missing project_id")
-        if error:
-            return {"outcome": "failed", "error": error}
-        policy_id = request.params["policy_id"]
-        project_id = request.project_id
-        force = bool(request.params.get("force"))
-        with lock:
-            policy = db.get_policy(conn, policy_id)
-        if policy is None:
-            return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
-
-        current_state = _current_check_state(policy, project_id)
-        if current_state and not force:
+        with step("find_policy") as handle:
+            error = _require(request.params, "policy_id") or (None if request.project_id else "missing project_id")
+            if error:
+                raise _Refused(error)
+            policy_id = request.params["policy_id"]
+            project_id = request.project_id
+            force = bool(request.params.get("force"))
+            check_origin = origins.normalize(request.params.get("origin"))
+            check_bypassed = bool(request.params.get("bypassed"))
             with lock:
-                previous = db.latest_check_result(conn, policy_id=policy_id, project_id=project_id)
-            if previous is not None and previous.checked_state == current_state:
-                # Nothing has changed since the last verdict (same HEAD
-                # commit, same policy edit) — reuse it instead of paying for
-                # another Docker sandbox run. Recorded as a fresh row (its own
-                # id/checked_at/job_id) so history and job linkage stay
-                # accurate, but the sandbox itself never runs. Cheap and
-                # synchronous — no thread needed, nothing here can block.
-                result = PolicyCheckResult(
-                    id=db.new_id(), policy_id=policy_id, project_id=project_id,
-                    outcome=previous.outcome, detail=previous.detail, job_id=request.job_id,
-                    checked_state=current_state,
-                )
-                with lock:
-                    db.insert_check_result(conn, result)
-                return {"outcome": "succeeded", "result": result.model_dump(mode="json"), "skipped": "unchanged"}
+                policy = db.get_policy(conn, policy_id)
+            if policy is None:
+                raise _Refused(f"policy {policy_id!r} not found")
+            handle.detail = f"{policy.topic} on {project_id}"
 
-        try:
-            mounts = _mounts_for_policy(policy, project_id)
-        except ProjectResolutionError as exc:
-            return {"outcome": "failed", "error": str(exc)}
+        with step("check_changes") as handle:
+            current_state = _current_check_state(policy, project_id)
+            reused = None
+            if current_state and not force:
+                with lock:
+                    previous = db.latest_check_result(conn, policy_id=policy_id, project_id=project_id)
+                if previous is not None and previous.checked_state == current_state:
+                    # Nothing has changed since the last verdict (same HEAD
+                    # commit, same policy edit) — reuse it instead of paying for
+                    # another Docker sandbox run. Recorded as a fresh row (its own
+                    # id/checked_at/job_id) so history and job linkage stay
+                    # accurate, but the sandbox itself never runs. Cheap and
+                    # synchronous — no thread needed, nothing here can block.
+                    reused = PolicyCheckResult(
+                        id=db.new_id(), policy_id=policy_id, project_id=project_id,
+                        outcome=previous.outcome, detail=previous.detail, job_id=request.job_id,
+                        checked_state=current_state, origin=check_origin,
+                        bypassed=check_bypassed and previous.outcome == CheckOutcome.FAIL,
+                    )
+                    with lock:
+                        db.insert_check_result(conn, reused)
+            handle.detail = "unchanged since the last check: verdict reused" if reused else "changed (or forced): the check must run"
+        if reused is not None:
+            # The sandbox step never runs; the rest of the checklist is not needed this time.
+            return {"outcome": "succeeded", "result": reused.model_dump(mode="json"), "skipped": "unchanged"}
+
+        with step("prepare_sandbox") as handle:
+            try:
+                mounts = _mounts_for_policy(policy, project_id)
+            except ProjectResolutionError as exc:
+                raise _Refused(str(exc))
+            handle.detail = f"{len(mounts)} mount(s)"
+
+        def finish(**outcome) -> None:
+            with lock:
+                db.remove_running_check(conn, request.job_id)
+            _complete_orchestration_job(request.job_id, **outcome)
 
         def worker() -> None:
-            try:
-                sandbox_result = sandbox.run_policy_check(policy.test_script, mounts)
-            except SandboxUnavailable as exc:
-                # No verdict at all — a framework-level fault, never
-                # pending_confirmation: nothing was determined to be a
-                # violation, only that the check itself is broken.
-                _complete_orchestration_job(
-                    request.job_id, succeeded=False, result=None,
-                    error=f"policy check did not complete: {exc}",
-                )
-                return
+            with reporting(StepReporter(paths, request.job_id)):
+                try:
+                    with step("run_check") as handle:
+                        sandbox_result = sandbox.run_policy_check(policy.test_script, mounts)
+                        handle.detail = sandbox_result.outcome.value if hasattr(sandbox_result.outcome, "value") else str(sandbox_result.outcome)
+                except SandboxInterrupted:
+                    # The pillar is stopping and removed the check's container. The Job is not over:
+                    # the check stays in running_checks and runs again at the next start.
+                    return
+                except SandboxUnavailable as exc:
+                    # No verdict at all — a framework-level fault, never
+                    # pending_confirmation: nothing was determined to be a
+                    # violation, only that the check itself is broken.
+                    finish(succeeded=False, result=None, error=f"policy check did not complete: {exc}")
+                    return
 
-            result = PolicyCheckResult(
-                id=db.new_id(), policy_id=policy_id, project_id=project_id,
-                outcome=sandbox_result.outcome, detail=sandbox_result.detail, job_id=request.job_id,
-                checked_state=current_state,
-            )
-            with lock:
-                db.insert_check_result(conn, result)
+                with step("record_result") as handle:
+                    result = PolicyCheckResult(
+                        id=db.new_id(), policy_id=policy_id, project_id=project_id,
+                        outcome=sandbox_result.outcome, detail=sandbox_result.detail, job_id=request.job_id,
+                        checked_state=current_state, origin=check_origin,
+                        bypassed=check_bypassed and sandbox_result.outcome == CheckOutcome.FAIL,
+                    )
+                    with lock:
+                        db.insert_check_result(conn, result)
+                    handle.detail = f"result {result.id}"
             # Always "succeeded" at the Job level — a determined pass/fail/
             # not_applicable verdict is success for the check itself; only an
             # unreachable dependency or the sandbox's own 30-minute ceiling is
             # a genuine Job failure (see the SandboxUnavailable branch above).
-            _complete_orchestration_job(request.job_id, succeeded=True, result=result.model_dump(mode="json"), error=None)
+            finish(succeeded=True, result=result.model_dump(mode="json"), error=None)
 
+        with lock:
+            db.add_running_check(conn, request.job_id, project_id, request.params)
         threading.Thread(target=worker, daemon=True).start()
         return {"outcome": "accepted", "result": {"dispatched": True}}
 
-    @app.post("/v1/jobs/policy.check_all")
-    def job_check_all(request: JobRequest) -> dict:
-        policy_id = request.params.get("policy_id")
-        if not policy_id:
-            return {"outcome": "failed", "error": "missing 'policy_id'"}
+    def rerun_interrupted_checks() -> list[str]:
+        """Startup, before serving (REQ-000000405): a check still in running_checks was cut short when
+        the pillar last stopped (2026-10-04: a gate check lost this way kept a branch finish waiting for
+        hours). Run it again from the start under its own Job; one that cannot run is completed as it
+        would have been answered."""
         with lock:
-            policy = db.get_policy(conn, policy_id)
-        if policy is None:
-            return {"outcome": "failed", "error": f"policy {policy_id!r} not found"}
+            cut = db.list_running_checks(conn)
+        for row in cut:
+            try:
+                answer = job_check_project(JobRequest(job_id=row["job_id"], project_id=row["project_id"], params=row["params"]))
+            except Exception as exc:  # one check must never keep the pillar from starting
+                answer = {"outcome": "failed", "error": f"could not run the check again after a restart: {exc}"}
+            if answer["outcome"] != "accepted":
+                with lock:
+                    db.remove_running_check(conn, row["job_id"])
+                _complete_orchestration_job(
+                    row["job_id"], succeeded=answer["outcome"] == "succeeded", result=answer.get("result"), error=answer.get("error"),
+                )
+        return [row["job_id"] for row in cut]
 
-        project_ids = [sel.project_id for sel in policy.projects]
+    app.state.rerun_interrupted_checks = rerun_interrupted_checks
+
+    @app.post("/v1/jobs/policy.check_all")
+    @_reported
+    def job_check_all(request: JobRequest) -> dict:
+        with step("find_policy") as handle:
+            policy_id = request.params.get("policy_id")
+            if not policy_id:
+                raise _Refused("missing 'policy_id'")
+            with lock:
+                policy = db.get_policy(conn, policy_id)
+            if policy is None:
+                raise _Refused(f"policy {policy_id!r} not found")
+            project_ids = [sel.project_id for sel in policy.projects]
+            handle.detail = f"{policy.topic}: {len(project_ids)} project(s)"
 
         dispatched = []
-        socket_path = resolve_pillar_socket(paths, "orchestration", timeout=5.0)
-        if socket_path is not None:
-            for project_id in project_ids:
-                try:
-                    with client_for_socket(socket_path, timeout=10.0) as client:
-                        response = client.post("/v1/jobs", json={
-                            "type": "policy.check_project", "target_pillar": PILLAR_ITSELF, "project_id": project_id,
-                            "params": {"policy_id": policy_id}, "queue_key": None, "depends_on": [],
-                            "created_by": "policy.check_all",
-                        })
-                    if response.status_code == 200:
-                        dispatched.append(response.json()["id"])
-                except Exception:  # noqa: BLE001 — best-effort fan-out, never let one bad socket abort the rest
-                    continue
+        with step("dispatch_checks") as handle:
+            socket_path = resolve_pillar_socket(paths, "orchestration", timeout=5.0)
+            if socket_path is not None:
+                for project_id in project_ids:
+                    try:
+                        with client_for_socket(socket_path, timeout=10.0) as client:
+                            response = client.post("/v1/jobs", json={
+                                "type": "policy.check_project", "target_pillar": PILLAR_ITSELF, "project_id": project_id,
+                                "params": {"policy_id": policy_id}, "queue_key": None, "depends_on": [],
+                                "created_by": "policy.check_all",
+                            })
+                        if response.status_code == 200:
+                            dispatched.append(response.json()["id"])
+                    except Exception:  # noqa: BLE001 — best-effort fan-out, never let one bad socket abort the rest
+                        continue
+            handle.detail = f"{len(dispatched)} of {len(project_ids)} check job(s) started"
         return {"outcome": "succeeded", "result": {"dispatched_job_ids": dispatched, "project_ids": project_ids}}
 
     # -- reads ----------------------------------------------------------------
 
     @app.get("/v1/policies")
-    def list_policies(topic: str | None = None) -> list[dict]:
+    def list_policies(topic: str | None = None, view: str = "full") -> list[dict]:
+        """Every policy; `view=summary` leaves out each one's test script, which a list never shows and which
+        is most of what a policy holds (REQ-000000390)."""
         with lock:
-            return [p.model_dump(mode="json") for p in db.list_policies(conn, topic=topic)]
+            policies = [p.model_dump(mode="json") for p in db.list_policies(conn, topic=topic)]
+        if view == "summary":
+            return [{key: value for key, value in p.items() if key != "test_script"} for p in policies]
+        return policies
 
     @app.get("/v1/policies/winning")
     def get_winning_policy(topic: str, project_id: str) -> dict:
@@ -680,15 +861,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             policy = resolve_winning_policy(conn, topic=topic, project_id=project_id)
         return {"topic": topic, "project_id": project_id, "policy": policy.model_dump(mode="json") if policy else None}
 
-    @app.get("/v1/policies/gating-for-job")
-    def get_gating_for_job(project_id: str, categories: str) -> list[dict]:
-        """Every currently-winning policy, for this project, whose own
-        `gate_points` intersects the requested categories — Orchestration's
-        own entry point for "which policies, if any, apply to this Job."
-        Each carries `gating`: whether a failure may hold the Job. With
-        gating off for this project the check is still returned so it runs
-        (for analysis) — it just cannot block."""
-        requested = {GatePoint(c) for c in categories.split(",") if c}
+    def _gating_winners(project_id: str, requested: set[GatePoint]) -> list[tuple[Policy, bool]]:
+        """Every currently-winning policy for this project whose own gate
+        points intersect `requested`, with whether its gating is on here."""
         _seed_unseeded()
         with lock:
             topics = {p.topic for p in db.list_policies(conn) if requested & set(p.gate_points)}
@@ -696,8 +871,109 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             for topic in sorted(topics):
                 winner = resolve_winning_policy(conn, topic=topic, project_id=project_id)
                 if winner is not None and requested & set(winner.gate_points):
-                    winners.append({**winner.model_dump(mode="json"), "gating": gating_enabled_for(winner, project_id)})
+                    winners.append((winner, gating_enabled_for(winner, project_id)))
         return winners
+
+    @app.get("/v1/policies/gating-for-job")
+    def get_gating_for_job(project_id: str, categories: str, origin: str = "unknown") -> list[dict]:
+        """Every currently-winning policy, for this project, whose own
+        `gate_points` intersects the requested categories — Orchestration's
+        own entry point for "which policies, if any, apply to this Job."
+        Each carries `gating`: whether a failure may hold the Job. With
+        gating off for this project the check is still returned so it runs
+        (for analysis) — it just cannot block. While the user's policy bypass is on, a request whose `origin`
+        is the user's terminal CLI is likewise checked but not gated, and says so (`bypassed`); any other
+        origin keeps its gating."""
+        requested = {GatePoint(c) for c in categories.split(",") if c}
+        origin = origins.normalize(origin)
+        with lock:
+            bypassing = bypass.bypasses(conn, origin)
+        return [{**winner.model_dump(mode="json"), "gating": gating and not bypassing, "bypassed": gating and bypassing}
+                for winner, gating in _gating_winners(project_id, requested)]
+
+    @app.get("/v1/bypass")
+    def get_bypass() -> dict:
+        """The `bypass_policies` flag, with the time left while it is TRUE."""
+        with lock:
+            return bypass.status(conn)
+
+    @app.post("/v1/bypass")
+    def set_bypass(request: BypassRequest) -> dict:
+        """Turn the flag on (only for the user's terminal CLI, `sudo lws bypass_policies true`) or back off."""
+        origin = origins.normalize(request.origin)
+        with lock:
+            if not request.enabled:
+                return bypass.disable(conn, origin=origin, actor=request.actor or origin)
+            try:
+                return bypass.enable(conn, minutes=request.minutes, origin=origin, actor=request.actor)
+            except bypass.BypassRefused as exc:
+                raise HTTPException(status_code=403 if origin != origins.USER_CLI else 400, detail=str(exc))
+
+    @app.get("/v1/bypass/log")
+    def get_bypass_log(limit: int = 50) -> list[dict]:
+        with lock:
+            return bypass.log_entries(conn, limit)
+
+    @app.post("/v1/policies/evaluate")
+    def evaluate(request: EvaluateRequest) -> dict:
+        """Run, now and in the sandbox, every policy that would gate
+        `gate_point` for this project, and answer with each verdict and its
+        reason. Nothing is recorded and nothing is held: this is the early
+        warning, not the gate — the `commit-msg` hook's check of the commit
+        being made (`commit`, with `commit` describing it), and a session's
+        preflight before it asks for a gated action (`branch_finish`,
+        `release`, ...). `blocking` lists the topics that fail with gating on,
+        which is exactly what the real gate would hold."""
+        try:
+            gate_point = GatePoint(request.gate_point)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"unknown gate point {request.gate_point!r}")
+        if gate_point == GatePoint.COMMIT and request.commit is None:
+            raise HTTPException(status_code=400, detail="gate point 'commit' needs the pending commit ('commit')")
+        env: dict[str, str] = {}
+        inputs: dict[str, str] = {}
+        if request.commit is not None:
+            env["POLICY_COMMIT_DIR"] = COMMIT_INPUT_DIR
+            inputs["message"] = request.commit.message
+            inputs["files"] = "\n".join(request.commit.files)
+            if request.commit.version is not None:
+                inputs["VERSION"] = request.commit.version
+
+        try:
+            checkout = _checkout_of(request.project_id, request.checkout) if request.checkout else None
+        except ProjectResolutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        origin = origins.normalize(request.origin)
+        with lock:
+            bypassing = bypass.bypasses(conn, origin)
+
+        def run_one(winner: Policy, gating: bool) -> dict:
+            entry = {"policy_id": winner.id, "topic": winner.topic, "ears_text": winner.ears_text, "gating": gating and not bypassing,
+                     "bypassed": gating and bypassing}
+            try:
+                mounts = _mounts_for_policy(winner, request.project_id, checkout)
+                verdict = sandbox.run_policy_check(winner.test_script, mounts, env=env, inputs=inputs)
+            except (ProjectResolutionError, SandboxUnavailable) as exc:
+                return {**entry, "outcome": "error", "detail": str(exc)}
+            return {**entry, "outcome": verdict.outcome.value, "detail": verdict.detail}
+
+        winners = _gating_winners(request.project_id, {gate_point})
+        with ThreadPoolExecutor(max_workers=EVALUATE_WORKERS) as pool:
+            results = list(pool.map(lambda pair: run_one(*pair), winners))
+        bypassed = [r["topic"] for r in results if r["outcome"] == CheckOutcome.FAIL.value and r["bypassed"]]
+        if bypassed:
+            with lock:
+                bypass.record_violation(conn, origin=origin, detail=f"{request.project_id} {gate_point.value}: {', '.join(bypassed)}")
+        return {
+            "project_id": request.project_id,
+            "gate_point": gate_point.value,
+            "origin": origin,
+            "results": results,
+            "blocking": [r["topic"] for r in results if r["outcome"] == CheckOutcome.FAIL.value and r["gating"]],
+            "bypassed": bypassed,
+            "errors": [r["topic"] for r in results if r["outcome"] == "error"],
+        }
 
     @app.get("/v1/policies/{policy_id}")
     def get_policy(policy_id: str) -> dict:
@@ -730,9 +1006,21 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             return db.list_policy_projects(conn, policy_id=policy_id, project_id=project_id)
 
     @app.get("/v1/policy_check_results")
-    def list_check_results(policy_id: str | None = None, project_id: str | None = None) -> list[dict]:
+    def list_check_results(
+        policy_id: str | None = None, project_id: str | None = None, checked_since: datetime | None = None,
+        latest: bool = False, outcome: str | None = None,
+    ) -> list[dict]:
+        """The check results, oldest first; `latest` only the newest of each policy and project (and with
+        `outcome`, those of that outcome), `checked_since` only those recorded since."""
+        if outcome is not None:
+            try:
+                CheckOutcome(outcome)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
         with lock:
-            return [r.model_dump(mode="json") for r in db.list_check_results(conn, policy_id=policy_id, project_id=project_id)]
+            results = db.list_check_results(conn, policy_id=policy_id, project_id=project_id, checked_since=checked_since,
+                                            latest=latest, outcome=outcome)
+        return [r.model_dump(mode="json") for r in results]
 
     @app.get("/v1/policy_check_results/latest")
     def get_latest_check_result(policy_id: str, project_id: str) -> dict:

@@ -1,0 +1,3 @@
+# Requirements are appended as new sections at the end: two branches adding
+# theirs is not a conflict, keep both (version finish rebases through this).
+docs/requirements.md merge=union

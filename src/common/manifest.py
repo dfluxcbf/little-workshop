@@ -28,6 +28,9 @@ DEFAULT_ENABLED = {
     # Server below, once M14 actually built it (2026-09-16).
     "dashboard": True,
     "mcp": False,
+    # Optional like Build & Packages (switched off, nothing is collected and nothing else changes),
+    # but on by default: the owner decided it is essential (docs/claude_usage_optimization.md §16).
+    "usage": True,
 }
 
 

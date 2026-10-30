@@ -1,0 +1,8 @@
+{% macro job_deps(deps) -%}
+<ul class="deps">
+  {% for d in deps %}
+  <li>{% if d.href %}<a class="dep {{ d.state_class }}" href="{{ d.href }}" title="{{ d.state }}">{{ d.label }}</a>
+      {% else %}<span class="dep {{ d.state_class }}" title="{{ d.state }}">{{ d.label }}</span>{% endif %}</li>
+  {% endfor %}
+</ul>
+{%- endmacro %}

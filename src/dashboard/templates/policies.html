@@ -8,9 +8,43 @@
   <span class="pending-chev" aria-hidden="true">›</span>
 </a>
 {% endif %}
-<div class="policy-list">
+
+{#- Filters: the server applies them to the page it sends (so an address with them works anywhere), and the
+    script below applies the same rules as they change, keeping the address in step. -#}
+<form class="policy-filters" id="policy-filters" method="get" action="/policies" role="search">
+  <input type="search" name="q" value="{{ filters.q }}" placeholder="Search names and descriptions (* any text, ? one character)"
+         aria-label="Search policies" autocomplete="off">
+  <div class="policy-filter-row">
+    <select name="status" aria-label="Status">
+      {% for value, label in status_filters %}<option value="{{ value }}"{{ ' selected' if filters.status == value }}>{{ label }}</option>{% endfor %}
+    </select>
+    <details class="dropdown" data-key="gate">
+      <summary>Gate points<span class="dropdown-n" data-count-for="gate">{{ filters.gate | length or '' }}</span></summary>
+      <div class="dropdown-menu">
+        {% for gp in gate_point_values %}<label class="chip-check"><input type="checkbox" name="gate" value="{{ gp }}"{{ ' checked' if gp in filters.gate }}><span>{{ gp }}</span></label>{% endfor %}
+      </div>
+    </details>
+    <details class="dropdown" data-key="project">
+      <summary>Projects governed<span class="dropdown-n" data-count-for="project">{{ filters.project | length or '' }}</span></summary>
+      <div class="dropdown-menu">
+        {% for name in filter_projects %}<label class="chip-check"><input type="checkbox" name="project" value="{{ name }}"{{ ' checked' if name in filters.project }}><span>{{ name }}</span></label>{% else %}<p class="muted">No project yet.</p>{% endfor %}
+      </div>
+    </details>
+    <label class="chip-check"><input type="checkbox" name="gating" value="1"{{ ' checked' if filters.gating }}><span>Gating on in a project</span></label>
+    <noscript><button type="submit">Filter</button></noscript>
+    <a class="btn ghost" href="/policies" id="policy-filters-clear">Clear</a>
+  </div>
+  <p class="muted policy-count" id="policy-count">{{ shown }} of {{ policies | length }} polic{{ 'y' if policies | length == 1 else 'ies' }}</p>
+</form>
+
+<div class="policy-list" id="policies-live" data-live-region>
   {% for p in policies %}
-  <a class="polcard{{ ' is-off' if not p.enabled }}" href="/policies/{{ p.id }}">
+  {% set n = p.projects | length %}{% set on = p.projects | selectattr("gating_enabled") | list | length %}
+  <a class="polcard{{ ' is-off' if not p.enabled }}" href="/policies/{{ p.id }}" data-policy="{{ p.id }}"
+     data-topic="{{ p.topic | lower }}" data-text="{{ (p.ears_text or '') | lower }}"
+     data-status="{{ 'enabled' if p.enabled else 'disabled' }}{{ ' failing' if p.failing_count }}"
+     data-gates="{{ (p.gate_points or []) | join(' ') }}" data-projects="{{ p.projects | map(attribute='project_id') | join(' ') }}"
+     data-gating="{{ 1 if on else 0 }}"{% if not p.matches %} hidden{% endif %}>
     <span class="polcard-head">
       <span class="polcard-topic">{{ p.topic }}</span>
       {% if p.failing_count %}<span class="pill fail">{{ p.failing_count }} failing</span>
@@ -20,7 +54,6 @@
     <span class="polcard-meta">
       {% if p.gate_points %}{% for gp in p.gate_points %}<span class="chip gate">{{ gp }}</span>{% endfor %}
       {% else %}<span class="chip">no gate</span>{% endif %}
-      {% set n = p.projects | length %}{% set on = p.projects | selectattr("gating_enabled") | list | length %}
       <span class="chip">{{ n }} project{{ '' if n == 1 else 's' }}{% if n and n == 1 %}: {{ p.projects[0].project_id }}{% endif %}</span>
       {% if on %}<span class="chip">gating on: {{ on }}</span>{% endif %}
       <span class="chip">{{ p.target_pillar }}</span>
@@ -30,6 +63,53 @@
   {% else %}
   <p class="muted">No policies authored yet.</p>
   {% endfor %}
+  <p class="muted" id="policy-none"{% if shown or not policies %} hidden{% endif %}>No policy matches these filters.</p>
 </div>
 
+<script>
+(function () {
+  var form = document.getElementById('policy-filters');
+  // The same rules as the server's (dashboard/app.py, policy_matches): * any text, ? one character,
+  // plain text anywhere; several gate points or projects match any of them.
+  function globRegex(text) {
+    text = text.trim().toLowerCase();
+    if (!text) return null;
+    var wild = /[*?]/.test(text);
+    var body = text.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[\\s\\S]*').replace(/\?/g, '[\\s\\S]');
+    return new RegExp(wild ? '^' + body + '$' : body);
+  }
+  function values(name) {
+    return Array.prototype.filter.call(form.elements[name] ? form.querySelectorAll('[name="' + name + '"]') : [], function (i) { return i.checked; })
+      .map(function (i) { return i.value; });
+  }
+  function anyOf(have, wanted) {
+    var set = (have || '').split(' ');
+    return !wanted.length || wanted.some(function (w) { return set.indexOf(w) >= 0; });
+  }
+  function apply() {
+    var re = globRegex(form.elements.q.value), status = form.elements.status.value;
+    var gates = values('gate'), projects = values('project'), gating = form.elements.gating.checked;
+    var cards = document.querySelectorAll('[data-policy]'), shown = 0;
+    cards.forEach(function (card) {
+      var d = card.dataset;
+      var ok = (!re || re.test(d.topic) || re.test(d.text)) && (!status || (' ' + d.status + ' ').indexOf(' ' + status + ' ') >= 0) &&
+        anyOf(d.gates, gates) && anyOf(d.projects, projects) && (!gating || d.gating === '1');
+      card.hidden = !ok;
+      if (ok) shown += 1;
+    });
+    document.getElementById('policy-count').textContent = shown + ' of ' + cards.length + (cards.length === 1 ? ' policy' : ' policies');
+    var none = document.getElementById('policy-none');
+    if (none) none.hidden = shown > 0 || cards.length === 0;
+    form.querySelectorAll('[data-count-for]').forEach(function (n) { var c = values(n.dataset.countFor).length; n.textContent = c ? c : ''; });
+    var query = new URLSearchParams(new FormData(form));
+    Array.from(query.keys()).forEach(function (k) { if (!query.get(k)) query.delete(k); });
+    history.replaceState(null, '', '/policies' + (query.toString() ? '?' + query.toString() : ''));
+  }
+  form.addEventListener('input', apply);
+  form.addEventListener('change', apply);
+  form.addEventListener('submit', function (e) { e.preventDefault(); apply(); });
+  // A live update brings the cards back as the server filtered them: apply what is chosen now.
+  document.addEventListener('live:replaced', apply);
+})();
+</script>
 {% endblock %}

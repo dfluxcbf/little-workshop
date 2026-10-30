@@ -76,6 +76,25 @@ def test_scheduler_thread_runs_startup_check_before_the_first_tick(conn):
         thread.stop()
 
 
+def test_scheduler_thread_start_deletes_once_tasks_an_older_version_left_after_firing(conn):
+    fired_long_ago = datetime.now() - timedelta(days=3)
+    spent = ScheduledTask(
+        name="already-ran",
+        job_template=JobTemplate(type="noop", target_pillar="reference"),
+        schedule=Schedule(kind=ScheduleKind.ONCE, at=fired_long_ago),
+        next_run_at=None,
+    )
+    db.insert_scheduled_task(conn, spent)
+
+    thread = SchedulerThread(conn, socket_lookup=lambda pillar: None, interval_seconds=60)
+    thread.start()
+    try:
+        assert db.get_scheduled_task(conn, spent.id) is None
+        assert db.list_jobs(conn) == []  # deleted, never re-fired
+    finally:
+        thread.stop()
+
+
 def test_scheduler_thread_stop_is_clean_and_idempotent_to_join(conn):
     thread = SchedulerThread(conn, socket_lookup=lambda pillar: None, interval_seconds=60)
     thread.start()

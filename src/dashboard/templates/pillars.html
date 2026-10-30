@@ -18,7 +18,7 @@
 </div>
 {% endif %}
 <form method="post" action="/pillars/redeploy" id="redeploy-form">
-<div class="pillar-grid">
+<div class="pillar-grid" id="pillars-live" data-live-region>
   {% for name, entry in pillars.items() %}
   {% set dep = deployed.get(name) %}
   {% set disabled = entry.status == "disabled" %}
@@ -61,21 +61,26 @@
 </form>
 <script>
 (function () {
-  var picks = Array.prototype.slice.call(document.querySelectorAll(".pick"));
+  // The cards are replaced as the pillars change (live.js), so the boxes are looked up each time; while any
+  // is ticked the grid is the user's (`data-dirty`) and stays as it is until the redeploy is sent.
   var toggle = document.getElementById("toggle-all");
   var go = document.getElementById("redeploy-btn");
+  var grid = document.getElementById("pillars-live");
   if (!toggle || !go) return;
+  function picks() { return Array.prototype.slice.call(document.querySelectorAll(".pick")); }
   function sync() {
-    var n = picks.filter(function (b) { return b.checked; }).length;
+    var all = picks(), n = all.filter(function (b) { return b.checked; }).length;
     go.textContent = n ? "Redeploy " + n : "Redeploy";
-    toggle.textContent = n === picks.length ? "Clear" : "Select all";
+    toggle.textContent = all.length && n === all.length ? "Clear" : "Select all";
+    if (grid) { if (n) grid.dataset.dirty = "1"; else delete grid.dataset.dirty; }
   }
   toggle.addEventListener("click", function () {
-    var all = picks.some(function (b) { return !b.checked; });
-    picks.forEach(function (b) { b.checked = all; });
+    var all = picks(), select = all.some(function (b) { return !b.checked; });
+    all.forEach(function (b) { b.checked = select; });
     sync();
   });
-  picks.forEach(function (b) { b.addEventListener("change", sync); });
+  document.addEventListener("change", function (e) { if (e.target.classList && e.target.classList.contains("pick")) sync(); });
+  document.addEventListener("live:replaced", sync);
   sync();
 })();
 </script>

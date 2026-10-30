@@ -1,25 +1,27 @@
-"""Two catalog policy drafts (docs/pending_policy_drafts/) narrowed 2026-09-22 to judge
-only the newest tag, matching this project's own "a past mistake never fails forever"
-rule (commit-bumps-version). Run as real subprocesses against scratch git repos, the
-same way tools/policy_scripts/*.py's own tests do, since these scripts aren't
-committed files themselves (framework-catalog drafts stay data until approved)."""
+"""Catalog policies narrowed 2026-09-22 to judge only the newest tag, matching this project's
+own "a past mistake never fails forever" rule (commit-bumps-version), plus python-test-coverage.
+Every policy's script is a file in tools/policy_scripts/ (REQ-000000303); these run it as a real
+subprocess against a scratch git repository, pointed at it by POLICY_PROJECT_DIR, the same way
+the sandbox runs it against /project."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-DRAFTS = Path(__file__).resolve().parents[2] / "docs" / "pending_policy_drafts"
+import pytest
+
+SCRIPTS = Path(__file__).resolve().parents[2] / "tools" / "policy_scripts"
 
 
 def _script(topic: str) -> str:
-    return json.loads((DRAFTS / f"{topic}.json").read_text())["test_script"]
+    return (SCRIPTS / f"{topic.replace('-', '_')}.py").read_text()
 
 
 def _write(tmp_path, topic):
-    script = _script(topic).replace('PROJECT = "/project"', 'import os\nPROJECT = os.environ.get("POLICY_PROJECT_DIR", "/project")', 1)
     path = tmp_path / f"{topic}.py"
-    path.write_text(script)
+    path.write_text(_script(topic))
     return path
 
 
@@ -68,7 +70,7 @@ def test_production_tag_format_fails_when_nothing_parses(tmp_path):
     repo = _repo(tmp_path)
     _git("tag", "-a", "1.1.0", "-m", "r2", cwd=repo)  # missing the leading v — malformed, and the only tag
     result = _run(script, repo)
-    assert result.returncode != 0 and "no well-formed production tag" in result.stdout
+    assert result.returncode != 0 and "No well-formed production tag" in result.stdout
 
 
 def test_production_tag_format_fails_a_lightweight_newest_tag(tmp_path):
@@ -193,3 +195,30 @@ def test_python_test_coverage_passes_when_fully_covered(tmp_path):
     project = _python_project(tmp_path)
     result = _run_coverage(script, project)
     assert result.returncode == 0 and "passed" in result.stdout
+
+
+def test_python_test_coverage_script_is_the_manifest_entrys_script():
+    # The Dashboard finds a policy's script under tools/policy_scripts/ by blob hash, and
+    # tools/sync_policies.py pushes exactly the file its manifest entry names.
+    manifest = json.loads((SCRIPTS / "policies.json").read_text())["policies"]
+    entry = next(e for e in manifest if e["topic"] == "python-test-coverage")
+    assert (SCRIPTS / entry["script"]).read_text() == _script("python-test-coverage")
+
+
+def test_python_test_coverage_measures_a_read_only_project(tmp_path):
+    """The sandbox mounts the project read-only; coverage.py's data file must land
+    somewhere writable, or the run crashes before measuring anything."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    script = _write_coverage_script(tmp_path)
+    project = _python_project(tmp_path)
+    dirs = [project, *(p for p in project.rglob("*") if p.is_dir())]
+    for d in dirs:
+        d.chmod(0o555)
+    try:
+        result = _run_coverage(script, project)
+    finally:
+        for d in dirs:
+            d.chmod(0o755)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (project / ".coverage").exists()

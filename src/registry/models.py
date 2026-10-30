@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -28,6 +29,8 @@ class Project(BaseModel):
     name: str
     path: str
     repo_url: str | None = None
+    # The checkout folder (relative) whose assets the Dashboard shows; None: asset review is off.
+    assets_dir: str | None = None
     status: ProjectStatus = ProjectStatus.ACTIVE
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
@@ -56,6 +59,7 @@ class Ticket(BaseModel):
 class BootstrapParams(BaseModel):
     name: str
     dest_dir: str
+    template: Literal["python", "unity"] = "python"
     owner: str = "dfluxcbf"
     description: str = ""
     create_github_repo: bool = False
@@ -72,6 +76,26 @@ class BootstrapResult(BaseModel):
     github_created: bool = False
     pushed: bool = False
     version_initialized: bool = False
+    labels_created: list[str] = Field(default_factory=list)
+
+
+class ConnectGitHubParams(BaseModel):
+    name: str
+    owner: str = "dfluxcbf"
+    description: str = ""
+    public: bool = False
+    remote_host: str = "github.com"
+    github_token: str | None = None
+    ensure_labels: bool = True
+
+
+class ConnectGitHubResult(BaseModel):
+    name: str
+    path: str
+    repo_url: str
+    adopted_remote: bool
+    github_created: bool = False
+    pushed: bool = False
     labels_created: list[str] = Field(default_factory=list)
 
 
