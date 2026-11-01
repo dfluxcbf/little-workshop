@@ -101,3 +101,15 @@ def ahead_count(project_dir: Path, base: str, branch: str) -> int:
 
 def reset_branch_to(project_dir: Path, branch: str, sha: str) -> None:
     run(["git", "branch", "-f", branch, sha], project_dir, check=True)
+
+
+def stash_push(project_dir: Path) -> bool:
+    """Stash tracked and untracked changes; False when there was nothing to stash."""
+    if not is_dirty(project_dir):
+        return False
+    run(["git", "stash", "push", "--include-untracked", "-q"], project_dir, check=True)
+    return True
+
+
+def stash_pop(project_dir: Path) -> None:
+    run(["git", "stash", "pop", "-q"], project_dir, check=True)

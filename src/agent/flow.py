@@ -22,7 +22,7 @@ from common.job_steps import done, step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from agent import db, gitutil, report, requirements_client, standards, templates_util, version_client
-from agent.branching import BranchingError, BranchingSpec, MODE_AUTO, MODE_EXISTING, MODE_NEW, resolve as resolve_branching
+from agent.branching import BranchingError, BranchingSpec, MODE_AUTO, MODE_EXISTING, MODE_NEW, default_branch_type, resolve as resolve_branching
 from agent import launch, usage_client
 from agent.claude_invoke import claude_argv, parse_claude_output, parse_status, usage_from_raw, with_budget, with_env
 from agent.github_adapter import GitHubAdapter, GitHubError, parse_github_slug
@@ -424,10 +424,11 @@ class AgentFlow:
         if run["status"] != db.AWAITING_FINISH:
             raise AgentFlowError(f"run {run_id!r} is not awaiting finish (status={run['status']!r})")
         branch_type = run["branch_type"]
+        branch = run["branch"]
         if not branch_type:
-            raise AgentFlowError(f"cannot finish {run['branch']!r} automatically: no recognized branch-type prefix")
+            branch, branch_type = self._move_off_integration(conn, run, project_dir)
 
-        gitutil.checkout(project_dir, run["branch"])
+        gitutil.checkout(project_dir, branch)
         try:
             version_client.run_job(self.paths, run["project_id"], f"version.{branch_type}_finish", {})
         except VersionClientError as exc:
@@ -446,7 +447,36 @@ class AgentFlow:
                     self.github.close_issue(repo, number)
                 except GitHubError:
                     pass
-        return f"finished {run['branch']!r} via version.{branch_type}_finish"
+        return f"finished {branch!r} via version.{branch_type}_finish"
+
+    def _move_off_integration(self, conn: sqlite3.Connection, run: dict, project_dir: Path) -> tuple[str, str]:
+        """Work left on the integration branch: stash it, start a branch of the intent's default type, pop the
+        stash there and commit it, so the finish needs no human step. Any other unrecognized branch still refuses."""
+        unrecognized = AgentFlowError(f"cannot finish {run['branch']!r} automatically: no recognized branch-type prefix")
+        try:
+            cfg = version_client.get_config(self.paths, run["project_id"])
+        except VersionClientError:
+            raise unrecognized
+        if run["branch"] != cfg["integration_branch"]:
+            raise unrecognized
+
+        branch_type = default_branch_type(run["intent"])
+        short_name = slugify(run["title"]) or "task"
+        gitutil.checkout(project_dir, run["branch"])
+        stashed = gitutil.stash_push(project_dir)
+        try:
+            result = version_client.run_job(self.paths, run["project_id"], f"version.{branch_type}_start", {"name": short_name})
+        except VersionClientError as exc:
+            if stashed:
+                gitutil.stash_pop(project_dir)
+            raise AgentFlowError(str(exc)) from exc
+        branch = result.get("branch", f"{branch_type}/{short_name}")
+        gitutil.checkout(project_dir, branch)
+        if stashed:
+            gitutil.stash_pop(project_dir)
+        gitutil.commit_if_dirty(project_dir, run["title"])
+        db.update_run(conn, run["id"], branch=branch, branch_type=branch_type)
+        return branch, branch_type
 
     def skip_task(self, conn: sqlite3.Connection, run_id: str) -> str:
         run = db.get_run(conn, run_id)
