@@ -785,3 +785,33 @@ page too with the project's `.blend` files as choices) and starts it. The agent 
 is a `.blend` inside the visible folder, answers `accepted` and runs `asset_mcp.runner.export_bundle` on each file in a
 worker thread, reporting its one step and the outcome back. While a queued or running export names the file the page
 shows "exporting…" and reloads every 4 seconds; a second press for the same file is refused.
+
+## System > Data management (2026-11-01)
+
+One page, `/data`, for what the workshop keeps per project. Two sections:
+
+- **Projects.** Each registered project has a *Delete project* form that asks for the project's name. In order:
+  (1) if Deployment says its server is running, `deployment.stop` runs, and a server that will not stop (or a
+  Deployment pillar that cannot say) keeps the project; (2) Registry's `project.remove` (policy-gated: a held
+  removal stops here and nothing else is purged); (3) each pillar's purge Job (`usage`, `policy`, `agent`,
+  `deployment`, `build` `.purge_project`); (4) Orchestration's own `POST /v1/projects/{id}/purge`, after stopping
+  the project's running Jobs. It is not a Job, because the removal's Job is one of the rows it deletes. All of the
+  project's Jobs are deleted, finished or not. This removes the registration, backlog, tickets and project files and
+  the pillars' records of the project. The git checkout and the project's requirements are never touched.
+- **Deletions not finished.** A purge step whose pillar could not be reached is kept in
+  `state/dashboard/deletions.json` (`dashboard/deletions.py`) and tried again every 10 minutes by a loop of the
+  running Dashboard. A deletion still unfinished 2 hours after it began is listed under *Needs attention* (kind
+  `deletion`, with no `project` so that the unregistered project does not hide it) with the errors the attempts met
+  (each with the failed Job's link, the log). The page lists them with the errors and two buttons: *Try again* tries
+  now, restarts the 2-hour wait and keeps the automatic retries; *Try again (once)* tries now and changes nothing
+  else. The last 30 errors are kept.
+- **Requirements.** Every project id with stored requirements, from Requirements & Quality, tagged *not registered*
+  when the Registry does not know it. Per project: *Export* (a JSON backup), and *Delete the requirements* behind an
+  irreversibility warning and the project id typed. *Import* takes a backup under its original project id, a custom
+  one, or a registered project. The import goes to the pillar's Job route directly (`requirements.import_project`),
+  not through Orchestration, so the backup is not stored in a Job's params.
+
+**An unregistered project raises nothing** (REQ-000000470). The attention list, the Claude Code status, the incidents
+page and the conflicts page leave out what concerns a project the Registry does not know; Agentic Development does
+not record an incident reported for one; the periodic conflict analysis covers registered projects only. When the
+Registry does not answer nothing is quieted (unknown is not unregistered).

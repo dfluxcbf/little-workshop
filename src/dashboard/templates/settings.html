@@ -13,6 +13,7 @@
       <span class="polcard-topic">{% if i.job_id %}<a href="{{ i.href }}">{{ i.title }}</a>{% else %}{{ i.title }}{% endif %}</span>
       {% if i.kind == 'policy' %}<span class="pill fail">failing</span>
       {% elif i.kind == 'incident' %}<span class="pill fail">bug</span>
+      {% elif i.kind == 'deletion' %}<span class="pill fail">stuck</span>
       {% else %}<span class="pill warn">confirm</span>{% endif %}
     </span>
     {% if i.detail %}<span class="polcard-ears">{{ i.detail }}</span>{% endif %}

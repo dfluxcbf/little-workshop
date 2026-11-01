@@ -259,6 +259,14 @@ def build_app(
         with lock:
             return db.prune_finished_jobs(conn, cutoff)
 
+    @app.post("/v1/projects/{project_id}/purge")
+    def purge_project(project_id: str) -> dict:
+        """Remove what Orchestration recorded about a project (its finished Jobs, pipeline runs and scheduled
+        tasks). Called by the Dashboard's project deletion once every other pillar has purged its own data;
+        it is not a Job, because its own Job is one of the rows."""
+        with lock:
+            return db.purge_project(conn, project_id)
+
     @app.get("/v1/jobs/{job_id}")
     def get_job(job_id: str) -> dict:
         with lock:

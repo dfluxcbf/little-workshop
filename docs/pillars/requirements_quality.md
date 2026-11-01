@@ -240,3 +240,16 @@ requirements only through this pillar: a draft can be edited, a published one is
 still holds, replaced under the next free key. The conflict is resolved when the next analysis no longer finds
 it. A conflict still `resolving` can be resolved again from its page, for example when its task failed.
 
+
+## Backup, import and deletion of a project's requirements (2026-11-01)
+
+`requirements/transfer.py`. `GET /v1/projects` lists every project id with stored data and its counts;
+`GET /v1/export/{project_id}` returns a JSON backup (`format` `little-workshop-requirements`, `version` 1: use cases,
+milestones, test suites, requirements with their suite ids, test results; conflicts are derived and left out).
+`requirements.import_project` puts a backup into the project id in `project_id`, which may be the original, a new one
+or a registered project's: every row gets a new id, and a requirement whose key the target already has gets the next
+free key (the trailing number moves past the highest taken one, keeping its width; a key without a number gets
+`-2`, `-3`), the old and new keys returned. An invalid file writes nothing (one transaction).
+`requirements.delete_project_data` deletes everything stored for a project id, irreversibly. The Dashboard's
+[Data management](dashboard.md) page is the user-facing side. The periodic analysis and `requirements.analyze_conflicts`
+without a project cover registered projects only.

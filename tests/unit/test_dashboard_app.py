@@ -1551,7 +1551,7 @@ def test_every_page_carries_the_attention_banner_only_when_something_needs_atten
     _stub_project_panels(monkeypatch)
     _stub_attention(monkeypatch, policies=[], results=[], jobs=[])
     assert 'id="attention-banner" href="/settings" hidden' in test_client.get("/").text
-    _stub_attention(monkeypatch, policies=[], results=[], jobs=[{"type": "deployment.deploy", "project_id": "x", "created_at": None}])
+    _stub_attention(monkeypatch, policies=[], results=[], jobs=[{"type": "deployment.deploy", "project_id": "little-widget", "created_at": None}])
     text = test_client.get("/").text
     assert 'id="attention-banner" href="/settings">' in text and '<strong id="attention-count">1</strong>' in text
 

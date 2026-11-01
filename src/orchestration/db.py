@@ -477,6 +477,23 @@ def get_scheduled_task(conn: sqlite3.Connection, task_id: str) -> ScheduledTask 
     return row_to_scheduled_task(row) if row else None
 
 
+def purge_project(conn: sqlite3.Connection, project_id: str) -> dict:
+    """Remove everything Orchestration recorded about a project: all its Jobs (with their runs and steps),
+    its pipeline runs and its scheduled tasks. The caller stops what is running first; a Job still queued
+    or awaiting confirmation goes with the rest."""
+    doomed = [j.id for j in list_jobs(conn) if j.project_id == project_id]
+    steps.delete_steps(conn, doomed)
+    conn.executemany("DELETE FROM job_runs WHERE job_id = ?", [(i,) for i in doomed])
+    conn.executemany("DELETE FROM jobs WHERE id = ?", [(i,) for i in doomed])
+    runs = conn.execute("DELETE FROM pipeline_runs WHERE project_id = ?", (project_id,)).rowcount
+    tasks = [t.id for t in list_scheduled_tasks(conn) if t.job_template.project_id == project_id]
+    conn.executemany("DELETE FROM scheduled_tasks WHERE id = ?", [(i,) for i in tasks])
+    conn.commit()
+    if doomed:
+        changes.FEED.note("jobs_deleted", "", count=len(doomed))
+    return {"jobs_deleted": len(doomed), "pipeline_runs_deleted": runs, "scheduled_tasks_deleted": len(tasks)}
+
+
 def list_scheduled_tasks(
     conn: sqlite3.Connection, *, state: ScheduledTaskState | None = None
 ) -> list[ScheduledTask]:

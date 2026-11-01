@@ -348,6 +348,30 @@ def requirement_conflicts_version(paths: Paths, *, timeout: float = 3.0) -> str:
     return _get(paths, "requirements", "/v1/conflicts/version", timeout=timeout)["version"]
 
 
+def requirement_projects(paths: Paths) -> list[dict]:
+    """Every project id with stored requirement data (registered or not) and how much of it."""
+    return _get(paths, "requirements", "/v1/projects", timeout=10.0)
+
+
+def requirements_export(paths: Paths, project_id: str) -> dict:
+    return _get(paths, "requirements", f"/v1/export/{project_id}", timeout=120.0)
+
+
+def requirements_import(paths: Paths, project_id: str, data: dict) -> dict:
+    """Put a backup into `project_id`. Called on the pillar's Job route directly, not as an orchestration Job:
+    the backup (every test result the project ever recorded) would otherwise be stored in the Job's params."""
+    return _send(paths, "requirements", "POST", "/v1/jobs/requirements.import_project",
+                 json={"job_id": "dashboard-import", "project_id": project_id, "params": {"data": data}}, timeout=300.0)
+
+
+def running_job_ids(paths: Paths, project_id: str) -> list[str]:
+    return [job["id"] for job in list_jobs(paths, status="running", project_id=project_id, summary=True)]
+
+
+def purge_orchestration(paths: Paths, project_id: str) -> dict:
+    return _send(paths, "orchestration", "POST", f"/v1/projects/{project_id}/purge")
+
+
 def requirements_list(paths: Paths, project_id: str) -> list[dict]:
     return _get(paths, "requirements", "/v1/requirements", params={"project_id": project_id}, timeout=10.0)
 

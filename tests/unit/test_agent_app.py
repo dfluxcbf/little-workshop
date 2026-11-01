@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from agent import app as agent_app
 from agent import db
 from agent.app import build_app
 from agent.flow import AgentFlow
@@ -752,6 +753,23 @@ def test_report_incident_creates_an_open_incident(paths, conn, tmp_path, monkeyp
     incident = client.get(f"/v1/incidents/{incident_id}").json()
     assert incident["status"] == "open" and incident["project_id"] == "little-widget"
     assert incident["exception_type"] == "ValueError" and incident["message"] == "boom"
+
+
+# --- REQ-000000470: An unregistered project raises nothing ---
+
+def test_an_incident_about_an_unregistered_project_is_not_recorded(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    monkeypatch.setattr(agent_app, "registered_project_ids", lambda paths: {"little-workshop"})
+    answer = _report(client, project_id="little-mindcheck").json()
+    assert answer["id"] is None and "not registered" in answer["ignored"]
+    assert client.get("/v1/incidents").json() == []
+    assert _report(client, project_id="little-workshop").json()["id"]
+
+
+def test_incidents_are_recorded_while_the_registry_does_not_answer(paths, conn, tmp_path, monkeypatch):
+    client, _ = make_client(paths, conn, tmp_path, monkeypatch)
+    monkeypatch.setattr(agent_app, "registered_project_ids", lambda paths: None)
+    assert _report(client, project_id="little-mindcheck").json()["id"]
 
 
 def test_report_incident_requires_the_essentials(paths, conn, tmp_path, monkeypatch):

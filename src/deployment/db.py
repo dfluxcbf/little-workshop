@@ -89,6 +89,15 @@ def get_server_state(conn: sqlite3.Connection, project_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def purge_project(conn: sqlite3.Connection, project_id: str) -> dict:
+    """Remove a project's deployment records: its server state, deploy history and confirmation. A running
+    server is not stopped here (`deployment.stop` does that)."""
+    removed = {t: conn.execute(f"DELETE FROM {t} WHERE project_id = ?", (project_id,)).rowcount
+               for t in ("servers", "deployments", "deploy_confirmations")}
+    conn.commit()
+    return removed
+
+
 def list_server_states(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute("SELECT * FROM servers ORDER BY project_id").fetchall()
     return [dict(row) for row in rows]

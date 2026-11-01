@@ -152,6 +152,13 @@ def build_app(
             payload["cli_note"] = result.cli_note
         return {"outcome": "succeeded", "result": payload}
 
+    @app.post("/v1/jobs/deployment.purge_project")
+    def job_purge_project(request: JobRequest) -> dict:
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        with lock:
+            return {"outcome": "succeeded", "result": db.purge_project(conn, request.project_id)}
+
     @app.post("/v1/jobs/deployment.stop")
     def job_stop(request: JobRequest) -> dict:
         if not request.project_id:

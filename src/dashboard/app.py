@@ -53,7 +53,7 @@ from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.workspace import WORKSPACE_ID, workspace_dir
 from dashboard import docs_tree
-from dashboard import calendar, client, job_catalog, live, markdown, prefs, statistics
+from dashboard import calendar, client, deletions, job_catalog, live, markdown, prefs, statistics
 
 GATE_POINT_VALUES = [
     "commit", "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
@@ -509,6 +509,29 @@ def policy_matches(policy: dict, *, q: str = "", status: str = "", gates=(), pro
     return not gating or any(p.get("gating_enabled") for p in policy.get("projects", []))
 
 
+# The purge Job each pillar runs when a project is deleted (Registry's project.remove runs first); Orchestration's own
+# records are purged last, directly. Requirements are never purged by it.
+ORCHESTRATION_PURGE = "orchestration.purge"
+DATA_PURGE_JOBS = (("usage.purge_project", "usage"), ("policy.purge_project", "policy"), ("agent.purge_project", "agent"),
+                   ("deployment.purge_project", "deployment"), ("build.purge_project", "build"))
+
+
+def registered_names(paths: Paths) -> set[str] | None:
+    """The names of the registered projects, or None when the Registry does not answer (then nothing is quieted)."""
+    try:
+        return {project["name"] for project in client.list_projects(paths)}
+    except client.PillarUnavailable:
+        return None
+
+
+def only_registered(rows: list[dict], names: set[str] | None, key: str = "project_id") -> list[dict]:
+    """The rows about a registered project or about none: what concerns a project that is no longer registered
+    raises no attention, status or incident (its requirements are kept apart, under System > Data management)."""
+    if names is None:
+        return rows
+    return [row for row in rows if not row.get(key) or row[key] in names]
+
+
 def collect_attention(paths: Paths) -> list[dict]:
     """What needs a human right now: an enabled policy whose latest check on a
     project still currently associated with it failed, every Job waiting
@@ -550,6 +573,16 @@ def collect_attention(paths: Paths) -> list[dict]:
             "detail": incident.get("message", "")[:240], "href": f"/incidents/{incident['id']}",
             "since": incident.get("created_at"),
         })
+    items = only_registered(items, registered_names(paths), key="project")
+    now = datetime.now(timezone.utc)
+    for deletion in deletions.load(paths).values():
+        if deletions.stuck(deletion, now):  # no `project`: the project is unregistered, which would hide it
+            owing = ", ".join(step["pillar"] for step in deletion["pending"])
+            recent = "; ".join(f"{e['pillar']}: {e['error']}" for e in deletion["errors"][-3:])
+            items.append({
+                "kind": "deletion", "tag": "Data", "title": f"Deleting {deletion['project']} has not finished",
+                "detail": f"Still owing: {owing}. {recent}"[:240], "href": "/data#deletions", "since": deletion["started_at"],
+            })
     return items
 
 
@@ -623,6 +656,8 @@ def collect_status(paths: Paths, project_id: str | None, *, now: datetime | None
         incidents_future = pool.submit(read, "agent", client.list_incidents, status="open")
         core_future = pool.submit(read, "core", client.core_status)
         reads, incidents, core = project_future.result(), incidents_future.result(), core_future.result()
+        if incidents is not None:
+            incidents = only_registered(incidents, registered_names(paths))
 
     status: dict = {"project": project_id if reads else None, "generated_at": now.isoformat()}
     if reads:
@@ -922,6 +957,139 @@ def build_app(paths: Paths) -> FastAPI:
         items = collect_attention(paths)
         return _render(request, "settings.html", items=items, attention_count=len(items), nav_active="settings", live_topics="attention")
 
+    # -- System > Data management: delete a project's local data; keep, back up and restore its requirements ----
+
+    @app.get("/data", response_class=HTMLResponse)
+    def data_management(request: Request):
+        projects = _try(lambda: client.list_projects(paths), default=None)
+        stored = _try(lambda: client.requirement_projects(paths), default=None)
+        names = {p["name"] for p in projects or []}
+        for row in stored or []:
+            row["registered"] = row["project_id"] in names
+        now = datetime.now(timezone.utc)
+        owing = [{**d, "stuck": deletions.stuck(d, now)} for d in deletions.load(paths).values()]
+        return _render(request, "data.html", projects=projects, stored=stored, registered=sorted(names), owing=owing,
+                       retry_minutes=deletions.RETRY_SECONDS // 60, nav_active="data")
+
+    def _run_job(job_type: str, pillar: str, project_id: str, **params) -> tuple[bool, str, str | None]:
+        """(ok, why not, the Job's id): one Job on a pillar, waited for."""
+        result = _try(lambda: client.create_job(paths, type=job_type, target_pillar=pillar, project_id=project_id, params=params,
+                                                queue_key=project_id, depends_on=[], created_by="dashboard"))
+        if result is None:
+            return False, f"{pillar} is unreachable", None
+        job_id = result.get("id")
+        if result.get("status") == "pending_confirmation":
+            return False, "held by a policy: confirm it under Jobs, then delete again", job_id
+        if result.get("status") != "succeeded":
+            return False, result.get("error") or f"the job {result.get('status')}", job_id
+        return True, "", job_id
+
+    def _run_purge_step(project: str, step: dict) -> tuple[bool, str, str | None]:
+        """One purge step of a deletion: a pillar's `purge_project` Job, or Orchestration's own purge, which first
+        stops the project's running Jobs."""
+        if step["type"] != ORCHESTRATION_PURGE:
+            return _run_job(step["type"], step["pillar"], project)
+        try:
+            for job_id in client.running_job_ids(paths, project):
+                client.stop_job(paths, job_id, force=True)
+            client.purge_orchestration(paths, project)
+        except client.PillarUnavailable as exc:
+            return False, str(exc), None
+        return True, "", None
+
+    def _retry_deletions(stop: threading.Event) -> None:
+        while not stop.wait(deletions.RETRY_SECONDS):
+            try:
+                deletions.retry_all(paths, _run_purge_step, datetime.now(timezone.utc))
+            except Exception:  # noqa: BLE001 - a failed round must not end the loop; the next one retries
+                pass
+
+    background.append(_retry_deletions)
+
+    @app.post("/data/projects/{name}/delete")
+    def data_delete_project(name: str, confirm: str = Form("")):
+        if confirm.strip() != name:
+            return _back("/data", f"Type the project's name ({name}) to delete it.")
+        try:
+            server = client.deployment_status_optional(paths, name)
+        except client.PillarUnavailable:
+            return _back("/data", f"{name} was not deleted: Deployment & Servers is unreachable, so it cannot be told whether its server is running.")
+        if server and (server.get("listening") or server.get("unit") == "active"):
+            ok, why, _ = _run_job("deployment.stop", "deployment", name)
+            if not ok:
+                return _back("/data", f"{name} was not deleted: its server could not be stopped ({why}).")
+        ok, why, _ = _run_job("project.remove", "registry", name, name=name)
+        if not ok:
+            return _back("/data", f"{name} was not deleted: {why}.")
+        now = datetime.now(timezone.utc)
+        steps = [{"type": job_type, "pillar": pillar} for job_type, pillar in DATA_PURGE_JOBS] + [{"type": ORCHESTRATION_PURGE, "pillar": "orchestration"}]
+        owing, errors = [], []
+        for step in steps:
+            ok, why, job_id = _run_purge_step(name, step)
+            if not ok:
+                owing.append(step)
+                errors.append({"at": now.isoformat(), "pillar": step["pillar"], "type": step["type"], "error": why, "job_id": job_id})
+        deletions.begin(paths, name, owing, errors, now)
+        done = f"Deleted {name}: its registration and local data. Its checkout and its requirements were kept."
+        if owing:
+            done += (f" {', '.join(s['pillar'] for s in owing)} could not be reached: trying again every "
+                     f"{deletions.RETRY_SECONDS // 60} minutes; it needs your attention if that has not worked within 2 hours.")
+        return _back("/data", done)
+
+    @app.post("/data/deletions/{project}/retry")
+    def data_retry_deletion(project: str, mode: str = Form("again")):
+        if project not in deletions.load(paths):
+            return _back("/data", f"Nothing is owing for {project}.")
+        left = deletions.retry(paths, project, _run_purge_step, datetime.now(timezone.utc), restart_clock=mode != "once")
+        if left is None:
+            return _back("/data", f"The deletion of {project} is finished.")
+        return _back("/data", f"The deletion of {project} still owes {', '.join(s['pillar'] for s in left['pending'])}.")
+
+    @app.get("/data/requirements/{project}/export")
+    def data_export_requirements(project: str):
+        try:
+            backup = client.requirements_export(paths, project)
+        except client.PillarUnavailable as exc:
+            return _back("/data", f"Could not export: {exc}.")
+        filename = f"requirements-{project}-{date.today().isoformat()}.json"
+        return Response(json.dumps(backup, indent=2), media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    @app.post("/data/requirements/{project}/delete")
+    def data_delete_requirements(project: str, confirm: str = Form("")):
+        if confirm.strip() != project:
+            return _back("/data", f"Type the project id ({project}) to delete its requirements.")
+        ok, why, _ = _run_job("requirements.delete_project_data", "requirements", project)
+        return _back("/data", f"Deleted the requirements of {project}." if ok else f"The requirements of {project} were not deleted: {why}.")
+
+    @app.post("/data/requirements/import")
+    async def data_import_requirements(request: Request):
+        form = await request.form()
+        upload = form.get("backup")
+        if upload is None or not hasattr(upload, "read"):
+            return _back("/data", "Choose a backup file to import.")
+        try:
+            data = json.loads((await upload.read()).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return _back("/data", "That file is not a requirements backup (not valid JSON).")
+        target = str(form.get("target") or "original")
+        original = str((data or {}).get("project_id") or "") if isinstance(data, dict) else ""
+        project = {"original": original, "custom": str(form.get("custom_id") or "").strip(),
+                   "existing": str(form.get("existing") or "").strip()}.get(target, "")
+        if not project:
+            return _back("/data", "Choose the project id to import under.")
+        try:
+            result = client.requirements_import(paths, project, data)
+        except client.PillarUnavailable as exc:
+            return _back("/data", f"Could not import: {exc}.")
+        if result.get("outcome") != "succeeded":
+            return _back("/data", f"Not imported: {result.get('error')}.")
+        done = result["result"]
+        renumbered = done["renumbered"]
+        return _back("/data", f"Imported {done['imported']['requirements']} requirements into {project}."
+                              + (f" {len(renumbered)} keys were renumbered ({', '.join(f'{r['old']} -> {r['new']}' for r in renumbered[:8])}"
+                                 f"{', ...' if len(renumbered) > 8 else ''})." if renumbered else ""))
+
     # -- Statistics: per-day counts of the workshop's operations, kept by the Dashboard ----
 
     def _update_statistics() -> list[str]:
@@ -1026,7 +1194,7 @@ def build_app(paths: Paths) -> FastAPI:
 
     @app.get("/incidents", response_class=HTMLResponse)
     def incidents(request: Request, status: str = "open"):
-        rows = _try(lambda: client.list_incidents(paths, status=status or None), default=[])
+        rows = only_registered(_try(lambda: client.list_incidents(paths, status=status or None), default=[]), registered_names(paths))
         return _render(request, "incidents.html", incidents=rows, status=status, nav_active="incidents", live_topics="incidents")
 
     @app.get("/incidents/{incident_id}", response_class=HTMLResponse)
@@ -1061,6 +1229,8 @@ def build_app(paths: Paths) -> FastAPI:
     def requirement_conflicts(request: Request, status: str = "open", project: str = ""):
         try:
             rows, error = client.requirement_conflicts(paths, project_id=project or None, status=status or None), None
+            if not project:
+                rows = only_registered(rows, registered_names(paths))
         except client.PillarUnavailable as exc:
             rows, error = [], str(exc)
         return _render(request, "conflicts.html", conflicts=rows, status=status, project=project, error=error,

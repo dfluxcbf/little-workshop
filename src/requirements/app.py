@@ -23,8 +23,8 @@ from common import serving
 from common.paths import Paths
 from common.incident import install_incident_reporting, report_incident as report_crash
 from common.worktree_client import WorktreeUnavailable
-from common.registry_client import ProjectResolutionError, resolve_project_path
-from requirements import conflicts, db, markers
+from common.registry_client import ProjectResolutionError, registered_project_ids, resolve_project_path
+from requirements import conflicts, db, markers, transfer
 from requirements.ears import ears_error
 from requirements.junit import JUnitParseError, parse_junit_xml
 from requirements.models import (
@@ -89,13 +89,17 @@ CONFLICT_DECISIONS = ("older_wins", "newer_wins", "other")
 CONFLICT_SCAN_SECONDS = 15 * 60
 
 
-def analyze_conflicts(conn: sqlite3.Connection, lock: threading.Lock, project_id: str | None = None) -> dict:
+def analyze_conflicts(conn: sqlite3.Connection, lock: threading.Lock, project_id: str | None = None,
+                      only: set[str] | None = None) -> dict:
     """Run the conflict analysis on one project, or on every project with requirements, and record it:
-    {project_id: {found, new, reopened, resolved}}."""
+    {project_id: {found, new, reopened, resolved}}. `only` limits the every-project run to those project
+    ids (the registered ones: a project that is no longer registered raises nothing)."""
     with lock:
         requirements = db.list_requirements(conn, project_id=project_id)
         projects = {project_id} if project_id else {r.project_id for r in requirements}
         projects |= {c["project_id"] for c in db.list_conflicts(conn, project_id=project_id)}  # a project emptied since
+        if only is not None and project_id is None:
+            projects &= only
         return {
             pid: db.record_conflict_analysis(conn, pid, conflicts.find_conflicts([r for r in requirements if r.project_id == pid]))
             for pid in sorted(projects)
@@ -111,7 +115,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
         def scan() -> None:
             while True:
                 try:
-                    analyze_conflicts(conn, lock)
+                    analyze_conflicts(conn, lock, only=registered_project_ids(paths))
                 except Exception as exc:  # noqa: BLE001 - one failed scan must not end the periodic analysis
                     report_crash(paths, project_id="little-workshop", pillar="requirements",
                                  context="periodic requirement conflict analysis", exc=exc)
@@ -254,6 +258,27 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
                 return {"outcome": "failed", "error": f"requirement {requirement_id!r} not found"}
             db.delete_requirement(conn, requirement_id)
         return {"outcome": "succeeded", "result": {"requirement_id": requirement_id}}
+
+    @app.post("/v1/jobs/requirements.import_project")
+    def job_import_project(request: JobRequest) -> dict:
+        """Put a backup file's data into the project id in `project_id` (new ids, keys renumbered where taken)."""
+        data = request.params.get("data")
+        if not request.project_id or not isinstance(data, dict):
+            return {"outcome": "failed", "error": "missing project_id or the backup 'data'"}
+        with lock:
+            try:
+                result = transfer.import_project(conn, data, project_id=request.project_id)
+            except transfer.TransferError as exc:
+                return {"outcome": "failed", "error": str(exc)}
+        return {"outcome": "succeeded", "result": result}
+
+    @app.post("/v1/jobs/requirements.delete_project_data")
+    def job_delete_project_data(request: JobRequest) -> dict:
+        """Delete every requirement row stored for a project id. Irreversible."""
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        with lock:
+            return {"outcome": "succeeded", "result": transfer.delete_project(conn, request.project_id)}
 
     @app.post("/v1/jobs/requirements.link_requirement_to_suite")
     def job_link(request: JobRequest) -> dict:
@@ -501,7 +526,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
 
     @app.post("/v1/jobs/requirements.analyze_conflicts")
     def job_analyze_conflicts(request: JobRequest) -> dict:
-        return {"outcome": "succeeded", "result": {"projects": analyze_conflicts(conn, lock, request.project_id)}}
+        return {"outcome": "succeeded", "result": {"projects": analyze_conflicts(conn, lock, request.project_id, only=None if request.project_id else registered_project_ids(paths))}}
 
     @app.post("/v1/jobs/requirements.decide_conflict")
     def job_decide_conflict(request: JobRequest) -> dict:
@@ -549,6 +574,17 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
         return conflict
 
     # -- reads ----------------------------------------------------------------
+
+    @app.get("/v1/projects")
+    def list_projects() -> list[dict]:
+        """Every project id with stored requirement data, and how much of it (registered or not)."""
+        with lock:
+            return transfer.project_summaries(conn)
+
+    @app.get("/v1/export/{project_id}")
+    def export_project(project_id: str) -> dict:
+        with lock:
+            return transfer.export_project(conn, project_id)
 
     @app.get("/v1/test_suites")
     def list_test_suites(project_id: str | None = None) -> list[dict]:

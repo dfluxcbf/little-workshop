@@ -303,7 +303,7 @@ Trigger { id, name, on: { event, filter }, job_template, enabled }
 - **Safety.** Checked when the trigger is created, never left to firing time: a template whose type merges,
   finishes, releases, removes or deletes is refused (`FORBIDDEN_TARGET`: `*_finish`, `version.release`,
   `version.stabilize`, `*.remove`, `*_delete`, `agent.finish_task`, `agent.skip_task`, confirmations,
-  `usage.purge_project`), which keeps "automation never merges, deletes or finishes on its own initiative". A
+  `*.purge_project`), which keeps "automation never merges, deletes or finishes on its own initiative". A
   Job a trigger created never fires that same trigger, and a chain of triggers stops at depth 3
   (`trigger_jobs` records each triggered Job's depth).
 - **Interface.** `POST|GET /v1/triggers`, `PATCH|DELETE /v1/triggers/{id}`, `POST /v1/triggers/install-defaults`;

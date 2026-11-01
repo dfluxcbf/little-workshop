@@ -23,7 +23,7 @@ from common.paths import Paths
 # `report_crash`: the route handler below is itself called report_incident.
 from common.incident import install_incident_reporting, report_incident as report_crash
 from common.pillar_socket import resolve_pillar_socket
-from common.registry_client import ProjectResolutionError, resolve_project
+from common.registry_client import ProjectResolutionError, registered_project_ids, resolve_project
 from common.uds_client import client_for_socket
 from common.workspace import WORKSPACE_ID, workspace_dir
 from agent import assets as asset_review, db, peek, procs, review_store
@@ -768,6 +768,10 @@ def build_app(
         missing = [k for k in ("project_id", "pillar", "exception_type") if not body.get(k)]
         if missing:
             raise HTTPException(status_code=422, detail=f"missing: {', '.join(missing)}")
+        registered = registered_project_ids(paths)
+        if registered is not None and body["project_id"] not in registered:
+            # A project that is no longer registered raises no incidents; an unreachable registry quiets nothing.
+            return {"id": None, "ignored": f"project {body['project_id']!r} is not registered"}
         incident_id = db.new_incident_id()
         # Not under `lock`: a task run holds it for an hour, and a crash report must not wait for it.
         write_apart(
@@ -795,6 +799,12 @@ def build_app(
         if incident is None:
             raise HTTPException(status_code=404, detail="incident not found")
         return incident
+
+    @app.post("/v1/jobs/agent.purge_project")
+    def job_purge_project(request: JobRequest) -> dict:
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        return {"outcome": "succeeded", "result": write_apart(db.purge_project, request.project_id)}
 
     @app.post("/v1/jobs/agent.confirm_incident")
     def job_confirm_incident(request: JobRequest) -> dict:

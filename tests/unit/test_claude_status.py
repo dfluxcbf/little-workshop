@@ -45,7 +45,7 @@ def local_in(**delta) -> str:
 
 def _stub(monkeypatch, *, projects=(PROJECT,), server=None, jobs=(), runs=(), scheduled=(), policies=(), results=(),
           incidents=(), pillars=None):
-    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": n, "status": "active"} for n in projects])
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": n, "status": "active"} for n in (*projects, "little-workshop")])  # the workshop is always registered
     monkeypatch.setattr(client, "deployment_status_optional", lambda paths, name: server)
     reads = patch_jobs(monkeypatch, client, list(jobs))
     monkeypatch.setattr(client, "agent_runs", lambda paths, name: list(runs))

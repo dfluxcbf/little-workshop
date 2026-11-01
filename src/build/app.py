@@ -55,6 +55,13 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             count = len(db.list_build_runs(conn)) if free else None
         return {"ok": True, "build_run_count": count, **({} if free else {"busy": True})}
 
+    @app.post("/v1/jobs/build.purge_project")
+    def job_purge_project(request: JobRequest) -> dict:
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        with lock:
+            return {"outcome": "succeeded", "result": db.purge_project(conn, request.project_id)}
+
     # -- build/test Job execution -------------------------------------------
 
     @app.post("/v1/jobs/build.run")

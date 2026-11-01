@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Data management — little-workshop{% endblock %}
+{% block content %}
+<h1>Data management</h1>
+<p class="lede">What the workshop keeps per project. Deleting a project removes its local data and its registration; its git checkout is never touched. Requirements are managed separately, below.</p>
+
+{% if owing %}
+<h2 class="section-label" id="deletions">Deletions not finished</h2>
+<p class="muted">A pillar that could not be reached still owes its part of these. They are tried again every {{ retry_minutes }} minutes; one that has not finished within 2 hours needs your attention.</p>
+<div class="policy-list">
+  {% for d in owing %}
+  <div class="panel" style="padding:14px 18px">
+    <p><strong>{{ d.project }}</strong> {% if d.stuck %}<span class="pill fail">stuck</span>{% else %}<span class="pill warn">retrying</span>{% endif %}
+      <span class="muted">began {{ d.started_at | reltime }}, {{ d.attempts }} attempt{{ '' if d.attempts == 1 else 's' }}, still owing {% for s in d.pending %}{{ s.pillar }}{{ ', ' if not loop.last }}{% endfor %}</span></p>
+    <details {{ 'open' if d.stuck }}>
+      <summary>Errors ({{ d.errors | length }})</summary>
+      <ul>
+        {% for e in d.errors | reverse %}
+        <li><span class="chip">{{ e.pillar }}</span> {{ e.error }} <span class="muted">{{ e.at | reltime }}{% if e.job_id %} · <a href="/jobs/{{ e.job_id }}">job log</a>{% endif %}</span></li>
+        {% endfor %}
+      </ul>
+    </details>
+    <form method="post" action="/data/deletions/{{ d.project }}/retry" class="row" style="margin-top:10px">
+      <button type="submit" name="mode" value="again" class="primary">Try again</button>
+      <button type="submit" name="mode" value="once" class="btn">Try again (once)</button>
+    </form>
+    <p class="muted"><em>Try again</em> tries now, restarts the 2-hour wait and keeps retrying every {{ retry_minutes }} minutes. <em>Try again (once)</em> tries now and changes nothing else.</p>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h2 class="section-label">Projects</h2>
+{% if projects is none %}
+<p class="muted">The Registry is not answering, so the projects cannot be listed.</p>
+{% else %}
+<div class="policy-list">
+  {% for p in projects %}
+  <details class="section-panel">
+    <summary><strong>{{ p.name }}</strong> <span class="chip">{{ p.path }}</span></summary>
+    <form method="post" action="/data/projects/{{ p.name }}/delete" style="padding:12px 16px">
+      <p>Deletes the registration, backlog, tickets and project files, and what the workshop recorded about <code>{{ p.name }}</code>: usage, policy results, incidents and agent runs, build and deployment records, jobs and scheduled tasks. Its server is stopped first if it is running, and its jobs (running ones are stopped) are deleted. <strong>Not deleted:</strong> the checkout on disk and the project's requirements. This cannot be undone.</p>
+      <label for="del-{{ p.name }}">Type <code>{{ p.name }}</code> to confirm</label>
+      <input type="text" id="del-{{ p.name }}" name="confirm" autocomplete="off" autocapitalize="none" required>
+      <div class="row" style="margin-top:12px"><button type="submit" class="danger">Delete project</button></div>
+    </form>
+  </details>
+  {% else %}
+  <p class="muted">No projects are registered.</p>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h2 class="section-label">Requirements</h2>
+<p class="muted">Every project id with stored requirements. A project that is no longer registered is tagged, and raises no conflicts, incidents or alerts.</p>
+{% if stored is none %}
+<p class="muted">Requirements &amp; Quality is not answering, so the stored requirements cannot be listed.</p>
+{% else %}
+<div class="panel">
+<table>
+  <thead><tr><th>Project</th><th>Requirements</th><th>Suites</th><th>Test results</th><th>Actions</th></tr></thead>
+  <tbody>
+  {% for r in stored %}
+  <tr>
+    <td><strong>{{ r.project_id }}</strong>{% if not r.registered %} <span class="pill warn">not registered</span>{% endif %}</td>
+    <td>{{ r.requirements }} <span class="muted">({{ r.published }} published)</span></td>
+    <td>{{ r.test_suites }}</td>
+    <td>{{ r.test_results }}</td>
+    <td><a class="btn" href="/data/requirements/{{ r.project_id }}/export" download>Export</a></td>
+  </tr>
+  <tr>
+    <td colspan="5">
+      <details>
+        <summary>Delete the requirements of {{ r.project_id }}</summary>
+        <form method="post" action="/data/requirements/{{ r.project_id }}/delete" style="padding:8px 0">
+          <p><strong>This is irreversible.</strong> Its {{ r.requirements }} requirements, suites, use cases, milestones, test results and conflicts are deleted for good. Export them first if you may want them back.</p>
+          <label for="delreq-{{ r.project_id }}">Type <code>{{ r.project_id }}</code> to confirm</label>
+          <input type="text" id="delreq-{{ r.project_id }}" name="confirm" autocomplete="off" autocapitalize="none" required>
+          <div class="row" style="margin-top:12px"><button type="submit" class="danger">Delete requirements</button></div>
+        </form>
+      </details>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">No requirements are stored.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h3>Import requirements</h3>
+<div class="panel" style="padding:18px 20px">
+<form method="post" action="/data/requirements/import" enctype="multipart/form-data">
+  <label for="backup">Backup file (exported from here)</label>
+  <input type="file" name="backup" id="backup" accept="application/json,.json" required>
+  <fieldset style="border:0;padding:0;margin:12px 0 0">
+    <legend>Import under</legend>
+    <label class="check"><input type="radio" name="target" value="original" checked> the original project id (as in the file)</label>
+    <label class="check"><input type="radio" name="target" value="custom"> a custom project id: <input type="text" name="custom_id" placeholder="e.g. little-mindcheck-archive" autocomplete="off" autocapitalize="none"></label>
+    <label class="check"><input type="radio" name="target" value="existing"> a registered project:
+      <select name="existing">{% for name in registered %}<option value="{{ name }}">{{ name }}</option>{% endfor %}</select></label>
+  </fieldset>
+  <p class="muted">Every imported row gets a new id, and a requirement whose key the project already has is renumbered to the next free key.</p>
+  <div class="row" style="margin-top:12px"><button type="submit" class="primary">Import</button></div>
+</form>
+</div>
+{% endif %}
+{% endblock %}

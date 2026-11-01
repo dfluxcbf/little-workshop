@@ -297,6 +297,15 @@ def usage_total(conn: sqlite3.Connection, kind: str, ref_id: str) -> dict | None
 # -- incidents: an unhandled exception, awaiting the user's confirmation --
 
 
+def purge_project(conn: sqlite3.Connection, project_id: str) -> dict:
+    """Remove everything recorded about a project: its runs, remote-control sessions, poll cursor,
+    incidents, doc updates, CI checks and Claude usage."""
+    tables = ("agent_runs", "remote_control_sessions", "poll_cursors", "incidents", "doc_updates", "claude_usage", "ci_checks")
+    removed = {table: conn.execute(f"DELETE FROM {table} WHERE project_id = ?", (project_id,)).rowcount for table in tables}
+    conn.commit()
+    return removed
+
+
 def new_incident_id() -> str:
     return uuid.uuid4().hex
 
