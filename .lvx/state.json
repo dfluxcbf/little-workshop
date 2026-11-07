@@ -1,1 +1,10 @@
-{}
+{
+  "release_finish_in_progress": {
+    "release_branch": "release/0.3.7",
+    "stable_version": "0.3.7",
+    "production_branch": "master",
+    "integration_branch": "dev",
+    "merge_message": "rel (0.3.7): merge release/0.3.7",
+    "phase": "prod_merge"
+  }
+}
