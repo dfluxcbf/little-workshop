@@ -87,9 +87,9 @@ def is_generated_entry(entry: str, owned: set[str]) -> bool:
 
 
 def is_guard_entry(entry: dict) -> bool:
-    """A hook entry the generator writes: the scope guard or the test-output filter."""
+    """A hook entry the generator writes: the scope guard, the test-output filter or the reminder."""
     return any(path in (hook.get("command") or "") for hook in entry.get("hooks") or []
-               for path in (ct.GUARD_PATH, ct.TEST_FILTER_PATH))
+               for path in (ct.GUARD_PATH, ct.TEST_FILTER_PATH, ct.REMINDER_PATH))
 
 
 def merged_settings(project_id: str, template: str, current: dict | None, options: dict | None = None) -> dict:

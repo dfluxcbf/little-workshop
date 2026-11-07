@@ -516,17 +516,20 @@ def test_the_job_creates_what_the_register_describes_links_everything_and_report
     client, connection, _ = requirements
     body = {"job_id": "j1", "project_id": "little-widget"}
     dry = client.post("/v1/jobs/requirements.sync_markers", json={**body, "params": {"dry_run": True}}).json()["result"]
-    assert dry["created"] == ["REQ-000000002"] and len(requirements_db.list_requirements(connection, project_id="little-widget")) == 1
+    assert dry["created"] == ["REQ-000000002", "REQ-000000004"] and len(requirements_db.list_requirements(connection, project_id="little-widget")) == 1
 
     result = client.post("/v1/jobs/requirements.sync_markers", json=body).json()["result"]
-    assert result["created"] == ["REQ-000000002"] and result["linked"] == ["REQ-000000001", "REQ-000000002"]
-    assert [m["key"] for m in result["missing_text"]] == ["REQ-000000003", "REQ-000000004"] and result["suite"] == "Unit tests" and result["markers"] == 4
+    assert result["created"] == ["REQ-000000002", "REQ-000000004"]
+    assert result["linked"] == ["REQ-000000001", "REQ-000000002", "REQ-000000004"]
+    # REQ-000000450: a row not in EARS form is created all the same and listed as advice.
+    assert result["not_ears"] == ["REQ-000000004"]
+    assert [m["key"] for m in result["missing_text"]] == ["REQ-000000003"] and result["suite"] == "Unit tests" and result["markers"] == 4
     created = next(r for r in requirements_db.list_requirements(connection, project_id="little-widget") if r.key == "REQ-000000002")
     assert created.description == "When asked, the widget shall answer." and created.status.value == "draft"
     assert requirements_db.list_suites_for_requirement(connection, created.id) == ["suite-1"]
 
     again = client.post("/v1/jobs/requirements.sync_markers", json=body).json()["result"]
-    assert again["created"] == [] and again["linked"] == [] and again["in_place"] == ["REQ-000000001", "REQ-000000002"]
+    assert again["created"] == [] and again["linked"] == [] and again["in_place"] == ["REQ-000000001", "REQ-000000002", "REQ-000000004"]
     assert client.post("/v1/jobs/requirements.sync_markers", json={**body, "params": {"suite_id": "no-such-suite"}}).json()["outcome"] == "failed"
 
 

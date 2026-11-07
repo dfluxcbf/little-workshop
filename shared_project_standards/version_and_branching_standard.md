@@ -61,7 +61,8 @@ restart at `1` when the base changes. `master` always holds a stable version.
 Two hooks are installed by `lws version install-hooks` (and `lws version init`). `.githooks/pre-commit`
 runs `lws version sync-version-files` on `feature/*` and `improvement/*` branches only and never blocks.
 `.githooks/commit-msg` runs the policies gating `commit` (`commit-bumps-version`,
-`branch-commit-dev-suffix`, `version-format`, `commit-cites-requirement`) against the commit being made
+`branch-commit-dev-suffix`, `version-format`; `commit-cites-requirement` gates only the finish since
+2026-10-24) against the commit being made
 and refuses it when one fails, printing the fix; when little-workshop is unreachable it warns and lets
 the commit through, and the same policies still gate the branch finish. `release/*`, `hotfix/*`,
 `support/*`, `dev` and `master` get their `VERSION` from the finish commands, whose commits run with
@@ -97,4 +98,4 @@ requirements pass, all policies pass. A running app is relaunched when the relea
 - Stray branches, detached HEAD and extra worktrees are observed read-only by the cross-repo
   branch audit.
 
-Last reviewed: 2026-10-07 (hand edit: features and improvements are squash-merged; source docs/version_policy.md).
+Last reviewed: 2026-10-24 (hand edit: citations checked at the finish only); before that 2026-10-07 (hand edit: features and improvements are squash-merged; source docs/version_policy.md).

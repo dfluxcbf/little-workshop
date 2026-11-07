@@ -527,6 +527,14 @@ def _requirements_publish(paths: Paths, args: JSONDict) -> Any:
     return _requirements_job(paths, "requirements.publish_requirement", args["project_id"], {"requirement_id": args["requirement_id"]})
 
 
+def _requirements_supersede(paths: Paths, args: JSONDict) -> Any:
+    fields = {"requirement_id": args["requirement_id"], "key": args["key"], "description": args["description"]}
+    for name in ("title", "category", "register_status"):
+        if name in args:
+            fields[name] = args[name]
+    return _requirements_job(paths, "requirements.supersede_requirement", args["project_id"], fields)
+
+
 def _requirements_delete(paths: Paths, args: JSONDict) -> Any:
     return _requirements_job(paths, "requirements.delete_requirement", args["project_id"], {"requirement_id": args["requirement_id"]})
 
@@ -1205,6 +1213,18 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("workshop_requirements_publish", "Publish a requirement, locking it against further edits.",
              _schema({"project_id": _PROJECT_ID, "requirement_id": _prop("string", "The requirement's id.")},
                      ["project_id", "requirement_id"]), _requirements_publish),
+    ToolSpec("workshop_requirements_supersede",
+             "Replace a requirement (draft or published) in one call: creates the new draft with the old one's "
+             "links, marks the old one superseded, updates the project's docs/requirements.md rows and lists the "
+             "test files whose markers still cite the old id.",
+             _schema({
+                 "project_id": _PROJECT_ID, "requirement_id": _prop("string", "The id of the requirement replaced."),
+                 "key": _prop("string", "The new requirement's key, the next free REQ-nnnnnnnnn."),
+                 "description": _prop("string", "The new requirement's full text."),
+                 "title": _prop("string", "The new title. Default: the old one's."),
+                 "category": _prop("string", "The new category. Default: the old one's."),
+                 "register_status": _prop("string", "Last cell of the new docs/requirements.md row. Default: draft."),
+             }, ["project_id", "requirement_id", "key", "description"]), _requirements_supersede),
     ToolSpec("workshop_requirements_delete", "Delete a requirement for good.",
              _schema({"project_id": _PROJECT_ID, "requirement_id": _prop("string", "The requirement's id.")},
                      ["project_id", "requirement_id"]), _requirements_delete),
@@ -1218,7 +1238,7 @@ TOOLS: tuple[ToolSpec, ...] = (
                      ["project_id", "requirement_id", "suite_id"]), _requirements_unlink_suite),
     ToolSpec("workshop_requirements_list", "List requirements, optionally filtered by project and/or status.",
              _schema({"project_id": _prop("string", "Filter by project."),
-                      "status": _prop("string", "draft|published")}), _requirements_list),
+                      "status": _prop("string", "draft|published|superseded")}), _requirements_list),
     ToolSpec("workshop_requirements_get", "Get one requirement by id, including the test suites linked to it.",
              _schema({"requirement_id": _prop("string", "The requirement's id.")}, ["requirement_id"]), _requirements_get),
     ToolSpec("workshop_requirements_result_record", "Record a single test result manually.",

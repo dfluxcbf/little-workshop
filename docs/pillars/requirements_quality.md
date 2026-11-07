@@ -70,10 +70,23 @@ to 'is it done'" (`docs/architecture.md`).
   only way to lock it. There is no unpublish — the same "corrected
   forward, not rewritten" discipline this ecosystem's own requirements
   register already follows.
+- **Superseding is one operation** (REQ-000000448, 2026-10-24) —
+  `supersede_requirement` (`workshop_requirements_supersede`, `lws
+  requirements supersede`) takes a draft or published requirement and
+  a new key and text: it creates the new draft with the old one's
+  category, use case, milestone and suite links, marks the old one
+  `superseded` (`superseded_by` names the new key), marks the old row
+  of the project's `docs/requirements.md` "superseded by" and adds the
+  new row after it, and returns the test files whose markers still cite
+  the old key. A superseded requirement cannot be published and is left
+  out of the definition-of-done report; the policy
+  `requirement-marker-not-superseded` refuses a commit that leaves a
+  test citing it. Cheap on purpose: a newer request changes the row
+  instead of being bent to fit it.
 - **Eleven operations, as Orchestration Job types**:
   `create_test_suite`/`delete_test_suite`, `create_use_case`,
   `create_milestone`, `create_requirement`/`update_requirement`/
-  `publish_requirement`/`delete_requirement`,
+  `publish_requirement`/`supersede_requirement`/`delete_requirement`,
   `link_requirement_to_suite`/`unlink_requirement_from_suite`,
   `record_test_result` (manual), `import_junit` (E6: ingest an
   externally-produced JUnit-XML report), and `run_tests` (E6: sandboxed,
@@ -146,8 +159,10 @@ to 'is it done'" (`docs/architecture.md`).
 
 ## EARS enforcement (2026-09-21)
 
-`requirements.create_requirement`, and `requirements.update_requirement` when it changes the description,
-refuse a description that is not in EARS form and reply with how to fix it (`requirements/ears.py`, a
+Advice, never a refusal, since 2026-10-24 (REQ-000000450: a form check that refuses only costs turns of
+rewording). `requirements.create_requirement`, `update_requirement` when it changes the description, and
+`supersede_requirement` keep a description that is not in EARS form and return how to fix it in the result's
+`warnings` (`requirements/ears.py`, a
 deterministic pattern check: an optional `While`/`When`/`Where`/`If … then` prefix, then a determiner, a
 system name and `shall`). A bulk import from another tool passes `imported: true` to skip the check; requirements
 recorded before the rule keep their wording until edited.
@@ -185,7 +200,8 @@ directory) and brings the pillar in line with them in one Job:
 
 - A marked requirement the pillar lacks is created as a draft from its row in the project's
   `docs/requirements.md` (`| REQ-… | **Title.** text | status |`), EARS-checked like any other. A marker with
-  no such row, or whose text is not EARS, is reported under `missing_text` and not created.
+  no such row (or an empty one) is reported under `missing_text` and not created; one whose text is not EARS
+  is created all the same and listed under `not_ears`.
 - Every marked requirement is linked to `params.suite_id`, or to the suite named "Unit tests".
 - Nothing is deleted or unlinked. `params.dry_run` only reports.
 

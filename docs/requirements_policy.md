@@ -39,14 +39,31 @@ section for the full shape.
 
 ## Requirements are the source of truth for every implementation request (2026-09-21)
 
-- **Every implementation request is mapped to Requirements before it is implemented.**
-  A request that adds behaviour adds requirements; one that changes behaviour edits the
-  affected requirements (a published requirement is locked, so a change to one is a new
-  requirement that supersedes it); one that removes behaviour removes them. The commits
+- **Every implementation request is mapped to Requirements by the time its branch finishes**
+  (2026-10-24; it read "before it is implemented"). Requirements are written once the behaviour
+  settles, not ahead of exploratory or visual iteration, which needs none. A request that adds behaviour adds requirements; one that changes behaviour edits the
+  affected requirements (a draft is edited in place; a published requirement changes by a new
+  requirement that supersedes it in the same change, and never blocks a new request; reworded
+  2026-10-24, it read "is locked"); one that removes behaviour removes them. The commits
   that implement the request cite the affected ids (`REQ-nnnnnnnnn`) in their messages.
   Judging that the mapping is *right* is a review matter; the mechanical part — commits under
   `src/` cite an id — is the `commit-cites-requirement` policy, filed as a draft for approval in
-  the app.
+  the app. Since 2026-10-24 it gates the branch finish only, never a single commit: a citation is
+  form, not protection, and a check of form never refuses work in progress.
+- **A requirement records a request; it never caps the next one** (2026-10-24). When the user
+  asks for something that contradicts a requirement, a test or a design note, the request wins:
+  the same change supersedes or removes the old row and updates its tests. The look of an
+  interface (colours, sizes, materials, styles) is written as design notes, not requirements, so
+  a new reference picture does not have to argue with a locked row. Added after a long task kept
+  earlier simplifications over the user's reference images.
+- **Publish late** (2026-10-24). A round's requirements stay drafts, edited in place, while the
+  work iterates; they are published when the branch finishes or the release is cut, the point
+  where the definition-of-done report counts them. Publishing mid-work only makes the next change
+  a supersede.
+- **Superseding is one call** (2026-10-24): `workshop_requirements_supersede` creates the new
+  row, marks the old one superseded in the pillar and in `docs/requirements.md`, and lists the
+  tests still tagged with the old id; the policy `requirement-marker-not-superseded` refuses a
+  commit that leaves one of them behind.
 - **`REQ-NONE`: a commit that affects no requirement says so** (2026-09-24). A commit
   cites `REQ-NONE` instead of an id when it affects no requirement at all — a refactor, a
   typo fix, a version bump a version hook wrote into `src/`. It declares "no requirement

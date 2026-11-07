@@ -1195,3 +1195,15 @@ def test_backlog_tools_list_get_add_and_delete_within_the_named_project(paths, m
         tools_mod.TOOLS_BY_NAME["workshop_project_backlog_delete"].handler(paths, {"project_id": "little-home", "entry_id": "e1"})
     assert deleted == []  # another project's entry is never deleted
     assert tools_mod.TOOLS_BY_NAME["workshop_project_backlog_delete"].handler(paths, {"project_id": "little-meals", "entry_id": "e1"})["deleted"]
+
+
+# --- REQ-000000448: workshop_requirements_supersede ---------------------------------------------
+
+def test_requirements_supersede_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_supersede"].handler(paths, {
+        "project_id": "p1", "requirement_id": "r1", "key": "REQ-2", "description": "The system shall x.",
+        "register_status": "M9",
+    })
+    call = fake_create_job[0]
+    assert call["type"] == "requirements.supersede_requirement" and call["project_id"] == "p1"
+    assert call["params"] == {"requirement_id": "r1", "key": "REQ-2", "description": "The system shall x.", "register_status": "M9"}

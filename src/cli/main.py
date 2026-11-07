@@ -724,6 +724,14 @@ def cmd_requirements_publish(args: argparse.Namespace) -> int:
     return _requirements_job(args, "requirements.publish_requirement", {"requirement_id": args.requirement_id})
 
 
+def cmd_requirements_supersede(args: argparse.Namespace) -> int:
+    fields = {"requirement_id": args.requirement_id, "key": args.key, "description": args.description}
+    for name in ("title", "category", "register_status"):
+        if getattr(args, name) is not None:
+            fields[name] = getattr(args, name)
+    return _requirements_job(args, "requirements.supersede_requirement", fields)
+
+
 def cmd_requirements_delete(args: argparse.Namespace) -> int:
     return _requirements_job(args, "requirements.delete_requirement", {"requirement_id": args.requirement_id})
 
@@ -2567,6 +2575,17 @@ def build_parser() -> argparse.ArgumentParser:
     req_publish.add_argument("requirement_id")
     req_publish.set_defaults(func=cmd_requirements_publish)
 
+    req_supersede = requirements_sub.add_parser(
+        "supersede", help="Replace a requirement in one step: new draft, old one superseded, register rows updated")
+    req_supersede.add_argument("--project-id", required=True)
+    req_supersede.add_argument("requirement_id")
+    req_supersede.add_argument("--key", required=True, help="the new requirement's key (next free REQ-nnnnnnnnn)")
+    req_supersede.add_argument("--description", required=True)
+    req_supersede.add_argument("--title", default=None)
+    req_supersede.add_argument("--category", default=None)
+    req_supersede.add_argument("--register-status", dest="register_status", default=None)
+    req_supersede.set_defaults(func=cmd_requirements_supersede)
+
     req_delete = requirements_sub.add_parser("delete", help="Delete a requirement")
     req_delete.add_argument("--project-id", required=True)
     req_delete.add_argument("requirement_id")
@@ -2586,7 +2605,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     req_list = requirements_sub.add_parser("list", help="List requirements")
     req_list.add_argument("--project-id", default=None)
-    req_list.add_argument("--status", choices=["draft", "published"], default=None)
+    req_list.add_argument("--status", choices=["draft", "published", "superseded"], default=None)
     req_list.set_defaults(func=cmd_requirements_list)
 
     req_status = requirements_sub.add_parser("status", help="Show one requirement")

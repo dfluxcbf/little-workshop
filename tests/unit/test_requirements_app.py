@@ -484,3 +484,91 @@ def test_run_tests_by_suite_records_each_result_under_its_suite(client, monkeypa
 def test_run_tests_by_suite_refuses_bad_suite_ids(client, suite_ids, error):
     body = client.post("/v1/jobs/requirements.run_tests", json={"job_id": "j", "project_id": "p1", "params": {"suite_ids": suite_ids}}).json()
     assert body["outcome"] == "failed" and error in body["error"]
+
+
+# --- REQ-000000448: superseding a requirement is one call ---------------------------------------
+
+REGISTER = "| ID | Description | Status |\n| --- | --- | --- |\n| REQ-000000001 | **Thing works.** The system shall work. | M3 |\n| REQ-000000009 | **Other.** x | done |\n"
+
+
+@pytest.fixture
+def checkout(tmp_path, monkeypatch):
+    root = tmp_path / "checkout"
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "requirements.md").write_text(REGISTER)
+    (root / "tests").mkdir()
+    (root / "tests" / "test_thing.py").write_text("# " + "--- REQ-000000001: thing works ---\ndef test_x(): pass\n")
+    monkeypatch.setattr("requirements.app.resolve_project_path", lambda paths, project_id: root)
+    return root
+
+
+def _supersede(client, requirement_id, key="REQ-000000002", description="The system shall work blue.", **extra):
+    return client.post(
+        "/v1/jobs/requirements.supersede_requirement",
+        json={"job_id": "j", "project_id": "p1", "params": {"requirement_id": requirement_id, "key": key,
+                                                              "description": description, **extra}},
+    ).json()
+
+
+def test_supersede_replaces_a_published_requirement_in_one_call(client, checkout):
+    suite = _create_suite(client)
+    old = _create_requirement(client, key="REQ-000000001", category="look")
+    client.post("/v1/jobs/requirements.link_requirement_to_suite",
+                json={"job_id": "j", "project_id": "p1", "params": {"requirement_id": old["id"], "suite_id": suite["id"]}})
+    client.post("/v1/jobs/requirements.publish_requirement", json={"job_id": "j", "project_id": "p1", "params": {"requirement_id": old["id"]}})
+
+    body = _supersede(client, old["id"])
+    assert body["outcome"] == "succeeded"
+    result = body["result"]
+    assert result["superseded"]["status"] == "superseded" and result["superseded"]["superseded_by"] == "REQ-000000002"
+    new = result["requirement"]
+    assert (new["key"], new["status"], new["title"], new["category"]) == ("REQ-000000002", "draft", "thing works", "look")
+    assert client.get(f"/v1/requirements/{new['id']}").json()["suite_ids"] == [suite["id"]]
+    assert result["register_updated"] is True and result["tests_still_tagged"] == ["tests/test_thing.py"]
+    lines = (checkout / "docs" / "requirements.md").read_text().splitlines()
+    assert lines[2] == "| REQ-000000001 | **Thing works.** The system shall work. | M3, superseded by REQ-000000002 |"
+    assert lines[3] == "| REQ-000000002 | **thing works.** The system shall work blue. | draft |"
+    assert lines[4].startswith("| REQ-000000009 |")
+
+    report = client.get("/v1/report", params={"project_id": "p1"}).json()
+    assert [r["key"] for r in report["requirements"]] == ["REQ-000000002"]
+    refused = client.post("/v1/jobs/requirements.publish_requirement",
+                          json={"job_id": "j", "project_id": "p1", "params": {"requirement_id": old["id"]}}).json()
+    assert refused["outcome"] == "failed" and "superseded by REQ-000000002" in refused["error"]
+
+
+def test_supersede_refuses_a_superseded_requirement_and_a_taken_key(client, checkout):
+    old = _create_requirement(client)
+    _create_requirement(client, key="REQ-000000009", title="other")
+    assert "already taken" in _supersede(client, old["id"], key="REQ-000000009")["error"]
+    assert _supersede(client, old["id"])["outcome"] == "succeeded"
+    assert "already superseded by REQ-000000002" in _supersede(client, old["id"], key="REQ-000000003")["error"]
+
+
+def test_supersede_without_a_register_row_or_a_checkout_still_replaces_the_requirement(client, monkeypatch):
+    from common.registry_client import ProjectResolutionError
+
+    def unresolvable(paths, project_id):
+        raise ProjectResolutionError("no checkout")
+
+    monkeypatch.setattr("requirements.app.resolve_project_path", unresolvable)
+    old = _create_requirement(client)
+    result = _supersede(client, old["id"])["result"]
+    assert result["register_updated"] is False and result["tests_still_tagged"] is None
+    assert result["superseded"]["status"] == "superseded"
+
+
+# --- REQ-000000450: the EARS form is advice, never a refusal ------------------------------------
+
+def test_a_description_not_in_ears_form_is_kept_with_a_warning(client, checkout):
+    created = client.post("/v1/jobs/requirements.create_requirement", json={"job_id": "j", "project_id": "p1", "params": {
+        "key": "REQ-000000005", "title": "seasons", "description": "When a game starts, new or loaded, it shall add the designs."}}).json()
+    assert created["outcome"] == "succeeded" and created["result"]["description"].startswith("When a game starts")
+    assert "EARS" in created["result"]["warnings"][0]
+    assert _create_requirement(client, key="REQ-000000006")["warnings"] == []
+    updated = client.post("/v1/jobs/requirements.update_requirement", json={"job_id": "j", "project_id": "p1", "params": {
+        "requirement_id": created["result"]["id"], "description": "make it blue"}}).json()
+    assert updated["outcome"] == "succeeded" and updated["result"]["warnings"]
+    superseded = _supersede(client, created["result"]["id"], key="REQ-000000007", description="make it green")
+    assert superseded["outcome"] == "succeeded" and superseded["result"]["warnings"]
+

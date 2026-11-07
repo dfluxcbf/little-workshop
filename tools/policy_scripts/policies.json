@@ -48,7 +48,6 @@
       "created_by": "user",
       "ears_text": "WHEN a commit changes a file under src/ or, in a Unity project, under Assets/, Packages/, ProjectSettings/ or tools/, the commit message shall cite either at least one requirement id in the form REQ-nnnnnnnnn or, if the commit affects no requirement, REQ-NONE (in any letter case); IF a commit message cites REQ-NONE, THEN it shall not cite any requirement id.",
       "gate_points": [
-        "commit",
         "branch_finish"
       ],
       "script": "commit_cites_requirement.py"
@@ -335,6 +334,19 @@
         "branch_finish"
       ],
       "script": "requirement_marker_id_format.py"
+    },
+    {
+      "topic": "requirement-marker-not-superseded",
+      "target_pillar": "requirements",
+      "scope_level": "all_projects",
+      "scope_target": null,
+      "created_by": "user",
+      "ears_text": "WHERE the project keeps a docs/requirements.md register, the project shall require that a commit leave no test citing a requirement whose register row is marked superseded or removed.",
+      "gate_points": [
+        "commit",
+        "branch_finish"
+      ],
+      "script": "requirement_marker_not_superseded.py"
     },
     {
       "topic": "python-test-coverage",

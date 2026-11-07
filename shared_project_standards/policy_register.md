@@ -40,7 +40,7 @@ project selection), and `workshop_policy_check_all` re-checks it everywhere it a
 | `version-format` | version | commit, branch_finish | `VERSION` is `M.m.p`, optionally `-dev.N` or `-rc.N` |
 | `commit-bumps-version` | version | commit, branch_finish | Each commit's `VERSION` has higher precedence than its parent's |
 | `branch-commit-dev-suffix` | version | commit, branch_finish | On a working branch, `VERSION` is next patch of the branch point plus `-dev.N` (`N`: 1, then +1) |
-| `commit-cites-requirement` | version | commit, branch_finish | A commit changing source (`src/`; in a Unity project also `Assets/`, `Packages/`, `ProjectSettings/`, `tools/`) cites `REQ-nnnnnnnnn` or `REQ-NONE`, never both |
+| `commit-cites-requirement` | version | branch_finish | A commit changing source (`src/`; in a Unity project also `Assets/`, `Packages/`, `ProjectSettings/`, `tools/`) cites `REQ-nnnnnnnnn` or `REQ-NONE`, never both |
 | `unity-meta-files-paired` | version | commit, branch_finish | In a Unity project, a file or folder under `Assets/` is added or deleted with its `.meta`, and no `.meta` apart from its asset |
 | `lfs-tracked-files-are-pointers` | version | commit, branch_finish | A file `.gitattributes` routes to Git LFS is committed as an LFS pointer |
 | `no-committed-secrets` | version | commit, branch_finish | A commit introduces no private key, no provider token or API key in a recognisable format and no `.env` file (a line marked `pragma: allowlist secret` is skipped) |
@@ -54,6 +54,7 @@ project selection), and `workshop_policy_check_all` re-checks it everywhere it a
 | `release-candidate-tag-format` | version | release | The newest RC tag is annotated `v<M>.<m>.<p>-rc.N`, `N` starting at 1 and increasing by one |
 | `requirement-marker-registered` | requirements | branch_finish | Where tests use requirement markers, pytest configuration registers one |
 | `requirement-marker-id-format` | requirements | branch_finish | Markers reference `REQ-` plus nine digits |
+| `requirement-marker-not-superseded` | requirements | commit, branch_finish | No test cites a requirement the register marks superseded or removed |
 | `python-test-coverage` | requirements | branch_finish | A Python project's suite covers at least 90 percent of statements |
 | `issue-form-installed` | agent | branch_finish | Where issue-driven automation is used, `.github/ISSUE_TEMPLATE/claude-task.yml` exists |
 | `ssh-remotes-no-embedded-credentials` | registry | branch_finish | Git remotes are SSH URLs without embedded credentials |
@@ -117,7 +118,7 @@ First run:
 - The requirements behind the 2026-10-02 policies are proposed in little-workshop's
   `docs/requirements.md` with ids pending registration in the Requirements pillar.
 
-Last reviewed: 2026-10-02 (four new policies, three policies fixed to read only the project's files,
+Last reviewed: 2026-10-24 (hand edit: requirement-marker-not-superseded; commit-cites-requirement at the finish only; claude-instructions-valid limits are warnings); before that 2026-10-02 (four new policies, three policies fixed to read only the project's files,
 claude-config-present and commit-cites-requirement widened, ethereal-lands attached; hand edit, same day:
 no-committed-secrets added, claude-config-present and claude-instructions-valid widened, the guard refuses
 raw lifecycle commands and generated-file edits).

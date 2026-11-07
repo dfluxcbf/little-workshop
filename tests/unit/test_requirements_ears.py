@@ -41,9 +41,9 @@ def _create(client, description, **extra):
     }).json()
 
 
-def test_create_refuses_a_non_ears_description_and_says_how_to_fix_it(client):
+def test_create_keeps_a_non_ears_description_and_warns_how_to_fix_it(client):  # REQ-000000450: advice, not a refusal
     response = _create(client, "The dashboard lists projects.")
-    assert response["outcome"] == "failed" and "EARS" in response["error"] and "shall" in response["error"]
+    assert response["outcome"] == "succeeded" and "EARS" in response["result"]["warnings"][0] and "shall" in response["result"]["warnings"][0]
 
 
 def test_create_accepts_ears_and_import_bypasses_the_check(client):
@@ -55,7 +55,7 @@ def test_update_is_checked_too(client):
     created = _create(client, "The Dashboard shall list projects.")["result"]
     bad = client.post("/v1/jobs/requirements.update_requirement", json={
         "job_id": "j", "project_id": "p1", "params": {"requirement_id": created["id"], "description": "lists projects"}}).json()
-    assert bad["outcome"] == "failed" and "EARS" in bad["error"]
+    assert bad["outcome"] == "succeeded" and "EARS" in bad["result"]["warnings"][0]
     good = client.post("/v1/jobs/requirements.update_requirement", json={
         "job_id": "j", "project_id": "p1", "params": {"requirement_id": created["id"], "description": "The Dashboard shall list every project."}}).json()
     assert good["outcome"] == "succeeded"

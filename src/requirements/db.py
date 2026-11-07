@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS requirements (
     status TEXT NOT NULL,
     use_case_id TEXT,
     milestone_id TEXT,
+    superseded_by TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -125,6 +126,9 @@ def connect(path: Path) -> sqlite3.Connection:
     # and idempotent here too, the same belt-and-suspenders pattern this
     # project already uses for a column added after a table shipped.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_test_results_suite_executed ON test_results (suite_id, executed_at)")
+    # `superseded_by` came after the table shipped (REQ-000000448).
+    if "superseded_by" not in {row["name"] for row in conn.execute("PRAGMA table_info(requirements)")}:
+        conn.execute("ALTER TABLE requirements ADD COLUMN superseded_by TEXT")
     conn.commit()
     return conn
 
@@ -253,12 +257,13 @@ def list_milestones(conn: sqlite3.Connection, *, project_id: str | None = None) 
 def insert_requirement(conn: sqlite3.Connection, requirement: Requirement) -> None:
     conn.execute(
         """INSERT INTO requirements
-           (id, project_id, key, title, description, category, status, use_case_id, milestone_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (id, project_id, key, title, description, category, status, use_case_id, milestone_id, superseded_by,
+            created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             requirement.id, requirement.project_id, requirement.key, requirement.title,
             requirement.description, requirement.category, requirement.status.value,
-            requirement.use_case_id, requirement.milestone_id,
+            requirement.use_case_id, requirement.milestone_id, requirement.superseded_by,
             _iso(requirement.created_at), _iso(requirement.updated_at),
         ),
     )
@@ -270,7 +275,7 @@ def _row_to_requirement(row: sqlite3.Row) -> Requirement:
         id=row["id"], project_id=row["project_id"], key=row["key"], title=row["title"],
         description=row["description"], category=row["category"],
         status=RequirementStatus(row["status"]),
-        use_case_id=row["use_case_id"], milestone_id=row["milestone_id"],
+        use_case_id=row["use_case_id"], milestone_id=row["milestone_id"], superseded_by=row["superseded_by"],
         created_at=_parse_iso(row["created_at"]), updated_at=_parse_iso(row["updated_at"]),
     )
 
@@ -300,10 +305,11 @@ def update_requirement(conn: sqlite3.Connection, requirement: Requirement) -> No
     requirement.updated_at = datetime.now(timezone.utc)
     conn.execute(
         """UPDATE requirements SET title = ?, description = ?, category = ?, status = ?,
-           use_case_id = ?, milestone_id = ?, updated_at = ? WHERE id = ?""",
+           use_case_id = ?, milestone_id = ?, superseded_by = ?, updated_at = ? WHERE id = ?""",
         (
             requirement.title, requirement.description, requirement.category, requirement.status.value,
-            requirement.use_case_id, requirement.milestone_id, _iso(requirement.updated_at), requirement.id,
+            requirement.use_case_id, requirement.milestone_id, requirement.superseded_by,
+            _iso(requirement.updated_at), requirement.id,
         ),
     )
     conn.commit()

@@ -6,14 +6,22 @@ Sources: `docs/requirements_policy.md`, `docs/requirements.md` ("Conventions"),
 
 ## Source of truth
 
-Every implementation request is mapped to requirements **before** it is implemented:
+Every implementation request is mapped to requirements by the time its branch finishes, once the behaviour
+settles (exploratory and visual iteration needs none):
 
 - new behaviour adds requirements;
-- changed behaviour edits the affected requirements (a published requirement is locked, so a change
-  is a new requirement that supersedes it);
+- changed behaviour edits the affected requirements (a draft in place; a published requirement by a
+  new requirement that supersedes it in the same change, never blocking the request);
 - removed behaviour removes them.
 
-Requirements are drafted as the first real task of a milestone, not speculatively ahead of need.
+A requirement records what was asked for, not a ceiling on what comes next: when the user asks for something
+that contradicts a requirement, a test or a design note, the request wins and the same change supersedes or
+removes the old row and updates its tests. Write the look of an interface (colours, sizes, materials, styles) as
+design notes, not as requirements, so a new reference picture does not have to argue with a locked row.
+Publish late: a round's requirements stay drafts while the work iterates and are published at the branch
+finish or release, where the definition-of-done report counts them.
+
+Requirements are drafted when the behaviour they describe settles, not speculatively ahead of need.
 
 ## Where they live
 
@@ -61,8 +69,8 @@ A milestone is done only when every one of its requirements is done.
 - `REQ-NONE` covers refactors, typo fixes, version bumps written by a hook, and little-workshop's own
   bookkeeping commits (version bumps, finish and release state, changelogs). Merge commits never use
   it.
-- Enforced by policy `commit-cites-requirement` on every commit (the commit-msg hook) and at
-  `branch_finish`.
+- Checked by policy `commit-cites-requirement` at `branch_finish` only, on the newest commit (since
+  2026-10-24: a citation is form, not protection, so it no longer refuses each commit).
 
 ## Tests and requirements
 
@@ -89,4 +97,4 @@ The report takes the **worst** verdict of the linked suite's latest run. See
   requirements are imported into it. `docs/requirements.md` also cites
   `docs/policies/documentation_policy.md`, which does not exist.
 
-Last reviewed: 2026-10-02 (hand edit: commit-cites-requirement also checked at commit).
+Last reviewed: 2026-10-24 (hand edit: a request outranks an older requirement; looks are design notes; publish late; citations checked at the finish only).

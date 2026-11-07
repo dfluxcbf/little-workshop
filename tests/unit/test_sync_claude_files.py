@@ -103,3 +103,16 @@ def test_a_retired_rule_is_dropped_not_kept_as_the_projects_own(tmp_path):
     deny = json.loads((root / ".claude" / "settings.json").read_text())["permissions"]["deny"]
     assert "Bash(git merge*)" not in deny and "Bash(git tag*)" not in deny
     assert "Bash(git merge *)" in deny and deny[-1] == "Read(./secrets/**)"
+
+
+# --- REQ-000000447: the reminder hook is generated, the project's own prompt hooks are kept ----
+
+def test_a_projects_own_prompt_hook_is_kept_beside_the_reminder_and_the_reminder_is_not_doubled(tmp_path):
+    current = claude_templates.settings("little-widget", "python")
+    own_hook = {"hooks": [{"type": "command", "command": "python3 .claude/hooks/own_prompt_hook.py"}]}
+    current["hooks"]["UserPromptSubmit"].append(own_hook)
+    root = _checkout(tmp_path, settings=current)
+    _tool().main(["--checkout", str(root), "--write"])
+    merged = json.loads((root / ".claude" / "settings.json").read_text())
+    generated = claude_templates.settings("little-widget", "python")
+    assert merged["hooks"]["UserPromptSubmit"] == generated["hooks"]["UserPromptSubmit"] + [own_hook]

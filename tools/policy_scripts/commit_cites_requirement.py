@@ -1,4 +1,5 @@
-"""Policy `commit-cites-requirement` (version pillar; gates commit, branch_finish): a commit
+"""Policy `commit-cites-requirement` (version pillar; gates branch_finish only since 2026-10-24,
+REQ-000000451: a citation is form, not protection, so it no longer refuses each commit): a commit
 that changes the project's source -- a file under src/ or, in a Unity project (one with
 ProjectSettings/ProjectVersion.txt), under Assets/, Packages/, ProjectSettings/ or tools/ --
 cites the requirements it affects (REQ-nnnnnnnnn) or, if it affects none, REQ-NONE (any letter

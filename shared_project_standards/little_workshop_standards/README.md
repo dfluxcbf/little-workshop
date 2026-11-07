@@ -36,7 +36,7 @@ is attached to ([../policy_register.md](../policy_register.md)), little-workshop
   registers `tools/on_version_bump.py`); `.githooks/commit-msg` runs the policies gating `commit`.
   `lws version install-hooks --project-id little-workshop` (re)installs both.
 - Run `tools/sync_versions.py` whenever `VERSION` changes; `pyproject.toml` is never edited by hand.
-- Commits that change `src/` cite `REQ-nnnnnnnnn` or `REQ-NONE`. Subjects read
+- Commits that change `src/` cite `REQ-nnnnnnnnn` or `REQ-NONE` (checked at the branch finish, not per commit). Subjects read
   `feat|impr|fix (<issue or -1>): <title>`.
 - Test suites: `tests/unit` (the DoD "Unit tests" suite, never skipping in a sandbox),
   `tests/integration` (stops the live pillars: never beside the live install), `tests/ui` (Playwright).

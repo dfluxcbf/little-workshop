@@ -64,6 +64,7 @@ ROUTES = {
 # Files little-workshop writes, relative to the checkout -> how they change.
 GENERATED = {
     ".claude/hooks/lws_scope_guard.py": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
+    ".claude/hooks/newest_request_reminder.py": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
     ".claude/hooks/test_output_filter.py": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
     ".claude/little-workshop.md": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",
     ".claude/rules/claude-instructions.md": "little-workshop generates it: change src/registry/claude_templates.py in little-workshop and run its `python3 tools/sync_claude_files.py --write`",

@@ -89,6 +89,7 @@
       "Bash(lws version install-hooks --project-id little-workshop *)",
       "Bash(lws requirements create --project-id little-workshop *)",
       "Bash(lws requirements update --project-id little-workshop *)",
+      "Bash(lws requirements supersede --project-id little-workshop *)",
       "Bash(lws requirements suite create --project-id little-workshop *)",
       "Bash(lws requirements use-case create --project-id little-workshop *)",
       "Bash(lws requirements milestone create --project-id little-workshop *)",
@@ -171,6 +172,7 @@
       "mcp__little-workshop__workshop_version_issue_unset",
       "mcp__little-workshop__workshop_requirements_create",
       "mcp__little-workshop__workshop_requirements_update",
+      "mcp__little-workshop__workshop_requirements_supersede",
       "mcp__little-workshop__workshop_requirements_suite_create",
       "mcp__little-workshop__workshop_requirements_use_case_create",
       "mcp__little-workshop__workshop_requirements_milestone_create",
@@ -356,6 +358,17 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/live_install_guard.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/newest_request_reminder.py",
             "timeout": 10
           }
         ]
