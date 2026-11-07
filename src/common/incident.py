@@ -60,7 +60,7 @@ def _post(socket_path: Path | None, body: dict) -> None:
     try:
         with client_for_socket(socket_path, timeout=3.0) as client:
             client.post("/v1/incidents", json=body)
-    except (httpx.ConnectError, httpx.TimeoutException, OSError):
+    except (httpx.TransportError, OSError):
         pass
 
 

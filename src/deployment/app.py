@@ -18,7 +18,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from common import redeploy_plan
+from common import redeploy_plan, windows
 from common.job_steps import StepReporter, reporting
 from common.paths import Paths
 from common.pillar_socket import resolve_pillar_socket
@@ -29,6 +29,7 @@ from common.registry_client import ProjectResolutionError, resolve_project_path
 from deployment import db, gitutil, worktrees
 from deployment.confirm import rollback_guard
 from deployment.flow import DeploymentError, DeploymentFlow, SelfRedeployRequiresDispatch
+from deployment.windows_supervisor import WindowsServerSupervisor
 from deployment.gitutil import list_branches
 from deployment.manifest import ManifestError, ServerManifest, parse_manifest
 from deployment.workshop_repo import workshop_repo_dir
@@ -97,6 +98,7 @@ def create_orchestration_job(paths: Paths, template: dict) -> dict:
 def build_app(
     paths: Paths, conn: sqlite3.Connection, resolve: ResolveFn = resolve_project_path, flow: DeploymentFlow | None = None,
     *, live_pillars: Callable[[], list[str]] | None = None, create_job: Callable[[dict], object] | None = None,
+    start_windows_supervisor: bool = False,
 ) -> FastAPI:
     app = FastAPI(title="little-workshop Deployment & Servers")
     install_incident_reporting(app, paths, pillar="deployment")
@@ -107,6 +109,16 @@ def build_app(
 
     db_row = conn.execute("PRAGMA database_list").fetchone()
     db_file = db_row[2] if db_row else ""
+
+    if start_windows_supervisor:
+        # Restart-on-failure for a Windows-hosted server (no systemd unit to delegate that to) — a
+        # dedicated read-only connection, since the supervisor's own thread must never contend with
+        # `lock` for longer than one project's relaunch (same reasoning as `read()` above).
+        supervisor_conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True) if db_file else conn
+        if db_file:
+            supervisor_conn.row_factory = conn.row_factory
+        supervisor = WindowsServerSupervisor(paths, flow, supervisor_conn, _load_manifest, lock)
+        threading.Thread(target=supervisor.run_forever, daemon=True, name="deployment-windows-supervisor").start()
 
     def read(fn, *args, **kwargs):
         """Reads must never queue behind `lock`: a deploy, stop or pillar
@@ -166,8 +178,9 @@ def build_app(
         with lock:
             try:
                 manifest = _load_manifest(paths, request.project_id)
-                report = flow.down(request.project_id, manifest)
-            except DeploymentError as exc:
+                project_dir = resolve(paths, request.project_id)
+                report = flow.down(request.project_id, manifest, on_windows=windows.is_windows_checkout(project_dir))
+            except (DeploymentError, ProjectResolutionError) as exc:
                 return {"outcome": "failed", "error": str(exc)}
         return {
             "outcome": "succeeded",
@@ -330,7 +343,13 @@ def build_app(
             manifest = _load_manifest(paths, project_id)
         except DeploymentError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
-        result = read(flow.status, project_id, manifest)
+        on_windows = False
+        if not manifest.external:
+            try:
+                on_windows = windows.is_windows_checkout(resolve(paths, project_id))
+            except ProjectResolutionError:
+                pass
+        result = read(flow.status, project_id, manifest, on_windows=on_windows)
         return {
             "name": result.name, "unit": result.unit, "pids": result.pids, "listening": result.listening,
             "tailscale": result.tailscale, "branch": result.branch, "version": result.version,

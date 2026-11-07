@@ -27,7 +27,7 @@ def resolve_pillar_socket(paths: Paths, pillar: str, *, timeout: float = 5.0) ->
         with client_for_socket(paths.core_socket_path, timeout=timeout) as client:
             response = client.get("/v1/status")
         response.raise_for_status()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         return None
     entry = response.json().get("pillars", {}).get(pillar)
     if entry is None or entry["status"] in UNAVAILABLE_STATUSES:

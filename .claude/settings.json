@@ -78,6 +78,7 @@
       "Bash(lws usage findings --project-id little-workshop *)",
       "Bash(lws project backlog list --project-id little-workshop *)",
       "Bash(lws project backlog show --project-id little-workshop *)",
+      "Bash(lws api token-list --project-id little-workshop *)",
       "Bash(lws version feature-start --project-id little-workshop *)",
       "Bash(lws version improvement-start --project-id little-workshop *)",
       "Bash(lws version hotfix-start --project-id little-workshop *)",
@@ -299,6 +300,8 @@
       "Bash(lws trigger enable *)",
       "Bash(lws trigger disable *)",
       "Bash(lws trigger install-defaults *)",
+      "Bash(lws api token-create *)",
+      "Bash(lws api token-revoke *)",
       "Bash(bazel run //:install*)",
       "Bash(bazel run //*_server*)",
       "Bash(python3 tools/sync_policies.py --apply*)"

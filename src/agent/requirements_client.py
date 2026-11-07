@@ -31,7 +31,7 @@ def run_job(paths: Paths, project_id: str, job_type: str, params: dict, *, timeo
             )
         response.raise_for_status()
         body = response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise RequirementsClientError(f"could not run {job_type}: {exc}") from exc
     if body.get("outcome") != "succeeded":
         raise RequirementsClientError(f"{job_type} failed: {body.get('error')}")

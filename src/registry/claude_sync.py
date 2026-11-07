@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+from common.windows import is_windows_checkout
 from registry import claude_templates as ct
 
 PLATFORM_PROJECT = "little-workshop"
@@ -122,7 +123,7 @@ def merged_settings(project_id: str, template: str, current: dict | None, option
 
 def wanted_files(checkout: Path, project_id: str, template: str) -> dict[str, str]:
     options = options_in(checkout, project_id)
-    files = ct.claude_files(project_id, template, **options)
+    files = ct.claude_files(project_id, template, windows=is_windows_checkout(checkout), **options)
     try:
         current = json.loads((checkout / ct.SETTINGS_PATH).read_text(encoding="utf-8"))
     except (OSError, ValueError):

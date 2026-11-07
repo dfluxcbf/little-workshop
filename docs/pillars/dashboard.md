@@ -815,3 +815,22 @@ One page, `/data`, for what the workshop keeps per project. Two sections:
 page and the conflicts page leave out what concerns a project the Registry does not know; Agentic Development does
 not record an incident reported for one; the periodic conflict analysis covers registered projects only. When the
 Registry does not answer nothing is quieted (unknown is not unregistered).
+
+## HTTP gateway (2026-10-25)
+
+REQ-000000464, REQ-000000465. `GET /api/v1/tools` and `POST /api/v1/tools/{tool}` give a project's own code the
+MCP tools over HTTP (docs/architecture.md, "Windows-hosted projects"). A call carries `Authorization: Bearer
+<token>`; the token belongs to one project (`lws api token-create --project-id <p> [--label] [--write <file>]`,
+`token-list`, `token-revoke`; only its SHA-256 is kept, in `~/.config/little-workshop/api_tokens.json`, mode
+0600). A missing or unknown token is 401. Otherwise the Dashboard forwards the call to the MCP pillar's gateway
+(docs/pillars/mcp_server.md, "HTTP gateway") as the token's project and passes its answer on, refusals included;
+with the gateway not running it answers 503 and says to enable the `mcp` pillar. The token is the only access
+control, on loopback and on the tailnet alike: the tailnet route reaches the same port.
+
+Example, from PowerShell in a Windows-hosted project:
+
+```
+$token = Get-Content .little-workshop-token
+Invoke-RestMethod -Method Post http://127.0.0.1:8790/api/v1/tools/workshop_version_status `
+  -Headers @{Authorization = "Bearer $token"} -ContentType application/json -Body '{"kind": "feature"}'
+```

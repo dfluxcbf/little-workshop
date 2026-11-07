@@ -35,7 +35,7 @@ def resolve_project(paths: Paths, project_id: str | None, *, timeout: float = 5.
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.get(f"/v1/projects/{project_id}")
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+    except (httpx.TransportError, OSError) as exc:
         raise ProjectResolutionError(f"Registry & Portfolio pillar unreachable: {exc}") from exc
 
     if response.status_code == 404:

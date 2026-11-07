@@ -151,6 +151,48 @@ def test_job_remove_unknown_project_fails_gracefully(client):
     assert response.json()["outcome"] == "failed"
 
 
+def test_job_archive_drops_project_out_of_the_active_list(client):
+    app_client, workdir = client
+    params = {"name": "little-widget", "dest_dir": str(workdir)}
+    app_client.post("/v1/jobs/project.bootstrap", json={"job_id": "j1", "params": params})
+
+    response = app_client.post(
+        "/v1/jobs/project.archive", json={"job_id": "j2", "params": {"name": "little-widget"}}
+    )
+    assert response.json()["outcome"] == "succeeded"
+    assert app_client.get("/v1/projects/little-widget").json()["status"] == "removed"
+    assert app_client.get("/v1/projects", params={"status": "active"}).json() == []
+
+
+def test_job_archive_unknown_project_fails_gracefully(client):
+    app_client, _ = client
+    response = app_client.post(
+        "/v1/jobs/project.archive", json={"job_id": "j1", "params": {"name": "ghost"}}
+    )
+    assert response.json()["outcome"] == "failed"
+
+
+def test_job_restore_puts_an_archived_project_back_on_the_active_list(client):
+    app_client, workdir = client
+    params = {"name": "little-widget", "dest_dir": str(workdir)}
+    app_client.post("/v1/jobs/project.bootstrap", json={"job_id": "j1", "params": params})
+    app_client.post("/v1/jobs/project.archive", json={"job_id": "j2", "params": {"name": "little-widget"}})
+
+    response = app_client.post(
+        "/v1/jobs/project.restore", json={"job_id": "j3", "params": {"name": "little-widget"}}
+    )
+    assert response.json()["outcome"] == "succeeded"
+    assert app_client.get("/v1/projects/little-widget").json()["status"] == "active"
+
+
+def test_job_restore_unknown_project_fails_gracefully(client):
+    app_client, _ = client
+    response = app_client.post(
+        "/v1/jobs/project.restore", json={"job_id": "j1", "params": {"name": "ghost"}}
+    )
+    assert response.json()["outcome"] == "failed"
+
+
 def test_project_set_lifecycle(client):
     app_client, workdir = client
     app_client.post(

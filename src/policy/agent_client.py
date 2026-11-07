@@ -38,7 +38,7 @@ def query(paths: Paths, prompt: str, *, timeout: float = 300.0) -> str:
             )
         response.raise_for_status()
         body = response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise AgentClientError(f"agent.query unreachable: {exc}") from exc
     if body.get("outcome") != "succeeded":
         raise AgentClientError(f"agent.query failed: {body.get('error')}")

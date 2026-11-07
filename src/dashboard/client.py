@@ -40,7 +40,7 @@ def _get(paths: Paths, pillar: str, path: str, *, params: dict | None = None, ti
             response = client.get(path, params=params or {})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
 
 
@@ -50,7 +50,7 @@ def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
             response = client.get("/v1/status")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable("Core daemon unreachable") from exc
 
 
@@ -64,7 +64,7 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
             response = client.post("/v1/jobs", json=fields)
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable("orchestration daemon unreachable") from exc
 
 
@@ -77,7 +77,7 @@ def _send(paths: Paths, pillar: str, method: str, path: str, *, json: dict | Non
             response = client.request(method, path, json=json)
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(f"{pillar} daemon unreachable or refused the request") from exc
 
 
@@ -161,7 +161,7 @@ def job_cleanup(paths: Paths, older_than_hours: int, *, timeout: float = 60.0) -
             response = client.post("/v1/job-cleanup", json={"older_than_hours": older_than_hours})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable("orchestration daemon unreachable") from exc
 
 
@@ -222,7 +222,7 @@ def policy_script_link(paths: Paths, script: str, *, timeout: float = 5.0) -> di
             response = client.post("/v1/policy-scripts/locate", json={"script": script})
         response.raise_for_status()
         body = response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError, ValueError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError, ValueError):
         return None
     return body if body.get("found") else None
 
@@ -248,7 +248,7 @@ def _get_optional(paths: Paths, pillar: str, path: str, *, params: dict | None =
             return None
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
 
 
@@ -410,7 +410,7 @@ def _call(paths: Paths, pillar: str, method: str, path: str, *, params: dict | N
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.request(method, path, params=params or {}, json=json)
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+    except (httpx.TransportError, OSError) as exc:
         raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
     if 400 <= response.status_code < 500:
         try:
@@ -571,7 +571,7 @@ def agent_remote_control_act(paths: Paths, job_id: str, action: str, *, project_
     try:
         with client_for_socket(socket_path, timeout=30.0) as client:
             response = client.post(f"/v1/remote-control/{job_id}/{action}", params={"project_id": project_id})
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+    except (httpx.TransportError, OSError) as exc:
         raise PillarUnavailable("agent daemon unreachable") from exc
     if response.status_code in (404, 409):
         raise RemoteControlRefused(str(response.json().get("detail") or "refused"))
@@ -585,3 +585,23 @@ def agent_remote_control_act(paths: Paths, job_id: str, action: str, *, project_
 def agent_run_for_job(paths: Paths, job_id: str) -> dict | None:
     """The task (agent run) an `agent.run_task` Job started, if it has one yet."""
     return _get_optional(paths, "agent", f"/v1/runs/by-job/{job_id}")
+
+
+# The HTTP gateway's longest call is a tool that waits (workshop_job_wait: at most 300 s), plus the handler's own time.
+GATEWAY_TIMEOUT_SECONDS = 330.0
+
+
+def gateway_request(paths: Paths, method: str, path: str, project_id: str, *, json: dict | None = None,
+                    timeout: float = GATEWAY_TIMEOUT_SECONDS) -> tuple[int, dict]:
+    """A call to the MCP pillar's HTTP gateway as `project_id` (docs/pillars/mcp_server.md, "HTTP gateway"). The
+    gateway's own answer is passed on, refusals included: (status, body)."""
+    socket_path = resolve_pillar_socket(paths, "mcp", timeout=5.0)
+    if socket_path is None:
+        raise PillarUnavailable("the MCP gateway is not running — Core has no socket for the mcp pillar registered")
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.request(method, path, json=json,
+                                      headers={"X-Little-Workshop-Project": project_id})
+        return response.status_code, response.json()
+    except (httpx.TransportError, OSError, ValueError) as exc:
+        raise PillarUnavailable("the MCP gateway is unreachable") from exc

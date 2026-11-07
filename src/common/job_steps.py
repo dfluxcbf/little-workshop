@@ -86,7 +86,7 @@ def _socket_call(paths: Paths) -> Call:
         try:
             with client_for_socket(socket_path, timeout=10.0) as client:
                 response = client.request(method, path, json=json)
-        except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        except (httpx.TransportError, OSError) as exc:
             raise ConnectionError(f"could not reach the orchestration pillar: {exc}") from exc
         if response.status_code >= 400:
             raise ConnectionError(f"orchestration {method} {path}: HTTP {response.status_code} {response.text[:200]}")

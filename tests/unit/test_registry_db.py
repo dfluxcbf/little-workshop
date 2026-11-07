@@ -28,6 +28,15 @@ def test_list_projects_filters_by_status(conn):
     assert [p.name for p in active] == ["a"]
 
 
+def test_set_project_status_updates_status_and_updated_at(conn):
+    db.insert_project(conn, Project(name="a", path="/a"))
+
+    db.set_project_status(conn, "a", ProjectStatus.REMOVED)
+
+    fetched = db.get_project(conn, "a")
+    assert fetched.status == ProjectStatus.REMOVED
+
+
 def test_delete_project_cascades_sets_and_tickets(conn):
     db.insert_project(conn, Project(name="a", path="/a"))
     db.create_project_set(conn, ProjectSet(name="household", project_names=["a"]))

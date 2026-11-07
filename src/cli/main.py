@@ -2052,6 +2052,105 @@ def cmd_mcp_serve(args: argparse.Namespace) -> int:
     return serve(Paths.from_env())
 
 
+def _windows_local_appdata() -> str:
+    out = subprocess.run(["cmd.exe", "/d", "/c", "echo %LOCALAPPDATA%"], capture_output=True, text=True,
+                         timeout=30, cwd="/mnt/c" if Path("/mnt/c").is_dir() else None)
+    value = out.stdout.strip()
+    if out.returncode != 0 or not value or "%" in value:
+        raise RuntimeError(f"could not read %LOCALAPPDATA% through cmd.exe: {out.stderr.strip() or value!r}")
+    return value
+
+
+_ADD_TO_USER_PATH = (
+    "$dir = $env:LWS_SHIM_DIR; $path = [Environment]::GetEnvironmentVariable('Path', 'User'); "
+    "$parts = @($path -split ';' | Where-Object { $_ }); "
+    "if ($parts -contains $dir) { 'present' } else { "
+    "[Environment]::SetEnvironmentVariable('Path', (($parts + $dir) -join ';'), 'User'); 'added' }"
+)
+
+
+def cmd_windows_install_shim(args: argparse.Namespace) -> int:
+    """Install `lws.cmd` on the Windows side so a Windows-hosted project's own code can run `lws`
+    (docs/architecture.md, "Windows-hosted projects")."""
+    import shutil
+
+    from common import windows
+
+    distro = os.environ.get("WSL_DISTRO_NAME", "")
+    lws_path = args.lws_path or shutil.which("lws") or ""
+    problems = windows.shim_problems(distro, lws_path)
+    if not distro:
+        problems.insert(0, "WSL_DISTRO_NAME is not set: run this inside WSL")
+    if problems:
+        for problem in problems:
+            print(f"error: {problem}", file=sys.stderr)
+        return 1
+    try:
+        win_dir = args.dir or _windows_local_appdata() + "\\little-workshop\\bin"
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        print(f"error: {exc}; pass --dir", file=sys.stderr)
+        return 1
+    root = windows.mount_root()
+    if win_dir.startswith(root):  # given as a WSL path (or translated by the shim itself)
+        win_dir = windows.to_windows_path(win_dir, distro, root)
+    target_dir = Path(windows.to_wsl_path(win_dir, root))
+    content = windows.lws_cmd(distro, lws_path).replace("\n", "\r\n")
+    result = {"shim": win_dir.rstrip("\\") + "\\lws.cmd", "distro": distro, "lws": lws_path}
+    if args.dry_run:
+        _print({**result, "dry_run": True, "content": content.replace("\r\n", "\n")})
+        return 0
+    if not windows.is_windows_path(win_dir):
+        print(f"error: {win_dir!r} is not a Windows path (C:\\...)", file=sys.stderr)
+        return 1
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "lws.cmd").write_bytes(content.encode("utf-8"))
+    result["user_path"] = "unchanged (--no-path)"
+    if not args.no_path:
+        env = {**os.environ, "LWS_SHIM_DIR": win_dir, "WSLENV": "LWS_SHIM_DIR"}
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _ADD_TO_USER_PATH],
+                             capture_output=True, text=True, timeout=60, env=env)
+        state = out.stdout.strip().splitlines()[-1:] or [""]
+        if out.returncode != 0 or state[0] not in ("present", "added"):
+            print(f"warning: could not add {win_dir} to the user PATH: {out.stderr.strip()}", file=sys.stderr)
+            result["user_path"] = "not changed: add the folder yourself"
+        else:
+            result["user_path"] = "already listed" if state[0] == "present" else "added (open a new terminal)"
+    _print(result)
+    return 0
+
+
+def cmd_api_token_create(args: argparse.Namespace) -> int:
+    from common import api_tokens
+
+    created = api_tokens.create(Paths.from_env(), args.project_id, args.label or "")
+    if args.write:
+        target = Path(args.write)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(created["token"] + "\n")
+        created = {**created, "token": f"written to {target} (keep it out of git)"}
+    _print({**created, "use": "Authorization: Bearer <token> on http://127.0.0.1:8790/api/v1/tools/<tool>"})
+    return 0
+
+
+def cmd_api_token_list(args: argparse.Namespace) -> int:
+    from common import api_tokens
+
+    _print({"tokens": api_tokens.list_tokens(Paths.from_env(), args.project_id)})
+    return 0
+
+
+def cmd_api_token_revoke(args: argparse.Namespace) -> int:
+    from common import api_tokens
+
+    if not api_tokens.revoke(Paths.from_env(), args.token_id, args.project_id):
+        print(f"error: no token {args.token_id} for {args.project_id}", file=sys.stderr)
+        return 1
+    _print({"revoked": args.token_id, "project_id": args.project_id})
+    return 0
+
+
 def cmd_worktree_provision(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -3052,11 +3151,70 @@ def build_parser() -> argparse.ArgumentParser:
     asset_mcp_serve.add_argument("--project-id", required=True)
     asset_mcp_serve.set_defaults(func=cmd_asset_mcp_serve)
 
+    windows_cmd = subparsers.add_parser("windows", help="Reach little-workshop from a Windows-hosted project's own code")
+    windows_sub = windows_cmd.add_subparsers(dest="windows_command", required=True)
+    win_shim = windows_sub.add_parser("install-shim", help="Install lws.cmd on Windows (runs this lws through wsl.exe) and put it on the user PATH")
+    win_shim.add_argument("--dir", help="Windows folder for lws.cmd (default %%LOCALAPPDATA%%\\little-workshop\\bin)")
+    win_shim.add_argument("--lws-path", help="The WSL lws the shim runs (default: lws on PATH; pass it when PATH has none)")
+    win_shim.add_argument("--no-path", action="store_true", help="Leave the user PATH alone")
+    win_shim.add_argument("--dry-run", action="store_true", help="Print the shim and where it would go")
+    win_shim.set_defaults(func=cmd_windows_install_shim)
+
+    api = subparsers.add_parser("api", help="Tokens for the Dashboard's HTTP gateway (/api/v1/tools)")
+    api_sub = api.add_subparsers(dest="api_command", required=True)
+    token_create = api_sub.add_parser("token-create", help="A new gateway token for a project (shown once)")
+    token_create.add_argument("--project-id", required=True)
+    token_create.add_argument("--label", help="What the token is for, e.g. 'Unity editor'")
+    token_create.add_argument("--write", help="Write the token to this file (mode 0600) instead of printing it")
+    token_create.set_defaults(func=cmd_api_token_create)
+    token_list = api_sub.add_parser("token-list", help="A project's gateway tokens (never the tokens themselves)")
+    token_list.add_argument("--project-id", required=True)
+    token_list.set_defaults(func=cmd_api_token_list)
+    token_revoke = api_sub.add_parser("token-revoke", help="Revoke a project's gateway token by id")
+    token_revoke.add_argument("--project-id", required=True)
+    token_revoke.add_argument("token_id")
+    token_revoke.set_defaults(func=cmd_api_token_revoke)
+
     return parser
+
+
+def _subparser_for(parser: argparse.ArgumentParser, argv: list[str]) -> argparse.ArgumentParser:
+    """The (sub)parser the command words at the front of `argv` select (`version status` -> its parser)."""
+    current = parser
+    for word in argv:
+        if word.startswith("-"):
+            break
+        subactions = [a for a in current._actions if isinstance(a, argparse._SubParsersAction)]
+        if not subactions or word not in subactions[0].choices:
+            break
+        current = subactions[0].choices[word]
+    return current
+
+
+def _windows_argv(parser: argparse.ArgumentParser, argv: list[str], cwd: str, projects_of) -> list[str]:
+    """`lws` started by the Windows shim (docs/architecture.md, "Windows-hosted projects"): Windows paths become WSL
+    paths, and a command taking `--project-id` without one gets the registered project holding the folder the
+    shim was run from."""
+    from common import windows
+
+    argv = windows.translate_argv(argv, windows.mount_root())
+    if any(a == "--project-id" or a.startswith("--project-id=") for a in argv):
+        return argv
+    sub = _subparser_for(parser, argv)
+    if not any("--project-id" in a.option_strings for a in sub._actions):
+        return argv
+    try:
+        project = windows.project_for_cwd(cwd, projects_of())
+    except Exception:  # noqa: BLE001 - no registry answer: argparse reports the missing option as usual
+        project = None
+    return [*argv, "--project-id", project] if project else argv
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    if os.environ.get("LWS_FROM_WINDOWS"):
+        argv = _windows_argv(parser, sys.argv[1:] if argv is None else argv, os.getcwd(),
+                             lambda: client.list_projects(Paths.from_env())["projects"])
     args = parser.parse_args(argv)
     return args.func(args)
 

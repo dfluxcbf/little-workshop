@@ -28,7 +28,7 @@ STEPS: dict[str, tuple[StepSpec, ...]] = {
         StepSpec("post_result", "Post the result to GitHub and record it"),
     ),
     "agent.session_start": (
-        StepSpec("check_session", "Check dtach is installed, no session is running and the folder is trusted"),
+        StepSpec("check_session", "Check no session is running, the folder is trusted and (on WSL) dtach is installed"),
         StepSpec("launch_session", "Launch the Remote Control session"),
     ),
     "agent.export_asset": (

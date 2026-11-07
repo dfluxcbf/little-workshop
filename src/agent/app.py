@@ -54,7 +54,7 @@ def _complete_orchestration_job(paths: Paths, job_id: str, *, succeeded: bool, r
     try:
         with client_for_socket(socket_path, timeout=10.0) as client:
             client.post(f"/v1/jobs/{job_id}/complete", json={"succeeded": succeeded, "result": result, "error": error})
-    except (httpx.ConnectError, httpx.TimeoutException, OSError):
+    except (httpx.TransportError, OSError):
         pass
 
 

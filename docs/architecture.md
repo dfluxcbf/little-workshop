@@ -325,6 +325,42 @@ cross-cutting table, for the same reason every other table is: a pillar's
 audit trail is that pillar's own data, readable by any caller through its
 PI, not a table another pillar could accidentally join against.
 
+## Windows-hosted projects
+
+(2026-10-25; REQ-000000463 to REQ-000000466.) little-workshop runs in WSL and manages checkouts on a Windows drive
+(`/mnt/c/...`) like any other; what a Windows-hosted project adds is its own code running on Windows (a Unity
+editor script, a Windows service, a `.bat`), which cannot open the pillars' Unix sockets or run WSL's `lws`
+directly. Two bridges reach little-workshop from there, both ending in WSL:
+
+- **`lws.cmd`** (`lws windows install-shim`, `src/common/windows.py`): a Windows batch file on the user PATH that
+  runs WSL's `lws` through `wsl.exe` with the caller's folder as its working directory, passing the exit code back.
+  `lws` sees `LWS_FROM_WINDOWS` (carried by `WSLENV`), translates Windows path arguments to WSL paths and, where a
+  command takes `--project-id` and none was given, uses the registered project whose checkout holds the folder.
+- **The HTTP gateway**: the Dashboard, already on `127.0.0.1:8790` (which mirrored networking makes reachable
+  from Windows), serves `/api/v1/tools/...`. It checks a project's Bearer token (`common/api_tokens.py`) and
+  forwards to the MCP pillar's gateway mode, which runs the MCP tools as that project
+  (docs/pillars/mcp_server.md, "HTTP gateway"; docs/pillars/dashboard.md, "HTTP gateway").
+
+`common/windows.py` also holds the path translation (`C:\x` <-> `/mnt/c/x`, `\\wsl.localhost\<distro>\...`)
+and `is_windows_checkout`, which decides whether a project's generated briefing gets its "Windows" section.
+
+(2026-10-28.) `is_windows_checkout` also decides *where* little-workshop itself runs the two long-lived
+processes a Windows-hosted project needs — its Claude Remote Control session and its deployed server —
+rather than always forcing them into a WSL process, which is all it could do before this. Both run as
+real Windows processes instead (`common/windows_process.py`: PowerShell's own `Start-Process -PassThru`
+for a detached, hidden launch; `tasklist.exe`/`taskkill.exe /T` for liveness and tree-kill), since neither
+`dtach` (keeps a session alive, detached from its launcher) nor `systemd --user` (restarts a server on
+failure, answers "is it running") has a Windows port:
+
+- **Agentic Development** (`src/agent/session_flow.py`): a Windows-hosted session's PID is tracked in a
+  plain file (`Paths.session_windows_pid_path`) instead of matching a `dtach` socket in the WSL process
+  list — there is no WSL process to find at all.
+- **Deployment & Servers** (`src/deployment/flow.py`, `src/deployment/windows_supervisor.py`): a
+  Windows-hosted server's PID is tracked the same way (`Paths.deployment_windows_pid_path`); its manifest
+  `command` is PowerShell, the Windows-side counterpart of `bash -c`. `WindowsServerSupervisor` polls every
+  tracked PID and relaunches a dead one — little-workshop standing in for `Restart=on-failure`, since there
+  is no Windows unit to delegate that to.
+
 ## Feature mapping
 
 | Absorbed tool | Becomes | What changes |

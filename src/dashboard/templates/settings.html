@@ -29,4 +29,59 @@
   {% endfor %}
 </div>
 <p class="muted"><button type="button" class="btn" id="enable-alerts" hidden>Alert me on this device when something new fails</button></p>
+
+<h2 class="section-label">Projects</h2>
+<div class="policy-list">
+  {% for p in active_projects %}
+  <div class="polcard" data-kind="project">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ p.name }}</span>
+    </span>
+    <span class="polcard-meta">
+      <span class="chip">{{ p.path }}</span>
+      {% if p.repo_url %}<span class="chip">{{ p.repo_url }}</span>{% else %}<span class="chip">no remote</span>{% endif %}
+    </span>
+    <div class="gate-actions">
+      {% if p.repo_url %}
+      <form method="post" action="/projects/{{ p.name }}/archive">
+        <button type="submit" class="danger" data-busy="Archiving…" data-confirm="Archive {{ p.name }}? It drops out of the project list, but its registry data and checkout are kept — its remote is the backup. Restore it any time from the Archived tab below.">Archive</button>
+      </form>
+      {% else %}
+      <form method="post" action="/projects/{{ p.name }}/delete">
+        <button type="submit" class="danger" data-busy="Deleting…" data-confirm="Delete {{ p.name }}? It has no remote, so this purges its registry data and files directory for good — only its git checkout is left on disk. No undo.">Delete</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <p class="muted">No project is registered.</p>
+  {% endfor %}
+</div>
+
+<details class="section-panel" style="margin-top:1.5rem">
+  <summary>Archived ({{ archived_projects | length }})</summary>
+  <div class="policy-list" style="padding:0 12px 12px">
+    {% for p in archived_projects %}
+    <div class="polcard" data-kind="project">
+      <span class="polcard-head">
+        <span class="polcard-topic">{{ p.name }}</span>
+      </span>
+      <span class="polcard-meta">
+        <span class="chip">{{ p.path }}</span>
+        {% if p.repo_url %}<span class="chip">{{ p.repo_url }}</span>{% endif %}
+      </span>
+      <div class="gate-actions">
+        <form method="post" action="/projects/{{ p.name }}/restore">
+          <button type="submit" class="btn" data-busy="Restoring…">Restore</button>
+        </form>
+        <form method="post" action="/projects/{{ p.name }}/delete">
+          <button type="submit" class="danger" data-busy="Deleting…" data-confirm="Permanently delete {{ p.name }}? This purges its registry data and files directory for good — only its git checkout and remote (if any) survive. No undo.">Delete permanently</button>
+        </form>
+      </div>
+    </div>
+    {% else %}
+    <p class="muted">Nothing archived.</p>
+    {% endfor %}
+  </div>
+</details>
 {% endblock %}

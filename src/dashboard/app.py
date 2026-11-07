@@ -47,7 +47,7 @@ from urllib.parse import quote
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from common import redeploy_plan, serving
+from common import api_tokens, redeploy_plan, serving
 from common.job_steps import format_seconds
 from common.paths import Paths
 from common.incident import install_incident_reporting
@@ -918,6 +918,39 @@ def build_app(paths: Paths) -> FastAPI:
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    # -- HTTP gateway: the MCP tools for a project's own code, with its token (docs/pillars/dashboard.md) --------
+
+    def _gateway(request: Request, method: str, path: str, body: dict | None = None) -> JSONResponse:
+        authorization = request.headers.get("authorization", "")
+        token = authorization[7:].strip() if authorization[:7].lower() == "bearer " else None
+        project = api_tokens.project_for(paths, token)
+        if project is None:
+            return JSONResponse({"error": "unauthorized", "detail": "no valid token",
+                                 "hint": "send Authorization: Bearer <token> from `lws api token-create --project-id <project>`"},
+                                status_code=401, headers={"WWW-Authenticate": "Bearer"})
+        try:
+            status, answer = client.gateway_request(paths, method, path, project, json=body)
+        except client.PillarUnavailable as exc:
+            return JSONResponse({"error": "gateway_unavailable", "detail": str(exc),
+                                 "hint": "enable the mcp pillar in the Core manifest (docs/pillars/mcp_server.md)"},
+                                status_code=503)
+        return JSONResponse(answer, status_code=status)
+
+    @app.get("/api/v1/tools")
+    def api_tools(request: Request) -> JSONResponse:
+        return _gateway(request, "GET", "/v1/tools")
+
+    @app.post("/api/v1/tools/{name}")
+    async def api_tool_call(name: str, request: Request) -> JSONResponse:
+        try:
+            body = await request.json() if await request.body() else {}
+        except ValueError:
+            return JSONResponse({"error": "bad_json", "detail": "the body is not JSON"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "bad_json", "detail": "the body is a JSON object of the tool's arguments"},
+                                status_code=400)
+        return await asyncio.to_thread(_gateway, request, "POST", f"/v1/tools/{quote(name, safe='')}", body)
+
     @app.get("/sw.js")
     def service_worker() -> Response:
         # Served from the root so its scope covers the whole app.
@@ -955,7 +988,11 @@ def build_app(paths: Paths) -> FastAPI:
     @app.get("/settings", response_class=HTMLResponse)
     def settings(request: Request):
         items = collect_attention(paths)
-        return _render(request, "settings.html", items=items, attention_count=len(items), nav_active="settings", live_topics="attention")
+        all_projects = _try(client.list_projects, paths, default=[])
+        active_projects = sorted((p for p in all_projects if p.get("status", "active") == "active"), key=lambda p: p["name"])
+        archived_projects = sorted((p for p in all_projects if p.get("status") == "removed"), key=lambda p: p["name"])
+        return _render(request, "settings.html", items=items, attention_count=len(items), nav_active="settings", live_topics="attention",
+                       active_projects=active_projects, archived_projects=archived_projects)
 
     # -- System > Data management: delete a project's local data; keep, back up and restore its requirements ----
 
@@ -1454,6 +1491,39 @@ def build_app(paths: Paths) -> FastAPI:
             queue_key=None, depends_on=[], created_by="dashboard",
         ))
         return _back(f"/?expand={name}", "Session stopped.")
+
+    @app.post("/projects/{name}/archive")
+    def project_archive(name: str):
+        """Drops `name` out of the active project list into Settings' Archived tab, keeping its
+        registry rows, files directory and git checkout untouched — for a project whose code already
+        lives on a remote, so nothing is lost by taking it out of the active list."""
+        result = _try(lambda: client.create_job(
+            paths, type="project.archive", target_pillar="registry", project_id=name, params={"name": name},
+            queue_key=name, depends_on=[], created_by="dashboard",
+        ))
+        ok = result is not None and result.get("status") == "succeeded"
+        return _back("/settings", f"{name} archived." if ok else f"Could not archive {name}: {(result or {}).get('error', 'registry unreachable')}")
+
+    @app.post("/projects/{name}/restore")
+    def project_restore(name: str):
+        result = _try(lambda: client.create_job(
+            paths, type="project.restore", target_pillar="registry", project_id=name, params={"name": name},
+            queue_key=name, depends_on=[], created_by="dashboard",
+        ))
+        ok = result is not None and result.get("status") == "succeeded"
+        return _back("/settings", f"{name} restored." if ok else f"Could not restore {name}: {(result or {}).get('error', 'registry unreachable')}")
+
+    @app.post("/projects/{name}/delete")
+    def project_delete(name: str):
+        """Hard delete (`project.remove`): purges `name`'s registry rows and files directory, no undo.
+        The git checkout itself is left alone. Settings only offers this where there is no remote to
+        fall back on — a remote-backed project is archived instead."""
+        result = _try(lambda: client.create_job(
+            paths, type="project.remove", target_pillar="registry", project_id=name, params={"name": name},
+            queue_key=name, depends_on=[], created_by="dashboard",
+        ))
+        ok = result is not None and result.get("status") == "succeeded"
+        return _back("/settings", f"{name} deleted." if ok else f"Could not delete {name}: {(result or {}).get('error', 'registry unreachable')}")
 
     @app.get("/projects/new", response_class=HTMLResponse)
     def project_new(request: Request):

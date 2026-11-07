@@ -113,6 +113,12 @@ class Paths:
     def worktree_path(self, worktree_id: str) -> Path:
         return self.worktrees_dir / worktree_id
 
+    def deployment_windows_pid_path(self, project_id: str) -> Path:
+        """A Windows-hosted server has no `systemd --user` unit to query — this file, holding the
+        Windows PID of its `start_server` wrapper (`common/windows_process.py`), is Deployment &
+        Servers' own record of it, read by `WindowsServerSupervisor` to poll and relaunch it on crash."""
+        return self.state_home / "deployment-windows" / f"{project_id.replace('/', '-')}.pid"
+
     @property
     def sessions_dir(self) -> Path:
         """Agentic Development's ad-hoc, human-driven Remote Control
@@ -124,6 +130,11 @@ class Paths:
 
     def session_socket_path(self, project_id: str) -> Path:
         return self.sessions_dir / f"{project_id.replace('/', '-')}.sock"
+
+    def session_windows_pid_path(self, project_id: str) -> Path:
+        """A Windows-hosted project's session has no `dtach` socket to match in the process list (no
+        WSL process exists at all) — this file, holding its Windows PID, is the equivalent record."""
+        return self.sessions_dir / f"{project_id.replace('/', '-')}.winpid"
 
     @property
     def packages_dir(self) -> Path:

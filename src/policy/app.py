@@ -699,7 +699,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         try:
             with client_for_socket(socket_path, timeout=10.0) as client:
                 client.post(f"/v1/jobs/{job_id}/complete", json={"succeeded": succeeded, "result": result, "error": error})
-        except (httpx.ConnectError, httpx.TimeoutException, OSError):
+        except (httpx.TransportError, OSError):
             pass
 
     @app.post("/v1/jobs/policy.check_project")

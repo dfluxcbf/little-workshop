@@ -52,7 +52,7 @@ def _get(paths: Paths, pillar: str, path: str, *, params: dict | None = None, ti
             response = client.get(path, params=params or {})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(_failure(pillar, exc, timeout)) from exc
 
 
@@ -67,7 +67,7 @@ def _mutate(
             response = client.request(method, path, json=json or {})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(_failure(pillar, exc, timeout)) from exc
 
 
@@ -77,7 +77,7 @@ def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
             response = client.get("/v1/status")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable("Core daemon unreachable") from exc
 
 
@@ -91,7 +91,7 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
             response = client.post("/v1/jobs", json=fields)
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(_failure("orchestration", exc, timeout)) from exc
 
 

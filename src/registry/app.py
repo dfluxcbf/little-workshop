@@ -35,7 +35,7 @@ from registry.assets_config import AssetsConfigError, configure_assets
 from registry.connect_github import ConnectGitHubError, connect_github
 from registry.import_ import ProjectImportError, import_project
 from registry.models import BootstrapParams, ConnectGitHubParams, ImportParams, ProjectSet, ProjectStatus, Ticket
-from registry.removal import ProjectNotFoundError, remove_project
+from registry.removal import ProjectNotFoundError, archive_project, remove_project, restore_project
 
 
 class JobRequest(BaseModel):
@@ -202,6 +202,33 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None) -> F
         with reported(request), lock:
             try:
                 remove_project(conn, paths, name)
+            except ProjectNotFoundError:
+                return {"outcome": "failed", "error": f"project {name!r} not found"}
+        return {"outcome": "succeeded", "result": {"name": name}}
+
+    @app.post("/v1/jobs/project.archive")
+    def job_archive(request: JobRequest) -> dict:
+        """Drops a project out of the active list (Dashboard home, `status=active` queries) without
+        touching its registry rows, files directory or git checkout — the reversible counterpart to
+        `project.remove`, for a project whose code already lives on a remote."""
+        name = request.params.get("name") or request.project_id
+        if not name:
+            return {"outcome": "failed", "error": "missing project name"}
+        with reported(request), lock:
+            try:
+                archive_project(conn, name)
+            except ProjectNotFoundError:
+                return {"outcome": "failed", "error": f"project {name!r} not found"}
+        return {"outcome": "succeeded", "result": {"name": name}}
+
+    @app.post("/v1/jobs/project.restore")
+    def job_restore(request: JobRequest) -> dict:
+        name = request.params.get("name") or request.project_id
+        if not name:
+            return {"outcome": "failed", "error": "missing project name"}
+        with reported(request), lock:
+            try:
+                restore_project(conn, name)
             except ProjectNotFoundError:
                 return {"outcome": "failed", "error": f"project {name!r} not found"}
         return {"outcome": "succeeded", "result": {"name": name}}

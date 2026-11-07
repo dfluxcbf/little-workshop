@@ -3,8 +3,8 @@ import pytest
 from common.paths import Paths
 from registry import db
 from registry.bootstrap import BootstrapError, bootstrap_project
-from registry.models import BootstrapParams
-from registry.removal import ProjectNotFoundError, remove_project
+from registry.models import BootstrapParams, ProjectStatus
+from registry.removal import ProjectNotFoundError, archive_project, remove_project, restore_project
 
 
 @pytest.fixture
@@ -187,3 +187,38 @@ def test_remove_project_deletes_registry_row_and_project_files(conn, paths, tmp_
 def test_remove_project_unknown_raises(conn, paths):
     with pytest.raises(ProjectNotFoundError):
         remove_project(conn, paths, "ghost")
+
+
+def test_archive_project_drops_status_to_removed_without_touching_files(conn, paths, tmp_path):
+    dest_dir = tmp_path / "workdir"
+    dest_dir.mkdir()
+    params = BootstrapParams(name="little-widget", dest_dir=str(dest_dir))
+    bootstrap_project(conn, paths, params)
+
+    archive_project(conn, "little-widget")
+
+    project = db.get_project(conn, "little-widget")
+    assert project.status == ProjectStatus.REMOVED
+    assert paths.project_dir("little-widget").exists()
+
+
+def test_restore_project_sets_status_back_to_active(conn, paths, tmp_path):
+    dest_dir = tmp_path / "workdir"
+    dest_dir.mkdir()
+    params = BootstrapParams(name="little-widget", dest_dir=str(dest_dir))
+    bootstrap_project(conn, paths, params)
+    archive_project(conn, "little-widget")
+
+    restore_project(conn, "little-widget")
+
+    assert db.get_project(conn, "little-widget").status == ProjectStatus.ACTIVE
+
+
+def test_archive_project_unknown_raises(conn):
+    with pytest.raises(ProjectNotFoundError):
+        archive_project(conn, "ghost")
+
+
+def test_restore_project_unknown_raises(conn):
+    with pytest.raises(ProjectNotFoundError):
+        restore_project(conn, "ghost")
