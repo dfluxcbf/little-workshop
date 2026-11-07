@@ -1,17 +1,24 @@
 #!/bin/sh
 # Installed by little-workshop (`lws version install-hooks`, also run by `lws version init`).
-# Runs every Policy & Compliance policy that gates `commit` for this project against
-# the commit being made -- its message, its staged files and VERSION -- in the policy
-# sandbox, and refuses the commit when one fails, printing what to fix. If lws, the
-# daemon or Docker is unavailable it warns and lets the commit through: the same
-# policies still gate the branch finish. little-workshop's own finish and bookkeeping
-# commits run with hooks off. See little-workshop's docs/pillars/policy_compliance.md.
+# Refuses a commit that adds a secret -- a private key, a provider token or API key, an .env
+# file -- with a local scan of its staged changes: no daemon, no Docker. The other policies
+# gate the branch finish. In WSL or Linux without lws (little-workshop not installed here) it
+# warns and lets the commit through: no-committed-secrets still gates the finish. On Windows
+# (Git for Windows) without the lws shim it refuses the commit: the shim is how these checks
+# reach WSL there. little-workshop's own finish commits run with hooks off. See
+# little-workshop's docs/pillars/policy_compliance.md.
 if ! command -v lws >/dev/null 2>&1; then
-    echo "commit-msg: lws not found; commit-time policies were not checked" >&2
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*)
+            echo "commit-msg: lws not found on Windows, so the commit cannot be scanned for secrets and is refused." >&2
+            echo "  Install the shim once from WSL: lws windows install-shim  (then open a new terminal)" >&2
+            exit 1 ;;
+    esac
+    echo "commit-msg: lws not found; the commit was not scanned for secrets" >&2
     exit 0
 fi
-if ! lws policy evaluate --help >/dev/null 2>&1; then
-    echo "commit-msg: this lws predates 'lws policy evaluate'; commit-time policies were not checked" >&2
+if ! lws policy scan-secrets --help >/dev/null 2>&1; then
+    echo "commit-msg: this lws predates 'lws policy scan-secrets'; the commit was not scanned for secrets" >&2
     exit 0
 fi
-exec lws policy evaluate --project-id 'little-workshop' --gate-point commit --commit-message-file "$1" --fail-open
+exec lws policy scan-secrets
