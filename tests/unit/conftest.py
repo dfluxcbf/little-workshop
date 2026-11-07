@@ -9,6 +9,14 @@ if str(SRC) not in sys.path:
 
 
 @pytest.fixture(autouse=True)
+def _bare_windows_program_names(monkeypatch):
+    """Windows programs keep their bare names (`git.exe`) in every test, whether or not this machine has a
+    Windows drive: `windows_exe`'s folder lookup is tested on its own, against a scratch drive."""
+    from common import windows
+    monkeypatch.setattr(windows, "WINDOWS_EXE_DIRS", ())
+
+
+@pytest.fixture(autouse=True)
 def _private_state_home(tmp_path_factory, monkeypatch):
     """Every test keeps little-workshop state (the version pillar's per-project state among it) in a
     directory of its own, never the user's ~/.local/state."""

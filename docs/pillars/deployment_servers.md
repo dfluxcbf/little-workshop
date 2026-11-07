@@ -51,6 +51,8 @@ healthy, currently-running process down.
   `WindowsServerSupervisor` polls it and relaunches a dead server from its folder — little-workshop's own
   stand-in for `Restart=on-failure`. Git for every Windows-hosted project is `git.exe` (`gitutil.py`,
   REQ-000000510), except a worktree in the WSL filesystem (a test sandbox), which stays WSL git's.
+  A pillar runs under systemd with no Windows folders on its PATH, so `common.windows.windows_exe` runs
+  `git.exe`, `powershell.exe`, `tasklist.exe` and `taskkill.exe` by their absolute paths there (REQ-000000529).
 - **Tailscale exposure** — `tailscale serve` after a successful deploy,
   torn down on stop; a no-op when `[server.tailscale]` isn't configured.
 - **Confirm-gated deploys** (opt-in via `confirm_timeout_seconds`) — an

@@ -296,6 +296,7 @@ def test_the_sh_shim_forwards_the_git_hook_variables_and_the_folder():
     assert 'exec wsl.exe -d Ubuntu-26.04 --cd "$(pwd -W 2>/dev/null || pwd)" -e /home/crist/.local/bin/lws "$@"' in text
     for var in ("GIT_INDEX_FILE/p", "GIT_DIR/p", "GIT_WORK_TREE/p", windows.FROM_WINDOWS_ENV):
         assert var in text and var in windows.lws_cmd("U", "/x/lws")
+    assert 'export MSYS2_ARG_CONV_EXCL="*"' in text  # Git Bash leaves /mnt/... arguments alone
 
 
 def test_install_shim_writes_the_sh_twin_beside_lws_cmd(monkeypatch, tmp_path):
@@ -519,3 +520,48 @@ def test_the_commit_msg_hook_refuses_on_windows_without_lws_and_warns_elsewhere(
     assert windows_run.returncode == 1 and "lws windows install-shim" in windows_run.stderr
     linux_run = _commit_msg(tmp_path, "Linux")
     assert linux_run.returncode == 0 and "not scanned for secrets" in linux_run.stderr
+
+
+# --- REQ-000000529: Pillars find Windows programs without a Windows PATH ---
+def _scratch_drive(tmp_path, *programs):
+    for rel in programs:
+        target = tmp_path / "c" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("")
+    return str(tmp_path) + "/"
+
+
+def test_a_windows_program_off_path_runs_by_its_absolute_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(windows, "WINDOWS_EXE_DIRS", ("Windows/System32", "Program Files/Git/cmd"))
+    monkeypatch.setattr(windows.shutil, "which", lambda name: None)  # a systemd unit's PATH
+    root = _scratch_drive(tmp_path, "Program Files/Git/cmd/git.exe", "Windows/System32/tasklist.exe")
+    assert windows.windows_exe("git.exe", root) == str(tmp_path / "c" / "Program Files/Git/cmd/git.exe")
+    assert windows.windows_exe("tasklist.exe", root) == str(tmp_path / "c" / "Windows/System32/tasklist.exe")
+    assert windows.windows_exe("nowhere.exe", root) == "nowhere.exe"
+    command = windows.git_command(str(tmp_path / "c" / "x"), root)
+    assert windows.is_git_exe(command[0]) and command[0].endswith("/git.exe")
+
+
+def test_a_windows_program_on_path_keeps_its_bare_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(windows, "WINDOWS_EXE_DIRS", ("Windows/System32",))
+    monkeypatch.setattr(windows.shutil, "which", lambda name: "/somewhere/" + name)
+    root = _scratch_drive(tmp_path, "Windows/System32/cmd.exe")
+    assert windows.windows_exe("cmd.exe", root) == "cmd.exe"
+    assert windows.is_git_exe("git.exe") and not windows.is_git_exe("git")
+
+
+def test_process_calls_resolve_their_windows_programs(monkeypatch):
+    monkeypatch.setattr(windows_process, "windows_exe", lambda name: "/abs/" + name)
+
+    class Runner:
+        calls = []
+
+        def run(self, argv, **kwargs):
+            self.calls.append(argv)
+            return CommandResult(returncode=0, stdout="", stderr="")
+
+    runner = Runner()
+    windows_process.is_alive(runner, 7)
+    windows_process.stop(runner, 7)
+    windows_process.command_lines(runner, "Unity.exe")
+    assert [c[0] for c in runner.calls] == ["/abs/tasklist.exe", "/abs/taskkill.exe", "/abs/powershell.exe"]

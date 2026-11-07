@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from common.windows import GIT_EXE, git_command, git_path
+from common.windows import git_command, git_path, is_git_exe
 
 
 class GitError(Exception):
@@ -57,7 +57,7 @@ def _git_args(args: list[str], cwd: Path | None = None) -> list[str]:
     if not args or args[0] != "git":
         return list(args)
     git = git_command(cwd) if cwd is not None else ["git"]
-    extra = _WINDOWS_NO_EDITOR if git[0] == GIT_EXE else ()
+    extra = _WINDOWS_NO_EDITOR if is_git_exe(git[0]) else ()
     return [*git, *_NO_HOOKS, *extra, *args[1:]]
 
 
@@ -346,7 +346,7 @@ def resolve_version_only_conflicts(repo_root: Path) -> bool:
             continue
         base, ours, theirs = stages
         # In the checkout for git.exe, which reads Windows paths only (a WSL /tmp has none it can rely on).
-        tmp_parent = str(repo_root) if git_command(repo_root)[0] == GIT_EXE else None
+        tmp_parent = str(repo_root) if is_git_exe(git_command(repo_root)[0]) else None
         with tempfile.TemporaryDirectory(dir=tmp_parent, prefix=".lws-merge-") as tmp_dir:
             files = [Path(tmp_dir) / name for name in ("ours", "base", "theirs")]
             for f, content in zip(files, (ours, base, theirs)):

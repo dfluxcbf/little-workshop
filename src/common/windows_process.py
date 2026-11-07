@@ -42,6 +42,7 @@ import json
 from pathlib import Path
 
 from common.shell import CommandResult, CommandRunner
+from common.windows import windows_exe
 
 POWERSHELL = "powershell.exe"
 
@@ -65,7 +66,7 @@ def _encoded_command(script: str) -> str:
 
 
 def _run_powershell(runner: CommandRunner, script: str, *, timeout: float) -> CommandResult:
-    return runner.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand", _encoded_command(script)],
+    return runner.run([windows_exe(POWERSHELL), "-NoProfile", "-NonInteractive", "-EncodedCommand", _encoded_command(script)],
                        timeout=timeout)
 
 
@@ -128,7 +129,7 @@ def is_alive(runner: CommandRunner, pid: int, started: str | None = None, *, tim
     it, `tasklist.exe` (called directly: WSL/Windows interop resolves it on the System32 PATH entry)."""
     if started:
         return start_time(runner, pid, timeout=timeout) == started
-    result = runner.run(["tasklist.exe", "/FI", f"PID eq {pid}", "/NH"], timeout=timeout)
+    result = runner.run([windows_exe("tasklist.exe"), "/FI", f"PID eq {pid}", "/NH"], timeout=timeout)
     if not result.ok:
         return False
     return any(str(pid) in line.split() for line in result.stdout.splitlines())
@@ -149,7 +150,7 @@ def stop(runner: CommandRunner, pid: int, *, timeout: float = 10.0) -> None:
     running. A PID that is already gone is not an error (`/F` alone would be; `taskkill` on a missing
     PID exits non-zero either way, so the caller checks `is_alive` first rather than this return
     value)."""
-    runner.run(["taskkill.exe", "/PID", str(pid), "/T", "/F"], timeout=timeout)
+    runner.run([windows_exe("taskkill.exe"), "/PID", str(pid), "/T", "/F"], timeout=timeout)
 
 
 def write_pid_record(path: Path, pid: int, started: str | None, cwd: str | None = None) -> None:

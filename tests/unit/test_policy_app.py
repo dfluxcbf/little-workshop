@@ -1046,3 +1046,61 @@ def test_reimporting_replaces_the_project_selection(client, conn):
 def test_import_rejects_an_invalid_project_entry(client):
     assert "invalid project entry" in _import(client, _draft(projects=["", {"no_project_id": 1}])).json()["error"]
     assert "invalid project entry" in _import(client, _draft(projects=[{"no_project_id": 1}])).json()["error"]
+
+
+# --- REQ-000000530: All-projects policies follow the registry ---
+def _selected(client, policy_id):
+    return sorted(p["project_id"] for p in client.get(f"/v1/policies/{policy_id}").json()["projects"])
+
+
+def _gate(client):  # any gating lookup re-reads the registry
+    client.get("/v1/policies/gating-for-job", params={"project_id": "proj-a", "categories": "release"})
+
+
+def test_a_project_registered_later_is_added_and_a_removed_one_dropped(client, conn, monkeypatch):
+    policy = _seed_policy(client, conn)
+    assert _selected(client, policy["id"]) == ["proj-a", "proj-b"]
+    monkeypatch.setattr(app_module.registry_client, "list_active_project_ids", lambda paths, **kw: ["proj-a", "proj-c"])
+    _gate(client)
+    assert _selected(client, policy["id"]) == ["proj-a", "proj-c"]
+    gating = {p["project_id"]: p["gating_enabled"] for p in client.get(f"/v1/policies/{policy['id']}").json()["projects"]}
+    assert gating["proj-c"] is True
+
+
+def test_a_deselected_project_stays_out_and_a_re_registered_one_comes_back(client, conn, monkeypatch):
+    policy = _seed_policy(client, conn)
+    _set_projects(client, policy["id"], ["proj-a"])
+    _gate(client)
+    assert _selected(client, policy["id"]) == ["proj-a"]  # proj-b was offered and deselected
+    monkeypatch.setattr(app_module.registry_client, "list_active_project_ids", lambda paths, **kw: ["proj-a"])
+    _gate(client)
+    monkeypatch.setattr(app_module.registry_client, "list_active_project_ids", lambda paths, **kw: ["proj-a", "proj-b"])
+    _gate(client)
+    assert _selected(client, policy["id"]) == ["proj-a", "proj-b"]  # removed, registered again: offered again
+
+
+def test_a_project_scoped_policy_does_not_follow_the_registry_and_an_empty_answer_changes_nothing(
+        client, conn, monkeypatch):
+    single = _seed_policy(client, conn, topic="s", scope_level="project", scope_target="proj-b")
+    everyone = _seed_policy(client, conn, topic="e")
+    monkeypatch.setattr(app_module.registry_client, "list_active_project_ids", lambda paths, **kw: ["proj-a", "proj-c"])
+    _gate(client)
+    assert _selected(client, single["id"]) == ["proj-b"]
+    monkeypatch.setattr(app_module.registry_client, "list_active_project_ids", lambda paths, **kw: [])
+    _gate(client)
+    assert _selected(client, everyone["id"]) == ["proj-a", "proj-c"]
+
+
+def test_an_existing_database_counts_its_selections_as_offered(tmp_path):
+    path = tmp_path / "old.db"
+    old = db.connect(path)
+    old.execute("INSERT INTO policy_projects (policy_id, project_id, gating_enabled) VALUES ('p', 'kept', 1)")
+    old.execute("DROP TABLE policy_projects_offered")
+    old.commit()
+    old.close()
+    migrated = db.connect(path)
+    offered = [r["project_id"] for r in migrated.execute("SELECT project_id FROM policy_projects_offered")]
+    assert offered == ["kept"]
+    assert db.follow_registry(migrated, "p", {"kept", "new"}) is True
+    assert sorted(r["project_id"] for r in migrated.execute("SELECT project_id FROM policy_projects")) == ["kept", "new"]
+    migrated.close()

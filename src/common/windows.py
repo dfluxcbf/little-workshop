@@ -13,6 +13,7 @@ from __future__ import annotations
 import configparser
 import os
 import re
+import shutil
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 FROM_WINDOWS_ENV = "LWS_FROM_WINDOWS"
@@ -106,6 +107,32 @@ def is_windows_project(project, root: str | None = None) -> bool:
 
 
 GIT_EXE = "git.exe"
+# Where Windows keeps the programs the pillars call, relative to the C: drive. A pillar runs under
+# systemd, whose PATH has no Windows folders (WSL adds them only to interactive shells).
+WINDOWS_EXE_DIRS = (
+    "Windows/System32",
+    "Windows/System32/WindowsPowerShell/v1.0",
+    "Program Files/Git/cmd",
+)
+
+
+def windows_exe(name: str, root: str | None = None) -> str:
+    """The argv[0] for a Windows program (`git.exe`, `powershell.exe`, `tasklist.exe`, ...): its bare name when
+    PATH finds it, else its absolute path under the C: drive's standard folders, else the bare name (the
+    call then fails as before, with the program's name in the error)."""
+    if shutil.which(name):
+        return name
+    drive = Path(mount_root() if root is None else root) / "c"
+    for folder in WINDOWS_EXE_DIRS:
+        candidate = drive / folder / name
+        if candidate.is_file():
+            return str(candidate)
+    return name
+
+
+def is_git_exe(argv0: str) -> bool:
+    """Whether a git command's argv[0] is Windows' git.exe (bare or resolved by `windows_exe`)."""
+    return PurePosixPath(argv0).name.lower() == GIT_EXE
 
 
 def git_command(project, root: str | None = None) -> list[str]:
@@ -116,7 +143,7 @@ def git_command(project, root: str | None = None) -> list[str]:
         return ["git"]
     path = project if isinstance(project, (str, Path)) else _project_path(project)
     root = mount_root() if root is None else root
-    return [GIT_EXE, "-C", to_windows_path(path, root=root)]
+    return [windows_exe(GIT_EXE, root), "-C", to_windows_path(path, root=root)]
 
 
 def git_path(path: str | Path, project, root: str | None = None) -> str:
@@ -193,7 +220,9 @@ def lws_sh(distro: str, lws_path: str) -> str:
     return f"""#!/bin/sh
 # Installed by `lws windows install-shim` (little-workshop, src/common/windows.py). Runs WSL's lws from
 # Git Bash (a Windows git hook): same arguments, the current folder as its working directory, and the
-# hook's GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE carried across. Reinstall to update.
+# hook's GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE carried across; MSYS2_ARG_CONV_EXCL keeps Git Bash from
+# rewriting a /mnt/... argument into a Git-folder path. Reinstall to update.
+export MSYS2_ARG_CONV_EXCL="*"
 export {FROM_WINDOWS_ENV}=1
 export WSLENV="{SHIM_WSLENV}${{WSLENV:+:$WSLENV}}"
 exec wsl.exe -d {distro} --cd "$(pwd -W 2>/dev/null || pwd)" -e {lws_path} "$@"

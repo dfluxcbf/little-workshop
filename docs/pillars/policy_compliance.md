@@ -669,8 +669,11 @@ selected project, switches **gating** on or off:
   `all_projects`) survives only as authoring intent: it seeds the initial
   selection once (at activation, or at the first start after upgrading),
   and it orders precedence among several selected policies on one topic
-  (framework > project > project set > all projects). A project registered
-  later is not selected automatically.
+  (framework > project > project set > all projects). An `all_projects`
+  policy follows the registry (2026-11-07, REQ-000000530; it used to keep
+  its first selection): a project registered later is selected once, with
+  gating on, and a removed project is dropped. A project the user
+  deselects after it was offered stays out (`policy_projects_offered`).
 - *Gating is per project; where it gates is not.* `gate_points` stays a
   property of the policy — never chosen per project. Per project there is
   only on/off.
@@ -915,6 +918,9 @@ Supersedes the placeholder `policy_rules`, `policy_check_results` pair in
   replaces waivers" under "Action-gating checks." A companion
   `policy_seeded` table records which policies have had their selection
   initialised, so deselecting everything is never undone by a restart.
+- `policy_projects_offered` (added 2026-11-07) — policy id, project id: the
+  registered projects an `all_projects` policy has been offered, so a later
+  registration is selected once and a deselection sticks.
 - `policy_drafts` also carries a `projects` column (added 2026-09-22, same
   `{project_id, gating_enabled}` shape as `policy_projects`, migrated onto
   an existing database with a guarded `ALTER TABLE` since the table already

@@ -95,7 +95,7 @@ Part of little-workshop's requirements register; conventions and the other parts
 
 | ID | Description | Status |
 | --- | --- | --- |
-| REQ-000000243 | **Orchestration's own dispatch timeout for a policy check is configured above the sandbox's own ceiling.** Where a Job type genuinely runs longer than Orchestration's 20-second default dispatch timeout, `orchestration/dispatch.py`'s per-Job-type override table (`JOB_TYPE_TIMEOUTS`, the same mechanism already used for `policy.author`, `policy.activate` and `deployment.deploy`) shall carry a value safely above that Job type's own real ceiling — `policy.check_project`'s is set to 1860s, 60s above `policy/sandbox.py`'s own 1800s sandbox-check ceiling, so a real (non-skipped) check is never misreported as "target pillar unreachable" and requeued while its Docker container is still legitimately running. | done |
+| REQ-000000527 | **Orchestration's own dispatch timeout for a policy check is configured above the sandbox's own ceiling.** Where a Job type genuinely runs longer than Orchestration's 20-second default dispatch timeout, `orchestration/dispatch.py`'s per-Job-type override table (`JOB_TYPE_TIMEOUTS`, the same mechanism already used for `policy.author`, `policy.activate` and `deployment.deploy`) shall carry a value safely above that Job type's own real ceiling — `policy.check_project`'s is set to 1860s, 60s above `policy/sandbox.py`'s own 1800s sandbox-check ceiling, so a real (non-skipped) check is never misreported as "target pillar unreachable" and requeued while its Docker container is still legitimately running. | done |
 
 ## Policy check dispatched asynchronously (2026-09-23)
 

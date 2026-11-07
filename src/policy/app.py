@@ -260,6 +260,22 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 continue
             with lock:
                 db.set_policy_projects(conn, policy.id, [PolicyProject(project_id=pid) for pid in dict.fromkeys(ids)])
+        _follow_registry()
+
+    def _follow_registry() -> None:
+        """An all-projects policy covers every registered project unless the user deselected it
+        (REQ-000000530): a project registered since is added once, a removed one is dropped. Nothing
+        changes while Registry & Portfolio cannot be read."""
+        try:
+            registered = set(registry_client.list_active_project_ids(paths))
+        except RegistryReadError:
+            return
+        if not registered:  # an empty answer never deselects everything
+            return
+        with lock:
+            for policy in db.list_policies(conn):
+                if policy.scope_level == ScopeLevel.ALL_PROJECTS:
+                    db.follow_registry(conn, policy.id, registered)
 
     _seed_unseeded()
 

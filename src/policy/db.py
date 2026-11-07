@@ -97,6 +97,15 @@ CREATE TABLE IF NOT EXISTS policy_seeded (
     policy_id TEXT PRIMARY KEY
 );
 
+-- The registered projects an all-projects policy has already been offered (REQ-000000530): a project
+-- registered later is added to its selection once; one the user then deselects stays out, and a removed
+-- project leaves both tables, so registering it again offers it again.
+CREATE TABLE IF NOT EXISTS policy_projects_offered (
+    policy_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    PRIMARY KEY (policy_id, project_id)
+);
+
 -- A policy check whose sandbox is running: its Job was answered `accepted`, and only the thread that
 -- finishes the check calls Orchestration back. A row still here when the pillar starts is a check its
 -- stop cut short, which runs again (REQ-000000405).
@@ -114,7 +123,14 @@ def connect(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    had_offered = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='policy_projects_offered'").fetchone()
     conn.executescript(SCHEMA)
+    if not had_offered:
+        # Before REQ-000000530 a selection was all a policy knew: what it selects counts as offered, and a
+        # registered project it does not select is offered once, at the next follow_registry.
+        conn.execute("INSERT OR IGNORE INTO policy_projects_offered (policy_id, project_id) "
+                     "SELECT policy_id, project_id FROM policy_projects")
     # Waivers were replaced by explicit project selection; drop the legacy
     # table only when it holds nothing, never discarding a recorded exception.
     legacy = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='policy_waivers'").fetchone()
@@ -280,6 +296,7 @@ def delete_policy(conn: sqlite3.Connection, policy_id: str) -> None:
     conn.execute("DELETE FROM policy_check_results WHERE policy_id = ?", (policy_id,))
     conn.execute("DELETE FROM policy_projects WHERE policy_id = ?", (policy_id,))
     conn.execute("DELETE FROM policy_seeded WHERE policy_id = ?", (policy_id,))
+    conn.execute("DELETE FROM policy_projects_offered WHERE policy_id = ?", (policy_id,))
     conn.commit()
 
 
@@ -295,7 +312,35 @@ def set_policy_projects(conn: sqlite3.Connection, policy_id: str, projects: list
             (policy_id, project.project_id, int(project.gating_enabled)),
         )
     conn.execute("INSERT OR IGNORE INTO policy_seeded (policy_id) VALUES (?)", (policy_id,))
+    conn.executemany("INSERT OR IGNORE INTO policy_projects_offered (policy_id, project_id) VALUES (?, ?)",
+                     [(policy_id, project.project_id) for project in projects])
     conn.commit()
+
+
+def follow_registry(conn: sqlite3.Connection, policy_id: str, registered: set[str]) -> bool:
+    """Bring an all-projects policy's selection in line with the registered projects (REQ-000000530): a
+    registered project it was never offered is selected (gating on) and marked offered; a selected or
+    offered project no longer registered is dropped from both. A project offered and then deselected stays
+    out. Returns whether anything changed."""
+    selected = {row["project_id"] for row in conn.execute(
+        "SELECT project_id FROM policy_projects WHERE policy_id = ?", (policy_id,))}
+    offered = {row["project_id"] for row in conn.execute(
+        "SELECT project_id FROM policy_projects_offered WHERE policy_id = ?", (policy_id,))}
+    new = registered - offered
+    gone = (selected | offered) - registered
+    if not new and not gone:
+        return False
+    for project_id in gone:
+        conn.execute("DELETE FROM policy_projects WHERE policy_id = ? AND project_id = ?", (policy_id, project_id))
+        conn.execute("DELETE FROM policy_projects_offered WHERE policy_id = ? AND project_id = ?",
+                     (policy_id, project_id))
+    for project_id in new:
+        conn.execute("INSERT OR IGNORE INTO policy_projects (policy_id, project_id, gating_enabled) VALUES (?, ?, 1)",
+                     (policy_id, project_id))
+        conn.execute("INSERT OR IGNORE INTO policy_projects_offered (policy_id, project_id) VALUES (?, ?)",
+                     (policy_id, project_id))
+    conn.commit()
+    return True
 
 
 def find_policy_project(conn: sqlite3.Connection, *, policy_id: str, project_id: str) -> PolicyProject | None:
@@ -339,7 +384,7 @@ def purge_project(conn: sqlite3.Connection, project_id: str) -> dict:
     list and its running-check rows. The policies themselves stay."""
     removed = {
         table: conn.execute(f"DELETE FROM {table} WHERE project_id = ?", (project_id,)).rowcount
-        for table in ("policy_check_results", "policy_projects", "running_checks")
+        for table in ("policy_check_results", "policy_projects", "policy_projects_offered", "running_checks")
     }
     conn.commit()
     return removed

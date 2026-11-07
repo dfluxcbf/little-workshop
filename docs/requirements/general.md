@@ -37,3 +37,4 @@ Part of little-workshop's requirements register; conventions and the other parts
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000510 | **A Windows-hosted project's git is git.exe.** While a project's host is `windows`, the system shall run the project's git commands in the Registry & Portfolio, Deployment & Servers, Agentic Development and Version Control & Release pillars with Windows' `git.exe` (with `-C` and the checkout's Windows path, and path arguments as Windows paths), and shall keep WSL's git for a worktree of it that lies outside the Windows drive. | draft |
+| REQ-000000529 | **Pillars find Windows programs without a Windows PATH.** If a pillar's PATH does not find a Windows program the pillar runs (git.exe or powershell.exe or tasklist.exe or taskkill.exe or cmd.exe), then the system shall run that program by its absolute path under the C: drive's System32, WindowsPowerShell or Git folders. | done |

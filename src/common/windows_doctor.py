@@ -26,7 +26,7 @@ def _check(name: str, ok: bool, detail: str, hint: str = "") -> dict:
 
 def _cmd(runner: CommandRunner, line: str):
     # From a folder on the Windows drive: cmd.exe refuses a \\wsl.localhost working directory.
-    return runner.run(["cmd.exe", "/d", "/c", line], timeout=30, cwd=windows.mount_root() + "c")
+    return runner.run([windows.windows_exe("cmd.exe"), "/d", "/c", line], timeout=30, cwd=windows.mount_root() + "c")
 
 
 def _read(path: Path) -> str | None:
