@@ -48,6 +48,29 @@ def scan(root: Path) -> dict[str, dict]:
     return found
 
 
+def supersede_in_register(root: Path, old_key: str, new_key: str, title: str, description: str,
+                          status: str = "draft") -> bool:
+    """Mark `old_key`'s row of the project's `docs/requirements.md` superseded by `new_key` (appended to
+    its last cell, which is a status or a milestone depending on the project) and add `new_key`'s row
+    right after it. False, and nothing written, where there is no such row (REQ-000000448)."""
+    path = root / REGISTER_PATH
+    try:
+        lines = path.read_text(encoding="utf-8").split("\n")
+    except OSError:
+        return False
+    for index, line in enumerate(lines):
+        match = REGISTER_ROW.match(line)
+        if not match or match.group(1) != old_key:
+            continue
+        head, last = line.rstrip().rstrip("|").rsplit("|", 1)
+        lines[index] = f"{head}| {last.strip()}, superseded by {new_key} |"
+        text = (f"**{title.rstrip('.')}.** {description}".strip() if title else description).replace("|", "\\|")
+        lines.insert(index + 1, f"| {new_key} | {text} | {status} |")
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return True
+    return False
+
+
 def register(root: Path) -> dict[str, dict]:
     """key -> {"title", "description"} from the project's `docs/requirements.md` rows
     (`| REQ-… | **Title.** text | status |`), where the project keeps such a register."""

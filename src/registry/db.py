@@ -150,6 +150,12 @@ def update_project_assets_dir(conn: sqlite3.Connection, name: str, assets_dir: s
     conn.commit()
 
 
+def set_project_status(conn: sqlite3.Connection, name: str, status: ProjectStatus) -> None:
+    conn.execute("UPDATE projects SET status = ?, updated_at = ? WHERE name = ?",
+                 (status.value, _iso(datetime.now(timezone.utc)), name))
+    conn.commit()
+
+
 def delete_project(conn: sqlite3.Connection, name: str) -> None:
     """Hard delete — no soft-delete, no undo (docs/open_questions.md OQ-7)."""
     conn.execute("DELETE FROM projects WHERE name = ?", (name,))

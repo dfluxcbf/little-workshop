@@ -13,7 +13,7 @@ def main() -> None:
     paths.ensure_layout()
 
     conn = db.connect(paths.pillar_db_path("deployment"))
-    app = build_app(paths, conn)
+    app = build_app(paths, conn, start_windows_supervisor=True)
 
     serving.serve(app, paths.socket_path("deployment"))
 

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from common import systemd
+from common import systemd, windows, windows_process
 from common.job_steps import done, step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
@@ -161,7 +161,15 @@ class DeploymentFlow:
 
     # -- helpers --------------------------------------------------------
 
-    def _pids(self, manifest: ServerManifest) -> list[int]:
+    def _pids(self, project_id: str, manifest: ServerManifest, *, on_windows: bool = False) -> list[int]:
+        if on_windows:
+            # A Windows-hosted server has no WSL process for pgrep to find at all -- its tracked PID
+            # file (common/windows_process.py) is the only record of it.
+            pid_path = self.paths.deployment_windows_pid_path(project_id)
+            if not pid_path.exists():
+                return []
+            pid = int(pid_path.read_text().strip())
+            return [pid] if windows_process.is_alive(self.runner, pid) else []
         # -A/--ignore-ancestors: this pillar's own argv could itself contain
         # the configured match string as a substring; without -A a process
         # could find and kill itself.
@@ -191,21 +199,30 @@ class DeploymentFlow:
                 f"so it will not {action} it"
             )
 
-    def down(self, project_id: str, manifest: ServerManifest, *, tailscale_off: bool = True) -> DownReport:
+    def down(self, project_id: str, manifest: ServerManifest, *, on_windows: bool = False, tailscale_off: bool = True) -> DownReport:
         self._refuse_external(manifest, "stop")
         report = DownReport(manifest.name)
 
-        if systemd.is_active(_unit_key(project_id), runner=self.runner):
-            systemd.stop(_unit_key(project_id), runner=self.runner)
-            report.unit_stopped = True
-        systemd.reset_failed(_unit_key(project_id), runner=self.runner)
+        if on_windows:
+            pid_path = self.paths.deployment_windows_pid_path(project_id)
+            if pid_path.exists():
+                pid = int(pid_path.read_text().strip())
+                if windows_process.is_alive(self.runner, pid):
+                    windows_process.stop(self.runner, pid)
+                    report.pids_killed.append(pid)
+                pid_path.unlink(missing_ok=True)
+        else:
+            if systemd.is_active(_unit_key(project_id), runner=self.runner):
+                systemd.stop(_unit_key(project_id), runner=self.runner)
+                report.unit_stopped = True
+            systemd.reset_failed(_unit_key(project_id), runner=self.runner)
 
-        pids = self._pids(manifest)
-        if pids:
-            self.runner.run(["pkill", "-A", "-TERM", "-f", manifest.match])
-            report.pids_killed.extend(pids)
-            if not self._wait(lambda: not self._pids(manifest), manifest.stop_timeout_seconds):
-                self.runner.run(["pkill", "-A", "-KILL", "-f", manifest.match])
+            pids = self._pids(project_id, manifest)
+            if pids:
+                self.runner.run(["pkill", "-A", "-TERM", "-f", manifest.match])
+                report.pids_killed.extend(pids)
+                if not self._wait(lambda: not self._pids(project_id, manifest), manifest.stop_timeout_seconds):
+                    self.runner.run(["pkill", "-A", "-KILL", "-f", manifest.match])
 
         if tailscale_off and manifest.tailscale:
             if self.runner.run(["tailscale", "serve", f"--https={manifest.tailscale.https_port}", "off"]).ok:
@@ -223,25 +240,40 @@ class DeploymentFlow:
 
     # -- install / launch / expose ---------------------------------------
 
-    def install(self, manifest: ServerManifest, *, cwd: Path) -> None:
-        result = self.runner.run(manifest.install, timeout=3600, cwd=cwd)
+    def install(self, manifest: ServerManifest, *, cwd: Path, on_windows: bool = False) -> None:
+        if on_windows:
+            windows_cwd = windows.to_windows_path(cwd)
+            result = windows_process.run_foreground(self.runner, manifest.install[0], manifest.install[1:], windows_cwd, timeout=3600)
+        else:
+            result = self.runner.run(manifest.install, timeout=3600, cwd=cwd)
         if not result.ok:
             raise DeploymentError(
                 f"install failed ({' '.join(manifest.install)} exited {result.returncode}); "
                 f"the previously running version was left untouched: {(result.stderr or result.stdout)[-2000:]}"
             )
 
-    def launch(self, project_id: str, manifest: ServerManifest, *, cwd: Path) -> str:
-        result = systemd.start(
-            _unit_key(project_id),
-            ["bash", "-c", manifest.command],
-            working_directory=str(cwd),
-            environment=manifest.env or None,
-            runner=self.runner,
-        )
-        if not result.ok:
-            raise DeploymentError(f"could not launch {manifest.name}: {(result.stderr or result.stdout).strip()}")
-        how = f"systemd --user unit {systemd.unit_name(_unit_key(project_id))}"
+    def launch(self, project_id: str, manifest: ServerManifest, *, cwd: Path, on_windows: bool = False) -> str:
+        if on_windows:
+            windows_cwd = windows.to_windows_path(cwd)
+            try:
+                pid = windows_process.start_server(self.runner, manifest.command, windows_cwd, manifest.env or None)
+            except windows_process.WindowsProcessError as exc:
+                raise DeploymentError(f"could not launch {manifest.name}: {exc}") from exc
+            pid_path = self.paths.deployment_windows_pid_path(project_id)
+            pid_path.parent.mkdir(parents=True, exist_ok=True)
+            pid_path.write_text(str(pid))
+            how = f"a native Windows process (pid {pid})"
+        else:
+            result = systemd.start(
+                _unit_key(project_id),
+                ["bash", "-c", manifest.command],
+                working_directory=str(cwd),
+                environment=manifest.env or None,
+                runner=self.runner,
+            )
+            if not result.ok:
+                raise DeploymentError(f"could not launch {manifest.name}: {(result.stderr or result.stdout).strip()}")
+            how = f"systemd --user unit {systemd.unit_name(_unit_key(project_id))}"
         if not wait_for_port(manifest.port, manifest.ready_timeout_seconds, sleep=self.sleep, probe=self.probe, clock=self.clock):
             raise DeploymentError(
                 f"{manifest.name} did not start listening on port {manifest.port} within "
@@ -276,22 +308,23 @@ class DeploymentFlow:
         project's own checkout — and only stop the currently running
         version and launch the new one once that succeeds. A bad
         build/install must never take a running server down."""
+        on_windows = windows.is_windows_checkout(project_dir)
         worktree = self.paths.worktree_path(f"deploy-{project_id}")
         try:
             with step("install") as handle:
                 gitutil.add_worktree(project_dir, commitish, worktree)
                 version = (worktree / "VERSION").read_text(encoding="utf-8").strip() if (worktree / "VERSION").exists() else "?"
                 commit = gitutil.current_commit(worktree)
-                self.install(manifest, cwd=worktree)
+                self.install(manifest, cwd=worktree, on_windows=on_windows)
                 handle.detail = f"version {version} at {commit[:12]}"
             with step("stop_old"):
-                self.down(project_id, manifest, tailscale_off=False)
+                self.down(project_id, manifest, on_windows=on_windows, tailscale_off=False)
             # Not cwd=worktree: the worktree is removed right after this call
             # returns, but the launched process's working directory has to
-            # keep existing for as long as the unit does (Restart=on-failure
-            # cds into it again on every restart).
+            # keep existing for as long as the unit (or, on Windows, the
+            # supervisor's next relaunch) does.
             with step("launch") as handle:
-                how = self.launch(project_id, manifest, cwd=self.paths.state_home)
+                how = self.launch(project_id, manifest, cwd=self.paths.state_home, on_windows=on_windows)
                 handle.detail = how
         finally:
             gitutil.remove_worktree(project_dir, worktree)
@@ -381,12 +414,17 @@ class DeploymentFlow:
 
     # -- status -----------------------------------------------------------
 
-    def status(self, conn: sqlite3.Connection, project_id: str, manifest: ServerManifest) -> ServerStatus:
-        if manifest.external and manifest.unit:
+    def status(self, conn: sqlite3.Connection, project_id: str, manifest: ServerManifest, *, on_windows: bool = False) -> ServerStatus:
+        if on_windows:
+            pids = self._pids(project_id, manifest, on_windows=True)
+            unit = "active" if pids else "inactive"
+        elif manifest.external and manifest.unit:
             checked = self.runner.run(["systemctl", "--user", "is-active", manifest.unit])
             unit = "active" if checked.stdout.strip() == "active" else "inactive"
+            pids = self._pids(project_id, manifest)
         else:
             unit = "active" if systemd.is_active(_unit_key(project_id), runner=self.runner) else "inactive"
+            pids = self._pids(project_id, manifest)
         cached = db.get_server_state(conn, project_id)
         branch = cached["branch"] if cached else "?"
         version = cached["version"] if cached else "?"
@@ -396,7 +434,7 @@ class DeploymentFlow:
         else:
             ts = "n/a"
         return ServerStatus(
-            name=manifest.name, unit=unit, pids=self._pids(manifest), listening=self.probe(manifest.port),
+            name=manifest.name, unit=unit, pids=pids, listening=self.probe(manifest.port),
             tailscale=ts, branch=branch, version=version, external=manifest.external,
         )
 

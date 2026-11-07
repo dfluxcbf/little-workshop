@@ -3,6 +3,7 @@ socket, real ECONNREFUSED" style test_mcp_client.py already uses for
 mcp_server.client, since dashboard.client is a deliberate duplicate of
 that exact pattern for a third thin proxy."""
 
+import httpx
 import pytest
 from fastapi import FastAPI
 
@@ -277,3 +278,29 @@ def test_job_cleanup_calls_raise_when_orchestration_is_down(paths):
         client.job_cleanup(paths, 7)
     with pytest.raises(client.PillarUnavailable):
         client.job_cleanup_preview(paths, [7])
+
+
+# --- REQ-000000144: Every panel degrades to a visible "UNREACHABLE" banner, never a 500, when the pillar behind it is down ---
+
+
+@pytest.mark.parametrize("error", [httpx.ReadError("Connection reset by peer"), httpx.RemoteProtocolError("Server disconnected")])
+def test_a_pillar_that_drops_the_connection_mid_request_is_unavailable_not_a_crash(paths, monkeypatch, error):
+    """A pillar being redeployed resets the connections it still holds while it shuts down."""
+    class Dropping:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, *a, **kw):
+            raise error
+
+        request = post = get
+
+    monkeypatch.setattr(client, "resolve_pillar_socket", lambda *a, **kw: paths.socket_path("orchestration"))
+    monkeypatch.setattr(client, "client_for_socket", lambda *a, **kw: Dropping())
+    with pytest.raises(client.PillarUnavailable):
+        client.list_jobs(paths)
+    with pytest.raises(client.PillarUnavailable):
+        client.create_job(paths, type="noop", target_pillar="reference")

@@ -52,7 +52,7 @@ def _get(paths: Paths, pillar: str, path: str, *, params: dict | None = None, ti
             response = client.get(path, params=params or {})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(_failure(pillar, exc, timeout)) from exc
 
 
@@ -67,7 +67,7 @@ def _mutate(
             response = client.request(method, path, json=json or {})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(_failure(pillar, exc, timeout)) from exc
 
 
@@ -77,7 +77,7 @@ def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
             response = client.get("/v1/status")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable("Core daemon unreachable") from exc
 
 
@@ -91,7 +91,7 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
             response = client.post("/v1/jobs", json=fields)
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(_failure("orchestration", exc, timeout)) from exc
 
 
@@ -375,3 +375,31 @@ def set_queue_capacity(paths: Paths, queue_key: str, capacity: int, *, timeout: 
         paths, "orchestration", "POST", f"/v1/queue_keys/{queue_key}/capacity",
         json={"capacity": capacity}, timeout=timeout,
     )
+
+
+def generation_get(paths: Paths, path: str, *, params: dict | None = None, timeout: float = 30.0) -> dict:
+    return _get(paths, "generation", path, params={k: v for k, v in (params or {}).items() if v is not None}, timeout=timeout)
+
+
+def generation_send(paths: Paths, method: str, path: str, *, json: dict | None = None, timeout: float = 30.0) -> dict:
+    return _mutate(paths, "generation", method, path, json=json, timeout=timeout)
+
+
+def generation_wait(paths: Paths, request_id: str, project_id: str, timeout_seconds: float) -> dict:
+    """The pillar's long poll; the request may take as long as the wait itself, plus a margin."""
+    return _get(paths, "generation", f"/v1/requests/{request_id}/wait", params={"project_id": project_id, "timeout": timeout_seconds},
+                timeout=timeout_seconds + 15.0)
+
+
+def generation_file(paths: Paths, request_id: str, name: str, *, timeout: float = 60.0) -> bytes:
+    """One picture's bytes, straight from the pillar's socket (no Dashboard in between)."""
+    socket_path = resolve_pillar_socket(paths, "generation", timeout=timeout)
+    if socket_path is None:
+        raise PillarUnavailable("generation daemon unreachable — Core has no socket for it registered")
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.get(f"/v1/requests/{request_id}/files/{name}")
+        response.raise_for_status()
+        return response.content
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
+        raise PillarUnavailable(_failure("generation", exc, timeout)) from exc

@@ -1528,3 +1528,14 @@ def test_policy_author_save_draft_flags_are_forwarded(paths, capsys, monkeypatch
 def test_there_is_no_cli_command_to_approve_a_draft(paths, capsys):
     with pytest.raises(SystemExit):
         main.main(["policy", "draft", "approve", "d1"])
+
+
+# --- REQ-000000448: lws requirements supersede --------------------------------------------------
+
+def test_requirements_supersede_builds_expected_job_params(paths, capsys, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(main.client, "create_job", lambda p, **kw: (captured.update(kw), {"status": "succeeded"})[1])
+    assert main.main(["requirements", "supersede", "--project-id", "p1", "r1", "--key", "REQ-2",
+                      "--description", "The system shall x.", "--title", "X"]) == 0
+    assert captured["type"] == "requirements.supersede_requirement"
+    assert captured["params"] == {"requirement_id": "r1", "key": "REQ-2", "description": "The system shall x.", "title": "X"}

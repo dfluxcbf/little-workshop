@@ -99,7 +99,7 @@ def resolve_gating_policies(
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.get("/v1/policies/gating-for-job", params={"project_id": project_id, "categories": ",".join(sorted(categories)), "origin": origin})
         response.raise_for_status()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         # Policy & Compliance unreachable right now: this pass treats
         # that the same as "no policy currently governs this Job" —
         # dispatch proceeds ungated rather than blocking indefinitely.

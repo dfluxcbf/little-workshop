@@ -47,7 +47,7 @@ def probe_health(
             if response.status_code == 200:
                 return HealthResult(ok=True, attempts=attempt, report=response.json())
             last_error = f"status {response.status_code}"
-        except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        except (httpx.TransportError, OSError) as exc:
             last_error = str(exc)
 
         if attempt < max_retries:

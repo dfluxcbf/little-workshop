@@ -428,6 +428,14 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             db.delete_policy(conn, policy_id)
         return {"outcome": "succeeded", "result": {"policy_id": policy_id}}
 
+    @app.post("/v1/jobs/policy.purge_project")
+    def job_purge_project(request: JobRequest) -> dict:
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        with lock:
+            removed = db.purge_project(conn, request.project_id)
+        return {"outcome": "succeeded", "result": removed}
+
     # -- drafts: Gates 1-3 output awaiting a human's Gate 4 in the Dashboard ----
 
     def _draft_from_params(raw: dict) -> tuple[PolicyDraft | None, str | None]:
@@ -691,7 +699,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
         try:
             with client_for_socket(socket_path, timeout=10.0) as client:
                 client.post(f"/v1/jobs/{job_id}/complete", json={"succeeded": succeeded, "result": result, "error": error})
-        except (httpx.ConnectError, httpx.TimeoutException, OSError):
+        except (httpx.TransportError, OSError):
             pass
 
     @app.post("/v1/jobs/policy.check_project")

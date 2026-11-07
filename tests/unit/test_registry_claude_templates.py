@@ -570,3 +570,32 @@ def test_only_workshop_itselfs_shared_section_administers_little_workshop():
     other = claude_templates.shared_briefing_md(PROJECT)
     assert "administers little-workshop" in own and "administers" not in other
     assert "policy authoring and project registration belong in" in other
+
+
+# --- REQ-000000447: the newest request outranks earlier decisions -----------------------------
+
+def test_the_shared_section_says_the_newest_request_outranks_earlier_decisions():
+    for text in (claude_templates.shared_briefing_md(PROJECT),
+                 claude_templates.shared_briefing_md("little-workshop", platform=True)):
+        assert claude_templates.NEWEST_REQUEST_WINS in text
+    for needle in ("newest request outranks", "memories", "requirement rows", "say what you changed", "in full"):
+        assert needle in claude_templates.NEWEST_REQUEST_WINS
+
+
+def test_settings_register_the_reminder_for_every_prompt():
+    (entry,) = claude_templates.settings(PROJECT)["hooks"]["UserPromptSubmit"]
+    assert "matcher" not in entry
+    (hook,) = entry["hooks"]
+    assert hook["command"] == f'python3 "${{CLAUDE_PROJECT_DIR}}"/{claude_templates.REMINDER_PATH}'
+    assert claude_templates.claude_files(PROJECT)[claude_templates.REMINDER_PATH] == claude_templates.newest_request_reminder_py()
+    assert claude_templates.REMINDER_PATH in claude_templates.generated_files_reasons()
+
+
+@pytest.mark.parametrize("stdin", ['{"hook_event_name": "UserPromptSubmit", "prompt": "make it blue"}', "not json"])
+def test_the_reminder_adds_the_rule_to_the_prompts_context(tmp_path, stdin):
+    script = tmp_path / "newest_request_reminder.py"
+    script.write_text(claude_templates.newest_request_reminder_py())
+    run = subprocess.run([sys.executable, str(script)], input=stdin, capture_output=True, text=True, check=True)
+    out = json.loads(run.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "UserPromptSubmit"
+    assert out["additionalContext"] == "little-workshop: " + claude_templates.NEWEST_REQUEST_WINS.replace("\n", " ")

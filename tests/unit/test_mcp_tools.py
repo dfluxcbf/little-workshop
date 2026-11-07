@@ -1195,3 +1195,32 @@ def test_backlog_tools_list_get_add_and_delete_within_the_named_project(paths, m
         tools_mod.TOOLS_BY_NAME["workshop_project_backlog_delete"].handler(paths, {"project_id": "little-home", "entry_id": "e1"})
     assert deleted == []  # another project's entry is never deleted
     assert tools_mod.TOOLS_BY_NAME["workshop_project_backlog_delete"].handler(paths, {"project_id": "little-meals", "entry_id": "e1"})["deleted"]
+
+
+# --- REQ-000000448: workshop_requirements_supersede ---------------------------------------------
+
+def test_requirements_supersede_builds_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_requirements_supersede"].handler(paths, {
+        "project_id": "p1", "requirement_id": "r1", "key": "REQ-2", "description": "The system shall x.",
+        "register_status": "M9",
+    })
+    call = fake_create_job[0]
+    assert call["type"] == "requirements.supersede_requirement" and call["project_id"] == "p1"
+    assert call["params"] == {"requirement_id": "r1", "key": "REQ-2", "description": "The system shall x.", "register_status": "M9"}
+
+
+# --- REQ-000000439: Image Generation is an optional pillar reached through lws, the MCP server and the Dashboard ---
+
+
+def test_generation_tools_name_their_project_except_the_queue_wide_ones():
+    """The handlers are exercised in test_generation.py; here, which take a project."""
+    scoped = ["workshop_generation_submit", "workshop_generation_status", "workshop_generation_list",
+              "workshop_generation_cancel", "workshop_generation_delete_files", "workshop_generation_wait",
+              "workshop_generation_download", "workshop_generation_picture_setup"]
+    for name in scoped:
+        assert "project_id" in tools_mod.TOOLS_BY_NAME[name].input_schema["required"]
+    for name in ("workshop_generation_queue", "workshop_generation_resume", "workshop_generation_gpu", "workshop_generation_models",
+                 "workshop_generation_recipes", "workshop_generation_recipe_save"):
+        assert "project_id" not in tools_mod.TOOLS_BY_NAME[name].input_schema["properties"]
+    # A recipe is named `recipe`, never `name`: the guard holds a tool's `name` to the session's project.
+    assert "name" not in tools_mod.TOOLS_BY_NAME["workshop_generation_recipe_save"].input_schema["properties"]

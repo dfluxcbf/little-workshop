@@ -24,3 +24,4 @@ right.
 | [Dashboard](dashboard.md) | Not yet built (M14) |
 | [MCP Server](mcp_server.md) | Built (M7) |
 | [Usage & Efficiency](usage.md) | Built (M19–M22): collection, findings, automation mining, token-aware operation; not yet deployed on this machine |
+| [Image Generation](generation.md) | Built (M23): a ComfyUI queue with grey-output recovery; optional, not yet in this machine's manifest |

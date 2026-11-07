@@ -80,6 +80,37 @@ its checklist so the question can be relayed.
   it is never itself discovered through Core by another pillar, since
   nothing calls *into* MCP Server except its own MCP client.
 
+## HTTP gateway (2026-10-25)
+
+REQ-000000465. A second face of this pillar, for code that can reach HTTP but not MCP over stdio, chiefly a
+Windows-hosted project's own code (docs/architecture.md, "Windows-hosted projects"). `python -m mcp_server
+gateway` (`mcp_server/gateway.py`) serves the tool catalog on the pillar's socket (`mcp.sock`); unlike the stdio
+server, it is supervised by Core once the manifest enables the pillar with that command:
+
+```toml
+[pillars.mcp]
+enabled = true
+command = ["/home/crist/.local/share/pipx/venvs/little-workshop/bin/python3", "-m", "mcp_server", "gateway"]
+```
+
+The Dashboard is its only caller: it authenticates the project's token and passes the project in
+`X-Little-Workshop-Project`.
+
+| Route | What |
+|---|---|
+| `GET /v1/health` | Liveness |
+| `GET /v1/tools` | The tools the gateway runs, with their input schemas (MCP shape) |
+| `POST /v1/tools/{name}` | Run one; the body is the tool's arguments. `{tool, project_id, is_error, result}` |
+
+The gateway acts as the project, as a Claude session in it would without a prompt: it runs the tools
+`common/tool_access.py` classifies read-only, routine or gated (a gated one is still held by its policies), fills
+the project into `project_id`, and into `name` for the tools that name a project, when the caller left it out, and
+refuses with 403 the tools classified ask (decisions that stand in for a human) or platform (administering
+little-workshop), and any call naming another project, the scope guard's rule. 404 for an unknown tool, 422 for
+missing or unknown arguments, 503 when the pillar a tool needs is down. The classification moved from
+`registry/claude_templates.py` to `common/tool_access.py` so both pillars read one list without importing each
+other's source.
+
 ## Asset-review server (2026-10-09)
 
 A second, per-project MCP server lives beside this one: `lws asset-mcp serve --project-id <id>` (`src/asset_mcp/`),

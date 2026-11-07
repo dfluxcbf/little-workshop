@@ -72,7 +72,7 @@ def test_unity_template_writes_the_unity_layout_not_the_python_one(unity_project
         ".claude/little-workshop.md", ".claude/rules/claude-instructions.md",
         ".claude/skills/workshop-lifecycle/SKILL.md",
         ".claude/skills/policies-digest/SKILL.md", ".claude/skills/policies-digest/scripts/digest.py",
-        ".claude/hooks/test_output_filter.py",
+        ".claude/hooks/test_output_filter.py", ".claude/hooks/newest_request_reminder.py",
     ])
     assert not (dest / "MODULE.bazel").exists()
     assert not (dest / "src").exists()

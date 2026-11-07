@@ -39,6 +39,13 @@ healthy, currently-running process down.
   then `pgrep`/`pkill -TERM` by the configured match string, escalating
   to `pkill -KILL` past a timeout, then confirms the port is actually
   free.
+- **A Windows-hosted project's server** (`is_windows_checkout`, 2026-10-28, REQ-000000467) — runs as a
+  real Windows process instead (`common/windows_process.py`; docs/architecture.md's "Windows-hosted
+  projects"), since there is no Windows `systemd --user` to launch, stop or query: `install`/`launch`
+  go through PowerShell (the manifest's `command` is written in PowerShell on this side, the
+  counterpart of `bash -c`'s bash), and the launched PID is tracked in a plain file
+  (`Paths.deployment_windows_pid_path`) instead of a unit. `WindowsServerSupervisor` polls every
+  tracked PID and relaunches a dead one — little-workshop's own stand-in for `Restart=on-failure`.
 - **Tailscale exposure** — `tailscale serve` after a successful deploy,
   torn down on stop; a no-op when `[server.tailscale]` isn't configured.
 - **Confirm-gated deploys** (opt-in via `confirm_timeout_seconds`) — an

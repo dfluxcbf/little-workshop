@@ -325,6 +325,17 @@ def unseeded_policies(conn: sqlite3.Connection) -> list[Policy]:
 # -- policy check results -----------------------------------------------------
 
 
+def purge_project(conn: sqlite3.Connection, project_id: str) -> dict:
+    """Remove everything recorded about a project: its check results, its place in every policy's project
+    list and its running-check rows. The policies themselves stay."""
+    removed = {
+        table: conn.execute(f"DELETE FROM {table} WHERE project_id = ?", (project_id,)).rowcount
+        for table in ("policy_check_results", "policy_projects", "running_checks")
+    }
+    conn.commit()
+    return removed
+
+
 def add_running_check(conn: sqlite3.Connection, job_id: str, project_id: str, params: dict) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO running_checks (job_id, project_id, params, started_at) VALUES (?, ?, ?, ?)",

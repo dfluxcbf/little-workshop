@@ -23,7 +23,7 @@ from common.paths import Paths
 # `report_crash`: the route handler below is itself called report_incident.
 from common.incident import install_incident_reporting, report_incident as report_crash
 from common.pillar_socket import resolve_pillar_socket
-from common.registry_client import ProjectResolutionError, resolve_project
+from common.registry_client import ProjectResolutionError, registered_project_ids, resolve_project
 from common.uds_client import client_for_socket
 from common.workspace import WORKSPACE_ID, workspace_dir
 from agent import assets as asset_review, db, peek, procs, review_store
@@ -54,7 +54,7 @@ def _complete_orchestration_job(paths: Paths, job_id: str, *, succeeded: bool, r
     try:
         with client_for_socket(socket_path, timeout=10.0) as client:
             client.post(f"/v1/jobs/{job_id}/complete", json={"succeeded": succeeded, "result": result, "error": error})
-    except (httpx.ConnectError, httpx.TimeoutException, OSError):
+    except (httpx.TransportError, OSError):
         pass
 
 
@@ -151,6 +151,12 @@ def build_app(
         """Report the Job's steps while the code inside runs (a worker thread installs its own)."""
         return reporting(StepReporter(paths, job_id))
 
+    # The database file, read once here: `read` and `write_apart` run on other threads, and asking the shared
+    # connection for its file there, without `lock`, raced its other users and crashed the interpreter when it
+    # was being closed (2026-10-24). Empty for an in-memory database, whose only connection is the shared one.
+    row = conn.execute("PRAGMA database_list").fetchone()
+    db_file = row[2] if row else ""
+
     def read(fn, *args, **kwargs):
         """Reads must never queue behind `lock`: `agent.run_task`'s worker
         holds it for the whole of a run (up to an hour), and the Dashboard's
@@ -158,8 +164,6 @@ def build_app(
         unreachable for exactly as long as it is busiest. A short-lived
         read-only connection (WAL) sidesteps it; an in-memory database
         (tests) has no file to reopen, so it falls back to the shared one."""
-        row = conn.execute("PRAGMA database_list").fetchone()
-        db_file = row[2] if row else ""
         if not db_file:
             with lock:
                 return fn(conn, *args, **kwargs)
@@ -173,8 +177,6 @@ def build_app(
     def write_apart(fn, *args, **kwargs):
         """A short write on a connection of its own, for the same reason as `read`: a query must not
         wait for `lock` while a task run holds it."""
-        row = conn.execute("PRAGMA database_list").fetchone()
-        db_file = row[2] if row else ""
         if not db_file:
             with lock:
                 return fn(conn, *args, **kwargs)
@@ -768,6 +770,10 @@ def build_app(
         missing = [k for k in ("project_id", "pillar", "exception_type") if not body.get(k)]
         if missing:
             raise HTTPException(status_code=422, detail=f"missing: {', '.join(missing)}")
+        registered = registered_project_ids(paths)
+        if registered is not None and body["project_id"] not in registered:
+            # A project that is no longer registered raises no incidents; an unreachable registry quiets nothing.
+            return {"id": None, "ignored": f"project {body['project_id']!r} is not registered"}
         incident_id = db.new_incident_id()
         # Not under `lock`: a task run holds it for an hour, and a crash report must not wait for it.
         write_apart(
@@ -795,6 +801,12 @@ def build_app(
         if incident is None:
             raise HTTPException(status_code=404, detail="incident not found")
         return incident
+
+    @app.post("/v1/jobs/agent.purge_project")
+    def job_purge_project(request: JobRequest) -> dict:
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        return {"outcome": "succeeded", "result": write_apart(db.purge_project, request.project_id)}
 
     @app.post("/v1/jobs/agent.confirm_incident")
     def job_confirm_incident(request: JobRequest) -> dict:

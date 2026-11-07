@@ -18,6 +18,7 @@ documents for MCP Server.
 from __future__ import annotations
 
 from datetime import datetime
+from urllib.parse import quote
 
 import httpx
 
@@ -40,7 +41,7 @@ def _get(paths: Paths, pillar: str, path: str, *, params: dict | None = None, ti
             response = client.get(path, params=params or {})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
 
 
@@ -50,7 +51,7 @@ def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
             response = client.get("/v1/status")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable("Core daemon unreachable") from exc
 
 
@@ -64,7 +65,7 @@ def create_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
             response = client.post("/v1/jobs", json=fields)
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable("orchestration daemon unreachable") from exc
 
 
@@ -77,7 +78,7 @@ def _send(paths: Paths, pillar: str, method: str, path: str, *, json: dict | Non
             response = client.request(method, path, json=json)
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(f"{pillar} daemon unreachable or refused the request") from exc
 
 
@@ -161,7 +162,7 @@ def job_cleanup(paths: Paths, older_than_hours: int, *, timeout: float = 60.0) -
             response = client.post("/v1/job-cleanup", json={"older_than_hours": older_than_hours})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable("orchestration daemon unreachable") from exc
 
 
@@ -222,7 +223,7 @@ def policy_script_link(paths: Paths, script: str, *, timeout: float = 5.0) -> di
             response = client.post("/v1/policy-scripts/locate", json={"script": script})
         response.raise_for_status()
         body = response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError, ValueError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError, ValueError):
         return None
     return body if body.get("found") else None
 
@@ -248,7 +249,7 @@ def _get_optional(paths: Paths, pillar: str, path: str, *, params: dict | None =
             return None
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
 
 
@@ -348,6 +349,30 @@ def requirement_conflicts_version(paths: Paths, *, timeout: float = 3.0) -> str:
     return _get(paths, "requirements", "/v1/conflicts/version", timeout=timeout)["version"]
 
 
+def requirement_projects(paths: Paths) -> list[dict]:
+    """Every project id with stored requirement data (registered or not) and how much of it."""
+    return _get(paths, "requirements", "/v1/projects", timeout=10.0)
+
+
+def requirements_export(paths: Paths, project_id: str) -> dict:
+    return _get(paths, "requirements", f"/v1/export/{project_id}", timeout=120.0)
+
+
+def requirements_import(paths: Paths, project_id: str, data: dict) -> dict:
+    """Put a backup into `project_id`. Called on the pillar's Job route directly, not as an orchestration Job:
+    the backup (every test result the project ever recorded) would otherwise be stored in the Job's params."""
+    return _send(paths, "requirements", "POST", "/v1/jobs/requirements.import_project",
+                 json={"job_id": "dashboard-import", "project_id": project_id, "params": {"data": data}}, timeout=300.0)
+
+
+def running_job_ids(paths: Paths, project_id: str) -> list[str]:
+    return [job["id"] for job in list_jobs(paths, status="running", project_id=project_id, summary=True)]
+
+
+def purge_orchestration(paths: Paths, project_id: str) -> dict:
+    return _send(paths, "orchestration", "POST", f"/v1/projects/{project_id}/purge")
+
+
 def requirements_list(paths: Paths, project_id: str) -> list[dict]:
     return _get(paths, "requirements", "/v1/requirements", params={"project_id": project_id}, timeout=10.0)
 
@@ -386,7 +411,7 @@ def _call(paths: Paths, pillar: str, method: str, path: str, *, params: dict | N
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.request(method, path, params=params or {}, json=json)
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+    except (httpx.TransportError, OSError) as exc:
         raise PillarUnavailable(f"{pillar} daemon unreachable") from exc
     if 400 <= response.status_code < 500:
         try:
@@ -547,7 +572,7 @@ def agent_remote_control_act(paths: Paths, job_id: str, action: str, *, project_
     try:
         with client_for_socket(socket_path, timeout=30.0) as client:
             response = client.post(f"/v1/remote-control/{job_id}/{action}", params={"project_id": project_id})
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+    except (httpx.TransportError, OSError) as exc:
         raise PillarUnavailable("agent daemon unreachable") from exc
     if response.status_code in (404, 409):
         raise RemoteControlRefused(str(response.json().get("detail") or "refused"))
@@ -561,3 +586,102 @@ def agent_remote_control_act(paths: Paths, job_id: str, action: str, *, project_
 def agent_run_for_job(paths: Paths, job_id: str) -> dict | None:
     """The task (agent run) an `agent.run_task` Job started, if it has one yet."""
     return _get_optional(paths, "agent", f"/v1/runs/by-job/{job_id}")
+
+
+# The HTTP gateway's longest call is a tool that waits (workshop_job_wait: at most 300 s), plus the handler's own time.
+GATEWAY_TIMEOUT_SECONDS = 330.0
+
+
+def gateway_request(paths: Paths, method: str, path: str, project_id: str, *, json: dict | None = None,
+                    timeout: float = GATEWAY_TIMEOUT_SECONDS) -> tuple[int, dict]:
+    """A call to the MCP pillar's HTTP gateway as `project_id` (docs/pillars/mcp_server.md, "HTTP gateway"). The
+    gateway's own answer is passed on, refusals included: (status, body)."""
+    socket_path = resolve_pillar_socket(paths, "mcp", timeout=5.0)
+    if socket_path is None:
+        raise PillarUnavailable("the MCP gateway is not running — Core has no socket for the mcp pillar registered")
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.request(method, path, json=json,
+                                      headers={"X-Little-Workshop-Project": project_id})
+        return response.status_code, response.json()
+    except (httpx.TransportError, OSError, ValueError) as exc:
+        raise PillarUnavailable("the MCP gateway is unreachable") from exc
+
+
+def generation_call(paths: Paths, method: str, path: str, *, timeout: float = 30.0) -> httpx.Response:
+    """Image Generation's request routes, passed on as they answer (JSON, a picture, or a text list)."""
+    return _call(paths, "generation", method, path, timeout=timeout)
+
+
+def generation_queue(paths: Paths) -> dict:
+    return _call(paths, "generation", "GET", "/v1/queue", timeout=5.0).json()
+
+
+def generation_gpu(paths: Paths, *, measure: bool) -> dict:
+    """The GPU usage report; without `measure`, only a sample the pillar already holds (a page load never waits)."""
+    params = {} if measure else {"cached_only": "true", "max_age": 600}
+    return _call(paths, "generation", "GET", "/v1/gpu", params=params, timeout=60.0 if measure else 5.0).json()
+
+
+def generation_requests(paths: Paths, *, status: str | None = None, project_id: str | None = None, limit: int = 100,
+                        offset: int = 0) -> list[dict]:
+    params = {"limit": limit, "offset": offset, **({"status": status} if status else {}), **({"project_id": project_id} if project_id else {})}
+    return _call(paths, "generation", "GET", "/v1/requests", params=params).json()
+
+
+def generation_models(paths: Paths) -> dict:
+    return _call(paths, "generation", "GET", "/v1/models", timeout=5.0).json()
+
+
+def generation_submit(paths: Paths, body: dict) -> dict:
+    """Queue a request; the pillar refuses (422) an unknown model or LoRA, a bad size or a model not installed."""
+    return _call(paths, "generation", "POST", "/v1/requests", json=body).json()
+
+
+def generation_request(paths: Paths, request_id: str) -> dict:
+    return _call(paths, "generation", "GET", f"/v1/requests/{quote(request_id)}", params={"images": "true"}).json()
+
+
+def generation_cancel(paths: Paths, request_id: str) -> dict:
+    return _call(paths, "generation", "POST", f"/v1/requests/{quote(request_id)}/cancel").json()
+
+
+def generation_delete_files(paths: Paths, request_id: str) -> dict:
+    return _call(paths, "generation", "DELETE", f"/v1/requests/{quote(request_id)}/files").json()
+
+
+def generation_resume(paths: Paths, *, retry_failed: bool) -> dict:
+    return _call(paths, "generation", "POST", "/v1/queue/resume", json={"retry_failed": retry_failed}).json()
+
+
+def generation_image_graph(paths: Paths, request_id: str, idx: int) -> dict:
+    """A picture's ComfyUI graph, its outputs and its nodes as rows."""
+    return _call(paths, "generation", "GET", f"/v1/requests/{quote(request_id)}/images/{idx}/graph").json()
+
+
+def generation_recipes(paths: Paths) -> dict:
+    return _call(paths, "generation", "GET", "/v1/recipes", timeout=5.0).json()
+
+
+def generation_recipe(paths: Paths, name: str) -> dict:
+    return _call(paths, "generation", "GET", f"/v1/recipes/{quote(name)}").json()
+
+
+def generation_recipe_suggest(paths: Paths, graph) -> dict:
+    """The slots and outputs a pasted graph would get; the pillar refuses (422) what is not ComfyUI's API format."""
+    return _call(paths, "generation", "POST", "/v1/recipes/suggest", json={"graph": graph}).json()
+
+
+def generation_recipe_save(paths: Paths, body: dict) -> dict:
+    return _call(paths, "generation", "POST", "/v1/recipes", json=body).json()
+
+
+def generation_recipe_delete(paths: Paths, name: str) -> dict:
+    return _call(paths, "generation", "DELETE", f"/v1/recipes/{quote(name)}").json()
+
+
+def generation_comfy(paths: Paths, action: str | None = None) -> dict:
+    """The hand-over of ComfyUI to the user; `action` is lend, restart or return."""
+    if action is None:
+        return _call(paths, "generation", "GET", "/v1/comfy", timeout=5.0).json()
+    return _call(paths, "generation", "POST", f"/v1/comfy/{action}").json()

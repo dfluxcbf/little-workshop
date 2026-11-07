@@ -724,6 +724,14 @@ def cmd_requirements_publish(args: argparse.Namespace) -> int:
     return _requirements_job(args, "requirements.publish_requirement", {"requirement_id": args.requirement_id})
 
 
+def cmd_requirements_supersede(args: argparse.Namespace) -> int:
+    fields = {"requirement_id": args.requirement_id, "key": args.key, "description": args.description}
+    for name in ("title", "category", "register_status"):
+        if getattr(args, name) is not None:
+            fields[name] = getattr(args, name)
+    return _requirements_job(args, "requirements.supersede_requirement", fields)
+
+
 def cmd_requirements_delete(args: argparse.Namespace) -> int:
     return _requirements_job(args, "requirements.delete_requirement", {"requirement_id": args.requirement_id})
 
@@ -1855,6 +1863,112 @@ def _trigger(method: str, path: str = "", body: dict | None = None) -> int:
     return 0
 
 
+def _generation(method: str, path: str, *, body: dict | None = None, params: dict | None = None) -> int:
+    try:
+        _print(client.generation_request(Paths.from_env(), method, path, json=body, params=params))
+    except client.GenerationPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_generation_submit(args: argparse.Namespace) -> int:
+    body: dict = {"prompts": []}
+    if args.file:
+        try:
+            loaded = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"error: --file takes a JSON file: {exc}", file=sys.stderr)
+            return 2
+        body = loaded if isinstance(loaded, dict) else {"prompts": loaded}
+    body["prompts"] = list(body.get("prompts") or []) + list(args.prompt or [])
+    for source in args.sources or []:
+        parts = source.split("/")
+        if len(parts) not in (2, 3) or not parts[1].isdigit():
+            print(f"error: --from takes REQUEST/IDX or REQUEST/IDX/ROLE, not {source!r}", file=sys.stderr)
+            return 2
+        ref = {"request_id": parts[0], "idx": int(parts[1]), **({"role": parts[2]} if len(parts) == 3 else {})}
+        body["prompts"].append({"source": ref})
+    defaults = {key: value for key, value in (("model", args.model), ("width", args.width), ("height", args.height), ("seed", args.seed),
+                                              ("steps", args.steps), ("lora", args.lora), ("recipe", args.recipe)) if value is not None}
+    if args.count is not None:
+        body["prompts"] = [{**({"prompt": entry} if isinstance(entry, str) else entry), "count": args.count} for entry in body["prompts"]]
+    if defaults:
+        body["defaults"] = {**(body.get("defaults") or {}), **defaults, "prompt": ""}
+    body["project_id"] = args.project_id
+    if args.name:
+        body["name"] = args.name
+    return _generation("POST", "/v1/requests", body=body)
+
+
+def cmd_generation_recipes(args: argparse.Namespace) -> int:
+    return _generation("GET", "/v1/recipes")
+
+
+def cmd_generation_recipe_show(args: argparse.Namespace) -> int:
+    return _generation("GET", f"/v1/recipes/{args.name}")
+
+
+def cmd_generation_setup(args: argparse.Namespace) -> int:
+    return _generation("GET", f"/v1/requests/{args.request_id}/images/{args.idx}/graph", params={"project_id": args.project_id})
+
+
+def cmd_generation_recipe_save(args: argparse.Namespace) -> int:
+    body = {"name": args.name, "from_image": {"request_id": args.request_id, "idx": args.idx}, "replace": args.replace}
+    if args.description:
+        body["description"] = args.description
+    return _generation("POST", "/v1/recipes", body=body)
+
+
+def cmd_generation_recipe_import(args: argparse.Namespace) -> int:
+    try:
+        graph = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"error: --file takes ComfyUI's Export (API) JSON: {exc}", file=sys.stderr)
+        return 2
+    body = {"name": args.name, "graph": graph, "replace": args.replace}
+    if args.description:
+        body["description"] = args.description
+    return _generation("POST", "/v1/recipes", body=body)
+
+
+def cmd_generation_recipe_delete(args: argparse.Namespace) -> int:
+    return _generation("DELETE", f"/v1/recipes/{args.name}")
+
+
+def cmd_generation_status(args: argparse.Namespace) -> int:
+    return _generation("GET", f"/v1/requests/{args.request_id}", params={"project_id": args.project_id, "images": str(args.images).lower()})
+
+
+def cmd_generation_list(args: argparse.Namespace) -> int:
+    params = {"project_id": args.project_id, "limit": args.limit, **({"status": args.status} if args.status else {})}
+    return _generation("GET", "/v1/requests", params=params)
+
+
+def cmd_generation_queue(args: argparse.Namespace) -> int:
+    return _generation("GET", "/v1/queue")
+
+
+def cmd_generation_models(args: argparse.Namespace) -> int:
+    return _generation("GET", "/v1/models", params={"purpose": args.purpose} if args.purpose else None)
+
+
+def cmd_generation_gpu(args: argparse.Namespace) -> int:
+    return _generation("GET", "/v1/gpu", params={"max_age": args.max_age} if args.max_age is not None else None)
+
+
+def cmd_generation_resume(args: argparse.Namespace) -> int:
+    return _generation("POST", "/v1/queue/resume", body={"retry_failed": args.retry_failed})
+
+
+def cmd_generation_cancel(args: argparse.Namespace) -> int:
+    return _generation("POST", f"/v1/requests/{args.request_id}/cancel", params={"project_id": args.project_id})
+
+
+def cmd_generation_delete_files(args: argparse.Namespace) -> int:
+    return _generation("DELETE", f"/v1/requests/{args.request_id}/files", params={"project_id": args.project_id})
+
+
 def cmd_trigger_list(args: argparse.Namespace) -> int:
     return _trigger("GET")
 
@@ -2044,6 +2158,105 @@ def cmd_mcp_serve(args: argparse.Namespace) -> int:
     return serve(Paths.from_env())
 
 
+def _windows_local_appdata() -> str:
+    out = subprocess.run(["cmd.exe", "/d", "/c", "echo %LOCALAPPDATA%"], capture_output=True, text=True,
+                         timeout=30, cwd="/mnt/c" if Path("/mnt/c").is_dir() else None)
+    value = out.stdout.strip()
+    if out.returncode != 0 or not value or "%" in value:
+        raise RuntimeError(f"could not read %LOCALAPPDATA% through cmd.exe: {out.stderr.strip() or value!r}")
+    return value
+
+
+_ADD_TO_USER_PATH = (
+    "$dir = $env:LWS_SHIM_DIR; $path = [Environment]::GetEnvironmentVariable('Path', 'User'); "
+    "$parts = @($path -split ';' | Where-Object { $_ }); "
+    "if ($parts -contains $dir) { 'present' } else { "
+    "[Environment]::SetEnvironmentVariable('Path', (($parts + $dir) -join ';'), 'User'); 'added' }"
+)
+
+
+def cmd_windows_install_shim(args: argparse.Namespace) -> int:
+    """Install `lws.cmd` on the Windows side so a Windows-hosted project's own code can run `lws`
+    (docs/architecture.md, "Windows-hosted projects")."""
+    import shutil
+
+    from common import windows
+
+    distro = os.environ.get("WSL_DISTRO_NAME", "")
+    lws_path = args.lws_path or shutil.which("lws") or ""
+    problems = windows.shim_problems(distro, lws_path)
+    if not distro:
+        problems.insert(0, "WSL_DISTRO_NAME is not set: run this inside WSL")
+    if problems:
+        for problem in problems:
+            print(f"error: {problem}", file=sys.stderr)
+        return 1
+    try:
+        win_dir = args.dir or _windows_local_appdata() + "\\little-workshop\\bin"
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        print(f"error: {exc}; pass --dir", file=sys.stderr)
+        return 1
+    root = windows.mount_root()
+    if win_dir.startswith(root):  # given as a WSL path (or translated by the shim itself)
+        win_dir = windows.to_windows_path(win_dir, distro, root)
+    target_dir = Path(windows.to_wsl_path(win_dir, root))
+    content = windows.lws_cmd(distro, lws_path).replace("\n", "\r\n")
+    result = {"shim": win_dir.rstrip("\\") + "\\lws.cmd", "distro": distro, "lws": lws_path}
+    if args.dry_run:
+        _print({**result, "dry_run": True, "content": content.replace("\r\n", "\n")})
+        return 0
+    if not windows.is_windows_path(win_dir):
+        print(f"error: {win_dir!r} is not a Windows path (C:\\...)", file=sys.stderr)
+        return 1
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "lws.cmd").write_bytes(content.encode("utf-8"))
+    result["user_path"] = "unchanged (--no-path)"
+    if not args.no_path:
+        env = {**os.environ, "LWS_SHIM_DIR": win_dir, "WSLENV": "LWS_SHIM_DIR"}
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _ADD_TO_USER_PATH],
+                             capture_output=True, text=True, timeout=60, env=env)
+        state = out.stdout.strip().splitlines()[-1:] or [""]
+        if out.returncode != 0 or state[0] not in ("present", "added"):
+            print(f"warning: could not add {win_dir} to the user PATH: {out.stderr.strip()}", file=sys.stderr)
+            result["user_path"] = "not changed: add the folder yourself"
+        else:
+            result["user_path"] = "already listed" if state[0] == "present" else "added (open a new terminal)"
+    _print(result)
+    return 0
+
+
+def cmd_api_token_create(args: argparse.Namespace) -> int:
+    from common import api_tokens
+
+    created = api_tokens.create(Paths.from_env(), args.project_id, args.label or "")
+    if args.write:
+        target = Path(args.write)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(created["token"] + "\n")
+        created = {**created, "token": f"written to {target} (keep it out of git)"}
+    _print({**created, "use": "Authorization: Bearer <token> on http://127.0.0.1:8790/api/v1/tools/<tool>"})
+    return 0
+
+
+def cmd_api_token_list(args: argparse.Namespace) -> int:
+    from common import api_tokens
+
+    _print({"tokens": api_tokens.list_tokens(Paths.from_env(), args.project_id)})
+    return 0
+
+
+def cmd_api_token_revoke(args: argparse.Namespace) -> int:
+    from common import api_tokens
+
+    if not api_tokens.revoke(Paths.from_env(), args.token_id, args.project_id):
+        print(f"error: no token {args.token_id} for {args.project_id}", file=sys.stderr)
+        return 1
+    _print({"revoked": args.token_id, "project_id": args.project_id})
+    return 0
+
+
 def cmd_worktree_provision(args: argparse.Namespace) -> int:
     paths = Paths.from_env()
     try:
@@ -2135,6 +2348,84 @@ def build_parser() -> argparse.ArgumentParser:
     bypass_policies.add_argument("--time", type=int, default=None, metavar="MINUTES",
                                  help="How long the bypass lasts (default 2, at most 30); with `true` only")
     bypass_policies.set_defaults(func=cmd_bypass_policies)
+
+    generation = subparsers.add_parser("generation", help="Image Generation: queue pictures for ComfyUI, probe them, download them")
+    generation_sub = generation.add_subparsers(dest="generation_command", required=True)
+    g_submit = generation_sub.add_parser("submit", help="Queue a set of prompts; prints the request's id and how to probe it")
+    g_submit.add_argument("--project-id", required=True)
+    g_submit.add_argument("--prompt", action="append", help="A prompt (repeat for several)")
+    g_submit.add_argument("--file", default=None, help='A JSON file: {"prompts": [...], "defaults": {...}, "name": ...} or a list of prompts')
+    g_submit.add_argument("--name", default=None)
+    g_submit.add_argument("--model", default=None, help="A configured model (default: the configured default_model)")
+    g_submit.add_argument("--width", type=int, default=None)
+    g_submit.add_argument("--height", type=int, default=None)
+    g_submit.add_argument("--seed", type=int, default=None)
+    g_submit.add_argument("--steps", type=int, default=None)
+    g_submit.add_argument("--lora", default=None, help="A LoRA of the model, by its configured name")
+    g_submit.add_argument("--count", type=int, default=None, help="Pictures of every prompt (seeds counting up)")
+    g_submit.add_argument("--recipe", default=None, help="Render this recipe instead of a model (lws generation recipes), e.g. seamless-texture")
+    g_submit.add_argument("--from", dest="sources", action="append", metavar="REQUEST/IDX[/ROLE]",
+                          help="A done picture as the input of a recipe that takes one, e.g. --recipe pbr-maps (repeat for several)")
+    g_submit.set_defaults(func=cmd_generation_submit)
+    g_recipes = generation_sub.add_parser("recipes", help="The recipes: saved ComfyUI node setups a prompt can render, with their slots and outputs")
+    g_recipes.set_defaults(func=cmd_generation_recipes)
+    g_recipe_show = generation_sub.add_parser("recipe-show", help="One recipe with its graph and nodes")
+    g_recipe_show.add_argument("name")
+    g_recipe_show.set_defaults(func=cmd_generation_recipe_show)
+    g_setup = generation_sub.add_parser("setup", help="The ComfyUI node setup a picture was rendered with")
+    g_setup.add_argument("--project-id", required=True)
+    g_setup.add_argument("request_id")
+    g_setup.add_argument("idx", type=int)
+    g_setup.set_defaults(func=cmd_generation_setup)
+    g_recipe_save = generation_sub.add_parser("recipe-save", help="Save a rendered picture's node setup as a recipe")
+    g_recipe_save.add_argument("name")
+    g_recipe_save.add_argument("--request-id", required=True)
+    g_recipe_save.add_argument("--idx", type=int, default=0)
+    g_recipe_save.add_argument("--description", default=None)
+    g_recipe_save.add_argument("--replace", action="store_true")
+    g_recipe_save.set_defaults(func=cmd_generation_recipe_save)
+    g_recipe_import = generation_sub.add_parser("recipe-import", help="Save a graph exported from ComfyUI (Export (API)) as a recipe, "
+                                                "its slots and outputs suggested")
+    g_recipe_import.add_argument("name")
+    g_recipe_import.add_argument("--file", required=True, help="The Export (API) JSON file")
+    g_recipe_import.add_argument("--description", default=None)
+    g_recipe_import.add_argument("--replace", action="store_true")
+    g_recipe_import.set_defaults(func=cmd_generation_recipe_import)
+    g_recipe_delete = generation_sub.add_parser("recipe-delete", help="Delete a saved or imported recipe")
+    g_recipe_delete.add_argument("name")
+    g_recipe_delete.set_defaults(func=cmd_generation_recipe_delete)
+    g_status = generation_sub.add_parser("status", help="A request's status, estimate, downloads and cleanup")
+    g_status.add_argument("--project-id", required=True)
+    g_status.add_argument("request_id")
+    g_status.add_argument("--images", action="store_true", help="List every picture of the request")
+    g_status.set_defaults(func=cmd_generation_status)
+    g_list = generation_sub.add_parser("list", help="A project's requests, newest first")
+    g_list.add_argument("--project-id", required=True)
+    g_list.add_argument("--status", default=None, help="queued,running,failed,success,cancelled (comma-separated)")
+    g_list.add_argument("--limit", type=int, default=20)
+    g_list.set_defaults(func=cmd_generation_list)
+    g_queue = generation_sub.add_parser("queue", help="The queue: paused or not, the batch rendering, the next batches")
+    g_queue.set_defaults(func=cmd_generation_queue)
+    g_models = generation_sub.add_parser("models", help="The image models to choose from: purpose, limits, licence, prompting, LoRAs, "
+                                                     "speed, installed; ranked for --purpose with a recommendation")
+    g_models.add_argument("--purpose", choices=["icon", "ui", "concept-art", "texture", "material-reference", "scene", "character",
+                                                "sprite", "background"], help="The kind of picture")
+    g_models.set_defaults(func=cmd_generation_models)
+    g_gpu = generation_sub.add_parser("gpu", help="How busy the GPU is and by whom, and what the queue will do to it (information, not a lock)")
+    g_gpu.add_argument("--max-age", type=float, help="Accept a sample this many seconds old (default: the configured cache, 15 s)")
+    g_gpu.set_defaults(func=cmd_generation_gpu)
+    g_resume = generation_sub.add_parser("resume", help="Resume a queue a failure paused (the user's decision)")
+    g_resume.add_argument("--retry-failed", action="store_true", help="Queue the failed requests' pictures again, attempts reset")
+    g_resume.set_defaults(func=cmd_generation_resume)
+    g_cancel = generation_sub.add_parser("cancel", help="Cancel a queued or running request")
+    g_cancel.add_argument("--project-id", required=True)
+    g_cancel.add_argument("request_id")
+    g_cancel.set_defaults(func=cmd_generation_cancel)
+    g_delete = generation_sub.add_parser("delete-files", help="Delete little-workshop's copies of a finished request's pictures "
+                                         "(after checking the download with sha256sum -c SHA256SUMS)")
+    g_delete.add_argument("--project-id", required=True)
+    g_delete.add_argument("request_id")
+    g_delete.set_defaults(func=cmd_generation_delete_files)
 
     trigger = subparsers.add_parser("trigger", help="Workshop triggers: an event starts a Job")
     trigger_sub = trigger.add_subparsers(dest="trigger_command", required=True)
@@ -2567,6 +2858,17 @@ def build_parser() -> argparse.ArgumentParser:
     req_publish.add_argument("requirement_id")
     req_publish.set_defaults(func=cmd_requirements_publish)
 
+    req_supersede = requirements_sub.add_parser(
+        "supersede", help="Replace a requirement in one step: new draft, old one superseded, register rows updated")
+    req_supersede.add_argument("--project-id", required=True)
+    req_supersede.add_argument("requirement_id")
+    req_supersede.add_argument("--key", required=True, help="the new requirement's key (next free REQ-nnnnnnnnn)")
+    req_supersede.add_argument("--description", required=True)
+    req_supersede.add_argument("--title", default=None)
+    req_supersede.add_argument("--category", default=None)
+    req_supersede.add_argument("--register-status", dest="register_status", default=None)
+    req_supersede.set_defaults(func=cmd_requirements_supersede)
+
     req_delete = requirements_sub.add_parser("delete", help="Delete a requirement")
     req_delete.add_argument("--project-id", required=True)
     req_delete.add_argument("requirement_id")
@@ -2586,7 +2888,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     req_list = requirements_sub.add_parser("list", help="List requirements")
     req_list.add_argument("--project-id", default=None)
-    req_list.add_argument("--status", choices=["draft", "published"], default=None)
+    req_list.add_argument("--status", choices=["draft", "published", "superseded"], default=None)
     req_list.set_defaults(func=cmd_requirements_list)
 
     req_status = requirements_sub.add_parser("status", help="Show one requirement")
@@ -3033,11 +3335,70 @@ def build_parser() -> argparse.ArgumentParser:
     asset_mcp_serve.add_argument("--project-id", required=True)
     asset_mcp_serve.set_defaults(func=cmd_asset_mcp_serve)
 
+    windows_cmd = subparsers.add_parser("windows", help="Reach little-workshop from a Windows-hosted project's own code")
+    windows_sub = windows_cmd.add_subparsers(dest="windows_command", required=True)
+    win_shim = windows_sub.add_parser("install-shim", help="Install lws.cmd on Windows (runs this lws through wsl.exe) and put it on the user PATH")
+    win_shim.add_argument("--dir", help="Windows folder for lws.cmd (default %%LOCALAPPDATA%%\\little-workshop\\bin)")
+    win_shim.add_argument("--lws-path", help="The WSL lws the shim runs (default: lws on PATH; pass it when PATH has none)")
+    win_shim.add_argument("--no-path", action="store_true", help="Leave the user PATH alone")
+    win_shim.add_argument("--dry-run", action="store_true", help="Print the shim and where it would go")
+    win_shim.set_defaults(func=cmd_windows_install_shim)
+
+    api = subparsers.add_parser("api", help="Tokens for the Dashboard's HTTP gateway (/api/v1/tools)")
+    api_sub = api.add_subparsers(dest="api_command", required=True)
+    token_create = api_sub.add_parser("token-create", help="A new gateway token for a project (shown once)")
+    token_create.add_argument("--project-id", required=True)
+    token_create.add_argument("--label", help="What the token is for, e.g. 'Unity editor'")
+    token_create.add_argument("--write", help="Write the token to this file (mode 0600) instead of printing it")
+    token_create.set_defaults(func=cmd_api_token_create)
+    token_list = api_sub.add_parser("token-list", help="A project's gateway tokens (never the tokens themselves)")
+    token_list.add_argument("--project-id", required=True)
+    token_list.set_defaults(func=cmd_api_token_list)
+    token_revoke = api_sub.add_parser("token-revoke", help="Revoke a project's gateway token by id")
+    token_revoke.add_argument("--project-id", required=True)
+    token_revoke.add_argument("token_id")
+    token_revoke.set_defaults(func=cmd_api_token_revoke)
+
     return parser
+
+
+def _subparser_for(parser: argparse.ArgumentParser, argv: list[str]) -> argparse.ArgumentParser:
+    """The (sub)parser the command words at the front of `argv` select (`version status` -> its parser)."""
+    current = parser
+    for word in argv:
+        if word.startswith("-"):
+            break
+        subactions = [a for a in current._actions if isinstance(a, argparse._SubParsersAction)]
+        if not subactions or word not in subactions[0].choices:
+            break
+        current = subactions[0].choices[word]
+    return current
+
+
+def _windows_argv(parser: argparse.ArgumentParser, argv: list[str], cwd: str, projects_of) -> list[str]:
+    """`lws` started by the Windows shim (docs/architecture.md, "Windows-hosted projects"): Windows paths become WSL
+    paths, and a command taking `--project-id` without one gets the registered project holding the folder the
+    shim was run from."""
+    from common import windows
+
+    argv = windows.translate_argv(argv, windows.mount_root())
+    if any(a == "--project-id" or a.startswith("--project-id=") for a in argv):
+        return argv
+    sub = _subparser_for(parser, argv)
+    if not any("--project-id" in a.option_strings for a in sub._actions):
+        return argv
+    try:
+        project = windows.project_for_cwd(cwd, projects_of())
+    except Exception:  # noqa: BLE001 - no registry answer: argparse reports the missing option as usual
+        project = None
+    return [*argv, "--project-id", project] if project else argv
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    if os.environ.get("LWS_FROM_WINDOWS"):
+        argv = _windows_argv(parser, sys.argv[1:] if argv is None else argv, os.getcwd(),
+                             lambda: client.list_projects(Paths.from_env())["projects"])
     args = parser.parse_args(argv)
     return args.func(args)
 

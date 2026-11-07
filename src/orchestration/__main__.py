@@ -35,7 +35,7 @@ def make_core_socket_lookup(paths: Paths):
             with client_for_socket(paths.core_socket_path, timeout=3.0) as client:
                 response = client.get("/v1/status")
             response.raise_for_status()
-        except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+        except (httpx.TransportError, OSError, httpx.HTTPStatusError):
             return None
         entry = response.json().get("pillars", {}).get(pillar)
         if entry is None or entry["status"] in _UNAVAILABLE_STATUSES:

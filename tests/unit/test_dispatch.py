@@ -151,6 +151,14 @@ def test_dispatch_timeout_for_gives_policy_check_project_a_ceiling_above_the_san
     assert dispatch.dispatch_timeout_for("policy.check_project") > 1800.0
 
 
+def test_dispatch_timeout_for_gives_agent_confirm_incident_a_margin_over_the_default():
+    """2026-10-27 finding: `agent.confirm_incident` answers `accepted` from a background thread, the
+    same fire-and-forget shape as `agent.run_task`, so its handler itself should be near-instant — but
+    it was still requeued past the plain 20s default, most likely dispatch-call overhead under load."""
+    assert dispatch.dispatch_timeout_for("agent.confirm_incident") == 60.0
+    assert dispatch.dispatch_timeout_for("agent.confirm_incident") > dispatch.DEFAULT_DISPATCH_TIMEOUT_SECONDS
+
+
 def test_dispatch_timeout_for_gives_every_declared_unstoppable_type_a_ceiling_above_the_default():
     """2026-09-23 finding, reproduced live during an actual release:
     version.release_start and version.release_finish both hit the plain

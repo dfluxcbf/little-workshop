@@ -29,7 +29,7 @@ EVENT_JOB_SETTLED = "job.settled"
 SETTLED = (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.STOPPED)
 # Job types no trigger may create.
 FORBIDDEN_TARGET = re.compile(
-    r"(_finish$|^version\.release$|^version\.stabilize$|\.remove$|_remove$|_delete$|\.delete|^usage\.purge_project$"
+    r"(_finish$|^version\.release$|^version\.stabilize$|\.remove$|_remove$|_delete$|\.delete|\.purge_project$"
     r"|^agent\.finish_task$|^agent\.skip_task$|^policy\.confirm|^deployment\.confirm$)"
 )
 BRANCH_FINISH_TYPES = ("version.feature_finish", "version.improvement_finish", "version.hotfix_finish", "version.support_finish")

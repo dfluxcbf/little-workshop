@@ -27,7 +27,7 @@ def list_active_project_ids(paths: Paths, *, timeout: float = 10.0) -> list[str]
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.get("/v1/projects", params={"status": "active"})
         response.raise_for_status()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise RegistryReadError(f"Registry & Portfolio unreachable: {exc}") from exc
     return [p["name"] for p in response.json()]
 
@@ -40,7 +40,7 @@ def project_sets_containing(paths: Paths, project_id: str, *, timeout: float = 1
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.get("/v1/project_sets")
         response.raise_for_status()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise RegistryReadError(f"Registry & Portfolio unreachable: {exc}") from exc
     return [s["name"] for s in response.json() if project_id in s.get("project_names", [])]
 
@@ -55,6 +55,6 @@ def project_set_members(paths: Paths, set_name: str, *, timeout: float = 10.0) -
         if response.status_code == 404:
             return []
         response.raise_for_status()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise RegistryReadError(f"Registry & Portfolio unreachable: {exc}") from exc
     return response.json().get("project_names", [])

@@ -22,6 +22,7 @@ def _now() -> datetime:
 class RequirementStatus(str, Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
+    SUPERSEDED = "superseded"  # replaced by `superseded_by`; out of the definition-of-done report (REQ-000000448)
 
 
 class TestSuite(BaseModel):
@@ -59,6 +60,7 @@ class Requirement(BaseModel):
     status: RequirementStatus = RequirementStatus.DRAFT
     use_case_id: str | None = None
     milestone_id: str | None = None
+    superseded_by: str | None = None  # the key of the requirement that replaced this one
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 

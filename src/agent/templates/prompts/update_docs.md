@@ -16,7 +16,7 @@ A comment applies ONLY to its own highlighted section in its own file. Never app
 `certified_sections` (same file) lists sections the reviewer has CERTIFIED: `path`, `start_line`/`end_line`, `highlighted_text` and `source_excerpt`, with no comment. A certified section is, by the reviewer's own standards, well written. Treat it as correct and settled:
 
 - Do not change it. Be highly critical and biased against any change: touch a certified section only when a comment (or keeping the rest of the document correct and consistent) makes that absolutely necessary, and then change no more than that requires.
-- When you do change one, its content must not be lost and must not deviate from what it says now — keep its meaning, facts, structure and wording as far as possible.
+- When you do change one, keep what the comment does not touch — its other facts, structure and wording. Where a comment asks for something the certified section contradicts, the comment wins: it is the reviewer's newer word.
 - Say in the `note` of the comment that made it necessary that you changed a certified section, and why. If you did not have to touch any, do not mention them.
 - Line numbers of certified sections are as of the branch's tip, like the comments'.
 

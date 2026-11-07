@@ -29,7 +29,7 @@ def get_config(paths: Paths, project_id: str, *, timeout: float = 5.0) -> dict:
             response = client.get("/v1/config", params={"project_id": project_id})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise VersionClientError(f"could not read version config: {exc}") from exc
 
 
@@ -44,7 +44,7 @@ def run_job(paths: Paths, project_id: str, job_type: str, params: dict, *, timeo
             )
         response.raise_for_status()
         body = response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise VersionClientError(f"could not run {job_type}: {exc}") from exc
     if body.get("outcome") != "succeeded":
         raise VersionClientError(f"{job_type} failed: {body.get('error')}")

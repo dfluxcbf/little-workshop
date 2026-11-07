@@ -24,6 +24,7 @@ PILLARS = (
     "dashboard",
     "mcp",
     "usage",
+    "generation",
 )
 
 OWNER_TAGS = {
@@ -38,6 +39,7 @@ OWNER_TAGS = {
     "dashboard": "dashboard",
     "mcp": "mcp",
     "usage": "usage",
+    "generation": "generation",
 }
 
 
@@ -113,6 +115,12 @@ class Paths:
     def worktree_path(self, worktree_id: str) -> Path:
         return self.worktrees_dir / worktree_id
 
+    def deployment_windows_pid_path(self, project_id: str) -> Path:
+        """A Windows-hosted server has no `systemd --user` unit to query — this file, holding the
+        Windows PID of its `start_server` wrapper (`common/windows_process.py`), is Deployment &
+        Servers' own record of it, read by `WindowsServerSupervisor` to poll and relaunch it on crash."""
+        return self.state_home / "deployment-windows" / f"{project_id.replace('/', '-')}.pid"
+
     @property
     def sessions_dir(self) -> Path:
         """Agentic Development's ad-hoc, human-driven Remote Control
@@ -125,6 +133,11 @@ class Paths:
     def session_socket_path(self, project_id: str) -> Path:
         return self.sessions_dir / f"{project_id.replace('/', '-')}.sock"
 
+    def session_windows_pid_path(self, project_id: str) -> Path:
+        """A Windows-hosted project's session has no `dtach` socket to match in the process list (no
+        WSL process exists at all) — this file, holding its Windows PID, is the equivalent record."""
+        return self.sessions_dir / f"{project_id.replace('/', '-')}.winpid"
+
     @property
     def packages_dir(self) -> Path:
         """Build & Packages' own package blobs (docs/milestones.md M11) —
@@ -135,6 +148,12 @@ class Paths:
 
     def package_blob_path(self, kind: str, filename: str) -> Path:
         return self.packages_dir / kind / filename
+
+    @property
+    def generated_dir(self) -> Path:
+        """Image Generation's copies of the pictures ComfyUI rendered, one folder per request, kept until the
+        caller has downloaded them and asks for their deletion (docs/pillars/generation.md)."""
+        return self.state_home / "generated"
 
     def ensure_layout(self) -> None:
         """Create every directory this system needs before anything writes to it."""

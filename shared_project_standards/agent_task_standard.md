@@ -40,7 +40,8 @@ standards unless the prompt points at them.
 - **bug**: reproduce with a failing test, root-cause fix, whole suite green, update
   `architecture.md` (and `design.md` if a decision changed), state the root cause in the summary.
 - **milestone**: read `design.md`, `architecture.md` and the milestone row; create missing
-  requirements with real ids; implement; test; mark the row's status honestly.
+  requirements with real ids; implement, with the docs as context, not a limit (what the task asks wins,
+  and the docs change with it); test; mark the row's status honestly.
 - **docs**: edit the relevant files under `docs/` (a task description can name another folder, as
   this one does for `shared_project_standards/`); `design.md` for concepts and decisions, `architecture.md` for
   implementation, `milestones.md` for rows; no duplication; no code changes beyond a tiny forced fix.
@@ -50,7 +51,8 @@ standards unless the prompt points at them.
 (Source: `update_docs.md` on `feature/doc-review`, not in this checkout's `dev`.)
 
 Work comment by comment, each applying only to its highlighted section; certified sections stay
-as they are (see [documentation_standard.md](documentation_standard.md)). Commit on the current HEAD,
+as they are (see [documentation_standard.md](documentation_standard.md)) unless a comment asks for what
+one contradicts, where the comment wins. Commit on the current HEAD,
 do not push or switch branches, and write the JSON result file last: it signals completion.
 
 ## Finish
@@ -77,5 +79,6 @@ checkout location for a project that lives on the Windows side.
   accompanying fix"; the Update Standards task further forbids edits outside
   `shared_project_standards/`. The task description is the narrower rule.
 
-Last reviewed: 2026-10-02 (hand edit: commit-time policy checks, mirroring
+Last reviewed: 2026-10-24 (hand edit: docs are context, not a limit; a comment outranks a certified
+section). Before that 2026-10-02 (hand edit: commit-time policy checks, mirroring
 `src/agent/templates/prompts/common.md`).

@@ -42,6 +42,6 @@ def init_version_tracking(
                 },
             )
         response.raise_for_status()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         return False
     return response.json().get("outcome") == "succeeded"

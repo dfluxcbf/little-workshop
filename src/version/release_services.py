@@ -34,7 +34,7 @@ class PillarReleaseServices:
         try:
             with client_for_socket(socket_path, timeout=timeout) as client:
                 return client.request(method, path, **kwargs)
-        except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        except (httpx.TransportError, OSError) as exc:
             raise ServiceUnavailable(f"could not reach the {pillar} pillar: {exc}") from exc
 
     def _json(self, pillar: str, method: str, path: str, **kwargs):
@@ -82,7 +82,7 @@ class PillarReleaseServices:
             with client_for_socket(self.paths.core_socket_path, timeout=10.0) as client:
                 response = client.get("/v1/status")
             response.raise_for_status()
-        except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
             raise ServiceUnavailable(f"could not reach Core: {exc}") from exc
         return response.json().get("pillars", {})
 

@@ -23,8 +23,8 @@ from common import serving
 from common.paths import Paths
 from common.incident import install_incident_reporting, report_incident as report_crash
 from common.worktree_client import WorktreeUnavailable
-from common.registry_client import ProjectResolutionError, resolve_project_path
-from requirements import conflicts, db, markers
+from common.registry_client import ProjectResolutionError, registered_project_ids, resolve_project_path
+from requirements import conflicts, db, markers, transfer
 from requirements.ears import ears_error
 from requirements.junit import JUnitParseError, parse_junit_xml
 from requirements.models import (
@@ -44,6 +44,12 @@ class JobRequest(BaseModel):
     job_id: str
     project_id: str | None = None
     params: dict[str, Any] = {}
+
+
+def _ears_warnings(description: str | None) -> list[str]:
+    """The EARS form check as advice: the reason a description is not EARS, or nothing."""
+    error = ears_error(description)
+    return [error] if error else []
 
 
 def _require(params: dict, *names: str) -> str | None:
@@ -89,13 +95,17 @@ CONFLICT_DECISIONS = ("older_wins", "newer_wins", "other")
 CONFLICT_SCAN_SECONDS = 15 * 60
 
 
-def analyze_conflicts(conn: sqlite3.Connection, lock: threading.Lock, project_id: str | None = None) -> dict:
+def analyze_conflicts(conn: sqlite3.Connection, lock: threading.Lock, project_id: str | None = None,
+                      only: set[str] | None = None) -> dict:
     """Run the conflict analysis on one project, or on every project with requirements, and record it:
-    {project_id: {found, new, reopened, resolved}}."""
+    {project_id: {found, new, reopened, resolved}}. `only` limits the every-project run to those project
+    ids (the registered ones: a project that is no longer registered raises nothing)."""
     with lock:
         requirements = db.list_requirements(conn, project_id=project_id)
         projects = {project_id} if project_id else {r.project_id for r in requirements}
         projects |= {c["project_id"] for c in db.list_conflicts(conn, project_id=project_id)}  # a project emptied since
+        if only is not None and project_id is None:
+            projects &= only
         return {
             pid: db.record_conflict_analysis(conn, pid, conflicts.find_conflicts([r for r in requirements if r.project_id == pid]))
             for pid in sorted(projects)
@@ -111,7 +121,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
         def scan() -> None:
             while True:
                 try:
-                    analyze_conflicts(conn, lock)
+                    analyze_conflicts(conn, lock, only=registered_project_ids(paths))
                 except Exception as exc:  # noqa: BLE001 - one failed scan must not end the periodic analysis
                     report_crash(paths, project_id="little-workshop", pillar="requirements",
                                  context="periodic requirement conflict analysis", exc=exc)
@@ -196,10 +206,10 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
     @app.post("/v1/jobs/requirements.create_requirement")
     def job_create_requirement(request: JobRequest) -> dict:
         error = _require(request.params, "key", "title") or (None if request.project_id else "missing project_id")
-        if not error and not request.params.get("imported"):  # `imported`: bulk import of requirements written elsewhere
-            error = ears_error(request.params.get("description"))
         if error:
             return {"outcome": "failed", "error": error}
+        # EARS form is advice, never a refusal (REQ-000000450); `imported`: requirements written elsewhere.
+        warnings = [] if request.params.get("imported") else _ears_warnings(request.params.get("description"))
         requirement = Requirement(
             id=db.new_id(), project_id=request.project_id, key=request.params["key"],
             title=request.params["title"], description=request.params.get("description", ""),
@@ -208,7 +218,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
         )
         with lock:
             db.insert_requirement(conn, requirement)
-        return {"outcome": "succeeded", "result": requirement.model_dump(mode="json")}
+        return {"outcome": "succeeded", "result": {**requirement.model_dump(mode="json"), "warnings": warnings}}
 
     @app.post("/v1/jobs/requirements.update_requirement")
     def job_update_requirement(request: JobRequest) -> dict:
@@ -221,15 +231,13 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
                 return {"outcome": "failed", "error": f"requirement {requirement_id!r} not found"}
             if requirement.status != RequirementStatus.DRAFT:
                 return {"outcome": "failed", "error": "only a draft requirement can be edited — publish creates a locked record"}
-            if "description" in request.params and not request.params.get("imported"):
-                error = ears_error(request.params["description"])
-                if error:
-                    return {"outcome": "failed", "error": error}
+            warnings = _ears_warnings(request.params["description"]) \
+                if "description" in request.params and not request.params.get("imported") else []
             for field in ("title", "description", "category", "use_case_id", "milestone_id"):
                 if field in request.params:
                     setattr(requirement, field, request.params[field])
             db.update_requirement(conn, requirement)
-        return {"outcome": "succeeded", "result": requirement.model_dump(mode="json")}
+        return {"outcome": "succeeded", "result": {**requirement.model_dump(mode="json"), "warnings": warnings}}
 
     @app.post("/v1/jobs/requirements.publish_requirement")
     def job_publish_requirement(request: JobRequest) -> dict:
@@ -240,9 +248,54 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
             requirement = db.get_requirement(conn, requirement_id)
             if requirement is None:
                 return {"outcome": "failed", "error": f"requirement {requirement_id!r} not found"}
+            if requirement.status == RequirementStatus.SUPERSEDED:
+                return {"outcome": "failed", "error": f"requirement {requirement.key} is superseded by {requirement.superseded_by}"}
             requirement.status = RequirementStatus.PUBLISHED
             db.update_requirement(conn, requirement)
         return {"outcome": "succeeded", "result": requirement.model_dump(mode="json")}
+
+    @app.post("/v1/jobs/requirements.supersede_requirement")
+    def job_supersede_requirement(request: JobRequest) -> dict:
+        """Replace a requirement in one step (REQ-000000448): a new draft `key` with the new text, the
+        old one's category, use case, milestone and suite links; the old one marked superseded by it;
+        the project's `docs/requirements.md` row marked and the new row added after it; and the test
+        files whose markers still cite the old key listed, for re-tagging. Draft or published alike: a
+        newer request never has to argue with a published row."""
+        params = request.params
+        error = _require(params, "requirement_id", "key", "description") or (None if request.project_id else "missing project_id")
+        if error:
+            return {"outcome": "failed", "error": error}
+        with lock:
+            old = db.get_requirement(conn, params["requirement_id"])
+            if old is None or old.project_id != request.project_id:
+                return {"outcome": "failed", "error": f"requirement {params['requirement_id']!r} not found"}
+            if old.status == RequirementStatus.SUPERSEDED:
+                return {"outcome": "failed", "error": f"requirement {old.key} is already superseded by {old.superseded_by}"}
+            if any(r.key == params["key"] for r in db.list_requirements(conn, project_id=request.project_id)):
+                return {"outcome": "failed", "error": f"requirement key {params['key']} is already taken"}
+            new = Requirement(
+                id=db.new_id(), project_id=request.project_id, key=params["key"],
+                title=params.get("title") or old.title, description=params["description"],
+                category=params.get("category", old.category),
+                use_case_id=old.use_case_id, milestone_id=old.milestone_id,
+            )
+            db.insert_requirement(conn, new)
+            for suite_id in db.list_suites_for_requirement(conn, old.id):
+                db.link_requirement_to_suite(conn, new.id, suite_id)
+            old.status, old.superseded_by = RequirementStatus.SUPERSEDED, new.key
+            db.update_requirement(conn, old)
+        try:
+            root = resolve_project_path(paths, request.project_id)
+        except ProjectResolutionError:
+            root = None
+        register_updated = bool(root) and markers.supersede_in_register(
+            root, old.key, new.key, new.title, new.description, params.get("register_status") or "draft")
+        still_tagged = markers.scan(root).get(old.key, {}).get("files", []) if root else None
+        return {"outcome": "succeeded", "result": {
+            "superseded": old.model_dump(mode="json"), "requirement": new.model_dump(mode="json"),
+            "register_updated": register_updated, "tests_still_tagged": still_tagged,
+            "warnings": _ears_warnings(new.description),
+        }}
 
     @app.post("/v1/jobs/requirements.delete_requirement")
     def job_delete_requirement(request: JobRequest) -> dict:
@@ -254,6 +307,27 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
                 return {"outcome": "failed", "error": f"requirement {requirement_id!r} not found"}
             db.delete_requirement(conn, requirement_id)
         return {"outcome": "succeeded", "result": {"requirement_id": requirement_id}}
+
+    @app.post("/v1/jobs/requirements.import_project")
+    def job_import_project(request: JobRequest) -> dict:
+        """Put a backup file's data into the project id in `project_id` (new ids, keys renumbered where taken)."""
+        data = request.params.get("data")
+        if not request.project_id or not isinstance(data, dict):
+            return {"outcome": "failed", "error": "missing project_id or the backup 'data'"}
+        with lock:
+            try:
+                result = transfer.import_project(conn, data, project_id=request.project_id)
+            except transfer.TransferError as exc:
+                return {"outcome": "failed", "error": str(exc)}
+        return {"outcome": "succeeded", "result": result}
+
+    @app.post("/v1/jobs/requirements.delete_project_data")
+    def job_delete_project_data(request: JobRequest) -> dict:
+        """Delete every requirement row stored for a project id. Irreversible."""
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        with lock:
+            return {"outcome": "succeeded", "result": transfer.delete_project(conn, request.project_id)}
 
     @app.post("/v1/jobs/requirements.link_requirement_to_suite")
     def job_link(request: JobRequest) -> dict:
@@ -284,7 +358,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
             return {"outcome": "failed", "error": str(exc)}
         dry_run = bool(request.params.get("dry_run"))
         found, written = markers.scan(root), markers.register(root)
-        report: dict[str, list] = {"created": [], "linked": [], "missing_text": [], "in_place": []}
+        report: dict[str, list] = {"created": [], "linked": [], "missing_text": [], "not_ears": [], "in_place": []}
         with lock:
             suites = db.list_test_suites(conn, project_id=request.project_id)
             suite = next((s for s in suites if s.id == request.params.get("suite_id")), None) if request.params.get("suite_id") else \
@@ -296,9 +370,11 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
                 requirement = by_key.get(key)
                 if requirement is None:
                     row = written.get(key) or {}
-                    if ears_error(row.get("description")):
+                    if not (row.get("description") or "").strip():
                         report["missing_text"].append({"key": key, "title": found[key]["title"], "files": found[key]["files"]})
                         continue
+                    if ears_error(row["description"]):
+                        report["not_ears"].append(key)  # created all the same: the form is advice (REQ-000000450)
                     requirement = Requirement(id=db.new_id(), project_id=request.project_id, key=key,
                                               title=row.get("title") or found[key]["title"], description=row["description"])
                     if not dry_run:
@@ -501,7 +577,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
 
     @app.post("/v1/jobs/requirements.analyze_conflicts")
     def job_analyze_conflicts(request: JobRequest) -> dict:
-        return {"outcome": "succeeded", "result": {"projects": analyze_conflicts(conn, lock, request.project_id)}}
+        return {"outcome": "succeeded", "result": {"projects": analyze_conflicts(conn, lock, request.project_id, only=None if request.project_id else registered_project_ids(paths))}}
 
     @app.post("/v1/jobs/requirements.decide_conflict")
     def job_decide_conflict(request: JobRequest) -> dict:
@@ -549,6 +625,17 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
         return conflict
 
     # -- reads ----------------------------------------------------------------
+
+    @app.get("/v1/projects")
+    def list_projects() -> list[dict]:
+        """Every project id with stored requirement data, and how much of it (registered or not)."""
+        with lock:
+            return transfer.project_summaries(conn)
+
+    @app.get("/v1/export/{project_id}")
+    def export_project(project_id: str) -> dict:
+        with lock:
+            return transfer.export_project(conn, project_id)
 
     @app.get("/v1/test_suites")
     def list_test_suites(project_id: str | None = None) -> list[dict]:
@@ -610,7 +697,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
         when it's published AND linked to at least one test suite AND
         every one of those suites' most recent run passed."""
         with lock:
-            requirements = db.list_requirements(conn, project_id=project_id)
+            # A superseded requirement is history, not work left to do (REQ-000000448).
+            requirements = [r for r in db.list_requirements(conn, project_id=project_id)
+                            if r.status != RequirementStatus.SUPERSEDED]
             # Two batched queries for every requirement at once, not one
             # pair of queries per requirement (2026-09-23 finding: the
             # per-requirement loop was still ~0.5s for little-workshop's

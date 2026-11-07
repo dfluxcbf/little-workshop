@@ -28,7 +28,7 @@ def core_status(paths: Paths, *, timeout: float = 3.0) -> dict:
             response = client.get("/v1/status")
         response.raise_for_status()
         return {"source": "daemon", **response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         return {"source": "fallback", "pillars": _core_status_fallback(paths)}
 
 
@@ -71,7 +71,7 @@ def post_job(paths: Paths, *, timeout: float = 30.0, **fields) -> dict:
             f"Orchestration took the job but has not answered within {timeout:g}s; it may still be "
             "working on it -- check `lws job list` before retrying"
         ) from exc
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable(
             "Orchestration daemon unreachable — job creation needs the daemon "
             "(dispatch can't happen from a direct file read)"
@@ -89,7 +89,7 @@ def list_jobs(paths: Paths, *, status: str | None = None, types: str | None = No
             response = client.get("/v1/jobs", params={key: value for key, value in params.items() if value is not None})
         response.raise_for_status()
         return {"source": "daemon", "jobs": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         conn = orchestration_db.connect(paths.pillar_db_path("orchestration"))
         jobs = orchestration_db.find_jobs(conn, statuses=status.split(",") if status else None, types=types.split(",") if types else None,
                                           newest_first=newest_first, limit=limit, summary=summary)
@@ -103,7 +103,7 @@ def stop_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> dict:
             response = client.post(f"/v1/jobs/{job_id}/stop")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — stopping a job needs the daemon") from exc
 
 
@@ -113,7 +113,7 @@ def policy_confirm_job(paths: Paths, job_id: str, *, timeout: float = 10.0) -> d
             response = client.post(f"/v1/jobs/{job_id}/policy_confirm")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — confirming a gated job needs the daemon") from exc
 
 
@@ -123,7 +123,7 @@ def policy_confirm_timeout_job(paths: Paths, job_id: str, *, timeout: float = 10
             response = client.post(f"/v1/jobs/{job_id}/policy_confirm_timeout")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — the confirm-gate watchdog needs the daemon") from exc
 
 
@@ -133,7 +133,7 @@ def create_scheduled_task(paths: Paths, *, timeout: float = 10.0, **fields) -> d
             response = client.post("/v1/scheduled_tasks", json=fields)
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — scheduling needs the daemon") from exc
 
 
@@ -143,7 +143,7 @@ def list_scheduled_tasks(paths: Paths, *, timeout: float = 5.0) -> dict:
             response = client.get("/v1/scheduled_tasks")
         response.raise_for_status()
         return {"source": "daemon", "scheduled_tasks": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         conn = orchestration_db.connect(paths.pillar_db_path("orchestration"))
         tasks = orchestration_db.list_scheduled_tasks(conn)
         conn.close()
@@ -156,7 +156,7 @@ def get_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 5.0) -> d
             response = client.get(f"/v1/scheduled_tasks/{task_id}")
         response.raise_for_status()
         return {"source": "daemon", "scheduled_task": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         conn = orchestration_db.connect(paths.pillar_db_path("orchestration"))
         task = orchestration_db.get_scheduled_task(conn, task_id)
         conn.close()
@@ -169,7 +169,7 @@ def edit_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 10.0, **
             response = client.patch(f"/v1/scheduled_tasks/{task_id}", json=fields)
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — editing a schedule needs the daemon") from exc
 
 
@@ -179,7 +179,7 @@ def remove_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 10.0) 
             response = client.delete(f"/v1/scheduled_tasks/{task_id}")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — removing a schedule needs the daemon") from exc
 
 
@@ -189,7 +189,7 @@ def trigger_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 30.0)
             response = client.post(f"/v1/scheduled_tasks/{task_id}/trigger")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — triggering a schedule needs the daemon") from exc
 
 
@@ -199,7 +199,7 @@ def cancel_scheduled_task(paths: Paths, task_id: str, *, timeout: float = 10.0) 
             response = client.post(f"/v1/scheduled_tasks/{task_id}/cancel")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — cancelling a schedule needs the daemon") from exc
 
 
@@ -209,7 +209,7 @@ def postpone_scheduled_task(paths: Paths, task_id: str, at: str, *, timeout: flo
             response = client.post(f"/v1/scheduled_tasks/{task_id}/postpone", json={"at": at})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — postponing a schedule needs the daemon") from exc
 
 
@@ -219,7 +219,7 @@ def get_queue_capacity(paths: Paths, queue_key: str, *, timeout: float = 5.0) ->
             response = client.get(f"/v1/queue_keys/{queue_key}/capacity")
         response.raise_for_status()
         return {"source": "daemon", **response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         conn = orchestration_db.connect(paths.pillar_db_path("orchestration"))
         capacity = orchestration_db.get_queue_capacity(conn, queue_key)
         conn.close()
@@ -232,7 +232,7 @@ def set_queue_capacity(paths: Paths, queue_key: str, capacity: int, *, timeout: 
             response = client.post(f"/v1/queue_keys/{queue_key}/capacity", json={"capacity": capacity})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable — setting queue capacity needs the daemon") from exc
 
 
@@ -243,7 +243,7 @@ def get_job(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
             response = client.get(f"/v1/jobs/{job_id}")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable(f"could not read job {job_id} from the Orchestration daemon: {exc}") from exc
 
 
@@ -255,7 +255,7 @@ def answer_step(paths: Paths, job_id: str, key: str, choice: str, *, timeout: fl
             raise DaemonUnavailable(f"answer refused: {response.json().get('detail', response.text)}")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable(f"could not send the answer to the Orchestration daemon: {exc}") from exc
 
 
@@ -265,7 +265,7 @@ def job_status(paths: Paths, job_id: str, *, timeout: float = 5.0) -> dict:
             response = client.get(f"/v1/jobs/{job_id}")
         response.raise_for_status()
         return {"source": "daemon", "job": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         conn = orchestration_db.connect(paths.pillar_db_path("orchestration"))
         job = orchestration_db.get_job(conn, job_id)
         conn.close()
@@ -283,7 +283,7 @@ def job_wait(paths: Paths, job_id: str, timeout_seconds: float | None = None) ->
             return {"source": "daemon", "job": None}
         response.raise_for_status()
         return {"source": "daemon", "job": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable(f"could not wait for the Job: the Orchestration daemon is unreachable: {exc}") from exc
 
 
@@ -294,7 +294,7 @@ def list_projects(paths: Paths, *, status: str | None = None, timeout: float = 5
             response = client.get("/v1/projects", params=params)
         response.raise_for_status()
         return {"source": "daemon", "projects": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from registry import db as registry_db
         from registry.models import ProjectStatus
 
@@ -312,7 +312,7 @@ def backlog(paths: Paths, method: str, path: str = "", *, params: dict | None = 
     try:
         with client_for_socket(paths.socket_path("registry"), timeout=timeout) as client:
             response = client.request(method, f"/v1/backlog{path}", params=params or {}, json=json)
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+    except (httpx.TransportError, OSError) as exc:
         raise DaemonUnavailable(f"the Registry & Portfolio daemon is unreachable: {exc}") from exc
     if response.status_code >= 400:
         try:
@@ -333,7 +333,7 @@ def version_status(paths: Paths, kind: str, project_id: str, *, timeout: float =
             response = client.get(f"/v1/status/{kind}", params={"project_id": project_id})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise VersionPillarUnavailable(
             "Version Control & Release daemon unreachable — this pillar has no "
             "database of its own, so there is no local fallback"
@@ -346,7 +346,7 @@ def version_config(paths: Paths, project_id: str, *, timeout: float = 5.0) -> di
             response = client.get("/v1/config", params={"project_id": project_id})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise VersionPillarUnavailable("Version Control & Release daemon unreachable") from exc
 
 
@@ -356,7 +356,7 @@ def version_issues(paths: Paths, project_id: str, *, timeout: float = 5.0) -> di
             response = client.get("/v1/issues", params={"project_id": project_id})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise VersionPillarUnavailable("Version Control & Release daemon unreachable") from exc
 
 
@@ -366,7 +366,7 @@ def version_release_candidates(paths: Paths, project_id: str, *, timeout: float 
             response = client.get("/v1/release/candidates", params={"project_id": project_id})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise VersionPillarUnavailable("Version Control & Release daemon unreachable") from exc
 
 
@@ -380,7 +380,7 @@ def requirements_list_test_suites(paths: Paths, project_id: str | None = None, *
             response = client.get("/v1/test_suites", params={"project_id": project_id} if project_id else {})
         response.raise_for_status()
         return {"source": "daemon", "test_suites": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from requirements import db as requirements_db
 
         conn = requirements_db.connect(paths.pillar_db_path("requirements"))
@@ -395,7 +395,7 @@ def requirements_get_test_suite(paths: Paths, suite_id: str, *, timeout: float =
             response = client.get(f"/v1/test_suites/{suite_id}")
         response.raise_for_status()
         return {"source": "daemon", "test_suite": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from requirements import db as requirements_db
 
         conn = requirements_db.connect(paths.pillar_db_path("requirements"))
@@ -413,7 +413,7 @@ def requirements_list_requirements(
             response = client.get("/v1/requirements", params=params)
         response.raise_for_status()
         return {"source": "daemon", "requirements": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from requirements import db as requirements_db
         from requirements.models import RequirementStatus
 
@@ -431,7 +431,7 @@ def requirements_get_requirement(paths: Paths, requirement_id: str, *, timeout: 
             response = client.get(f"/v1/requirements/{requirement_id}")
         response.raise_for_status()
         return {"source": "daemon", "requirement": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from requirements import db as requirements_db
 
         conn = requirements_db.connect(paths.pillar_db_path("requirements"))
@@ -453,7 +453,7 @@ def requirements_list_test_results(
             response = client.get("/v1/test_results", params=params)
         response.raise_for_status()
         return {"source": "daemon", "test_results": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from requirements import db as requirements_db
 
         conn = requirements_db.connect(paths.pillar_db_path("requirements"))
@@ -468,7 +468,7 @@ def requirements_list_use_cases(paths: Paths, project_id: str | None = None, *, 
             response = client.get("/v1/use_cases", params={"project_id": project_id} if project_id else {})
         response.raise_for_status()
         return {"source": "daemon", "use_cases": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from requirements import db as requirements_db
 
         conn = requirements_db.connect(paths.pillar_db_path("requirements"))
@@ -483,7 +483,7 @@ def requirements_list_milestones(paths: Paths, project_id: str | None = None, *,
             response = client.get("/v1/milestones", params={"project_id": project_id} if project_id else {})
         response.raise_for_status()
         return {"source": "daemon", "milestones": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from requirements import db as requirements_db
 
         conn = requirements_db.connect(paths.pillar_db_path("requirements"))
@@ -498,7 +498,7 @@ def requirements_report(paths: Paths, project_id: str, *, timeout: float = 10.0)
             response = client.get("/v1/report", params={"project_id": project_id})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise RequirementsPillarUnavailable(
             "Requirements & Quality daemon unreachable — the definition-of-done report is computed "
             "live and has no local fallback"
@@ -511,7 +511,7 @@ def build_list_runs(paths: Paths, project_id: str | None = None, *, timeout: flo
             response = client.get("/v1/build_runs", params={"project_id": project_id} if project_id else {})
         response.raise_for_status()
         return {"source": "daemon", "build_runs": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from build import db as build_db
 
         conn = build_db.connect(paths.pillar_db_path("build"))
@@ -526,7 +526,7 @@ def build_get_run(paths: Paths, run_id: str, *, timeout: float = 5.0) -> dict:
             response = client.get(f"/v1/build_runs/{run_id}")
         response.raise_for_status()
         return {"source": "daemon", "build_run": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from build import db as build_db
 
         conn = build_db.connect(paths.pillar_db_path("build"))
@@ -544,7 +544,7 @@ def build_list_packages(
             response = client.get("/v1/packages", params=params)
         response.raise_for_status()
         return {"source": "daemon", "packages": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from build import db as build_db
         from build.models import PackageKind
 
@@ -564,7 +564,7 @@ def policy_list(paths: Paths, topic: str | None = None, *, timeout: float = 5.0)
             response = client.get("/v1/policies", params={"topic": topic} if topic else {})
         response.raise_for_status()
         return {"source": "daemon", "policies": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from policy import db as policy_db
 
         conn = policy_db.connect(paths.pillar_db_path("policy"))
@@ -579,7 +579,7 @@ def policy_get(paths: Paths, policy_id: str, *, timeout: float = 5.0) -> dict:
             response = client.get(f"/v1/policies/{policy_id}")
         response.raise_for_status()
         return {"source": "daemon", "policy": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from policy import db as policy_db
 
         conn = policy_db.connect(paths.pillar_db_path("policy"))
@@ -594,7 +594,7 @@ def policy_winning(paths: Paths, topic: str, project_id: str, *, timeout: float 
             response = client.get("/v1/policies/winning", params={"topic": topic, "project_id": project_id})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PolicyPillarUnavailable(
             "Policy & Compliance daemon unreachable — winning-policy resolution needs project-set membership "
             "live from Registry & Portfolio, and has no local fallback"
@@ -608,7 +608,7 @@ def policy_check_results(paths: Paths, policy_id: str | None = None, project_id:
             response = client.get("/v1/policy_check_results", params=params)
         response.raise_for_status()
         return {"source": "daemon", "results": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from policy import db as policy_db
 
         conn = policy_db.connect(paths.pillar_db_path("policy"))
@@ -624,7 +624,7 @@ def policy_list_projects(paths: Paths, policy_id: str | None = None, project_id:
             response = client.get("/v1/policy_projects", params=params)
         response.raise_for_status()
         return {"source": "daemon", "projects": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from policy import db as policy_db
 
         conn = policy_db.connect(paths.pillar_db_path("policy"))
@@ -640,7 +640,7 @@ def policy_list_drafts(paths: Paths, status: str | None = None, *, timeout: floa
             response = client.get("/v1/policy_drafts", params=params)
         response.raise_for_status()
         return {"source": "daemon", "drafts": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError):
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError):
         from policy import db as policy_db
         from policy.models import DraftStatus
 
@@ -656,7 +656,7 @@ def policy_gating_for_job(paths: Paths, project_id: str, categories: list[str], 
             response = client.get("/v1/policies/gating-for-job", params={"project_id": project_id, "categories": ",".join(categories)})
         response.raise_for_status()
         return {"project_id": project_id, "categories": categories, "policies": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise PolicyPillarUnavailable(
             "Policy & Compliance daemon unreachable — gating resolution needs project-set membership "
             "live from Registry & Portfolio, and has no local fallback"
@@ -683,7 +683,7 @@ def policy_evaluate(
     try:
         with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
             response = client.post("/v1/policies/evaluate", json=body)
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+    except (httpx.TransportError, OSError) as exc:
         raise PolicyPillarUnavailable(
             "Policy & Compliance daemon unreachable -- policies only run in its sandbox"
         ) from exc
@@ -720,7 +720,7 @@ def _policy_bypass(paths: Paths, method: str, body: dict | None, timeout: float)
     try:
         with client_for_socket(paths.socket_path("policy"), timeout=timeout) as client:
             response = client.request(method, "/v1/bypass", json=body)
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+    except (httpx.TransportError, OSError) as exc:
         raise PolicyPillarUnavailable("Policy & Compliance daemon unreachable -- the bypass flag lives there") from exc
     if response.status_code in (400, 403):
         raise PolicyBypassRefused(str(response.json().get("detail", response.text)))
@@ -739,7 +739,7 @@ def _deployment_get(paths: Paths, path: str, *, params: dict | None = None, time
             response = client.get(path, params=params or {})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc
 
 
@@ -765,7 +765,7 @@ def provision_worktree(paths: Paths, project_id: str, commitish: str, *, timeout
             response = client.post("/v1/worktrees", json={"project_id": project_id, "commitish": commitish})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc
 
 
@@ -775,7 +775,7 @@ def release_worktree(paths: Paths, project_id: str, worktree_id: str, *, timeout
             response = client.delete(f"/v1/worktrees/{worktree_id}", params={"project_id": project_id})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc
 
 
@@ -799,7 +799,7 @@ def complete_orchestration_job(
                 f"/v1/jobs/{job_id}/complete", json={"succeeded": succeeded, "result": result, "error": error}
             )
         return response.status_code == 200
-    except (httpx.ConnectError, httpx.TimeoutException, OSError):
+    except (httpx.TransportError, OSError):
         return False
 
 
@@ -813,7 +813,7 @@ def usage_candidates(paths: Paths, *, state: str = "open", limit: int | None = N
             response = client.get("/v1/candidates", params={"state": state, **({"limit": limit} if limit is not None else {})})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
 
 
@@ -823,7 +823,7 @@ def usage_plugin_proposals(paths: Paths, *, state: str = "open", limit: int | No
             response = client.get("/v1/plugin_proposals", params={"state": state, **({"limit": limit} if limit is not None else {})})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
 
 
@@ -836,7 +836,7 @@ def trigger_request(paths: Paths, method: str, path: str = "", *, json: dict | N
             raise DaemonUnavailable(f"refused: {response.json().get('detail', response.text)}")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable(f"the Orchestration daemon is unreachable: {exc}") from exc
 
 
@@ -847,7 +847,7 @@ def usage_findings(paths: Paths, *, project: str | None = None, state: str = "op
             response = client.get("/v1/findings", params=params)
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
 
 
@@ -863,7 +863,7 @@ def usage_summary(paths: Paths, *, project: str | None = None, week: str | None 
             response = client.get("/v1/summary", params=params)
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise UsagePillarUnavailable(f"the Usage & Efficiency daemon is unreachable: {exc}") from exc
 
 
@@ -873,7 +873,7 @@ def agent_runs(paths: Paths, project_id: str, *, status: str | None = None, time
             response = client.get(f"/v1/runs/{project_id}", params={"status": status} if status else {})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
 
 
@@ -883,7 +883,7 @@ def agent_run_status(paths: Paths, project_id: str, run_id: str, *, timeout: flo
             response = client.get(f"/v1/runs/{project_id}/{run_id}")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
 
 
@@ -893,7 +893,7 @@ def agent_ci_checks(paths: Paths, project_id: str, *, timeout: float = 5.0) -> d
             response = client.get(f"/v1/ci_checks/{project_id}")
         response.raise_for_status()
         return {"ci_checks": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
 
 
@@ -905,7 +905,7 @@ def agent_latest_ci_check(paths: Paths, project_id: str, *, branch: str | None =
             return {"ci_check": None}
         response.raise_for_status()
         return {"ci_check": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
 
 
@@ -915,7 +915,7 @@ def agent_session_status(paths: Paths, project_id: str, *, timeout: float = 5.0)
             response = client.get(f"/v1/sessions/{project_id}")
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise AgentPillarUnavailable("Agentic Development daemon unreachable") from exc
 
 
@@ -925,7 +925,7 @@ def pump(paths: Paths, *, timeout: float = 10.0) -> dict:
             response = client.post("/v1/pump")
         response.raise_for_status()
         return {"dispatched": response.json()}
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DaemonUnavailable("Orchestration daemon unreachable") from exc
 
 
@@ -938,5 +938,23 @@ def deployment_rollback_timeout(paths: Paths, project_id: str, deploy_id: str, *
             response = client.post(f"/v1/rollback-timeout/{project_id}", json={"deploy_id": deploy_id})
         response.raise_for_status()
         return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc
+
+
+class GenerationPillarUnavailable(Exception):
+    pass
+
+
+def generation_request(paths: Paths, method: str, path: str, *, json: dict | None = None, params: dict | None = None,
+                       timeout: float = 30.0):
+    """One call to Image Generation's Pillar Interface; a refusal's reason is in the error."""
+    try:
+        with client_for_socket(paths.socket_path("generation"), timeout=timeout) as client:
+            response = client.request(method, path, json=json, params=params)
+        if response.status_code in (404, 409, 422):
+            raise GenerationPillarUnavailable(f"refused: {response.json().get('detail', response.text)}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise GenerationPillarUnavailable(f"the Image Generation daemon is unreachable (is the generation pillar enabled?): {exc}") from exc

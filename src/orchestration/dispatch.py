@@ -46,6 +46,10 @@ DECLARED_UNSTOPPABLE_JOB_TYPES: frozenset[str] = frozenset({
     "version.release_candidate_promote", "version.release_finish",
     "version.support_start", "version.support_finish",
     "version.config_add_hook", "version.config_remove_hook",
+    # 2026-10-27 finding, the OQ-14 class once more: `version.stabilize` (with execute=True) commits,
+    # finishes branches, pushes and deletes merged remote branches for real — genuinely slower than the
+    # 20s default on a repo with several branches, and not safely retriable mid-push/mid-delete.
+    "version.stabilize",
     # Answers `accepted` at once and runs on (release start/finish mid-way
     # must never be cut off); the 180s dispatch ceiling below is ample.
     "version.release",
@@ -121,6 +125,12 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     # experiment measurements synchronously in its request handler, which outlasts the 20s default on a
     # real transcript history; the Job was requeued while still running and could run twice.
     "usage.analyze": 300.0,
+    # 2026-10-27 finding: agent.confirm_incident answers 'accepted' and runs its task in a background
+    # thread (the same fire-and-forget shape as agent.run_task), so the dispatch call itself should be
+    # near-instant — but it was still requeued past the plain 20s default, most likely dispatch-call
+    # overhead under load rather than real handler work. A modest margin over the default, well short of
+    # a real synchronous Job's ceiling.
+    "agent.confirm_incident": 60.0,
 }
 
 
@@ -224,7 +234,18 @@ def dispatch_job(
                     status, error = JobStatus.FAILED, body.get("error", "pillar reported failure")
             else:
                 status, error = JobStatus.FAILED, f"pillar returned status {response.status_code}"
-        except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+        except (httpx.RemoteProtocolError, httpx.ReadError):
+            # It took the request and closed the connection unanswered: it stopped (a stop cuts what
+            # still runs) or crashed mid-way. Escaping here left the Job `running` for six hours
+            # (REQ-000000407); what the pillar did is unknown, so it is not run again. Both are
+            # httpx.TransportError subclasses (ProtocolError/NetworkError), so this must be checked
+            # before the broader TransportError catch below, or it never runs.
+            dropped = True
+            status, error = JobStatus.FAILED, (
+                f"the {job.target_pillar} pillar dropped the request before answering (it stopped or crashed), "
+                "so whether it did the Job is unknown"
+            )
+        except (httpx.TransportError, OSError) as exc:
             # Pillar enabled but unreachable right now — leave the job queued
             # so it's retried once Core reports the pillar healthy again,
             # rather than failing outright.
@@ -233,15 +254,6 @@ def dispatch_job(
                 # It took the request: requeued all the same, but it may still be doing it.
                 took_it = True
                 error = f"target pillar did not answer within {timeout:g}s and may still be doing it; requeued, so it may run twice"
-        except (httpx.RemoteProtocolError, httpx.ReadError):
-            # It took the request and closed the connection unanswered: it stopped (a stop cuts what
-            # still runs) or crashed mid-way. Escaping here left the Job `running` for six hours
-            # (REQ-000000407); what the pillar did is unknown, so it is not run again.
-            dropped = True
-            status, error = JobStatus.FAILED, (
-                f"the {job.target_pillar} pillar dropped the request before answering (it stopped or crashed), "
-                "so whether it did the Job is unknown"
-            )
 
         with guard:
             if lock is not None:
@@ -468,7 +480,7 @@ def _ask_pillar_to_stop(job: Job, socket_lookup: SocketLookup, *, timeout: float
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.post(f"/v1/jobs/{job.id}/stop", json={"type": job.type, "force": force})
-    except (httpx.ConnectError, httpx.TimeoutException, OSError):
+    except (httpx.TransportError, OSError):
         return "target pillar unreachable"
     if response.status_code == 200 and response.json().get("stopped"):
         return None

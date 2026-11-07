@@ -35,7 +35,7 @@ def resolve_project(paths: Paths, project_id: str | None, *, timeout: float = 5.
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.get(f"/v1/projects/{project_id}")
-    except (httpx.ConnectError, httpx.TimeoutException, OSError) as exc:
+    except (httpx.TransportError, OSError) as exc:
         raise ProjectResolutionError(f"Registry & Portfolio pillar unreachable: {exc}") from exc
 
     if response.status_code == 404:
@@ -46,3 +46,19 @@ def resolve_project(paths: Paths, project_id: str | None, *, timeout: float = 5.
 
 def resolve_project_path(paths: Paths, project_id: str | None, *, timeout: float = 5.0) -> Path:
     return Path(resolve_project(paths, project_id, timeout=timeout)["path"])
+
+
+def registered_project_ids(paths: Paths, *, timeout: float = 3.0) -> set[str] | None:
+    """The names of the projects currently registered, or None when Registry & Portfolio does not
+    answer: a caller that only quiets what concerns an unregistered project treats None as "unknown"
+    and quiets nothing."""
+    socket_path = resolve_pillar_socket(paths, "registry", timeout=timeout)
+    if socket_path is None:
+        return None
+    try:
+        with client_for_socket(socket_path, timeout=timeout) as client:
+            response = client.get("/v1/projects")
+        response.raise_for_status()
+        return {row["name"] for row in response.json()}
+    except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError):
+        return None

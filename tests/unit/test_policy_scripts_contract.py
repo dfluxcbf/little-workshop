@@ -19,8 +19,9 @@ from policy.models import GatePoint
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "tools" / "policy_scripts"
 MANIFEST = json.loads((SCRIPTS / "policies.json").read_text())["policies"]
-COMMIT_LEVEL = {"commit-bumps-version", "branch-commit-dev-suffix", "version-format", "commit-cites-requirement",
-                "unity-meta-files-paired", "lfs-tracked-files-are-pointers", "no-committed-secrets"}
+COMMIT_LEVEL = {"commit-bumps-version", "branch-commit-dev-suffix", "version-format",
+                "unity-meta-files-paired", "lfs-tracked-files-are-pointers", "no-committed-secrets",
+                "requirement-marker-not-superseded"}
 
 
 def script(topic: str) -> Path:
@@ -435,7 +436,7 @@ def test_claude_instructions_valid_checks_skill_and_hook_scripts_and_size(tmp_pa
     assert verdict("claude-instructions-valid", repo)[0] == "pass"  # HTML comments never load
     agents.write_text(agents.read_text() + "line\n" * 250)
     outcome, out = verdict("claude-instructions-valid", repo)
-    assert outcome == "fail" and "limit 200" in out
+    assert outcome == "pass" and "advice, not a failure" in out and "limit 200" in out  # REQ-000000451: a warning
 
 
 # --- REQ-000000307: commit-level policies judge the pending commit (the Unity source folders) -
@@ -689,7 +690,7 @@ def test_claude_instructions_valid_limits_what_a_session_starts_with(tmp_path):
     assert verdict("claude-instructions-valid", repo)[0] == "pass"
     (repo / ".claude" / "rules" / "everywhere.md").write_text("# No paths, so every session\n" + "rule\n" * 80)
     outcome, out = verdict("claude-instructions-valid", repo)
-    assert outcome == "fail" and "Every session starts with" in out and "limit 250" in out
+    assert outcome == "pass" and "Every session starts with" in out and "limit 250" in out  # REQ-000000451: a warning
     assert "docs/state.md 150" in out and ".claude/rules/everywhere.md 81" in out
     (repo / ".claude" / "rules" / "everywhere.md").write_text('---\npaths:\n  - "docs/**"\n---\n' + "rule\n" * 80)
     assert verdict("claude-instructions-valid", repo)[0] == "pass"
@@ -755,3 +756,71 @@ def test_no_committed_secrets_does_not_flag_its_own_patterns():
     module = util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.findings(script("no-committed-secrets").read_text()) == []
+
+
+# --- REQ-000000449: no test cites a superseded or removed requirement -------------------------
+
+# Built at run time, like MARKER above: written out, it would be a section of this file.
+SECTION = "# " + "--- "
+REGISTER_HEAD = "| ID | Description | Status |\n| --- | --- | --- |\n"
+
+
+def _register(repo, *rows):
+    (repo / "docs").mkdir(exist_ok=True)
+    (repo / "docs" / "requirements.md").write_text(REGISTER_HEAD + "".join(f"| {k} | **T.** text | {cell} |\n" for k, cell in rows))
+
+
+def _tagged(repo, name, key):
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / "tests" / name).write_text(f"{SECTION}{key}: t ---\ndef test_x(): pass\n")
+
+
+def _superseded_repo(tmp_path):
+    repo = make_repo(tmp_path)
+    _register(repo, ("REQ-000000001", "done"), ("REQ-000000002", "M3"))
+    _tagged(repo, "test_a.py", "REQ-000000001")
+    _tagged(repo, "test_b.py", "REQ-000000002")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "tests")
+    return repo
+
+
+def test_marker_not_superseded_refuses_a_commit_retiring_a_row_its_tests_still_cite(tmp_path):
+    repo = _superseded_repo(tmp_path)
+    _register(repo, ("REQ-000000001", "done, superseded by REQ-000000003"), ("REQ-000000003", "draft"), ("REQ-000000002", "M3"))
+    git(repo, "add", "-A")
+    outcome, out = verdict("requirement-marker-not-superseded", repo, pending(tmp_path, files=["docs/requirements.md"]))
+    assert outcome == "fail" and "tests/test_a.py:1: cites REQ-000000001" in out and "Fix:" in out
+    assert "test_b.py" not in out
+    _tagged(repo, "test_a.py", "REQ-000000003")
+    git(repo, "add", "-A")
+    assert verdict("requirement-marker-not-superseded", repo,
+                   pending(tmp_path, files=["docs/requirements.md", "tests/test_a.py"]))[0] == "pass"
+
+
+def test_marker_not_superseded_reads_a_removed_milestone_cell_and_judges_head_without_a_pending_commit(tmp_path):
+    repo = _superseded_repo(tmp_path)
+    _register(repo, ("REQ-000000001", "done"), ("REQ-000000002", "M3, removed in M9"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "retire")
+    outcome, out = verdict("requirement-marker-not-superseded", repo)
+    assert outcome == "fail" and "tests/test_b.py:1: cites REQ-000000002" in out
+
+
+def test_marker_not_superseded_leaves_an_old_leftover_to_commits_that_touch_it(tmp_path):
+    repo = _superseded_repo(tmp_path)
+    _register(repo, ("REQ-000000001", "done"), ("REQ-000000002", "removed"))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "retire, leftover kept")
+    commit(repo, "unrelated", path="src/x.txt")
+    assert verdict("requirement-marker-not-superseded", repo)[0] == "pass"
+    (repo / "tests" / "test_b.py").write_text((repo / "tests" / "test_b.py").read_text() + "def test_y(): pass\n")
+    git(repo, "add", "-A")
+    assert verdict("requirement-marker-not-superseded", repo, pending(tmp_path, files=["tests/test_b.py"]))[0] == "fail"
+
+
+def test_marker_not_superseded_skips_a_project_without_a_register(tmp_path):
+    repo = make_repo(tmp_path)
+    commit(repo, "x")
+    assert verdict("requirement-marker-not-superseded", repo)[0] == "skip"
+

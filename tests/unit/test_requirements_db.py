@@ -236,3 +236,24 @@ def test_test_results_has_a_suite_executed_at_index(conn):
     # take ~9.7s.
     names = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='test_results'")}
     assert "idx_test_results_suite_executed" in names
+
+
+# --- REQ-000000448: an older database gains the superseded_by column ---------------------------
+
+def test_connect_adds_superseded_by_to_an_older_database(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("""CREATE TABLE requirements (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, key TEXT NOT NULL,
+        title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL, use_case_id TEXT, milestone_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+    old.execute("INSERT INTO requirements VALUES ('r1', 'p1', 'REQ-1', 't', '', '', 'published', NULL, NULL,"
+                " '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')")
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    requirement = db.get_requirement(conn, "r1")
+    assert requirement.superseded_by is None and requirement.status.value == "published"
+    db.connect(path).close()  # a second connect finds the column and leaves it
+    conn.close()

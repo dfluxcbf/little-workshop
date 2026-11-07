@@ -19,9 +19,9 @@ Where an instruction lives decides when it loads, so put each one where it is ne
 
 When changing them, update or delete an existing line before adding one, and add only what the code does not
 show (commands, pitfalls, reasons, conventions that differ from the defaults), checked against the repository.
-The policy `claude-instructions-valid` fails an instruction file over 200 lines, more than 250 lines
-loaded at session start, an `@` import that does not resolve, a rule pattern that matches no file, and a skill
-or subagent without a description.
+The policy `claude-instructions-valid` fails an `@` import that does not resolve, a rule pattern that matches no
+file, and a skill or subagent without a description; an instruction file over 200 lines or more than
+250 lines loaded at session start is only a warning.
 
 little-workshop generates `.claude/little-workshop.md`, this rule, the `policy-preflight` and
 `workshop-lifecycle` skills, `.claude/hooks/lws_scope_guard.py` and the permission table and guard hook in

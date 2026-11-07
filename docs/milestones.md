@@ -51,6 +51,7 @@ little-workshop`.
 | M20 | Claude usage — findings | M19 | Done (2026-10-04) — built and unit-tested, not yet deployed; see `docs/pillars/usage.md` |
 | M21 | Claude usage — automation mining and workshop triggers | M20 | Done (2026-10-04) — built and unit-tested, not yet deployed; see `docs/pillars/usage.md` and `docs/pillars/orchestration.md` |
 | M22 | Claude usage — token-aware operation | M19 | Done (2026-10-04) — built and unit-tested, not yet deployed |
+| M23 | Image Generation (the `generation` pillar): a ComfyUI queue | M7, M14 | Built (2026-10-23) — unit-tested, run once against the live ComfyUI, Dashboard Images page; enabled in the manifest and running. Recipes (`pbr-texture`), per-picture node setups, the duplicate check and the ComfyUI hand-over built and unit-tested 2026-10-24 and redeployed (`tailscale serve` as `svc:comfyui`), not yet run live. The two-step PBR route (`seamless-texture`, then `pbr-maps` on chosen pictures) built and unit-tested 2026-10-24 and redeployed. The material sphere on a picture's page and the Dashboard's own Generation group built and unit-tested 2026-10-25, not yet redeployed; see `docs/pillars/generation.md` |
 
 Everything below M1 is new to this pass — laid out in one sitting so the
 dependency graph is visible up front, not discovered one milestone late.

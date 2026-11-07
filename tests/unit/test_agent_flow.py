@@ -1105,3 +1105,34 @@ def test_run_task_carries_on_when_no_standards_folder_can_be_found(paths, conn, 
     result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
 
     assert result.status == db.AWAITING_FINISH and runner.path is None
+
+
+# --- REQ-NONE: finishing work left on the integration branch moves it onto a branch first ---
+
+def test_finish_task_on_integration_branch_stashes_starts_branch_and_commits(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    patch_version_client(monkeypatch, repo)
+    (repo / "fix.txt").write_text("fix\n", encoding="utf-8")
+    (repo / "README.md").write_text("changed\n", encoding="utf-8")
+    run_id = db.new_run_id()
+    db.create_run(conn, run_id, job_id=None, project_id="little-meals", intent="task", review_mode="manual", title="Fix It", source={})
+    db.update_run(conn, run_id, status=db.AWAITING_FINISH, branch="dev", branch_type=None)
+
+    import agent.flow as flow_module
+
+    finished = []
+    real_run_job = flow_module.version_client.run_job
+    monkeypatch.setattr(
+        flow_module.version_client, "run_job",
+        lambda paths, pid, job_type, params, **kw: finished.append(job_type) if job_type.endswith("_finish") else real_run_job(paths, pid, job_type, params, **kw),
+    )
+    summary = AgentFlow(paths=paths).finish_task(conn, run_id, project_dir=repo)
+
+    run = db.get_run(conn, run_id)
+    assert run["branch"] == "improvement/fix-it" and run["branch_type"] == "improvement"
+    assert run["status"] == db.FINISHED
+    assert finished == ["version.improvement_finish"]
+    assert "improvement/fix-it" in summary
+    assert subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout == ""
+    assert (repo / "fix.txt").exists()
+    assert subprocess.run(["git", "log", "-1", "--format=%s"], cwd=repo, capture_output=True, text=True).stdout.strip() == "Fix It"

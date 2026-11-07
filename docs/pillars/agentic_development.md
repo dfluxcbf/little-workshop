@@ -297,6 +297,12 @@ running; `lws agent session-list` loops that over Registry & Portfolio's
 own project list for the old tool's "every project" view, the same
 pattern `version.branch_audit`/`version.stabilize` already established.
 
+(2026-10-28, REQ-000000467.) Neither `dtach` nor `systemd --user` exists for a Windows-hosted
+project's own session — it runs as a real Windows process instead (`common/windows_process.py`,
+docs/architecture.md's "Windows-hosted projects"), tracked by a PID file
+(`Paths.session_windows_pid_path`) rather than a process-list match. The trust check above also looks
+at that side's own `.claude.json` for such a project (`is_trusted`, `windows.windows_claude_configs`).
+
 ## Left open
 
 - Whether Agentic Development's own review-mode parameter (manual vs.

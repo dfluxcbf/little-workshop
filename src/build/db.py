@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS packages (
 """
 
 
+def purge_project(conn: sqlite3.Connection, project_id: str) -> dict:
+    """Remove a project's build runs and package records (the package files are not touched)."""
+    removed = {t: conn.execute(f"DELETE FROM {t} WHERE project_id = ?", (project_id,)).rowcount for t in ("build_runs", "packages")}
+    conn.commit()
+    return removed
+
+
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, check_same_thread=False)

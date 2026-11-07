@@ -165,6 +165,7 @@ deliberately *not* turned into entries:
 | `draft-published-lifecycle` | A requirement shall have a status of draft or published; draft shall be mutable and the default, published shall be immutable. | `little-requirements` design.md |
 | `local-only-no-auth` | WHERE a tool runs a local HTTP server, the server shall bind to localhost with no built-in authentication and shall never be exposed except via Tailscale. | `little-requirements` architecture.md; generalizes the same choice in `little-pypi`, `little-runner` |
 | `requirement-marker-registered` | The project's pytest configuration shall register a `requirement` marker. | `requirements_policy.md` ("registered in `pyproject.toml`") |
+| `requirement-marker-not-superseded` | Where the project keeps a `docs/requirements.md` register, a commit shall leave no test citing a requirement whose row is marked superseded or removed (REQ-000000449). | `requirements_policy.md` — a requirement never caps a newer request (2026-10-24). Judges what the commit introduces. |
 | `requirement-marker-id-format` | Every `requirement` marker in the project's tests shall reference an identifier of the form `REQ-` followed by nine digits. | `requirements_policy.md` — "not invented text". Complements `requirement-id-format`, which is about how identifiers are generated. |
 
 ## E. Build &amp; packaging

@@ -33,7 +33,7 @@ def provision_worktree(
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.post("/v1/worktrees", json={"project_id": project_id, "commitish": commitish})
         response.raise_for_status()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise WorktreeUnavailable(f"Deployment & Servers pillar unreachable: {exc}") from exc
     payload = response.json()
     return payload["worktree_id"], Path(payload["path"])
@@ -47,5 +47,5 @@ def release_worktree(paths: Paths, project_id: str, worktree_id: str, *, timeout
         with client_for_socket(socket_path, timeout=timeout) as client:
             response = client.delete("/v1/worktrees/{}".format(worktree_id), params={"project_id": project_id})
         response.raise_for_status()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise WorktreeUnavailable(f"Deployment & Servers pillar unreachable: {exc}") from exc

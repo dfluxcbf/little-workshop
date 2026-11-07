@@ -7,11 +7,36 @@ publishes and checks its policies at each step. Use the `little-workshop` MCP to
 As little-workshop's own project, this session also administers little-workshop: it authors, activates
 and configures policies and redeploys the pillars; registering projects belongs in `little-projects`.
 
+The user's newest request outranks what was decided before. Design docs, house settings in instruction
+files, Claude's memories, requirement rows and tests that pin a look record earlier choices, often
+simplifications made for that stage; none is a reason to do less than, or other than, what the user
+now asks. When one conflicts, follow the request and change the old item in the same work (edit the doc,
+supersede or remove the requirement, update the test, rewrite the memory), and say what you changed.
+Read the request and the files it names in full. When it is unclear, ask; never settle it with an
+earlier decision.
+
+Image generation: little-workshop renders pictures on this machine's ComfyUI. Generate only when the user asked
+for images, or after asking the user and getting a yes; never on your own initiative. Choose the model for the
+picture with `workshop_generation_models` (purpose, licence, prompting, LoRAs; pass a purpose for a
+recommendation). `workshop_generation_submit` queues a set of prompts (batching, restarts and re-rendering grey
+outputs are its job) and asks for permission;
+`workshop_generation_wait` waits for the request, and `workshop_generation_download` writes the pictures into a
+folder of this project, checking every SHA-256. A recipe is a saved ComfyUI node setup a prompt can render instead
+of a model (`workshop_generation_recipes`; submit with `recipe`). PBR textures take two steps: `seamless-texture`
+renders tileable textures from the prompt; after choosing one, `pbr-maps` with the picture as `source` gives its
+albedo, normal, height, occlusion, roughness and metallic maps. `workshop_generation_picture_setup` shows the nodes
+a picture was rendered with. In an agent task it works only when the user allowed it for that
+task; otherwise say in the report which pictures you would generate. Resuming a paused queue and deleting
+little-workshop's copies are the user's decisions.
+The GPU is shared (ComfyUI, the Unity Editor, Blender, the desktop): before GPU work, read
+`workshop_generation_gpu` (usage level, who uses it, when the queue is idle) and decide whether to go ahead, wait
+or do other work first. It informs; nothing is locked.
+
 These are checked, not remembered. When one refuses something, its message says what to do instead:
 
 - Every commit: `.githooks/pre-commit` writes `VERSION` on `feature/` and `improvement/` branches, and
-  `.githooks/commit-msg` runs the policies gating `commit` (`VERSION` raised and well-formed, a `REQ-nnnnnnnnn`
-  or `REQ-NONE` citation when source changes, no committed secrets) and refuses a commit that breaks one.
+  `.githooks/commit-msg` runs the policies gating `commit` (`VERSION` raised and well-formed,
+  no committed secrets, no test left citing a retired requirement) and refuses a commit that breaks one.
 - A branch finish, release, deploy or publish: little-workshop runs the policies gating it and holds a failing
   action in `pending_confirmation`. Run the `policy-preflight` skill first, and report a held action rather
   than working around it.

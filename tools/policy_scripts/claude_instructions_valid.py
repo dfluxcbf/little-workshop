@@ -9,7 +9,9 @@ Claude Code instructions load as written, and the part every session loads stays
   .claude/settings.json runs exists.
 - Every instruction file (each AGENTS.md, rule and imported file) stays within 200 lines, and
   what a session loads at launch (the root briefing, the rules without `paths` and everything they
-  import) within 250.
+  import) within 250. These two are advice (2026-10-24, REQ-000000451): reported as a warning in the
+  check's output, never a failure, since a limit that forces useful context out does more harm than
+  a long briefing.
 
 Claude Code fails quietly on each of these: a missing import is skipped, one outside the project
 loads only after the user approves it (and never in a sandbox or another clone), a rule whose
@@ -21,6 +23,7 @@ import json
 import os
 import re
 import subprocess
+import warnings
 
 import pytest
 
@@ -241,7 +244,7 @@ def test_claude_instructions_load_as_written():
                                 "never loads for it. Fix the pattern or delete it.")
 
     # Imports, followed as Claude Code follows them (up to four hops), and file sizes.
-    lines_of = {}
+    lines_of, advice = {}, []
     queue = [(f, 0) for f in briefings + rules]
     while queue:
         rel, depth = queue.pop(0)
@@ -250,7 +253,7 @@ def test_claude_instructions_load_as_written():
         text = read(rel)
         lines_of[rel] = loaded_lines(text)
         if lines_of[rel] > MAX_LINES:
-            problems.append(f"{rel}: {lines_of[rel]} lines loaded into context (limit {MAX_LINES}). Fix: keep the "
+            advice.append(f"{rel}: {lines_of[rel]} lines loaded into context (limit {MAX_LINES}). Fix: keep the "
                             "briefing to what every session needs; move guidance for one part of the tree into a "
                             ".claude/rules/ file with `paths:`, and procedures into a skill.")
         if depth >= MAX_IMPORT_DEPTH:
@@ -280,7 +283,7 @@ def test_claude_instructions_load_as_written():
     total = sum(startup.values())
     if total > MAX_STARTUP_LINES:
         parts = ", ".join(f"{rel} {n}" for rel, n in sorted(startup.items(), key=lambda kv: -kv[1]))
-        problems.append(f"Every session starts with {total} lines of instructions ({parts}; limit "
+        advice.append(f"Every session starts with {total} lines of instructions ({parts}; limit "
                         f"{MAX_STARTUP_LINES}). Fix: keep in the briefing only what every session needs; give "
                         "rules a `paths:` list so they load with the files they cover, turn procedures into skills, "
                         "and drop what the code or a hook already says.")
@@ -322,6 +325,8 @@ def test_claude_instructions_load_as_written():
                             problems.append(f".claude/settings.json: the {event} hook runs {target}, which does "
                                             "not exist. Fix the command or add the script.")
 
+    for note in advice:
+        warnings.warn(UserWarning(f"advice, not a failure: {note}"))
     assert not problems, (
         "The project's Claude Code instructions do not load as written:\n- " + "\n- ".join(problems)
     )

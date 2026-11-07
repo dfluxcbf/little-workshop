@@ -163,7 +163,7 @@ def test_d11_and_d12_flag_an_unused_mcp_server_and_job_runs_under_plan_pressure(
 def test_thresholds_come_from_the_pillars_configuration(conn):
     session(conn, "s1")
     request(conn, "r1", "s1", read=300_000)
-    period = detectors.Period(TODAY, TODAY)
+    period = detectors.Period(TODAY - timedelta(days=1), TODAY)  # an hour ago is yesterday until 01:00
     assert detectors.measure(conn, period, PRICES, only=("D1",))[0].flagged is True
     relaxed = {"thresholds": {"d1_long_context_share": 1.5}}
     assert detectors.measure(conn, period, PRICES, relaxed, only=("D1",))[0].flagged is False

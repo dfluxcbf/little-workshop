@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
+from common.windows import is_windows_checkout
 from registry import claude_templates as ct
 
 PLATFORM_PROJECT = "little-workshop"
@@ -87,9 +88,9 @@ def is_generated_entry(entry: str, owned: set[str]) -> bool:
 
 
 def is_guard_entry(entry: dict) -> bool:
-    """A hook entry the generator writes: the scope guard or the test-output filter."""
+    """A hook entry the generator writes: the scope guard, the test-output filter or the reminder."""
     return any(path in (hook.get("command") or "") for hook in entry.get("hooks") or []
-               for path in (ct.GUARD_PATH, ct.TEST_FILTER_PATH))
+               for path in (ct.GUARD_PATH, ct.TEST_FILTER_PATH, ct.REMINDER_PATH))
 
 
 def merged_settings(project_id: str, template: str, current: dict | None, options: dict | None = None) -> dict:
@@ -122,7 +123,7 @@ def merged_settings(project_id: str, template: str, current: dict | None, option
 
 def wanted_files(checkout: Path, project_id: str, template: str) -> dict[str, str]:
     options = options_in(checkout, project_id)
-    files = ct.claude_files(project_id, template, **options)
+    files = ct.claude_files(project_id, template, windows=is_windows_checkout(checkout), **options)
     try:
         current = json.loads((checkout / ct.SETTINGS_PATH).read_text(encoding="utf-8"))
     except (OSError, ValueError):

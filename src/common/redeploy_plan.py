@@ -31,7 +31,7 @@ from typing import Callable, Iterable
 
 _FIRST = "orchestration"
 _RUNNERS = ("build", "agent", "dashboard")
-_REST = ("policy", "registry", "requirements", "version", "mcp", "usage")
+_REST = ("policy", "registry", "requirements", "version", "mcp", "usage", "generation")
 _DEPLOYER = "deployment"
 _CORE = "core"
 
