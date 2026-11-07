@@ -106,10 +106,44 @@ def submit_job(paths: Paths, template: dict, *, timeout: float = 60.0) -> dict:
         return {"status": "failed", "error": str(exc)}
 
 
+def wait_job(paths: Paths, job_id: str, timeout: float) -> dict | None:
+    """Orchestration's long poll (`GET /v1/jobs/<id>/wait`): the Job once it settled, is held or asks, else as
+    it is after `timeout` seconds; None when Orchestration could not be asked."""
+    socket_path = resolve_pillar_socket(paths, "orchestration")
+    if socket_path is None:
+        return None
+    try:
+        with client_for_socket(socket_path, timeout=timeout + 15.0) as client:
+            response = client.get(f"/v1/jobs/{job_id}/wait", params={"timeout": timeout})
+        response.raise_for_status()
+        return response.json()
+    except (httpx.HTTPError, OSError, ValueError):
+        return None
+
+
+# How long a Job waits for the improvement branch it asked for: the start runs the policies gating it.
+BRANCH_START_TIMEOUT_SECONDS = 300.0
+_UNSETTLED = ("queued", "running")
+
+
 def start_improvement_branch(paths: Paths, project_id: str, name: str) -> dict:
-    """Ask Orchestration for a `version.improvement_start` Job and return it as it settled."""
-    return submit_job(paths, {"type": "version.improvement_start", "target_pillar": "version", "project_id": project_id,
-                              "params": {"name": name, "issue": None, "force": False}, "queue_key": project_id})
+    """Ask Orchestration for a `version.improvement_start` Job and return it once it settled (REQ-000000532).
+    Every caller is a Job holding the project's queue key, so the start goes without one: under the same key it
+    queued behind the Job that asked for it, which read the `queued` answer as a failed start."""
+    job = submit_job(paths, {"type": "version.improvement_start", "target_pillar": "version", "project_id": project_id,
+                             "params": {"name": name, "issue": None, "force": False}})
+    deadline = time.monotonic() + BRANCH_START_TIMEOUT_SECONDS
+    while job.get("id") and job.get("status") in _UNSETTLED:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
+        waited = wait_job(paths, job["id"], min(left, 120.0))
+        if waited is None:
+            break
+        job = waited
+        if any(s.get("state") == "attention" for s in job.get("steps") or []):
+            break  # a question only the owner answers (a dirty tree): reported as it stands, never waited out
+    return job
 
 
 PREFLIGHT_TIMEOUT_SECONDS = 900.0

@@ -319,3 +319,60 @@ def test_the_toolkit_tools_are_classified_reads_free_and_writes_asked():
     assert {"workshop_toolkit_sources", "workshop_toolkit_items", "workshop_toolkit_status"} <= set(tool_access.MCP_READ_ONLY)
     assert {"workshop_toolkit_install", "workshop_toolkit_remove", "workshop_toolkit_update", "workshop_toolkit_add_source",
             "workshop_usage_draft_skill"} <= set(tool_access.MCP_ASK)
+
+
+# --- REQ-000000532: A Job's own branch start runs and is waited for ---
+
+def test_branch_start_skips_the_project_queue_and_waits_until_it_settles(monkeypatch, tmp_path):
+    """The Job asking for the branch holds the project's queue key: the start submitted under the same key queued
+    behind it, came back `queued`, and the install was skipped although the branch appeared a moment later."""
+    from registry import app as app_module
+
+    submitted, waited = [], []
+
+    def fake_submit(paths, template, **kw):
+        submitted.append(template)
+        return {"id": "start-1", "status": "queued"}
+
+    def fake_wait(paths, job_id, timeout):
+        waited.append(job_id)
+        return {"id": job_id, "status": "running"} if len(waited) == 1 else \
+            {"id": job_id, "status": "succeeded", "result": {"branch": "improvement/toolkit-x"}}
+
+    monkeypatch.setattr(app_module, "submit_job", fake_submit)
+    monkeypatch.setattr(app_module, "wait_job", fake_wait)
+    job = app_module.start_improvement_branch(Paths(config_home=tmp_path / "config", state_home=tmp_path / "state"), "little-meals", "toolkit-x")
+
+    assert job["status"] == "succeeded" and job["result"]["branch"] == "improvement/toolkit-x"
+    assert submitted[0]["type"] == "version.improvement_start" and submitted[0].get("queue_key") is None
+    assert waited == ["start-1", "start-1"]
+
+
+def test_branch_start_that_never_settles_is_reported_as_it_stands(monkeypatch, tmp_path):
+    from registry import app as app_module
+
+    monkeypatch.setattr(app_module, "submit_job", lambda paths, template, **kw: {"id": "start-1", "status": "queued"})
+    monkeypatch.setattr(app_module, "wait_job", lambda paths, job_id, timeout: {"id": job_id, "status": "queued"})
+    monkeypatch.setattr(app_module, "BRANCH_START_TIMEOUT_SECONDS", 0.0)
+    assert app_module.start_improvement_branch(Paths(config_home=tmp_path / "config", state_home=tmp_path / "state"), "little-meals", "toolkit-x")["status"] == "queued"
+
+
+def test_branch_start_that_failed_to_submit_is_not_waited_for(monkeypatch, tmp_path):
+    from registry import app as app_module
+
+    monkeypatch.setattr(app_module, "submit_job", lambda paths, template, **kw: {"status": "failed", "error": "Orchestration is unreachable"})
+    monkeypatch.setattr(app_module, "wait_job", lambda *a, **kw: pytest.fail("nothing to wait for"))
+    job = app_module.start_improvement_branch(Paths(config_home=tmp_path / "config", state_home=tmp_path / "state"), "little-meals", "toolkit-x")
+    assert job == {"status": "failed", "error": "Orchestration is unreachable"}
+
+
+def test_branch_start_that_asks_a_question_is_not_waited_out(monkeypatch, tmp_path):
+    from registry import app as app_module
+
+    asking = {"id": "start-1", "status": "running", "steps": [{"key": "dirty", "state": "attention"}]}
+    calls = []
+    monkeypatch.setattr(app_module, "submit_job", lambda paths, template, **kw: {"id": "start-1", "status": "queued"})
+    monkeypatch.setattr(app_module, "wait_job", lambda paths, job_id, timeout: (calls.append(job_id), asking)[1])
+    assert app_module.start_improvement_branch(Paths(config_home=tmp_path / "config", state_home=tmp_path / "state"),
+                                               "little-meals", "toolkit-x") is asking
+    assert calls == ["start-1"]

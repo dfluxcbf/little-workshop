@@ -169,7 +169,8 @@ checkout and written by `registry/claude_sync.py`; `tools/sync_claude_files.py` 
 - Without `params.write` it reports, per project, which files differ.
 - With `write: true`, each project that differs and has a clean tree gets an improvement branch
   `improvement/claude-files-sync` from the Version pillar (a `version.improvement_start` Job through
-  Orchestration), the files written and committed there (`impr (-1): claude-files-sync`), and nothing more:
+  Orchestration, submitted without the project's queue key, which the asking Job already holds, and waited
+  for until it settles: REQ-000000532), the files written and committed there (`impr (-1): claude-files-sync`), and nothing more:
   the branch is the owner's to finish, and its finish runs `claude-config-present` and
   `claude-instructions-valid`. A checkout with uncommitted changes, or whose branch cannot be started, is
   skipped and says so.
