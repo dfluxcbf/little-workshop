@@ -19,8 +19,8 @@ Checkout: `/home/crist/little-projects/little-spectrum`. Repository
   number as a cross-reference.
 - Production branch `master`, integration `dev` (`.lvx/config.json`).
 - Version propagation: `.lvx/config.json` registers `tools/on_version_bump.py` in `version_hooks` and
-  `.githooks/pre-commit` runs `lws version sync-version-files` on `feature/*` and `improvement/*`
-  branches (checked 2026-10-01); `version-hook-installed` passes (latest recorded outcome).
+  the branch finish runs it when it writes `VERSION` (working branches leave `VERSION` alone since
+  2026-11-07; `.githooks/pre-commit` is retired, `lws version install-hooks` removes it).
 - `CMakeLists.txt` is legacy; per the build policy it is marked deprecated in `architecture.md` once
   Bazel covers the same build.
 - As a compiled project its Bazel artifact targets are `//:exe` rather than `//:wheel`.
@@ -34,8 +34,8 @@ describe `lreq` / `lvx`. The project has no `README.md`; its instructions are in
 
 ## Policies
 
-Only 3 policies gate this project: `commit-bumps-version`, `branch-commit-dev-suffix`,
-`version-hook-installed`. The other 14 are attached with gating off
+Only `version-hook-installed` and `commit-policy-hook-installed` gate this project (the two per-commit
+version policies were dropped on 2026-11-07). The others are attached with gating off
 ([../policy_register.md](../policy_register.md)).
 
 Last reviewed: 2026-10-01 (hand edit 2026-10-01: instructions moved to `.claude/AGENTS.md`).

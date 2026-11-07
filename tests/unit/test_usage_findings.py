@@ -260,7 +260,7 @@ def test_the_optimize_job_starts_one_fixed_agent_task_with_the_findings_digest(u
     finding = db.list_findings(conn)[0]
     usage.post("/v1/jobs/usage.optimize", json={"job_id": "j1", "project_id": "little-meals", "params": {"finding_ids": [finding["id"], "unknown"]}})
     (job,) = usage.jobs
-    assert (job["type"], job["target_pillar"], job["project_id"], job["queue_key"], job["created_by"]) == ("agent.run_task", "agent", "little-meals", "little-meals", "usage")
+    assert (job["type"], job["target_pillar"], job["project_id"], job["queue_key"], job["created_by"]) == ("agent.run_task", "agent", "little-meals", "little-meals:task:optimize-claude-usage", "usage")
     params = job["params"]
     assert params["intent"] == "task" and params["review_mode"] == "manual" and params["title"] == "Optimize Claude usage"
     assert "### D1: Long sessions re-read a large context" in params["description"] and '"requests_over_200k": 1' in params["description"]

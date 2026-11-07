@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 
+from common.task_queue import run_task_queue_key
+
 TITLE = "Optimize Claude usage"
 
 DESCRIPTION = """Reduce the tokens Claude sessions spend in this project by addressing the findings below. little-workshop's Usage & Efficiency pillar measured them from real sessions; each one names what was measured, the evidence, and the recommended action. Do not re-measure anything: the evidence is given.
@@ -50,7 +52,7 @@ def digest(findings: list[dict]) -> str:
 def task_job(project: str, findings: list[dict]) -> dict:
     """The one Orchestration Job the optimization runs: an agent task on a branch, reviewed by a human."""
     return {
-        "type": "agent.run_task", "target_pillar": "agent", "project_id": project, "queue_key": project,
+        "type": "agent.run_task", "target_pillar": "agent", "project_id": project, "queue_key": run_task_queue_key(project, {"title": TITLE}),
         "params": {"title": TITLE, "intent": "task", "review_mode": "manual", "include_standards": False,
                    "description": DESCRIPTION.format(digest=digest(findings))},
     }

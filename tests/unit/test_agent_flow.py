@@ -899,7 +899,7 @@ def test_run_ci_check_passes_through_test_command_and_timeout(paths, conn, monke
     assert captured["timeout"] == 42.0
 
 
-# --- REQ-000000252: Agent runs get the Playwright MCP server ------------------
+# --- REQ-000000480: Agent runs on a project with a UI get the Playwright MCP server ---
 
 
 class NpxClaudeRunner(WritingClaudeRunner):
@@ -920,10 +920,18 @@ def _claude_call(runner):
     return next(c for c in runner.calls if c and c[0] == "claude")
 
 
+def _with_ui(paths, project_id="little-meals"):
+    """The project has a server manifest, so its tasks get the UI section and the Playwright server."""
+    folder = paths.project_dir(project_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "manifest.deployment.toml").write_text("[server]\n", encoding="utf-8")
+
+
 def test_run_task_attaches_the_playwright_mcp_server(paths, conn, tmp_path, monkeypatch):
     repo = make_repo(tmp_path)
     _git(["checkout", "dev"], repo)
     patch_version_client(monkeypatch, repo)
+    _with_ui(paths)
     runner = NpxClaudeRunner(npx=True)
     flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
 
@@ -945,6 +953,7 @@ def test_run_task_without_npx_runs_without_playwright_and_says_so(paths, conn, t
     repo = make_repo(tmp_path)
     _git(["checkout", "dev"], repo)
     patch_version_client(monkeypatch, repo)
+    _with_ui(paths)
     runner = NpxClaudeRunner(npx=False)
     flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
 
@@ -961,6 +970,7 @@ def test_run_task_params_can_turn_playwright_off(paths, conn, tmp_path, monkeypa
     repo = make_repo(tmp_path)
     _git(["checkout", "dev"], repo)
     patch_version_client(monkeypatch, repo)
+    _with_ui(paths)
     runner = NpxClaudeRunner(npx=True)
     flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
 
@@ -978,6 +988,7 @@ def test_run_task_server_is_pinned_in_memory_and_uses_the_hosts_chromium(paths, 
     patch_version_client(monkeypatch, repo)
     chromium = tmp_path / "browsers" / "chromium-1234" / "chrome-linux64" / "chrome"
     monkeypatch.setattr(playwright, "installed_chromium", lambda root=None: chromium)
+    _with_ui(paths)
     runner = NpxClaudeRunner(npx=True)
     flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
 
@@ -996,6 +1007,7 @@ def _run_task_prompt(paths, conn, tmp_path, monkeypatch, *, npx: bool) -> str:
     repo = make_repo(tmp_path)
     _git(["checkout", "dev"], repo)
     patch_version_client(monkeypatch, repo)
+    _with_ui(paths)
     runner = NpxClaudeRunner(npx=npx)
     AgentFlow(paths=paths, runner=runner, remote_control=False).run_task(
         conn, "little-meals", repo, None, {"title": "restyle the menu", "branching": {"mode": "new"}},
@@ -1052,14 +1064,14 @@ class _SpyingRunner(WritingClaudeRunner):
 
 
 def test_run_task_gives_claude_a_temporary_standards_copy_and_deletes_it(paths, conn, tmp_path, monkeypatch):
-    """REQ-000000286, REQ-000000287."""
+    """REQ-000000479, REQ-000000287."""
     repo = make_repo(tmp_path)
     _git(["checkout", "dev"], repo)
     patch_version_client(monkeypatch, repo)
     runner = _SpyingRunner()
     flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
 
-    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "intent": "docs", "branching": {"mode": "new"}})
 
     assert result.status == db.AWAITING_FINISH
     assert runner.seen == {"README.md", "little_meals_standards/README.md"}
@@ -1075,7 +1087,7 @@ def test_run_task_deletes_the_standards_copy_when_the_task_fails(paths, conn, tm
     runner = _SpyingRunner(claude_ok=False)
     flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
 
-    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "intent": "docs", "branching": {"mode": "new"}})
 
     assert result.status == db.FAILED
     assert runner.path is not None and not runner.path.parent.exists()
@@ -1089,7 +1101,7 @@ def test_run_task_without_the_standards_option_makes_no_copy(paths, conn, tmp_pa
     runner = _SpyingRunner()
     flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
 
-    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}, "include_standards": False})
+    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "intent": "docs", "branching": {"mode": "new"}, "include_standards": False})
 
     assert runner.path is None and "Shared project standards" not in runner.prompt and "shared_project_standards" not in runner.prompt
 
@@ -1102,9 +1114,65 @@ def test_run_task_carries_on_when_no_standards_folder_can_be_found(paths, conn, 
     runner = _SpyingRunner()
     flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=tmp_path / "missing")
 
-    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+    result = flow.run_task(conn, "little-meals", repo, None, {"title": "t", "intent": "docs", "branching": {"mode": "new"}})
 
     assert result.status == db.AWAITING_FINISH and runner.path is None
+
+
+
+def test_run_task_on_a_task_not_about_standards_gets_no_copy_and_no_standards_section(paths, conn, tmp_path, monkeypatch):
+    """REQ-000000479."""
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = _SpyingRunner()
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
+
+    flow.run_task(conn, "little-meals", repo, None, {"title": "fix the menu", "intent": "bug", "branching": {"mode": "new"}})
+
+    assert runner.path is None and "Shared project standards" not in runner.prompt
+
+
+def test_run_task_whose_description_names_standards_gets_the_copy(paths, conn, tmp_path, monkeypatch):
+    """REQ-000000479."""
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = _SpyingRunner()
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False, standards_root=_standards_root(tmp_path))
+
+    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "description": "Apply the testing Standard",
+                                                      "branching": {"mode": "new"}})
+
+    assert runner.seen == {"README.md", "little_meals_standards/README.md"}
+
+
+# --- REQ-000000480: a project without a UI gets neither the UI section nor the Playwright server ---
+
+def test_run_task_on_a_project_without_a_ui_has_no_ui_section_and_no_playwright(paths, conn, tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = NpxClaudeRunner(npx=True)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
+
+    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}})
+
+    argv = _claude_call(runner)
+    assert "--mcp-config" not in argv and ["which", "npx"] not in runner.calls
+    assert "# UI and UX work" not in argv[2] and "Playwright" not in argv[2] and "# Finish" in argv[2]
+
+
+def test_a_tests_ui_folder_marks_a_project_with_a_ui(paths, tmp_path):
+    from agent.flow import has_ui
+
+    checkout = tmp_path / "checkout"
+    assert not has_ui(paths, "little-meals", checkout)
+    (checkout / "tests" / "ui").mkdir(parents=True)
+    assert has_ui(paths, "little-meals", checkout)
+    assert has_ui(paths, "little-other", tmp_path / "elsewhere") is False
+    _with_ui(paths, "little-other")
+    assert has_ui(paths, "little-other", tmp_path / "elsewhere")
 
 
 # --- REQ-NONE: finishing work left on the integration branch moves it onto a branch first ---
@@ -1136,3 +1204,21 @@ def test_finish_task_on_integration_branch_stashes_starts_branch_and_commits(pat
     assert subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout == ""
     assert (repo / "fix.txt").exists()
     assert subprocess.run(["git", "log", "-1", "--format=%s"], cwd=repo, capture_output=True, text=True).stdout.strip() == "Fix It"
+
+
+# --- REQ-000000496: requirement work is asked only of full-governance projects -------------
+
+@pytest.mark.parametrize("governance", ["light", "full"])
+def test_only_a_full_governance_task_is_asked_for_requirements(paths, conn, tmp_path, monkeypatch, governance):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    patch_version_client(monkeypatch, repo)
+    runner = NpxClaudeRunner(npx=True)
+    flow = AgentFlow(paths=paths, runner=runner, remote_control=False)
+
+    flow.run_task(conn, "little-meals", repo, None, {"title": "t", "branching": {"mode": "new"}, "governance": governance})
+
+    prompt = _claude_call(runner)[2]
+    assert ("8. This project keeps requirements" in prompt) is (governance == "full")
+    assert ("REQ-nnnnnnnnn" in prompt) is (governance == "full")
+    assert "commit-msg hook refuses a commit that adds a secret" in prompt

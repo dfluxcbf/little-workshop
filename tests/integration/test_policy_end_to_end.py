@@ -441,7 +441,7 @@ def test_project_registration_is_verified_after_a_real_bootstrap_completes_not_b
     the real registration has already succeeded — never a block. This
     replaces the pre-2026-09-17 proof that it blocked-then-confirmed
     like every other gate point; that was never actually achievable for
-    this one category (see `docs/open_questions.md`)."""
+    this one category (see `docs/pillars/policy_compliance.md`)."""
     fake_bin = tmp_path / "fakebin"
     fake_bin.mkdir()
     _write_fake_claude(fake_bin)

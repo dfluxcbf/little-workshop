@@ -8,6 +8,7 @@ model into one pillar-owned, `project_id`-scoped database.
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -111,6 +112,13 @@ CREATE TABLE IF NOT EXISTS requirement_conflicts (
     resolved_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_requirement_conflicts_project ON requirement_conflicts (project_id, status);
+
+-- A project whose requirements changed since its last conflict analysis, and when they last changed
+-- (REQ-000000473): analyzed once the change is old enough, then removed.
+CREATE TABLE IF NOT EXISTS conflict_scan_due (
+    project_id TEXT PRIMARY KEY,
+    changed_at TEXT NOT NULL
+);
 """
 
 
@@ -129,6 +137,9 @@ def connect(path: Path) -> sqlite3.Connection:
     # `superseded_by` came after the table shipped (REQ-000000448).
     if "superseded_by" not in {row["name"] for row in conn.execute("PRAGMA table_info(requirements)")}:
         conn.execute("ALTER TABLE requirements ADD COLUMN superseded_by TEXT")
+    # `requirement_key` came after the table shipped (REQ-000000500).
+    if "requirement_key" not in {row["name"] for row in conn.execute("PRAGMA table_info(test_results)")}:
+        conn.execute("ALTER TABLE test_results ADD COLUMN requirement_key TEXT")
     conn.commit()
     return conn
 
@@ -267,6 +278,7 @@ def insert_requirement(conn: sqlite3.Connection, requirement: Requirement) -> No
             _iso(requirement.created_at), _iso(requirement.updated_at),
         ),
     )
+    stamp_conflict_scan_due(conn, requirement.project_id)
     conn.commit()
 
 
@@ -312,13 +324,48 @@ def update_requirement(conn: sqlite3.Connection, requirement: Requirement) -> No
             _iso(requirement.updated_at), requirement.id,
         ),
     )
+    stamp_conflict_scan_due(conn, requirement.project_id)
     conn.commit()
 
 
 def delete_requirement(conn: sqlite3.Connection, requirement_id: str) -> None:
+    row = conn.execute("SELECT project_id FROM requirements WHERE id = ?", (requirement_id,)).fetchone()
+    if row is not None:
+        stamp_conflict_scan_due(conn, row["project_id"])
     conn.execute("DELETE FROM requirements WHERE id = ?", (requirement_id,))
     conn.execute("DELETE FROM requirement_test_mappings WHERE requirement_id = ?", (requirement_id,))
     conn.commit()
+
+
+# -- conflict analysis due (REQ-000000473) -----------------------------------
+
+
+def _clock() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def stamp_conflict_scan_due(conn: sqlite3.Connection, project_id: str, at: datetime | None = None) -> None:
+    """Record that the project's requirements changed now (or `at`); the caller commits."""
+    conn.execute(
+        "INSERT INTO conflict_scan_due (project_id, changed_at) VALUES (?, ?) "
+        "ON CONFLICT(project_id) DO UPDATE SET changed_at = excluded.changed_at",
+        (project_id, _iso(at or _clock())),
+    )
+
+
+def conflict_scans_due(conn: sqlite3.Connection, *, settled_before: datetime) -> list[tuple[str, str]]:
+    """(project id, its stamp as stored) for every project whose last change is at or before `settled_before`."""
+    rows = conn.execute("SELECT project_id, changed_at FROM conflict_scan_due ORDER BY project_id").fetchall()
+    return [(r["project_id"], r["changed_at"]) for r in rows if _parse_iso(r["changed_at"]) <= settled_before]
+
+
+def clear_conflict_scan_due(conn: sqlite3.Connection, project_id: str, changed_at: str) -> bool:
+    """Remove the project's stamp only if it is still `changed_at`: a change made during the analysis stays due."""
+    cleared = conn.execute(
+        "DELETE FROM conflict_scan_due WHERE project_id = ? AND changed_at = ?", (project_id, changed_at),
+    ).rowcount
+    conn.commit()
+    return bool(cleared)
 
 
 # -- requirement <-> test suite mappings ------------------------------------
@@ -373,11 +420,11 @@ def suites_for_requirements(conn: sqlite3.Connection, requirement_ids: list[str]
 
 def insert_test_result(conn: sqlite3.Connection, result: TestResult) -> None:
     conn.execute(
-        """INSERT INTO test_results (id, project_id, suite_id, test_name, verdict, detail, source, executed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO test_results (id, project_id, suite_id, test_name, verdict, detail, source, executed_at,
+           requirement_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             result.id, result.project_id, result.suite_id, result.test_name, result.verdict.value,
-            result.detail, result.source, _iso(result.executed_at),
+            result.detail, result.source, _iso(result.executed_at), result.requirement_key,
         ),
     )
     conn.commit()
@@ -387,7 +434,7 @@ def _row_to_result(row: sqlite3.Row) -> TestResult:
     return TestResult(
         id=row["id"], project_id=row["project_id"], suite_id=row["suite_id"], test_name=row["test_name"],
         verdict=TestVerdict(row["verdict"]), detail=row["detail"], source=row["source"],
-        executed_at=_parse_iso(row["executed_at"]),
+        executed_at=_parse_iso(row["executed_at"]), requirement_key=row["requirement_key"],
     )
 
 
@@ -430,6 +477,36 @@ def latest_result_for_suite(conn: sqlite3.Connection, suite_id: str) -> TestResu
     priority = {TestVerdict.ERROR: 0, TestVerdict.FAILED: 1, TestVerdict.SKIPPED: 2, TestVerdict.PASSED: 3}
     worst = min(batch, key=lambda r: priority[TestVerdict(r["verdict"])])
     return _row_to_result(worst)
+
+
+_PRIORITY = {TestVerdict.ERROR: 0, TestVerdict.FAILED: 1, TestVerdict.SKIPPED: 2, TestVerdict.PASSED: 3}
+
+
+def worst(results: list[TestResult]) -> TestResult:
+    return min(results, key=lambda r: _PRIORITY[r.verdict])
+
+
+def latest_runs_for_suites(conn: sqlite3.Connection, suite_ids: list[str]) -> dict[str, list[TestResult]]:
+    """`{suite_id: [every result of its latest run]}`, one query; a suite never run is absent (REQ-000000500)."""
+    if not suite_ids:
+        return {}
+    unique_ids = list(dict.fromkeys(suite_ids))
+    placeholders = ",".join("?" * len(unique_ids))
+    rows = conn.execute(
+        f"""
+        SELECT tr.* FROM test_results tr
+        JOIN (
+            SELECT suite_id, MAX(executed_at) AS ts FROM test_results
+            WHERE suite_id IN ({placeholders}) GROUP BY suite_id
+        ) latest ON tr.suite_id = latest.suite_id AND tr.executed_at = latest.ts
+        WHERE tr.suite_id IN ({placeholders})
+        """,
+        [*unique_ids, *unique_ids],
+    ).fetchall()
+    runs: dict[str, list[TestResult]] = {}
+    for row in rows:
+        runs.setdefault(row["suite_id"], []).append(_row_to_result(row))
+    return runs
 
 
 def latest_results_for_suites(conn: sqlite3.Connection, suite_ids: list[str]) -> dict[str, TestResult]:
@@ -481,8 +558,10 @@ def record_conflict_analysis(conn: sqlite3.Connection, project_id: str, found: l
     one is recorded `open`, one resolved earlier and found again is `open` again, one no longer found is
     `resolved`. Answers {found, new, reopened, resolved} counts."""
     now = _iso(datetime.now(timezone.utc))
+    # A `semantic` conflict was recorded by the user from Claude's check (REQ-000000523): the lexical analysis
+    # neither finds nor resolves it.
     known = {row["id"]: row["status"] for row in conn.execute(
-        "SELECT id, status FROM requirement_conflicts WHERE project_id = ?", (project_id,))}
+        "SELECT id, status FROM requirement_conflicts WHERE project_id = ? AND kind != 'semantic'", (project_id,))}
     new = reopened = 0
     for c in found:
         status = known.get(c.id)
@@ -505,12 +584,41 @@ def record_conflict_analysis(conn: sqlite3.Connection, project_id: str, found: l
         else:
             conn.execute("UPDATE requirement_conflicts SET last_seen_at = ? WHERE id = ?", (now, c.id))
     gone = [cid for cid, status in known.items() if status != CONFLICT_RESOLVED and cid not in {c.id for c in found}]
+    # A semantic conflict is resolved once either requirement was deleted, superseded or edited after it was recorded.
+    gone += [row["id"] for row in conn.execute(
+        """SELECT c.id FROM requirement_conflicts c
+           LEFT JOIN requirements o ON o.id = c.older_requirement_id LEFT JOIN requirements n ON n.id = c.newer_requirement_id
+           WHERE c.project_id = ? AND c.kind = 'semantic' AND c.status != ?
+             AND (o.id IS NULL OR n.id IS NULL OR o.status = 'superseded' OR n.status = 'superseded'
+                  OR o.updated_at > c.last_seen_at OR n.updated_at > c.last_seen_at)""",
+        (project_id, CONFLICT_RESOLVED))]
     conn.executemany(
         "UPDATE requirement_conflicts SET status = ?, resolved_at = ? WHERE id = ?",
         [(CONFLICT_RESOLVED, now, cid) for cid in gone],
     )
     conn.commit()
     return {"found": len(found), "new": new, "reopened": reopened, "resolved": len(gone)}
+
+
+def record_semantic_conflict(conn: sqlite3.Connection, project_id: str, suspect: dict) -> dict:
+    """Record a pair Claude's semantic check suspected (REQ-000000523) as an `open` conflict of kind `semantic`;
+    recording the same pair and texts again reopens it rather than adding another."""
+    digest = hashlib.sha256("\x1f".join((
+        "semantic", suspect["older_requirement_id"], suspect["newer_requirement_id"], suspect["older_text"], suspect["newer_text"],
+    )).encode()).hexdigest()[:32]
+    now = _iso(datetime.now(timezone.utc))
+    summary = suspect["summary"] + (f" ({suspect['reason']})" if suspect.get("reason") else "")
+    conn.execute(
+        """INSERT INTO requirement_conflicts (id, project_id, kind, older_requirement_id, newer_requirement_id,
+           older_key, newer_key, older_text, newer_text, summary, status, detected_at, last_seen_at)
+           VALUES (?, ?, 'semantic', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET status = excluded.status, decision = NULL, guidance = '', job_id = NULL,
+           decided_at = NULL, resolved_at = NULL, last_seen_at = excluded.last_seen_at""",
+        (digest, project_id, suspect["older_requirement_id"], suspect["newer_requirement_id"], suspect["older_key"],
+         suspect["newer_key"], suspect["older_text"], suspect["newer_text"], summary, CONFLICT_OPEN, now, now),
+    )
+    conn.commit()
+    return get_conflict(conn, digest)
 
 
 def list_conflicts(conn: sqlite3.Connection, *, project_id: str | None = None, status: str | None = None) -> list[dict]:

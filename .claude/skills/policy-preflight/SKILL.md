@@ -16,16 +16,20 @@ python3 .claude/skills/policy-preflight/scripts/preflight.py                    
 python3 .claude/skills/policy-preflight/scripts/preflight.py --gate-point release
 ```
 
-It evaluates the policies in little-workshop's sandbox (`lws policy evaluate`: the checks the gate runs,
-nothing recorded or held). If the installed `lws` or the running Policy pillar predates that, it runs the
-same policy scripts here and says so. Exit 0: nothing blocks; 1: a gating policy fails; 2: the policies
-could not be evaluated. A policy that runs the test suite (python-test-coverage) takes minutes.
+It evaluates the policies in little-workshop's sandbox (`lws policy evaluate`: the checks the gate runs;
+nothing is held, and a verdict on committed, unchanged files is recorded so the gate reuses it). If the
+installed `lws` or the running Policy pillar predates that, it runs the same policy scripts here and says
+so. Exit 0: nothing blocks; 1: a gating policy fails; 2: the policies could not be evaluated. At
+`release`, the policy that runs the test suite (python-test-coverage) takes minutes.
 
 ## Acting on the result
 
-Each failure names the policy, its rule and what to change. Fix the cause in the project, commit (the
-commit-msg hook re-checks the commit-level policies), and run the preflight again until nothing blocks.
+Each failure names the policy, its rule and what to change. Fix the cause in the project, commit, and run
+the preflight again until nothing blocks.
 
 A policy is the project's agreed rule, so change the project, not the policy, and leave a held action for
 the user to confirm. If a failure looks wrong, or cannot be fixed in this project, report it with the
 policy's output and let the user decide. The steps around a finish are in the `workshop-lifecycle` skill.
+
+<!-- project -->
+<!-- /project -->

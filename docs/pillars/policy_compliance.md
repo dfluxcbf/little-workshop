@@ -22,7 +22,7 @@ finer-grained "Pillar-Interface-only, safe-endpoints-only" proxy
 described in "Test-script execution sandbox," and which Job types
 declare which gate-point categories is a small, concrete, real start
 (`orchestration/policy_gate.py`'s `JOB_TYPE_CATEGORIES`) rather than the
-full mapping `docs/open_questions.md`'s `OQ-3` always left to each
+full mapping OQ-3 always left to each
 pillar's own future work. A companion document, `docs/pillars/policy_catalog.md`,
 holds a candidate set of roughly 50 policies mined from this ecosystem's
 existing tools — tier already decided, individual entries still pending
@@ -58,8 +58,9 @@ without someone finding out" (`docs/architecture.md`).
   enabled, non-waived policy gating any of those categories, for that
   project, passes — refined 2026-09-16 from a single fixed topic per
   Job type into a per-*policy*, user-chosen set of categories, so a Job
-  can now be held by more than one policy at once. Fail-closed, with a
-  10-minute human-override flow.
+  can now be held by more than one policy at once. Fail-closed: a held
+  Job waits for the user to confirm or cancel it (REQ-000000474); a newer
+  request for the same action supersedes it (REQ-000000475).
 - **Usability controls** — a policy can be enabled/disabled without
   re-authoring, and the user **selects which projects it applies to**,
   switching gating on or off per project (a check with gating off still
@@ -336,8 +337,7 @@ a shortcut around review.
 **Gate 4 happens inside the app (2026-09-21).** Gates 1-3's output is kept
 as a **draft** (`policy_drafts`: EARS text, generated script, source, review
 notes, a `concerns` flag) — via `policy.author` with `save_draft`, or
-`policy.draft_import` for output made elsewhere (e.g. the JSON files in
-`docs/pending_policy_drafts/`, imported with `lws policy draft import`). A
+`policy.draft_import` for output made elsewhere (JSON files imported with `lws policy draft import`). A
 draft also carries its own **recommended `gate_points` and `projects`**
 (the latter added 2026-09-22, same shape as a real policy's own selection —
 `{project_id, gating_enabled}`), set by whoever authored or imported it;
@@ -510,8 +510,8 @@ gets stuck, not a policy-enforced constraint and not something
 Policy & Compliance's rule system produced an answer to. EARS-scoped
 policies are small by construction; this ceiling is against a hang or a
 bug, never an expected duration. A script that actually completes and
-returns `fail` is what starts the separate ten-minute human-confirmation
-window in "Action-gating checks" below — a timeout never does, because
+returns `fail` is what starts the separate human confirmation
+(the held Job) in "Action-gating checks" below — a timeout never does, because
 there's no determined violation there for a human to knowingly bypass;
 see that section for the full distinction.
 
@@ -815,23 +815,19 @@ policy.check_project resolves one of two fundamentally different ways:
       │
       ▼
    user is warned immediately -- which policy failed, on which project,
-      and that the Job is waiting (Dashboard banner; the same treatment
-      already designed for an existing confirm-gated deploy's banner) --
-      this is the card `docs/pillars/policy_catalog.md`'s Q1 called it:
-      "if the user actually intended to break policy, they have 10
-      minutes to say so"
+      and that the Job is waiting (Dashboard banner)
       │
-      ├─ confirmed within the window (10 minutes -- matching
-      │  little-runner's own existing confirm_timeout_seconds default
-      │  exactly, reused rather than picked fresh) → Job dispatches, the
-      │  action happens exactly as if the check had passed
-      └─ window elapses, no response → Job = failed, reason = "policy
-         check unconfirmed" -- read as: this was probably broken by
-         mistake, not on purpose. The action NEVER happens. A fresh
-         launch: the server stays not running. A replace: Deployment &
-         Servers' build-before-stop sequence never starts in the first
-         place, so the old version was never touched and there is
-         nothing to roll back either.
+      ├─ confirmed → Job dispatches, the action happens exactly as if
+      │  the check had passed
+      ├─ cancelled (`stop`), or superseded by a newer Job of the same
+      │  type for the same project and branch (REQ-000000475) → Job =
+      │  cancelled, its dependants fail. The action never happens.
+      └─ otherwise it waits for the user, however long (REQ-000000474).
+         Only when Orchestration's environment sets
+         LWS_POLICY_CONFIRM_TIMEOUT_SECONDS (manifest
+         `[pillars.orchestration] environment`) does a systemd-run timer
+         fail it after that many seconds, reason = "policy check
+         unconfirmed": the action never happens.
 
    NO VERDICT (the 30-minute ceiling was hit): not a policy outcome at
    all -- a framework-level fault, the same category as a stuck process
@@ -844,7 +840,7 @@ policy.check_project resolves one of two fundamentally different ways:
       │
       ▼
    Job = failed immediately, reason = "policy check did not complete" --
-      NO pending_confirmation, NO ten-minute window. There is nothing for
+      NO pending_confirmation, NO confirmation. There is nothing for
       a human to knowingly bypass, because nothing was determined to be
       a violation -- only that the check itself is broken. The action
       never happens, and this is surfaced to the user as something to
@@ -856,8 +852,8 @@ Two clocks with different jobs, never both on the same path. The
 30-minute ceiling is a framework design decision, not something Policy &
 Compliance's rule system enforces — the same category of self-protection
 as Core refusing to let a crashed pillar spiral, not a policy verdict, and
-EARS-scoped scripts are expected to need nowhere near it. The ten-minute
-window is the deliberate-bypass card, and it only ever starts once a
+EARS-scoped scripts are expected to need nowhere near it. The held Job
+is the deliberate-bypass card, and it only ever starts once a
 script has actually run to completion and returned `fail` — never after a
 timeout, because there's no known violation there to knowingly bypass.
 
@@ -888,7 +884,7 @@ each is a separate question about a separate moment in the same Job.
 
 ### Left open
 
-Tracked as `OQ-3` in [`../open_questions.md`](../open_questions.md): which
+OQ-3: which
 Job types declare which gate-point categories isn't enumerated here —
 that mapping is each pillar's own implementation work as its Job types
 get defined (`orchestration/policy_gate.py`'s `JOB_TYPE_CATEGORIES` has
@@ -938,10 +934,11 @@ files; link to the authoritative one instead").
 ## Python test coverage policy, and the sandbox's own dependency limit (2026-09-22)
 
 `python-test-coverage` (`tools/policy_scripts/python_test_coverage.py`, `target_pillar`
-`requirements`, gate point `branch_finish`): runs a Python project's own real `pytest`
+`requirements`, gate point `release` since 2026-11-07, so a branch finish runs only the fast policies;
+`inputs` `pyproject.toml`, `src`, `tests`): runs a Python project's own real `pytest`
 suite with `--cov=src` inside the sandbox and reads pytest-cov's own `TOTAL` line,
 failing below 90%. Judges only the current run, the same "a past mistake never fails
-forever" rule `commit-bumps-version` already established. Skips cleanly (never fails) for
+forever" rule the other history policies follow. Skips cleanly (never fails) for
 a project that isn't Python in this ecosystem's own convention (no `pyproject.toml`,
 sidestepping a false match on a project like little-home that happens to have its own
 `src/`/`tests/` directories for TypeScript) or has no `tests/`/`src/`.
@@ -961,26 +958,44 @@ cite a requirement is only found when the branch is finished, long after the ses
 moved on. Three additions put the same policies where the change is made, for a person and for a
 Claude session alike, without a second copy of any rule.
 
-**The `commit` gate point.** It gates no Job: the project's `.githooks/commit-msg` hook (installed with
-the VERSION pre-commit hook by `lws version install-hooks` and `lws version init`) runs
-`lws policy evaluate --gate-point commit` for the commit being made, and git refuses the commit when a
-policy gating `commit` fails with gating on, printing each policy's rule and its reason. The hook reads
-the pending commit itself — the message after git's cleanup, the paths it changes and its staged
-`VERSION`, from the index git hands the hook (`GIT_INDEX_FILE` may point at a temporary one) — and the
-script gets them as files in `POLICY_COMMIT_DIR`. When `lws`, the daemon or Docker is unavailable the
-hook warns and lets the commit through (`--fail-open`): the same policies still gate the finish. Only a
-project-bound policy may gate `commit`; little-workshop's own finish and bookkeeping commits run with
-hooks off. `commit-bumps-version`, `branch-commit-dev-suffix`, `commit-cites-requirement` and
-`version-format` gate `commit` and `branch_finish`.
+**The `commit` gate point.** It gates no Job, and since 2026-11-07 no policy gates it: a policy run
+per commit meant several Docker runs on every commit. The project's `.githooks/commit-msg` hook
+(installed by `lws version install-hooks` and `lws version init`) runs `lws policy scan-secrets`, which
+scans the staged changes in its own process with `no-committed-secrets`' detection
+(`common/secret_scan.py`, kept equal to the policy script by a unit test) and refuses a commit that adds
+a secret, printing each finding redacted and the fix; a secret in history stays there for good, so it is
+the one rule worth checking at the commit. Without `lws` the hook warns and lets the commit through, and
+`no-committed-secrets` still gates the finish. Every other commit-level policy (`version-format`,
+`unity-meta-files-paired`, `lfs-tracked-files-are-pointers`,
+`requirement-marker-not-superseded`) gates `branch_finish`. `lws policy evaluate --gate-point commit
+--commit-message-file <file>` can still judge a pending commit: it reads the message after git's
+cleanup, the paths it changes and its staged `VERSION` from the index, and the scripts get them as
+files in `POLICY_COMMIT_DIR`. little-workshop's own finish and bookkeeping commits run with hooks off.
+REQ-000000490.
 
 **`policy.evaluate`** (`POST /v1/policies/evaluate`; `lws policy evaluate`, `workshop_policy_evaluate`)
 runs, now and in the sandbox, every winning policy that gates a gate point for a project and answers
-with each verdict and reason, and `blocking`: the topics the real gate would hold. Nothing is recorded
-and nothing is held — it is the early warning, not the gate (`policy.check_project` stays the only thing
-that records results). It can judge a git worktree of the project instead of the registered checkout
+with each verdict and reason, and `blocking`: the topics the real gate would hold. Nothing is held — it
+is the early warning, not the gate. A verdict on committed state (no pending commit, no uncommitted
+change in what the policy reads) is recorded under the same fingerprint the gate's check computes, and a
+fresh one is reused (`reused: true`), so the finish or release that follows does not run the same check
+again (REQ-000000483). It can judge a git worktree of the project instead of the registered checkout
 (`checkout`, accepted only if it shares the registered checkout's repository), since agents and
 sessions commit in worktrees. Each project's scaffolded `policy-preflight` skill runs it before a finish,
 release or publish.
+
+**Once per change: the fingerprint (REQ-000000482).** A verdict is recorded with the fingerprint of what
+it judged, and `policy.check_project` (or a preflight) reuses the newest verdict whose fingerprint matches
+instead of running the sandbox. The fingerprint is the policy's `amended_at` plus, for a policy that
+declares `inputs` in `policies.json` (repository paths, e.g. `["pyproject.toml", "src", "tests"]`), the
+committed git tree of those paths (`git ls-tree HEAD -- <inputs>`), so a docs-only commit or a rebase that
+leaves them alone keeps the verdict; a policy without `inputs` uses the HEAD commit. `force` always runs.
+
+**A check's test run is the Definition-of-Done run (REQ-000000484).** The sandbox gives each check one
+writable directory, `/policy/output` (`POLICY_OUTPUT_DIR`). A check that leaves a JUnit report there
+(`junit.xml`) has it recorded as the project's "Unit tests" run: the pillar submits
+`requirements.import_junit` with `suite_name: "Unit tests"`. `python-test-coverage` does this, so the
+release's coverage run is also the DoD run and the suite is not run twice.
 
 **Readable verdicts.** A check's recorded detail is the failure's reasons — the assertion messages and
 skip reasons pytest prints — and the summary line, not pytest's last five lines (which held only
@@ -1008,7 +1023,7 @@ newest production tag's commit must be in the integration branch's history (merg
 cherry-picked), but not on its first-parent line (a non-fast-forward merge).
 
 Two framework policies check that a project carries this integration: `commit-policy-hook-installed`
-(the commit-msg hook and `core.hooksPath`) and `claude-config-present` (an `AGENTS.md` briefing at the
+(the commit-msg hook running `lws policy scan-secrets`, and `core.hooksPath`) and `claude-config-present` (an `AGENTS.md` briefing at the
 root or as `.claude/AGENTS.md`, the scope guard registered in `.claude/settings.json`, the
 `policy-preflight` skill, and no `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`, any of which makes
 Claude Code skip `AGENTS.md`). The second pass below widened `claude-config-present`.
@@ -1019,8 +1034,8 @@ A project's Claude Code instructions come in layers that load at different momen
 briefing in every session, `.claude/rules/` files when Claude reads a file their `paths:` match, skills
 when a task calls for them. All three are read and weighed, never executed, so a rule that must hold
 every time is not a sentence in them: it is a hook in the project (`.claude/hooks/`, refusing a tool call
-before it happens) or a policy here, run by the commit-msg hook on the commit being made and by the gate
-before a finish, with a failure message addressed to whoever reads it, a person or Claude, that says what
+before it happens) or a policy here, run by the gate before a finish (and, for secrets, by the commit-msg
+hook's local scan), with a failure message addressed to whoever reads it, a person or Claude, that says what
 to do instead. The instructions then only need to say that the rule exists and what enforces it.
 
 Policies that came out of this, and what they replaced:
@@ -1041,10 +1056,6 @@ Policies that came out of this, and what they replaced:
 - `design-index-and-schema-current` (build; `branch_finish`; project ethereal-lands): the generated
   design index and ELM schema match their generators (`--check`). It replaced "generated, never
   hand-edited" for those files; ethereal-lands' edit guard hook refuses the hand edit itself.
-- `commit-cites-requirement` now also covers a Unity project's own folders (`Assets/`, `Packages/`,
-  `ProjectSettings/`, `tools/`), which had left the rule unenforced on the Unity layout.
-- `commit-bumps-version` and `branch-commit-dev-suffix` are scoped to all projects, matching the projects
-  they were already attached to and the pre-commit hook every project carries.
 - `requirement-marker-registered`, `requirement-marker-id-format`, `version-hook-installed` and
   `wheel-filename-has-version` list the project's files through `git ls-files` (tracked, or untracked and
   not ignored) instead of walking the checkout. On a Unity project the walk went through `Library/` (tens
@@ -1143,3 +1154,30 @@ the Dashboard's statistics and is shown to the user.
   it is only possible from the terminal.
 - **Audit.** `policy_bypass_log` records each enabling (with the sudo user), disabling, lapse and every violation
   a bypass let through; `GET /v1/bypass/log` lists it.
+
+## Governance: requirement policies only where they are wanted (2026-11-07)
+
+A policy may require `full` governance (`requires: "full"` in `policies.json`, the `requires` param of
+`policy.activate`, kept on a re-activation that leaves it out; `policies.requires` in the database). The project's
+governance is the Registry's setting (`registry_portfolio.md`, "Governance"). On a `light` project such a policy is
+not applicable: `gating-for-job` and `policy.evaluate` leave it out, so no gate runs or holds it, and a
+`policy.check_project` of it records `not_applicable` without a sandbox run. A project whose governance the Registry
+does not answer for is treated as `full`, so nothing is skipped on a guess. REQ-000000496.
+
+| Policy | Applies to |
+|---|---|
+| `requirement-marker-registered`, `requirement-marker-id-format`, `requirement-marker-not-superseded` | full |
+| `python-test-coverage` (release) | full |
+| `merge-commit-message-format` (bookkeeping on history little-workshop's own finish writes) | full |
+| `no-committed-secrets`, `ssh-remotes-no-embedded-credentials`, `commit-policy-hook-installed` | all |
+| `version-format`, `version-hook-installed`, the release and tag policies | all |
+| `claude-config-present`, `claude-instructions-valid` | all |
+| `unity-meta-files-paired`, `lfs-tracked-files-are-pointers`, `issue-form-installed`, `wheel-filename-has-version` | all (each skips where it does not apply) |
+| `back-merge-no-ff`, `hotfix-propagates-by-merge` (little-workshop), `design-index-and-schema-current` (ethereal-lands) | their project |
+
+`commit-cites-requirement` is retired: a citation in every commit was form, and the squash at the finish
+discarded it. A full project's traceability is the squash commit's `Requirements:` line instead
+(`version_control_release.md`, REQ-000000499). Applying the manifest (`tools/sync_policies.py --apply`) needs a
+Policy pillar that knows `requires`; the retired policy is removed from the live pillar with
+`workshop_policy_remove`.
+

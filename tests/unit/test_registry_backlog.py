@@ -177,7 +177,7 @@ def test_refining_a_missing_entry_or_without_claude_fails_cleanly(client, monkey
 # --- REQ-000000371: Generate task prompt ---
 
 
-def test_the_task_prompt_comes_from_the_refined_entry_and_ends_with_the_delete_instruction(client, claude):
+def test_the_task_prompt_comes_from_the_refined_entry_and_says_nothing_about_the_backlog(client, claude):
     entry = _add(client, "Primary words that must not reach the prompt").json()
     client.patch(f"/v1/backlog/{entry['id']}", json={"refinement_notes": "notes that must not reach it either"})
     refusal = client.post("/v1/jobs/registry.backlog_task_prompt", json={"job_id": "j0", "params": {"entry_id": entry["id"]}}).json()
@@ -192,14 +192,12 @@ def test_the_task_prompt_comes_from_the_refined_entry_and_ends_with_the_delete_i
     assert "The refined entry" in prompt and "Primary words" not in prompt and "notes that must not" not in prompt
     assert "checkout" in prompt and claude["read_checkout"] == [True, True]  # read for the files and tests to name
     stored = client.get(f"/v1/backlog/{entry['id']}").json()["task_prompt"]
-    assert stored.startswith("Implement the weekly export.")
-    ending = stored.rsplit("## When you are done", 1)[1]
-    assert f"lws project backlog delete --project-id little-meals {entry['id']}" in ending
-    assert "workshop_project_backlog_delete" in ending and entry["id"] in ending
+    assert stored == "Implement the weekly export."  # the task never closes the entry (REQ-000000524)
+    assert "backlog delete" not in stored and entry["id"] not in stored
 
     client.post("/v1/jobs/registry.backlog_task_prompt", json={"job_id": "j3", "params": {"entry_id": entry["id"]}})
     replaced = client.get(f"/v1/backlog/{entry['id']}").json()["task_prompt"]
-    assert replaced.startswith("Implement it differently.") and replaced.count("## When you are done") == 1
+    assert replaced == "Implement it differently."
 
 
 def test_lws_project_backlog_commands_act_on_the_named_projects_backlog(monkeypatch, capsys):
@@ -273,3 +271,138 @@ def test_the_backlog_asks_for_a_query_that_reads_the_checkout_and_waits_long_eno
     assert dispatch_timeout_for("registry.backlog_refine") < BACKLOG_ACTIVITY_STALE.total_seconds()
     agent_client.query(paths, "A plain query", job_id="j2")
     assert "read_checkout" not in sent["params"] and sent["timeout"] == agent_client.QUERY_TIMEOUT_SECONDS
+
+
+# --- REQ-000000524: Backlog entries have a status and a priority the owner sets ---
+
+
+def test_entries_start_open_and_normal_and_the_owner_sets_both(client):
+    entry = _add(client).json()
+    assert (entry["status"], entry["priority"]) == ("open", "normal")
+    changed = client.patch(f"/v1/backlog/{entry['id']}", json={"status": "done", "priority": "high"}).json()
+    assert (changed["status"], changed["priority"]) == ("done", "high")
+    assert client.patch(f"/v1/backlog/{entry['id']}", json={"status": "closed"}).status_code == 422
+    assert client.patch(f"/v1/backlog/{entry['id']}", json={"priority": "urgent"}).status_code == 422
+    assert client.patch("/v1/backlog/nope", json={"status": "done"}).status_code == 404
+
+
+def test_the_list_filters_by_status_and_puts_the_highest_priority_first(client):
+    low, normal, high, done = (_add(client, text).json() for text in ("low", "normal", "high", "done"))
+    client.patch(f"/v1/backlog/{low['id']}", json={"priority": "low"})
+    client.patch(f"/v1/backlog/{high['id']}", json={"priority": "high"})
+    client.patch(f"/v1/backlog/{done['id']}", json={"status": "done", "priority": "high"})
+    open_ids = [e["id"] for e in client.get("/v1/backlog", params={"project_name": "little-meals", "status": "open"}).json()]
+    assert open_ids == [high["id"], normal["id"], low["id"]]
+    assert [e["id"] for e in client.get("/v1/backlog", params={"status": "done"}).json()] == [done["id"]]
+    assert len(client.get("/v1/backlog").json()) == 4
+
+
+def test_an_entry_from_before_the_status_is_open_and_normal(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("""CREATE TABLE backlog_entries (id TEXT PRIMARY KEY, project_name TEXT NOT NULL, primary_entry TEXT NOT NULL,
+        refinement_notes TEXT NOT NULL DEFAULT '', refined_entry TEXT NOT NULL DEFAULT '', task_prompt TEXT NOT NULL DEFAULT '',
+        primary_updated_at TEXT NOT NULL, notes_updated_at TEXT, refined_at TEXT, prompt_at TEXT, created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL)""")
+    old.execute("INSERT INTO backlog_entries (id, project_name, primary_entry, primary_updated_at, created_at, updated_at) VALUES ('e', 'p', 'x', 't', 't', 't')")
+    old.commit()
+    old.close()
+    migrated = db.connect(path)
+    entry = db.get_backlog_entry(migrated, "e")
+    migrated.close()
+    assert (entry["status"], entry["priority"], entry["task_job"]) == ("open", "normal", None)
+
+
+def test_a_launched_task_is_remembered_and_leaves_the_entry_open(client):
+    entry = _add(client).json()
+    after = client.post(f"/v1/backlog/{entry['id']}/task", json={"job_id": "job-7"}).json()
+    assert after["task_job"] == "job-7" and after["status"] == "open"
+    assert client.post("/v1/backlog/nope/task", json={"job_id": "j"}).status_code == 404
+
+
+def test_lws_updates_an_entrys_status_and_priority(monkeypatch, capsys):
+    import json as json_module
+
+    from cli import client as cli_client
+    from cli import main
+    entry = {"id": "e1", "project_name": "little-meals", "title": "Export", "status": "open", "priority": "normal",
+             "refined_entry": "", "task_prompt": "", "updated_at": "t"}
+    calls = []
+
+    def fake_backlog(paths, method, path="", *, params=None, json=None, timeout=10.0):
+        calls.append((method, path, params, json))
+        if method == "PATCH":
+            return {**entry, **json}
+        return entry if path else [entry]
+
+    monkeypatch.setattr(cli_client, "backlog", fake_backlog)
+    assert main.main(["project", "backlog", "update", "--project-id", "little-meals", "e1", "--status", "done", "--priority", "high"]) == 0
+    assert calls[-1] == ("PATCH", "/e1", None, {"status": "done", "priority": "high"})
+    assert json_module.loads(capsys.readouterr().out)["status"] == "done"
+    assert main.main(["project", "backlog", "list", "--project-id", "little-meals", "--status", "done"]) == 0
+    assert calls[-1][2] == {"project_name": "little-meals", "status": "done"}
+    assert main.main(["project", "backlog", "update", "--project-id", "little-meals", "e1"]) == 1  # nothing to set
+
+
+
+def _dashboard_entry(**overrides):
+    entry = {"id": "e1", "project_name": "little-meals", "title": "Export", "primary_entry": "Export", "refinement_notes": "",
+             "refined_entry": "", "task_prompt": "", "created_at": "2026-10-05T06:00:00+00:00", "updated_at": "2026-10-05T06:00:00+00:00",
+             "status": "open", "priority": "normal", "task_job": None}
+    entry.update(overrides)
+    return entry
+
+
+def test_the_dashboard_filters_by_status_sorts_by_priority_and_sets_both(tmp_path, monkeypatch):
+    from dashboard import app as app_module
+    from dashboard import client as dashboard_client
+
+    entries = [_dashboard_entry(id="a", title="Low one", priority="low", updated_at="2026-10-07T00:00:00+00:00"),
+               _dashboard_entry(id="b", title="High one", priority="high", updated_at="2026-10-01T00:00:00+00:00")]
+    asked = []
+    monkeypatch.setattr(dashboard_client, "backlog_list", lambda paths, project=None, status=None: asked.append(status) or [dict(e) for e in entries])
+    monkeypatch.setattr(dashboard_client, "backlog_get", lambda paths, entry_id: _dashboard_entry())
+    edits = []
+    monkeypatch.setattr(dashboard_client, "backlog_edit", lambda paths, entry_id, **fields: edits.append((entry_id, fields)) or {})
+    test_client = TestClient(app_module.build_app(Paths(config_home=tmp_path / "c", state_home=tmp_path / "s")))
+
+    page = test_client.get("/backlog/little-meals").text
+    assert asked[-1] == "open" and page.index("High one") < page.index("Low one") and "high priority" in page
+    test_client.get("/backlog/little-meals?status=all")
+    assert asked[-1] is None
+    test_client.get("/backlog/little-meals?status=done")
+    assert asked[-1] == "done"
+
+    response = test_client.post("/backlog/little-meals/e1/state", data={"status": "dropped", "priority": "low"}, follow_redirects=False)
+    assert response.status_code == 303 and edits == [("e1", {"status": "dropped", "priority": "low"})]
+
+
+def test_the_entry_offers_mark_done_once_its_launched_task_succeeded(tmp_path, monkeypatch):
+    from dashboard import app as app_module
+    from dashboard import client as dashboard_client
+
+    entry = _dashboard_entry(task_job="job-9")
+    run = {"id": "r1", "project_id": "little-meals", "title": "Export", "status": "awaiting_finish", "completion_status": "done"}
+    monkeypatch.setattr(dashboard_client, "backlog_get", lambda paths, entry_id: dict(entry))
+    monkeypatch.setattr(dashboard_client, "agent_run_for_job", lambda paths, job_id: dict(run) if job_id == "job-9" else None)
+    test_client = TestClient(app_module.build_app(Paths(config_home=tmp_path / "c", state_home=tmp_path / "s")))
+
+    assert "Mark done" in test_client.get("/backlog/little-meals/e1").text
+    run["completion_status"] = "partial"
+    assert "Mark done" not in test_client.get("/backlog/little-meals/e1").text
+    run["completion_status"], entry["status"] = "done", "done"
+    assert "Mark done" not in test_client.get("/backlog/little-meals/e1").text
+
+
+def test_launching_a_task_from_an_entry_records_it_on_the_entry(tmp_path, monkeypatch):
+    from dashboard import app as app_module
+    from dashboard import client as dashboard_client
+
+    monkeypatch.setattr(dashboard_client, "create_job", lambda paths, **f: {"id": "job-3", "status": "running"})
+    launched = []
+    monkeypatch.setattr(dashboard_client, "backlog_task_launched", lambda paths, entry_id, job_id: launched.append((entry_id, job_id)))
+    test_client = TestClient(app_module.build_app(Paths(config_home=tmp_path / "c", state_home=tmp_path / "s")))
+    test_client.post("/tasks/new", data={"project": "little-meals", "title": "Export", "backlog_id": "e1"}, follow_redirects=False)
+    assert launched == [("e1", "job-3")]

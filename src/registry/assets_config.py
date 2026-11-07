@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 
 from common.assets import AssetError, asset_root
+from common.windows import is_windows_project
 from registry import db
 
 MCP_NAME = "asset-review"
@@ -21,19 +22,25 @@ class AssetsConfigError(Exception):
     pass
 
 
-def mcp_entry(project: str) -> dict:
-    return {"command": "lws", "args": ["asset-mcp", "serve", "--project-id", project]}
+def mcp_entry(project: str, *, windows: bool = False) -> dict:
+    """The `asset-review` server's `.mcp.json` entry. A Windows-hosted project's sessions may run natively on
+    Windows, where `lws` is the `lws.cmd` shim: `cmd.exe /c lws.cmd` starts it from either side (REQ-000000513)."""
+    args = ["asset-mcp", "serve", "--project-id", project]
+    if windows:
+        return {"command": "cmd.exe", "args": ["/c", "lws.cmd", *args]}
+    return {"command": "lws", "args": args}
 
 
-def _write_mcp(checkout: Path, project: str, enabled: bool) -> bool:
+def _write_mcp(checkout: Path, project: str, enabled: bool, *, windows: bool = False) -> bool:
     path = checkout / ".mcp.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     except (OSError, ValueError) as exc:
         raise AssetsConfigError(f"cannot read {path}: {exc}") from exc
     servers = data.setdefault("mcpServers", {})
-    if enabled and servers.get(MCP_NAME) != mcp_entry(project):
-        servers[MCP_NAME] = mcp_entry(project)
+    entry = mcp_entry(project, windows=windows)
+    if enabled and servers.get(MCP_NAME) != entry:
+        servers[MCP_NAME] = entry
     elif not enabled and MCP_NAME in servers:
         del servers[MCP_NAME]
     else:
@@ -62,7 +69,7 @@ def configure_assets(conn: sqlite3.Connection, name: str, assets_dir: str | None
     db.update_project_assets_dir(conn, name, assets_dir)
     mcp_written = False
     if assets_dir and mcp:
-        mcp_written = _write_mcp(checkout, name, enabled=True)
+        mcp_written = _write_mcp(checkout, name, enabled=True, windows=is_windows_project(project))
     elif not assets_dir:
         mcp_written = _write_mcp(checkout, name, enabled=False)
     return {"name": name, "assets_dir": assets_dir, "mcp_server": MCP_NAME if assets_dir and mcp else None, "mcp_json_changed": mcp_written}

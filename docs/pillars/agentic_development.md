@@ -46,9 +46,10 @@ from GitHub-issue-only triggers to any Job source.
 - **`agent_runs`** — this pillar's own table of every run and its state
   (`running`/`awaiting_finish`/`finished`/`failed`/`skipped`), reachable
   via `GET /v1/runs/{project_id}` and `GET /v1/runs/{project_id}/{run_id}`.
-- **The GitHub adapter and poller** — optional, per-project: actor lookup
-  via the issue timeline and cursor-based edge detection from polling
-  (detailed below), for projects that want issue-triggered runs.
+- **The GitHub adapter** — optional, per-project: actor lookup via the
+  issue timeline (detailed below). The issue poller that would have
+  started runs from issues was never wired in and was removed
+  (2026-11-07); issue-triggered runs are not built.
 - Full detail on the `BranchingSpec`, the completion marker, review
   modes, the change report, concurrency, and the GitHub adapter is in the
   sections below — this pillar's actual design content, not summarized
@@ -154,13 +155,29 @@ free-form prose — a missing or malformed file degrades to a report built
 from the agent's own summary, never to a failed run, since the work is
 already done by the time this step runs.
 
-## Concurrency: one task at a time per project
+## Where a task works: a worktree of its own (REQ-000000518)
 
-The same `queue_key` mutex Orchestration already provides for every Job
-type — restated here because this is the specific case it was designed
-around: a project never has two agent sessions on two branches at once;
-a second trigger queues and starts the moment the first is done, skipped,
-or failed. Different projects run fully in parallel.
+A task never works in the project's live checkout. Deployment & Servers provisions a worktree
+(`POST /v1/worktrees` with `branch`/`new_branch`) on the task's branch: a `new` branch is created there
+from its base (`origin/<base>` when that is ahead of the local one), an `existing` one is checked out
+there (fast-forwarded from origin), and `auto` becomes a `new` branch of the intent's default type named
+after the task, so the agent gets the "already on your branch" prompt. Claude, the screenshots, the commit
+and the push all run in the worktree, recorded as the run's `workdir`; the peek and Remote Control
+activation resume the session there. The live checkout may be dirty or on any branch; a branch that is
+checked out there (or in another worktree) is refused with that reason.
+
+- **Cleanup.** A run that ends awaiting finish removes its worktree (the finish checks the branch out in
+  the live checkout, as before). A failed or stopped run keeps it (`worktree_id`) for inspection; the
+  project's next task removes every kept one.
+- **Windows-hosted projects.** A non-Unity project's worktree is made with `git.exe` on its own drive,
+  `<root>\<project>\<worktree id>` (root `C:\little-workshop\worktrees`, or
+  `LWS_WINDOWS_WORKTREE_ROOT`). A Unity project keeps working in the live checkout (the editor's
+  `Library/` is there) behind the cleanliness check, one task per project at a time.
+- **Concurrency.** Tasks of one project run side by side: a worker writes through a database connection of
+  its own instead of holding the pillar's lock, and the Orchestration `queue_key` of an `agent.run_task`
+  Job is per branch (`common/task_queue.py`: `<project>:branch:<name>` for an existing branch,
+  `<project>:task:<title slug>` otherwise). Remote Control activation needs Claude Code to trust the
+  worktree's folder; a run started with Remote Control (the default) does not.
 
 ## Watching a run: Remote Control
 
@@ -223,12 +240,10 @@ than rediscovering:
   so authorization (is this sender the owner or an allowed actor) needs a
   timeline lookup (`GET /repos/{repo}/issues/{number}/events`) to find the
   real actor before dispatching anything.
-- **Cursor files turn polling into edge detection.** A poll only sees a
-  snapshot; the *new-since-last-time* edges a webhook would have
-  delivered are reconstructed by diffing each tick's snapshot against a
-  small per-project cursor file. This is the mechanism behind "no inbound
-  ports, no stored token" — outbound-only polling can still behave like
-  event delivery.
+- **Cursor files turn polling into edge detection** (for a future issue
+  poller). A poll only sees a snapshot; the *new-since-last-time* edges a
+  webhook would have delivered are reconstructed by diffing each tick's
+  snapshot against a small per-project cursor file.
 
 ## `agent.ci_check`: M16 `little-runner` parity (2026-09-17)
 
@@ -237,7 +252,7 @@ section) flagged this tool as "not close" to the absorbed tools'
 functional parity — true for its two genuinely load-bearing, no-
 equivalent-anywhere concepts (branch stabilization, cross-project branch
 auditing; both still open), but the survey undercounted: by the time
-this pass ran, this pillar's own `poller.py`/`github_adapter.py`/`db.py`
+this pass ran, this pillar's own `github_adapter.py`/`db.py`
 session tracking already gave `lrun issue run/finish` and `lrun session
 start/stop/list`'s *actor-lookup-and-dispatch* half full parity, just
 never checked off explicitly. What this pass actually closed was the one
@@ -303,6 +318,11 @@ docs/architecture.md's "Windows-hosted projects"), tracked by a PID file
 (`Paths.session_windows_pid_path`) rather than a process-list match. The trust check above also looks
 at that side's own `.claude.json` for such a project (`is_trusted`, `windows.windows_claude_configs`).
 
+(2026-11-07, REQ-000000510, REQ-000000512.) A Windows-hosted project's task runs its git — branching, the
+cleanliness check, the commit — with `git.exe` (`gitutil.py` through `common.windows.git_command`), and every
+task's commit stages only what `changed_paths` reports: untracked files and tracked ones that differ from HEAD by
+more than line endings. Where the task runs: see "Where a task works" above.
+
 ## Left open
 
 - Whether Agentic Development's own review-mode parameter (manual vs.
@@ -356,9 +376,10 @@ own follow-up commit, not part of little-workshop's own codebase.
 
 ## Playwright as standard: the agent drives a real browser (2026-09-24)
 
-Playwright is this ecosystem's standard for anything a user sees or touches, so every Claude Code
-session this pillar launches on a project — each `agent.run_task` run, and each ad-hoc session
-(`agent.session_start`) — gets the **Playwright MCP server** attached through `claude --mcp-config`
+Playwright is this ecosystem's standard for anything a user sees or touches, so each ad-hoc session
+(`agent.session_start`), and each `agent.run_task` run on a project with a UI (`flow.has_ui`: the project
+has a `manifest.deployment.toml` or its checkout a `tests/ui/` folder; REQ-000000480), gets the
+**Playwright MCP server** attached through `claude --mcp-config`
 (`common/playwright.py`). The agent can then launch the project's app (the project's
 `[server.screenshot].command` starts this branch on a scratch port) and navigate, click, type, resize to
 a phone viewport and take snapshots with the `browser_*` tools.
@@ -382,7 +403,14 @@ The prompt (`templates/prompts/ui_playwright_mcp.md`, or `ui_playwright.md` with
 agent, for any UI/UX change, to check it in the browser (desktop and phone viewports), never touch whatever
 is serving on the project's real port, and cover the behaviour with pytest-playwright tests under
 `tests/ui/` using relative URLs — which Requirements & Quality then runs against the branch's own app
-(`docs/pillars/requirements_quality.md`, "UI tests with Playwright").
+(`docs/pillars/requirements_quality.md`, "UI tests with Playwright"). A run on a project without a UI gets
+neither that section (the `{ui_instructions}` of `common.md` is empty) nor the server.
+
+Requirement work is asked only of a project of `full` governance (the Registry's setting, which the run reads
+with the project and puts in `params.governance`; REQ-000000496, REQ-000000501): its prompt carries ground rule 8
+(`templates/prompts/requirements.md`: create, update or supersede the affected requirements, tag the tests, cite
+the ids or `REQ-NONE` in commit messages), to which the `bug` and `milestone` intents refer. A `light` project's
+prompt asks for none of it.
 
 ## Documentation review: comments and the update-doc job (2026-09-28)
 
@@ -462,8 +490,9 @@ The backend of the Dashboard's Docs pages (`docs/pillars/dashboard.md`).
 
 ## Shared project standards copy (2026-10-01)
 
-Every `agent.run_task` run is given a **temporary, read-only copy of little-workshop's
-`shared_project_standards/`** (`src/agent/standards.py`; REQ-000000286..289).
+An `agent.run_task` run about documentation or standards (intent `docs`, or a title or description that
+mentions standards; `flow.touches_standards`) is given a **temporary, read-only copy of little-workshop's
+`shared_project_standards/`**; any other run gets neither the copy nor the prompt's standards section (`src/agent/standards.py`; REQ-000000479, REQ-000000287..289).
 
 - **What is copied**: every Markdown file at the root of `shared_project_standards/` plus the Markdown files
   of the run's own project folder (`<project id, hyphens as underscores>_standards/`). Other projects'
@@ -477,15 +506,15 @@ Every `agent.run_task` run is given a **temporary, read-only copy of little-work
 - **Source**: the registered `little-workshop` checkout's `shared_project_standards/`
   (`AgentFlow.standards_root` overrides it for tests). If it cannot be found or copied the run proceeds without
   the copy; a missing source never fails a task.
-- **Opt-out**: the `include_standards` param, default true. The New task form shows it as a checkbox, checked by
+- **Opt-out**: the `include_standards` param, default true (it allows the copy; the task still has to be
+  about documentation or standards). The New task form shows it as a checkbox, checked by
   default; the choice is carried through scheduling and retry; `workshop_agent_run_task` takes
   `include_standards: false`. The "Update Standards Documentation" job sets it false, since it edits the
   original folder.
 
 ## Claude usage of the runs this pillar starts (2026-10-04)
 
-M18 of `docs/milestones.md` (REQ-000000320, REQ-000000321); the reasons are in
-[../claude_usage_optimization.md](../claude_usage_optimization.md), §3 (F4, F5).
+M18 of `docs/milestones.md` (REQ-000000320, REQ-000000321).
 
 - **Stored usage.** Every `claude -p` result JSON carries what the run used. `claude_invoke.usage_from_raw`
   reads it and `db.record_usage` stores one `claude_usage` row per Claude call: kind (`run`, `query`,
@@ -564,9 +593,12 @@ little-workshop's queue for hours on 2026-10-04: it named the intent `improvemen
 (`templates/prompts/improvement.md`), so the worker thread died on a `FileNotFoundError` before Claude
 started, and neither the run nor its Job was ever settled.
 
-- **Intents.** The intents are those with a prompt: `bug`, `docs`, `milestone`, `task`
+- **Intents.** The intents are those with a prompt: `bug`, `docs`, `interview`, `milestone`, `skill`, `task`
   (`flow.INTENTS`). `agent.run_task` refuses any other at once, before a run exists, naming them
-  (`flow.intent_error`); `AgentFlow.run_task` refuses it too. The Usage pillar's tasks use `task`.
+  (`flow.intent_error`); `AgentFlow.run_task` refuses it too. The Usage pillar's tasks use `task`, and its
+  "Draft as a skill" uses `skill` (an improvement branch that writes `.claude/skills/<name>/SKILL.md`); a
+  bootstrap's interview uses `interview` (REQ-000000519: questions over Remote Control, `grill-me` when
+  installed, `docs/design.md`, requirements only for `full` governance).
 - **A crash ends the run.** An exception escaping the worker of `agent.run_task` marks its run failed
   ("the task crashed: …"), reports the Job failed to Orchestration and records an incident; building the
   prompt is part of the `run_claude` step, so its failure shows on that step.

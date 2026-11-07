@@ -13,7 +13,8 @@ from pathlib import Path
 from common.job_steps import StepFailed, can_ask, done, step
 from version.common import CommandResult, ensure_clean_tree, get_integration_branch, require_branch_exists, resolve_conflicts_with_user
 from version.configstore import clear_finish_state, get_issue_link, load_finish_state, save_finish_state
-from version.gitops import RebaseConflictError, commit_if_dirty, current_branch, is_rebase_in_progress, rebase_abort, rebase_continue, rebase_onto, no_requirement
+from version.gitops import RebaseConflictError, current_branch, is_rebase_in_progress, rebase_abort, rebase_continue, rebase_onto
+from version.generated import regenerate_conflicted
 from version.workflows import PatchMergePlan, squash_merge_and_bump_patch, start_integration_branch
 
 
@@ -25,16 +26,11 @@ def cmd_topic_start(
 
 
 def _finish_squash_merge_bump(repo_root: Path, work_branch: str, integ: str, merge_message: str) -> CommandResult:
-    return squash_merge_and_bump_patch(
-        repo_root,
-        PatchMergePlan(
-            work_branch=work_branch,
-            target_branch=integ,
-            merge_message=merge_message,
-            pre_merge_cleanup=clear_finish_state,
-            pre_merge_commit_message=no_requirement("chore(version): clear finish state"),
-        ),
+    result = squash_merge_and_bump_patch(
+        repo_root, PatchMergePlan(work_branch=work_branch, target_branch=integ, merge_message=merge_message),
     )
+    clear_finish_state(repo_root)
+    return result
 
 
 def cmd_topic_finish(
@@ -63,26 +59,13 @@ def _topic_finish(
         rebase_abort(repo_root)
         clear_finish_state(repo_root)
         work_branch = (finish_state or {}).get("work_branch", f"{prefix} branch")
-        # clear_finish_state rewrites .lvx/state.json but never committed
-        # it -- left dirty, this genuinely blocked switching away from the
-        # work branch right after an abort ("Repository restored" wasn't
-        # actually true). hotfix's own abort path already commits its
-        # equivalent cleanup; this one didn't.
-        commit_if_dirty(repo_root, no_requirement(f"chore(version): abort finish for {work_branch}"))
         return CommandResult(success=True, message=f"Aborted finish for {work_branch!r}. Repository restored.")
 
     if action == "continue":
-        # Drain any in-progress rebase *before* reading the saved state: the
-        # state-save commit is the newest commit on the work branch, so
-        # `git rebase` (which replays one commit's diff at a time against a
-        # moving base, unlike a merge) won't have restored `.lvx/state.json`
-        # to the working tree until every earlier commit's conflicts are
-        # resolved and it's actually replayed. Reading state first would
-        # spuriously report "no finish in progress" the moment the conflict
-        # lands on any commit older than the state-save one.
+        # Drain any in-progress rebase first: the squash and merge need it done.
         if is_rebase_in_progress(repo_root):
             try:
-                rebase_continue(repo_root)
+                rebase_continue(repo_root, regenerate_conflicted)
             except RebaseConflictError as exc:
                 return CommandResult(success=False, message=str(exc))
 
@@ -114,11 +97,10 @@ def _topic_finish(
 
     with step("save_state"):
         save_finish_state(repo_root, cur, integ, merge_message)
-        commit_if_dirty(repo_root, no_requirement("chore(version): save finish state"))
 
     with step("rebase") as handle:
         try:
-            rebase_onto(repo_root, integ)
+            rebase_onto(repo_root, integ, regenerate_conflicted)
             handle.detail = f"onto {integ}"
         except RebaseConflictError as exc:
             if not can_ask():
@@ -131,7 +113,7 @@ def _topic_finish(
         done("resolve_conflicts", "no conflicts")
     else:
         resolve_conflicts_with_user(
-            repo_root, "resolve_conflicts", f"the rebase onto {integ}", resume=lambda: rebase_continue(repo_root),
+            repo_root, "resolve_conflicts", f"the rebase onto {integ}", resume=lambda: rebase_continue(repo_root, regenerate_conflicted),
             abort=lambda: _abort_finish(repo_root, cur), first_error=str(conflict),
         )
 
@@ -142,7 +124,6 @@ def _abort_finish(repo_root: Path, work_branch: str) -> None:
     if is_rebase_in_progress(repo_root):
         rebase_abort(repo_root)
     clear_finish_state(repo_root)
-    commit_if_dirty(repo_root, no_requirement(f"chore(version): abort finish for {work_branch}"))
 
 
 def cmd_topic_status(repo_root: Path, *, prefix: str) -> CommandResult:

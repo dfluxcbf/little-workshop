@@ -1,7 +1,7 @@
 """version.common's `run_version_hooks` (never exercised — no test ran a
 real hook script before) and version.workflows' less-common branches
 (already-exists guard, wrong-branch guard, hook-warning message, the
-untracked-state-file cleanup, checkout_existing_branch's no-op case), plus
+checkout_existing_branch's no-op case), plus
 version.stages' one remaining gap (`rc_tag()` on a non-RC version)."""
 
 import subprocess
@@ -15,7 +15,6 @@ from version.gitops import MissingBranchError, current_branch
 from version.stages import GitflowVersion
 from version.workflows import (
     checkout_existing_branch,
-    clear_untracked_state_file,
     create_prefixed_branch,
     require_checked_out_branch,
     success_with_hook_warnings,
@@ -155,32 +154,6 @@ def test_success_with_hook_warnings_appends_warning_text():
 def test_success_with_hook_warnings_no_errors_leaves_message_unchanged():
     result = success_with_hook_warnings(message="base message", hook_errors=[])
     assert result.message == "base message"
-
-
-def test_clear_untracked_state_file_removes_untracked_state(tmp_path):
-    repo = make_repo(tmp_path)
-    state_file = repo / ".lvx" / "state.json"
-    state_file.write_text("{}", encoding="utf-8")
-    assert state_file.exists()
-
-    clear_untracked_state_file(repo)
-    assert not state_file.exists()
-
-
-def test_clear_untracked_state_file_keeps_tracked_state(tmp_path):
-    repo = make_repo(tmp_path)
-    state_file = repo / ".lvx" / "state.json"
-    state_file.write_text("{}", encoding="utf-8")
-    _git(["add", ".lvx/state.json"], repo)
-    _git(["commit", "-m", "track state (unusual, but exercise the code path)"], repo)
-
-    clear_untracked_state_file(repo)
-    assert state_file.exists()  # tracked, so left alone
-
-
-def test_clear_untracked_state_file_is_a_noop_when_file_absent(tmp_path):
-    repo = make_repo(tmp_path)
-    clear_untracked_state_file(repo)  # must not raise
 
 
 def test_checkout_existing_branch_switches_when_present(tmp_path):

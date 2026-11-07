@@ -44,32 +44,16 @@ def pillars_version(paths: Paths) -> str:
                        for name, entry in sorted(pillars.items())})
 
 
-def generation_version(paths: Paths) -> str:
-    """What the Generation pages show of the queue (the pause, the batch rendering, the open requests and their
-    statuses, ComfyUI lent to the user: asked for, started or failing), leaving out the seconds that tick by. A pillar
-    that is off answers nothing and changes nothing."""
-    try:
-        queue = client.generation_queue(paths)
-    except client.Refused:
-        return ""
-    running = queue.get("running_batch") or {}
-    lent = queue.get("comfy_lent")
-    lend = [lent.get("requested_at"), lent.get("since"), lent.get("error")] if lent else None
-    return json.dumps([queue.get("paused"), running.get("request_ids"), queue.get("pending_images"),
-                       [(r["id"], r["status"]) for r in queue.get("open_requests") or []], lend])
-
-
 VERSION_SOURCES: dict[str, Callable[[Paths], str]] = {
     "backlog": lambda paths: client.backlog_version(paths),
     "usage": lambda paths: client.usage_version(paths),
     "incidents": lambda paths: client.incidents_version(paths),
     "conflicts": lambda paths: client.requirement_conflicts_version(paths),
     "pillars": pillars_version,
-    "generation": generation_version,
 }
-# An incident or a requirement conflict appearing, or the generation queue pausing, is also something needing
-# attention; a pillar's health is on the Dashboard page too.
-ALSO_PUBLISH = {"incidents": ("attention",), "conflicts": ("attention",), "pillars": ("dashboard",), "generation": ("attention",)}
+# An incident or a requirement conflict appearing is also something needing attention; a pillar's health is on the
+# Dashboard page too.
+ALSO_PUBLISH = {"incidents": ("attention",), "conflicts": ("attention",), "pillars": ("dashboard",)}
 
 _TASK_TYPES = {"agent.run_task", "agent.finish_task", "agent.skip_task", "agent.dismiss_task", "agent.confirm_incident",
                "agent.resolve_requirement_conflict"}

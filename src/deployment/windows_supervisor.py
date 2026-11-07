@@ -1,4 +1,4 @@
-"""Restart-on-failure for a Windows-hosted server (`common/windows.py`'s `is_windows_checkout`):
+"""Restart-on-failure for a Windows-hosted server (`common/windows.py`'s `project_host`):
 little-workshop polls its tracked PID (`Paths.deployment_windows_pid_path`) and relaunches it on crash,
 standing in for what `systemd --user`'s `Restart=on-failure` already does for a WSL-hosted server --
 there is no Windows unit for this pillar to delegate that to instead.
@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 from typing import Callable
 
-from common import windows_process
+from common import windows, windows_process
 from common.paths import Paths
 from deployment import db
 from deployment.flow import DeploymentFlow
@@ -49,16 +50,17 @@ class WindowsServerSupervisor:
                 pid_path = self.paths.deployment_windows_pid_path(project_id)
                 if not pid_path.exists():
                     continue
-                try:
-                    pid = int(pid_path.read_text().strip())
-                except ValueError:
-                    logger.warning("%s: its Windows pid file is not a plain integer, leaving it alone", project_id)
+                record = windows_process.read_pid_record(pid_path)
+                if record is None:
+                    logger.warning("%s: its Windows pid file is unreadable, leaving it alone", project_id)
                     continue
-                if windows_process.is_alive(self.flow.runner, pid):
+                if windows_process.is_alive(self.flow.runner, record["pid"], record["started"]):
                     continue
+                # Relaunched from the deploy folder it ran from (a record from before folders were kept has none).
+                cwd = Path(windows.to_wsl_path(record["cwd"], windows.mount_root())) if record["cwd"] else self.paths.state_home
                 try:
                     manifest = self.load_manifest(self.paths, project_id)
-                    self.flow.launch(project_id, manifest, cwd=self.paths.state_home, on_windows=True)
+                    self.flow.launch(project_id, manifest, cwd=cwd, on_windows=True)
                 except Exception:  # noqa: BLE001 - one project's relaunch failing must never take this thread down
                     logger.exception("%s: its Windows process died and could not be relaunched", project_id)
                     continue

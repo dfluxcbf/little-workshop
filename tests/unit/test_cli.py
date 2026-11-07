@@ -723,9 +723,9 @@ def test_deployment_redeploy_pillars_prints_the_batches_and_creates_the_jobs(mon
     monkeypatch.setattr(cli_client, "post_job", lambda paths, **fields: created.append(fields) or {})
     code = main.main(["deployment", "redeploy-pillars", "--commit", "abc"])
     out, err = capsys.readouterr()
-    assert code == 0 and "batch 1/3: orchestration" in err and "batch 3/3: policy" in err
+    assert code == 0 and "batch 1/3: agent" in err and "batch 3/3: orchestration" in err
     by_pillar = {f["project_id"]: f for f in created}
-    assert by_pillar["agent"]["depends_on"] == [by_pillar["orchestration"]["id"]] and by_pillar["policy"]["depends_on"] == [by_pillar["agent"]["id"]]
+    assert by_pillar["policy"]["depends_on"] == [by_pillar["agent"]["id"]] and by_pillar["orchestration"]["depends_on"] == [by_pillar["policy"]["id"]]
     assert '"batches"' in out
 
 

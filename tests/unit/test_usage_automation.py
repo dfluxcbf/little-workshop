@@ -236,7 +236,7 @@ def test_make_it_a_task_starts_one_fixed_improvement_task_on_little_workshop(usa
     done = usage.post("/v1/jobs/usage.automate", json={"job_id": "j1", "params": {"candidate_id": candidate["id"]}}).json()
     assert done["outcome"] == "succeeded" and db.get_candidate(conn, candidate["id"])["state"] == "accepted"
     (job,) = usage.jobs
-    assert (job["type"], job["project_id"], job["queue_key"], job["created_by"]) == ("agent.run_task", "little-workshop", "little-workshop", "usage")
+    assert (job["type"], job["project_id"], job["queue_key"], job["created_by"]) == ("agent.run_task", "little-workshop", "little-workshop:task:automate-repeated-claude-work", "usage")
     description = job["params"]["description"]
     assert job["params"]["intent"] == "task" and job["params"]["review_mode"] == "manual"
     assert "`mcp:workshop_deployment_redeploy_pillar(commit, pillar)`" in description and "deterministic (determinism score 5 of 5" in description
@@ -571,7 +571,7 @@ def test_the_new_routes_are_allowed_asked_or_little_workshops_own_and_named_in_t
     assert {f"{mcp}workshop_trigger_add", f"{mcp}workshop_trigger_remove", f"{mcp}workshop_deployment_redeploy_changed_pillars"} <= set(project["ask"])
     assert "Bash(lws requirements sync-markers --project-id little-widget *)" in project["allow"]
     assert f"{mcp}workshop_deployment_redeploy_changed_pillars" in claude_templates.settings("little-workshop", platform=True)["permissions"]["allow"]
-    skill = claude_templates.lifecycle_skill_md("little-widget")
+    skill = claude_templates.lifecycle_skill_md("little-widget", governance="full")
     assert "`workshop_requirements_sync_markers`: one call" in skill
     assert "workshop_deployment_redeploy_changed_pillars" in claude_templates.lifecycle_skill_md("little-workshop", platform=True)
 

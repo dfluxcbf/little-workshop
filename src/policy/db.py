@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS policies (
     created_by TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
     gate_points TEXT NOT NULL DEFAULT '[]',
+    inputs TEXT NOT NULL DEFAULT '[]',
+    requires TEXT,
     created_at TEXT NOT NULL,
     amended_at TEXT NOT NULL
 );
@@ -124,6 +126,12 @@ def connect(path: Path) -> sqlite3.Connection:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(policy_drafts)")}
     if "projects" not in columns:
         conn.execute("ALTER TABLE policy_drafts ADD COLUMN projects TEXT NOT NULL DEFAULT '[]'")
+    # A policy's `inputs` (the paths its verdict is fingerprinted by), added after policies shipped.
+    if "inputs" not in {row["name"] for row in conn.execute("PRAGMA table_info(policies)")}:
+        conn.execute("ALTER TABLE policies ADD COLUMN inputs TEXT NOT NULL DEFAULT '[]'")
+    # The governance a policy needs (REQ-000000496), added after policies shipped.
+    if "requires" not in {row["name"] for row in conn.execute("PRAGMA table_info(policies)")}:
+        conn.execute("ALTER TABLE policies ADD COLUMN requires TEXT")
     # Change-driven check skipping (see PolicyCheckResult.checked_state) —
     # added after policy_check_results already shipped.
     result_columns = {row["name"] for row in conn.execute("PRAGMA table_info(policy_check_results)")}
@@ -155,13 +163,13 @@ def insert_policy(conn: sqlite3.Connection, policy: Policy) -> None:
     conn.execute(
         """INSERT INTO policies
            (id, topic, target_pillar, ears_text, test_script, scope_level, scope_target, created_by,
-            enabled, gate_points, created_at, amended_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            enabled, gate_points, inputs, requires, created_at, amended_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             policy.id, policy.topic, policy.target_pillar, policy.ears_text, policy.test_script,
             policy.scope_level.value, policy.scope_target, policy.created_by.value,
-            int(policy.enabled), json.dumps([g.value for g in policy.gate_points]),
-            _iso(policy.created_at), _iso(policy.amended_at),
+            int(policy.enabled), json.dumps([g.value for g in policy.gate_points]), json.dumps(policy.inputs),
+            policy.requires, _iso(policy.created_at), _iso(policy.amended_at),
         ),
     )
     conn.commit()
@@ -173,12 +181,13 @@ def replace_policy(conn: sqlite3.Connection, policy: Policy) -> None:
     policy.amended_at = datetime.now(timezone.utc)
     conn.execute(
         """UPDATE policies SET topic = ?, target_pillar = ?, ears_text = ?, test_script = ?,
-           scope_level = ?, scope_target = ?, created_by = ?, enabled = ?, gate_points = ?, amended_at = ? WHERE id = ?""",
+           scope_level = ?, scope_target = ?, created_by = ?, enabled = ?, gate_points = ?, inputs = ?, requires = ?, amended_at = ?
+           WHERE id = ?""",
         (
             policy.topic, policy.target_pillar, policy.ears_text, policy.test_script,
             policy.scope_level.value, policy.scope_target, policy.created_by.value,
-            int(policy.enabled), json.dumps([g.value for g in policy.gate_points]),
-            _iso(policy.amended_at), policy.id,
+            int(policy.enabled), json.dumps([g.value for g in policy.gate_points]), json.dumps(policy.inputs),
+            policy.requires, _iso(policy.amended_at), policy.id,
         ),
     )
     conn.commit()
@@ -219,7 +228,7 @@ def _row_to_policy(conn: sqlite3.Connection, row: sqlite3.Row) -> Policy:
         test_script=row["test_script"], scope_level=ScopeLevel(row["scope_level"]), scope_target=row["scope_target"],
         created_by=CreatedBy(row["created_by"]), enabled=bool(row["enabled"]),
         gate_points=[GatePoint(g) for g in json.loads(row["gate_points"])],
-        projects=_projects_of(conn, row["id"]),
+        projects=_projects_of(conn, row["id"]), inputs=json.loads(row["inputs"]), requires=row["requires"],
         created_at=_parse_iso(row["created_at"]), amended_at=_parse_iso(row["amended_at"]),
     )
 

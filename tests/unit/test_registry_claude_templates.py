@@ -220,7 +220,33 @@ def test_settings_register_the_guard_for_bash_the_edit_tools_and_the_mcp_tools()
     assert not re.fullmatch(matcher, "Read") and not re.fullmatch(matcher, "mcp__playwright__browser_click")
     (hook,) = hooks[0]["hooks"]
     assert hook["type"] == "command"
-    assert hook["command"] == f'python3 "${{CLAUDE_PROJECT_DIR}}"/.claude/hooks/lws_scope_guard.py {PROJECT}'
+    assert hook["command"] == claude_templates.hook_command(".claude/hooks/lws_scope_guard.py", PROJECT)
+    assert re.search(r"lws_scope_guard\.py\s+(\S+)", hook["command"]).group(1) == PROJECT  # what detect_project_id reads
+
+
+# --- REQ-000000494: a generated hook whose script is missing lets the tool call through ---------
+
+def _run_hook_command(command, project_dir, stdin=""):
+    import subprocess
+
+    return subprocess.run(["bash", "-c", command], input=stdin, capture_output=True, text=True,
+                          env={"CLAUDE_PROJECT_DIR": str(project_dir), "PATH": "/usr/bin:/bin"})
+
+
+def test_a_hook_command_runs_its_script_with_its_arguments_and_the_event(tmp_path):
+    script = tmp_path / ".claude" / "hooks" / "echo_hook.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("import sys\nprint(sys.argv[1:], sys.stdin.read())\nsys.exit(3)\n")
+    result = _run_hook_command(claude_templates.hook_command(".claude/hooks/echo_hook.py", PROJECT), tmp_path, "{}")
+    assert result.returncode == 3 and result.stdout.strip() == f"['{PROJECT}'] {{}}"
+
+
+def test_a_hook_command_whose_script_is_missing_exits_0_with_a_notice(tmp_path):
+    for entry in claude_templates.settings(PROJECT, **claude_templates.OWN_SETTINGS)["hooks"]["PreToolUse"]:
+        for hook in entry["hooks"]:
+            result = _run_hook_command(hook["command"], tmp_path, "{}")
+            assert result.returncode == 0 and result.stdout == ""
+            assert "is missing in this checkout" in result.stderr and "the hook did not run" in result.stderr
 
 
 @pytest.mark.parametrize("template", ["python", "unity"])
@@ -389,7 +415,7 @@ def test_python_agents_md_carries_the_commit_and_test_rules(tmp_path):
     dest = tmp_path / "little-widget"
     scaffold.create_project_tree(dest, "little-widget")
     text = _briefing(dest)
-    for needle in ("REQ-NONE", "python3 -m pytest tests/unit", "VERSION"):
+    for needle in ("python3 -m pytest tests/unit", "VERSION"):
         assert needle in text, needle
 
 
@@ -569,10 +595,10 @@ def test_only_workshop_itselfs_shared_section_administers_little_workshop():
     own = claude_templates.shared_briefing_md("little-workshop", platform=True)
     other = claude_templates.shared_briefing_md(PROJECT)
     assert "administers little-workshop" in own and "administers" not in other
-    assert "policy authoring and project registration belong in" in other
+    assert "Other projects belong in a session started from `little-projects`" in other
 
 
-# --- REQ-000000447: the newest request outranks earlier decisions -----------------------------
+# --- REQ-000000478: the newest request outranks earlier decisions, stated once in the briefing ---
 
 def test_the_shared_section_says_the_newest_request_outranks_earlier_decisions():
     for text in (claude_templates.shared_briefing_md(PROJECT),
@@ -582,20 +608,90 @@ def test_the_shared_section_says_the_newest_request_outranks_earlier_decisions()
         assert needle in claude_templates.NEWEST_REQUEST_WINS
 
 
-def test_settings_register_the_reminder_for_every_prompt():
-    (entry,) = claude_templates.settings(PROJECT)["hooks"]["UserPromptSubmit"]
-    assert "matcher" not in entry
-    (hook,) = entry["hooks"]
-    assert hook["command"] == f'python3 "${{CLAUDE_PROJECT_DIR}}"/{claude_templates.REMINDER_PATH}'
-    assert claude_templates.claude_files(PROJECT)[claude_templates.REMINDER_PATH] == claude_templates.newest_request_reminder_py()
-    assert claude_templates.REMINDER_PATH in claude_templates.generated_files_reasons()
+def test_no_prompt_hook_is_generated_and_the_reminder_is_retired():
+    assert "UserPromptSubmit" not in claude_templates.settings(PROJECT)["hooks"]
+    assert claude_templates.REMINDER_PATH not in claude_templates.claude_files(PROJECT)
+    assert claude_templates.REMINDER_PATH in claude_templates.RETIRED_FILES
+    assert claude_templates.REMINDER_PATH not in claude_templates.generated_files_reasons()
 
 
-@pytest.mark.parametrize("stdin", ['{"hook_event_name": "UserPromptSubmit", "prompt": "make it blue"}', "not json"])
-def test_the_reminder_adds_the_rule_to_the_prompts_context(tmp_path, stdin):
-    script = tmp_path / "newest_request_reminder.py"
-    script.write_text(claude_templates.newest_request_reminder_py())
-    run = subprocess.run([sys.executable, str(script)], input=stdin, capture_output=True, text=True, check=True)
-    out = json.loads(run.stdout)["hookSpecificOutput"]
-    assert out["hookEventName"] == "UserPromptSubmit"
-    assert out["additionalContext"] == "little-workshop: " + claude_templates.NEWEST_REQUEST_WINS.replace("\n", " ")
+# --- REQ-000000481: a branch finish needs no separate Definition-of-Done run ---
+
+@pytest.mark.parametrize("platform", [False, True])
+def test_the_finish_steps_are_the_preflight_and_the_finish(platform):
+    skill = claude_templates.lifecycle_skill_md(PROJECT, platform=platform)
+    steps = skill.split("## Finishing a branch", 1)[1]
+    assert "1. Run the `policy-preflight` skill" in steps and "2. Finish with" in steps and "3." not in steps
+    assert "No separate Definition-of-Done run" in steps and "coverage check" in steps
+
+
+# --- REQ-000000496: requirement work is asked only of full-governance projects -------------
+
+def test_only_full_governance_files_ask_for_requirement_work():
+    light = claude_templates.claude_files(PROJECT)
+    full = claude_templates.claude_files(PROJECT, governance="full")
+    for rel in (claude_templates.SHARED_BRIEFING_PATH, claude_templates.LIFECYCLE_SKILL_PATH):
+        assert "REQ-nnnnnnnnn" not in light[rel] and "workshop_requirements_create" not in light[rel], rel
+    assert "Governance `full`" in full[claude_templates.SHARED_BRIEFING_PATH]
+    assert "workshop_requirements_sync_markers" in full[claude_templates.LIFECYCLE_SKILL_PATH]
+    assert "workshop_requirements_run_tests" in light[claude_templates.LIFECYCLE_SKILL_PATH]
+    assert "requirement ids" not in claude_templates.agents_md(PROJECT)
+    assert "requirement ids" in claude_templates.agents_md(PROJECT, governance="full")
+
+
+# --- REQ-000000497: generated Claude files keep a project-owned section -----------------------
+
+def test_every_generated_markdown_file_ends_with_an_empty_project_section():
+    for rel, text in claude_templates.claude_files(PROJECT).items():
+        if rel.endswith(".md"):
+            assert text.endswith(claude_templates.PROJECT_SECTION), rel
+
+
+def test_keep_project_section_carries_the_checkouts_own_text_into_the_new_file():
+    generated = "new top\n<!-- project -->\n<!-- /project -->\n"
+    current = "old top\n<!-- project -->\n- our rule\n<!-- /project -->\n"
+    assert claude_templates.keep_project_section(generated, current) == "new top\n<!-- project -->\n- our rule\n<!-- /project -->\n"
+    assert claude_templates.keep_project_section(generated, "no markers") == generated
+    assert claude_templates.keep_project_section(generated, None) == generated
+    assert claude_templates.keep_project_section("plain", current) == "plain"
+
+
+def _section_file(root):
+    path = root / claude_templates.SHARED_BRIEFING_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(claude_templates.shared_briefing_md(PROJECT))
+    return path
+
+
+def test_guard_lets_claude_edit_only_the_project_section_of_a_generated_file(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    path = _section_file(root)
+    text = path.read_text()
+    inside = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "<!-- project -->\n",
+                                                  "new_string": "<!-- project -->\n- Use pnpm here.\n"}}
+    assert _guard_in(tmp_path, root, inside) is None
+    outside = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "## little-workshop",
+                                                   "new_string": "## mine"}}
+    reason = _guard_in(tmp_path, root, outside)
+    assert "sync_claude_files.py --write" in reason and "<!-- project -->" in reason
+    written = text.replace("<!-- /project -->", "- Use pnpm here.\n<!-- /project -->")
+    assert _guard_in(tmp_path, root, {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": written}}) is None
+    rewritten = "x" + written
+    assert _guard_in(tmp_path, root, {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": rewritten}})
+    multi = {"tool_name": "MultiEdit", "tool_input": {"file_path": str(path), "edits": [
+        {"old_string": "<!-- /project -->", "new_string": "- a\n<!-- /project -->"},
+        {"old_string": "## little-workshop", "new_string": "## mine"}]}}
+    assert _guard_in(tmp_path, root, multi)
+
+
+# --- REQ-000000498: learned rules go to the project's learned-rules file ---------------------
+
+def test_learned_rules_are_steered_to_the_learned_rules_file(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    reason = _guard_in(tmp_path, root, _edit(root / "CLAUDE.md"))
+    assert claude_templates.LEARNED_RULES_PATH in reason and "claude-reflect" in reason
+    assert claude_templates.LEARNED_RULES_PATH in claude_templates.shared_briefing_md(PROJECT)
+    assert claude_templates.LEARNED_RULES_PATH in claude_templates.instructions_rule_md()
+    assert claude_templates.LEARNED_RULES_PATH not in claude_templates.claude_files(PROJECT)

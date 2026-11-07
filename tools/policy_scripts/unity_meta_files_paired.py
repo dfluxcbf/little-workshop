@@ -1,10 +1,10 @@
-"""Policy `unity-meta-files-paired` (version pillar; gates commit, branch_finish): in a Unity
+"""Policy `unity-meta-files-paired` (version pillar; gates branch_finish): in a Unity
 project, a commit that adds or deletes a file or folder under Assets/ adds or deletes its .meta
 file with it, and adds or deletes no .meta file apart from its asset.
 
 Unity keeps an asset's GUID in its .meta file. Committed apart, another clone generates a new
 .meta with a new GUID and every reference to the asset breaks. Judges the commit being made
-when the commit-msg hook runs it (POLICY_COMMIT_DIR lists its paths; its parent is HEAD),
+when one is pending (POLICY_COMMIT_DIR lists its paths; its parent is HEAD),
 otherwise HEAD against its first parent. Unity's own exclusions have no .meta: hidden names
 (.name), names ending in ~, folders named cvs and *.tmp files."""
 

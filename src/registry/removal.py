@@ -1,5 +1,5 @@
 """`project.remove` — hard delete, immediate, cascading
-(docs/open_questions.md OQ-7): this pillar purges its own rows
+(OQ-7, presentations/17-answering-the-first-round.md): this pillar purges its own rows
 (`projects`, `project_set_members`, `tickets`) and the project-files
 directory it created during bootstrap/import. No soft-delete, no undo.
 Every *other* pillar implements the same "purge my data for this

@@ -22,6 +22,7 @@ import json
 import pytest
 
 from cli import main
+from cli.commands import build as build_commands
 from common.paths import Paths
 
 
@@ -1274,7 +1275,7 @@ def test_build_pip_shells_to_real_pip_with_the_extra_index(monkeypatch):
 
         return Result()
 
-    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    monkeypatch.setattr(build_commands.subprocess, "run", fake_run)
     # --host/--port must precede the positional `package` — nargs=REMAINDER
     # greedily swallows everything after it, the same ordering requirement
     # little-pypi's own `pip` command already has.

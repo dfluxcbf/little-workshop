@@ -161,6 +161,10 @@ def connect(path: Path) -> sqlite3.Connection:
     # Where a query ran (the query folder, or a project's checkout): its transcript is kept under it.
     if "cwd" not in {row["name"] for row in conn.execute("PRAGMA table_info(query_sessions)")}:
         conn.execute("ALTER TABLE query_sessions ADD COLUMN cwd TEXT")
+    # Where a task's Claude ran (its worktree, or the live checkout) and the worktree still kept for it (REQ-000000518).
+    for column in ("workdir", "worktree_id"):
+        if column not in {row["name"] for row in conn.execute("PRAGMA table_info(agent_runs)")}:
+            conn.execute(f"ALTER TABLE agent_runs ADD COLUMN {column} TEXT")
     conn.commit()
     return conn
 
@@ -206,6 +210,14 @@ def fail_interrupted_runs(conn: sqlite3.Connection, reason: str) -> list[dict]:
     for run in rows:
         update_run(conn, run["id"], status=FAILED, summary=reason)
     return rows
+
+
+def kept_worktrees(conn: sqlite3.Connection, project_id: str) -> list[dict]:
+    """The project's runs that ended (failed, stopped) and still have their worktree, kept for inspection."""
+    rows = conn.execute(
+        "SELECT * FROM agent_runs WHERE project_id = ? AND worktree_id IS NOT NULL AND status != ?", (project_id, RUNNING),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def get_run_by_job(conn: sqlite3.Connection, job_id: str) -> dict | None:

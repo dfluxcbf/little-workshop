@@ -31,7 +31,6 @@ from version.commands.release import (
     cmd_release_status,
 )
 from version.commands.support import cmd_support_finish, cmd_support_start
-from version.commands.sync_version_files import cmd_sync_version_files
 from version.release_job import ReleaseFailed, ReleaseRefused, run_release
 from version.release_services import PillarReleaseServices, ServiceUnavailable
 from version.commands.topic_branch import cmd_topic_finish, cmd_topic_start, cmd_topic_status
@@ -142,10 +141,6 @@ def _stabilize(repo_root: Path, params: dict) -> CommandResult:
     return CommandResult(success=success, message=result.message or result.status, data=asdict(result))
 
 
-def _sync_version_files(repo_root: Path, params: dict) -> CommandResult:
-    return cmd_sync_version_files(repo_root)
-
-
 JOB_HANDLERS: dict[str, JobHandler] = {
     "version.init": _init,
     "version.feature_start": _feature_start,
@@ -166,7 +161,6 @@ JOB_HANDLERS: dict[str, JobHandler] = {
     "version.issue_unset": _issue_unset,
     "version.branch_audit": _branch_audit,
     "version.stabilize": _stabilize,
-    "version.sync_version_files": _sync_version_files,
 }
 
 STATUS_HANDLERS: dict[str, Callable[[Path], CommandResult]] = {

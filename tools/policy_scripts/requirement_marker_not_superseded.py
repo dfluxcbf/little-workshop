@@ -1,11 +1,12 @@
-"""Policy `requirement-marker-not-superseded` (requirements pillar; gates commit and branch_finish):
-where the project keeps a `docs/requirements.md` register, a commit leaves no test citing a requirement
+"""Policy `requirement-marker-not-superseded` (requirements pillar; gates branch_finish):
+where the project keeps a `docs/requirements.md` register (with its `docs/requirements/*.md` parts, where it is
+split), a commit leaves no test citing a requirement
 whose row is marked superseded or removed (REQ-000000449).
 
 A superseded row whose tests still carry its id keeps asserting the old behaviour, and either fails or
 quietly pulls new work back toward it. `workshop_requirements_supersede` marks the row and lists the
 tests to re-tag; this check refuses the commit that leaves one behind. Judges the commit being made
-when the commit-msg hook runs it (POLICY_COMMIT_DIR), otherwise HEAD against its first parent, and
+when one is pending (POLICY_COMMIT_DIR), otherwise HEAD against its first parent, and
 only what it introduces: every test citing a row the commit newly retires, and the test files the
 commit changes that cite any retired row. An old leftover never fails every later commit."""
 
@@ -20,6 +21,7 @@ PROJECT = os.environ.get("POLICY_PROJECT_DIR", "/project")
 COMMIT_DIR = os.environ.get("POLICY_COMMIT_DIR")
 ROOT = pathlib.Path(PROJECT)
 REGISTER_PATH = "docs/requirements.md"
+REGISTER_DIR = "docs/requirements"
 FIX = (
     "Fix: re-tag these tests with the requirement that replaced it (the row's last cell names it), or delete "
     "them if the behaviour is gone; `workshop_requirements_supersede` lists the files still tagged."
@@ -87,6 +89,21 @@ def _text(prefix, path):
     return None
 
 
+def _register_text(prefix):
+    """The register's text at `prefix` (":" the index, else a revision): `docs/requirements.md` and every
+    `docs/requirements/*.md` part, joined."""
+    if prefix == ":":
+        listed = git("ls-files", "-z", "--", REGISTER_PATH, REGISTER_DIR)
+    else:
+        listed = git("ls-tree", "-r", "-z", "--name-only", prefix.rstrip(":"), "--", REGISTER_PATH, REGISTER_DIR)
+    names = [n for n in listed.stdout.split("\0") if n] if listed.returncode == 0 else []
+    if prefix == ":" and not names:  # not a git checkout's index: the files as they are
+        names = [str(p.relative_to(ROOT)) for p in [ROOT / REGISTER_PATH, *sorted((ROOT / REGISTER_DIR).glob("*.md"))]
+                 if p.is_file()]
+    parts = [n for n in names if n == REGISTER_PATH or (n.startswith(REGISTER_DIR + "/") and n.endswith(".md"))]
+    return "\n".join(_text(prefix, n) or "" for n in parts)
+
+
 def _retired(text) -> dict[str, str]:
     """REQ key -> its register row's last cell, for every row marked superseded or removed."""
     out = {}
@@ -109,13 +126,13 @@ def _cited(text):
 
 
 def test_no_test_cites_a_superseded_or_removed_requirement():
-    if not (ROOT / REGISTER_PATH).is_file():
+    if not (ROOT / REGISTER_PATH).is_file() and not (ROOT / REGISTER_DIR).is_dir():
         pytest.skip("The project keeps no docs/requirements.md register")
     changed, now, before = _commit()
-    retired = _retired(_text(now, REGISTER_PATH))
+    retired = _retired(_register_text(now))
     if not retired:
         pytest.skip("No requirement in the register is superseded or removed")
-    newly = {key for key in retired if key not in _retired(_text(before, REGISTER_PATH))}
+    newly = {key for key in retired if key not in _retired(_register_text(before))}
     violations = []
     # Nothing newly retired: only the commit's own files can break the rule, so the walk stays off
     # a large checkout's every test on every commit.

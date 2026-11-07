@@ -146,8 +146,25 @@ def get_project(paths: Paths, name: str, *, timeout: float = 5.0) -> dict:
     return _get(paths, "registry", f"/v1/projects/{name}", timeout=timeout)
 
 
-def backlog_list(paths: Paths, project_id: str, *, timeout: float = 5.0) -> list[dict]:
-    return _get(paths, "registry", "/v1/backlog", params={"project_name": project_id}, timeout=timeout)
+def toolkit_sources(paths: Paths, *, timeout: float = 5.0) -> list[dict]:
+    return _get(paths, "registry", "/v1/toolkit/sources", timeout=timeout)
+
+
+def toolkit_items(paths: Paths, repo: str, *, timeout: float = 5.0) -> list[dict]:
+    return _get(paths, "registry", "/v1/toolkit/items", params={"repo": repo}, timeout=timeout)
+
+
+def toolkit_status(paths: Paths, project_id: str, *, timeout: float = 10.0) -> dict:
+    return _get(paths, "registry", f"/v1/toolkit/status/{project_id}", timeout=timeout)
+
+
+def backlog_list(paths: Paths, project_id: str, *, status: str | None = None, timeout: float = 5.0) -> list[dict]:
+    params = {"project_name": project_id, **({"status": status} if status else {})}
+    return _get(paths, "registry", "/v1/backlog", params=params, timeout=timeout)
+
+
+def backlog_update(paths: Paths, entry_id: str, *, timeout: float = 10.0, **fields) -> dict:
+    return _mutate(paths, "registry", "PATCH", f"/v1/backlog/{entry_id}", json=fields, timeout=timeout)
 
 
 def backlog_get(paths: Paths, entry_id: str, *, timeout: float = 5.0) -> dict:
@@ -375,31 +392,3 @@ def set_queue_capacity(paths: Paths, queue_key: str, capacity: int, *, timeout: 
         paths, "orchestration", "POST", f"/v1/queue_keys/{queue_key}/capacity",
         json={"capacity": capacity}, timeout=timeout,
     )
-
-
-def generation_get(paths: Paths, path: str, *, params: dict | None = None, timeout: float = 30.0) -> dict:
-    return _get(paths, "generation", path, params={k: v for k, v in (params or {}).items() if v is not None}, timeout=timeout)
-
-
-def generation_send(paths: Paths, method: str, path: str, *, json: dict | None = None, timeout: float = 30.0) -> dict:
-    return _mutate(paths, "generation", method, path, json=json, timeout=timeout)
-
-
-def generation_wait(paths: Paths, request_id: str, project_id: str, timeout_seconds: float) -> dict:
-    """The pillar's long poll; the request may take as long as the wait itself, plus a margin."""
-    return _get(paths, "generation", f"/v1/requests/{request_id}/wait", params={"project_id": project_id, "timeout": timeout_seconds},
-                timeout=timeout_seconds + 15.0)
-
-
-def generation_file(paths: Paths, request_id: str, name: str, *, timeout: float = 60.0) -> bytes:
-    """One picture's bytes, straight from the pillar's socket (no Dashboard in between)."""
-    socket_path = resolve_pillar_socket(paths, "generation", timeout=timeout)
-    if socket_path is None:
-        raise PillarUnavailable("generation daemon unreachable — Core has no socket for it registered")
-    try:
-        with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.get(f"/v1/requests/{request_id}/files/{name}")
-        response.raise_for_status()
-        return response.content
-    except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
-        raise PillarUnavailable(_failure("generation", exc, timeout)) from exc

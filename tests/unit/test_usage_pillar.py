@@ -499,7 +499,7 @@ def test_the_pillar_hands_out_the_launch_environment_once_it_has_a_port(client, 
 def test_the_pillar_is_registered_optional_and_enabled_by_default():
     assert "usage" in PILLARS and manifest.DEFAULT_ENABLED["usage"] is True
     batches = redeploy_plan.redeploy_batches(["usage", "orchestration", "deployment"])
-    assert batches == [["orchestration"], ["usage"], ["deployment"]]
+    assert batches == [["usage"], ["deployment"], ["orchestration"]]
 
 
 def test_the_first_free_port_is_chosen_once_and_kept(paths):

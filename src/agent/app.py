@@ -6,6 +6,8 @@ pillar's own split between mutations (Jobs) and reads (plain GETs).
 
 from __future__ import annotations
 
+import contextlib
+
 import shutil
 import sqlite3
 import threading
@@ -137,7 +139,7 @@ def build_app(
     # The `agent.run_task` workers of this process: job id -> {"thread", "run_id", "stop" (an Event)}.
     workers: dict[str, dict] = {}
     workers_lock = threading.Lock()
-    flow = flow or AgentFlow(paths=paths)
+    flow = flow or AgentFlow(paths=paths, worktrees=True)
     remote = RemoteControl(paths, flow.runner)
     session_flow = session_flow or SessionFlow(paths=paths)
     if doc_flow is None:
@@ -206,18 +208,25 @@ def build_app(
 
         params = dict(params)
         params.setdefault("job_id", job_id)
+        params["governance"] = project.get("governance") or "light"  # the Registry's setting, never the caller's
         project_dir = Path(project["path"])
         repo_url = project.get("repo_url")
         run_id = db.new_run_id()
         stop = threading.Event()
 
         def worker() -> None:
+            # A run writes through a connection of its own, so tasks of one project run side by side, each in
+            # its worktree (REQ-000000518); an in-memory database (tests) has only the shared one, behind `lock`.
+            run_conn = None
+            if db_file:
+                run_conn = sqlite3.connect(db_file, timeout=30, check_same_thread=False)
+                run_conn.row_factory = sqlite3.Row
             try:
-                with reported(job_id), lock:
+                with reported(job_id), (contextlib.nullcontext() if run_conn is not None else lock):
                     if stop.is_set():  # stopped while it waited for the run lock: no run was ever started
                         _complete_orchestration_job(paths, job_id, succeeded=False, result=None, error=STOPPED_BY_USER)
                         return
-                    result = flow.run_task(conn, project_id, project_dir, repo_url, params, run_id=run_id, should_stop=stop.is_set)
+                    result = flow.run_task(run_conn or conn, project_id, project_dir, repo_url, params, run_id=run_id, should_stop=stop.is_set)
             except Exception as exc:  # noqa: BLE001 - a crash must never leave the run and its Job running
                 error = f"the task crashed: {type(exc).__name__}: {exc}"
                 with lock:
@@ -228,6 +237,8 @@ def build_app(
                 _complete_orchestration_job(paths, job_id, succeeded=False, result=None, error=error)
                 return
             finally:
+                if run_conn is not None:
+                    run_conn.close()
                 with workers_lock:
                     workers.pop(job_id, None)
                 write_apart(remote.end, run_id)  # the work ended: so does a remote control the owner activated
@@ -394,10 +405,13 @@ def build_app(
         elif run is not None:
             running, source = run["status"] == db.RUNNING, "run"
             if run.get("session_id"):
-                try:
-                    project_dir = Path(resolve_project(paths, run["project_id"])["path"])
-                except ProjectResolutionError:
-                    project_dir = Path("/nonexistent")
+                if run.get("workdir"):  # the task's worktree (REQ-000000518), or the live checkout
+                    project_dir = Path(run["workdir"])
+                else:
+                    try:
+                        project_dir = Path(resolve_project(paths, run["project_id"])["path"])
+                    except ProjectResolutionError:
+                        project_dir = Path("/nonexistent")
                 path = peek.transcript_of_session(project_dir, run["session_id"])
         else:
             running, source = update["status"] in (db.DOC_UPDATE_STARTING, db.DOC_UPDATE_RUNNING), "doc_update"

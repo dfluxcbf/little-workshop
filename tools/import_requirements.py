@@ -2,41 +2,33 @@
 """Import a project's requirements, test suites and real test results into
 little-workshop's Requirements & Quality pillar.
 
-Two sources are supported:
+Two modes:
 
-  lreq      a project tracked by the old `little-requirements` tool: its SQLite
-            database (`bundle-littles/req_db/<project>_reqs.db`) gives the
-            requirements, suites and which tests verify which requirement;
-            a JUnit report of a *real* run of the project's tests gives what
-            those tests actually did.
-  register  little-workshop's own interim register (`docs/requirements.md`),
-            which has no per-requirement test links: every done requirement is
-            linked to one "Unit tests" suite holding the whole real run.
+  register       little-workshop's own register (the `docs/requirements/*.md` parts),
+                 which has no per-requirement test links: every done requirement is
+                 linked to one "Unit tests" suite holding the whole real run.
+  module-suites  one suite per test module of a real JUnit run, results recorded,
+                 no requirement links.
 
 Re-runnable: requirements, suites and links are matched by key/name and only
 created when missing; every run records a fresh batch of results.
 
-    python3 tools/import_requirements.py lreq --project little-meals \
-        --lreq-db bundle-littles/req_db/little-meals_reqs.db --junit meals.xml --repo ../little-meals
     python3 tools/import_requirements.py register --project little-workshop \
-        --register docs/requirements.md --junit workshop.xml
+        --register docs/requirements/*.md --junit workshop.xml
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 import re
-import sqlite3
 import sys
 import uuid
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-UNLINKED_SUITE = "Tests without a requirement link"
 REGISTER_SUITE = "Unit tests"
 
 
@@ -84,80 +76,11 @@ class Case:
     name: str
     element: ET.Element
 
-    @property
-    def generic_id(self) -> str:
-        return f"{self.classname}::{self.name}" if self.classname else self.name
-
 
 def read_junit(path: Path) -> list[Case]:
     root = ET.parse(path).getroot()
     tests = root.iter("testcase")
     return [Case(t.get("classname", ""), t.get("name", ""), t) for t in tests]
-
-
-def pytest_node_id(repo: Path | None, case: Case) -> str | None:
-    """`tests.test_x.TestC` + `test_y` -> `tests/test_x.py::TestC::test_y` — the id the
-    old pytest plugin hashed — found by matching the longest existing file path."""
-    if repo is None:
-        return None
-    parts = case.classname.split(".") if case.classname else []
-    for i in range(len(parts), 0, -1):
-        relative = "/".join(parts[:i]) + ".py"
-        if (repo / relative).is_file():
-            return "::".join([relative, *parts[i:], case.name])
-    return None
-
-
-def sha(node_id: str) -> str:
-    return hashlib.sha256(node_id.encode("utf-8")).hexdigest()
-
-
-def hash_cases(cases: list[Case], known: set[str], repo: Path | None, style: str) -> tuple[dict[str, Case], str]:
-    """{hash: case}, plus the id style that was used. `auto` picks whichever style
-    reproduces more of the old database's own test ids."""
-    def build(chosen: str) -> dict[str, Case]:
-        out: dict[str, Case] = {}
-        for case in cases:
-            node = pytest_node_id(repo, case) if chosen == "pytest" else case.generic_id
-            if node:
-                out[sha(node)] = case
-        return out
-
-    if style != "auto":
-        return build(style), style
-    candidates = {s: build(s) for s in ("pytest", "generic")}
-    best = max(candidates, key=lambda s: len(known & set(candidates[s])))
-    return candidates[best], best
-
-
-# -- the old little-requirements database -----------------------------------------------
-
-
-@dataclass
-class Lreq:
-    requirements: list[dict] = field(default_factory=list)  # id, name, description, status
-    suites: list[dict] = field(default_factory=list)  # id, name
-    suite_requirements: dict[str, list[str]] = field(default_factory=dict)  # suite id -> requirement ids
-    requirement_tests: dict[str, set[str]] = field(default_factory=dict)  # requirement id -> test hashes
-    test_hashes: set[str] = field(default_factory=set)
-
-
-def load_lreq(db_path: Path) -> Lreq:
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    lreq = Lreq()
-    for rid, name, description, status in conn.execute(
-        "SELECT requirement_id, requirement_name, description, lifecycle_status FROM requirements_table ORDER BY requirement_id"
-    ):
-        lreq.requirements.append({"id": rid, "name": name, "description": description or "", "status": status})
-    for sid, name in conn.execute("SELECT suite_id, suite_name FROM suites_table ORDER BY suite_name"):
-        lreq.suites.append({"id": sid, "name": name})
-    for sid, rid in conn.execute("SELECT suite_id, requirement_id FROM suite_requirements_table"):
-        lreq.suite_requirements.setdefault(sid, []).append(rid)
-    for rid, tid in conn.execute("SELECT requirement_id, test_case_id FROM requirement_test_table"):
-        lreq.requirement_tests.setdefault(rid, set()).add(tid)
-    lreq.test_hashes = {row[0] for row in conn.execute("SELECT test_case_id FROM test_cases_table")}
-    conn.close()
-    return lreq
 
 
 # -- shared pillar sync steps ------------------------------------------------------------
@@ -256,49 +179,6 @@ def existing_links(pillar: Pillar, project: str, requirements: dict) -> set:
 # -- sources -----------------------------------------------------------------------------
 
 
-def import_lreq(pillar: Pillar, project: str, lreq: Lreq, cases: list[Case], repo: Path | None, style: str = "auto") -> dict:
-    summary = start_summary(project, "lreq")
-    by_hash, used = hash_cases(cases, lreq.test_hashes, repo, style)
-    matched = len(lreq.test_hashes & set(by_hash))
-    summary["id_style"] = used
-    summary["tests_in_run"] = len(cases)
-    summary["tests_known_to_lreq"] = len(lreq.test_hashes)
-    summary["tests_matched_to_lreq"] = matched
-    missing = lreq.test_hashes - set(by_hash)
-    if missing:
-        summary["warnings"].append(f"{len(missing)} test(s) known to the old database were not in this run")
-
-    requirements = {r["key"]: r for r in pillar.get("/v1/requirements", project_id=project)}
-    suites = {s["name"]: s for s in pillar.get("/v1/test_suites", project_id=project)}
-    linked = existing_links(pillar, project, requirements)
-
-    ids: dict[str, str] = {}
-    for r in lreq.requirements:
-        ids[r["id"]] = ensure_requirement(
-            pillar, project, requirements, r["id"], r["name"], r["description"], r["status"] == "published", None, summary,
-        )
-        if r["status"] != "published" and requirements[r["id"]]["status"] == "published":
-            summary["warnings"].append(f"{r['id']} is published here but draft in the old database (left as is)")
-
-    linked_hashes: set[str] = set()
-    for suite in lreq.suites:
-        suite_id = ensure_suite(pillar, project, suites, suite["name"], f"Imported from little-requirements suite {suite['id']}", summary)
-        hashes: set[str] = set()
-        for rid in lreq.suite_requirements.get(suite["id"], []):
-            link(pillar, project, ids[rid], suite_id, linked, summary)
-            hashes |= lreq.requirement_tests.get(rid, set())
-        linked_hashes |= hashes
-        record_results(pillar, project, suite_id, suite["name"], [by_hash[h] for h in sorted(hashes) if h in by_hash], summary)
-
-    seen = {id(c) for c in (by_hash[h] for h in linked_hashes if h in by_hash)}
-    rest = [c for c in cases if id(c) not in seen]
-    if rest:
-        suite_id = ensure_suite(pillar, project, suites, UNLINKED_SUITE, "Real tests that no requirement points at.", summary)
-        record_results(pillar, project, suite_id, UNLINKED_SUITE, rest, summary)
-    summary["unlinked_tests"] = len(rest)
-    return summary
-
-
 REGISTER_ROW = re.compile(r"^\| (REQ-\d{9}) \| (.*) \| (done|not done) \|\s*$")
 
 
@@ -358,25 +238,19 @@ def _connect():
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="source", required=True)
-    for name in ("lreq", "register", "module-suites"):
+    for name in ("register", "module-suites"):
         p = sub.add_parser(name)
         p.add_argument("--project", required=True)
         p.add_argument("--junit", type=Path, required=True, help="JUnit XML of a real run of the project's tests")
         p.add_argument("--dry-run", action="store_true", help="Plan only: report what would change, write nothing")
-    lreq_p = sub.choices["lreq"]
-    lreq_p.add_argument("--lreq-db", type=Path, required=True)
-    lreq_p.add_argument("--repo", type=Path, default=None, help="The project's checkout (resolves pytest node ids)")
-    lreq_p.add_argument("--style", choices=["auto", "pytest", "generic"], default="auto")
-    sub.choices["register"].add_argument("--register", type=Path, required=True)
+    sub.choices["register"].add_argument("--register", type=Path, nargs="+", required=True)
     args = parser.parse_args(argv)
 
     cases = read_junit(args.junit)
     with _connect() as client:
         pillar = Pillar(client, dry_run=args.dry_run)
-        if args.source == "lreq":
-            summary = import_lreq(pillar, args.project, load_lreq(args.lreq_db), cases, args.repo, args.style)
-        elif args.source == "register":
-            summary = import_register(pillar, args.project, parse_register(args.register.read_text(encoding="utf-8")), cases)
+        if args.source == "register":
+            summary = import_register(pillar, args.project, parse_register("\n".join(p.read_text(encoding="utf-8") for p in args.register)), cases)
         else:
             summary = start_summary(args.project, "module-suites")
             import_module_suites(pillar, args.project, cases, summary)

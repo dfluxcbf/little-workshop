@@ -1,9 +1,11 @@
-"""Policy `python-test-coverage` (requirements pillar; gates branch_finish): the project's own
+"""Policy `python-test-coverage` (requirements pillar; gates release): the project's own
 Python test suite covers at least 90 percent of its statements.
 
 Runs the suite (tests/unit when the project has one, else tests/) with coverage in the sandbox,
 which has no network: a test-time dependency the sandbox image does not carry fails the check
-with pytest's own output attached."""
+with pytest's own output attached. The run's JUnit report goes to $POLICY_OUTPUT_DIR/junit.xml,
+which the Policy pillar records as the project's "Unit tests" (Definition of Done) run, so the
+suite runs once for both."""
 
 import os
 import re
@@ -56,8 +58,10 @@ def test_python_statement_coverage_is_at_least_90_percent():
     # no pytest-cov-version-specific flag.
     with tempfile.TemporaryDirectory(prefix="policy-coverage-") as scratch:
         env = dict(os.environ, PYTHONPATH=src_dir, COVERAGE_FILE=os.path.join(scratch, ".coverage"))
+        output_dir = os.environ.get("POLICY_OUTPUT_DIR", "")
+        junit = [f"--junit-xml={os.path.join(output_dir, 'junit.xml')}"] if os.path.isdir(output_dir) else []
         result = subprocess.run(
-            ["python3", "-m", "pytest", target, "--cov=src", "--cov-report=term-missing", "-q"],
+            ["python3", "-m", "pytest", target, "--cov=src", "--cov-report=term-missing", "-q", *junit],
             cwd=PROJECT, capture_output=True, text=True, env=env, timeout=1500,
         )
     match = TOTAL_RE.search(result.stdout)

@@ -22,7 +22,7 @@ def _fake_chromium(root: Path, build: str) -> Path:
     return exe
 
 
-# --- REQ-000000252: Agent runs get the Playwright MCP server ------------------
+# --- REQ-000000480: Agent runs on a project with a UI get the Playwright MCP server ---
 # (the server's configuration; tests/unit/test_agent_flow.py attaches it to a run)
 
 

@@ -1,6 +1,5 @@
-"""Finishing a working branch after another one already landed on dev:
-the two branches' version bumps conflict, and only those are resolved
-automatically. REQ-000000265."""
+"""Finishing a working branch after another one already landed on dev: two branches cut before
+2026-11-07 still carry -dev version bumps that conflict, and only those are resolved automatically."""
 
 import subprocess
 
@@ -57,6 +56,8 @@ def _two_branches(repo, a_files: dict, b_files: dict):
     assert result.success, result.message
     _git(["checkout", "feature/b"], repo)
 
+
+# --- REQ-000000487: version-only rebase conflicts are settled --------------------------------------
 
 def test_a_version_only_conflict_is_resolved_and_the_finish_completes(tmp_path):
     repo = make_repo(tmp_path)

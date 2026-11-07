@@ -22,7 +22,8 @@ database, or process policy for its own governance. Concretely, today:
 
 - No dependency on `little-requirements`/`lreq` or
   `bundle-littles/req_db/`. There is no `little-workshop_reqs.db`.
-- No dependency on `little-versions`/`lvx`. There is no `.lvx/config.json`.
+- No dependency on `little-versions`/`lvx`. The `.lvx/config.json` in the checkout is little-workshop's
+  own Version pillar's file format (written by `lws version init`), not `lvx`'s.
 - No dependency on `little-runner`/`little-pypi` either, though neither
   was ever wired in — named here for completeness, since the same
   reasoning applies to all four.
@@ -142,5 +143,4 @@ tool that first implemented them:
   using*" — and once the migration this document describes is complete,
   whether a stray `.lvx` directory exists or not is simply irrelevant,
   since nothing in little-workshop reads it either way. See
-  `docs/requirements.md`'s M15 follow-up section and
-  `docs/pending_policy_drafts/README.md`'s "Rejected drafts."
+  `docs/requirements.md`'s M15 follow-up section (REQ-000000159).

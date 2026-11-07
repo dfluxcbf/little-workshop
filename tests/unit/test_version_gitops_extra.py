@@ -189,3 +189,30 @@ def test_rebase_continue_raises_when_a_later_commit_still_conflicts(tmp_path):
 
     with pytest.raises(RebaseConflictError, match="Further rebase conflicts remain"):
         rebase_continue(repo)
+
+
+# --- REQ-000000499: the squash commit records the branch's requirements ---------------------
+
+def test_squash_lists_the_requirements_the_branch_cites_and_its_markers_add(tmp_path):
+    repo = make_repo(tmp_path)
+    checkout(repo, "dev")
+    create_branch(repo, "feature/reqs", "dev")
+    checkout(repo, "feature/reqs")
+    _write_commit(repo, "a.py", "a = 1\n", "feat: a\n\nREQ-000000007")
+    _write_commit(repo, "test_a.py", "# --- REQ-000000009: a works ---\n", "test: a\n\nREQ-NONE")
+    _write_commit(repo, "b.py", "b = 1\n", "feat: b REQ-000000007")
+
+    squash_to_single_commit(repo, "dev", "feat (-1): reqs\n\nREQ-000000001")
+    body = run(["git", "log", "-1", "--format=%B"], repo).stdout
+    assert body.rstrip().endswith("Requirements: REQ-000000007, REQ-000000009")
+    assert body.count("REQ-000000001") == 1
+
+
+def test_squash_of_a_branch_naming_no_requirement_keeps_the_message(tmp_path):
+    repo = make_repo(tmp_path)
+    checkout(repo, "dev")
+    create_branch(repo, "feature/plain", "dev")
+    checkout(repo, "feature/plain")
+    _write_commit(repo, "a.py", "a = 1\n", "feat: a")
+    squash_to_single_commit(repo, "dev", "feat (-1): plain")
+    assert run(["git", "log", "-1", "--format=%B"], repo).stdout.strip() == "feat (-1): plain"

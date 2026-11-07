@@ -49,6 +49,7 @@ from common.job_steps import FAILED, RUNNING, SUCCEEDED, current_reporter, step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.systemd import user_path_env
+from common.windows import git_path
 from common.worktree_client import WorktreeUnavailable, provision_worktree, release_worktree
 from agent import db, gitutil, review_store, templates_util
 from agent import usage_client
@@ -358,7 +359,7 @@ class DocUpdateFlow:
             except WorktreeUnavailable:
                 pass  # a stale worktree is cleaned up by the next provision of the same id, or `git worktree prune`
         elif worktree is not None and project_dir is not None:
-            gitutil.run(["git", "worktree", "remove", "--force", "--force", str(worktree)], project_dir)
+            gitutil.run(["git", "worktree", "remove", "--force", "--force", git_path(worktree, project_dir)], project_dir)
             gitutil.run(["git", "branch", "-D", f"worktree-{worktree.name}"], project_dir)
             gitutil.run(["git", "worktree", "prune"], project_dir)
 

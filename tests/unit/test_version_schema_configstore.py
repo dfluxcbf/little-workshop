@@ -141,3 +141,39 @@ def test_promoted_rc_is_scoped_per_release_branch(tmp_path):
     set_promoted_rc(repo, "release/0.2.0", 2)
     assert get_promoted_rc(repo, "release/0.1.0") == 1
     assert get_promoted_rc(repo, "release/0.2.0") == 2
+
+
+# --- REQ-000000488: the version state lives in the state directory, never in a commit -------------
+
+def test_state_is_kept_per_project_in_the_state_directory_and_never_dirties_the_checkout(tmp_path, monkeypatch):
+    import json
+    import subprocess
+
+    from version.configstore import state_path, write_config
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    repo = make_repo(tmp_path)
+    set_issue_link(repo, "feature/widgets", 7)
+    path = state_path(repo)
+    assert path.parent == tmp_path / "state" / "little-workshop" / "version" / "projects"
+    assert json.loads(path.read_text())["issue_links"] == {"feature/widgets": 7}
+    assert not (repo / ".lvx" / "state.json").exists()
+    assert subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout == ""
+
+    cfg = load_config(repo)
+    write_config(repo, {**cfg, "project_id": "little-widget"})
+    assert state_path(repo).name == "little-widget.json"  # keyed by the project id where the config names it
+
+
+def test_a_tracked_state_file_is_read_once(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    repo = make_repo(tmp_path)
+    legacy = repo / ".lvx" / "state.json"
+    legacy.write_text(json.dumps({"issue_links": {"feature/old": 3}}))
+    assert get_issue_link(repo, "feature/old") == 3
+    legacy.write_text(json.dumps({"issue_links": {"feature/old": 99}}))
+    remove_issue_link(repo, "feature/old")
+    assert get_issue_link(repo, "feature/old") is None  # the repository's copy is not read again
+    assert json.loads(legacy.read_text()) == {"issue_links": {"feature/old": 99}}  # and never written

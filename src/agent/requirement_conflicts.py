@@ -16,6 +16,7 @@ _KINDS = {
     "duplicate_key": "Two requirements carry the same key.",
     "contradiction": "One requirement requires what the other forbids.",
     "different_value": "Both requirements state the same rule with different values.",
+    "semantic": "Claude's semantic check judged that the two cannot both hold, and the user recorded it.",
 }
 
 
@@ -62,7 +63,7 @@ def conflict_task(conflict: dict, decision: str, guidance: str) -> tuple[str, st
         "Change requirements only through the Requirements & Quality pillar (the workshop_requirements_* tools "
         "or `lws requirements`), never its database: a draft can be edited, a published requirement is locked, "
         "so it is deleted and, where some of it still holds, replaced by a new requirement with the next free "
-        "key. Keep the project's own requirements register (docs/requirements.md, where there is one) the same "
+        "key. Keep the project's own requirements register (docs/requirements.md and its docs/requirements/*.md parts, where there is one) the same "
         "as the pillar. The conflict is resolved once Requirements & Quality's next analysis no longer finds it "
         f"(conflict {conflict['id']}).",
     ])

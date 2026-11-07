@@ -27,7 +27,7 @@ from common.pillar_socket import resolve_pillar_socket
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.uds_client import client_for_socket
 from usage import (attribution, counterfactual, db, detectors, doctor, explorer, intake, mining, optimize, outcomes, plugins, pricing, profile, proxy,
-                   rollup, transcripts)
+                   rollup, skill_draft, transcripts)
 
 TICK_SECONDS = 600.0
 # A summary older than this is rolled up before it is read, so a session shows up within a minute
@@ -472,6 +472,32 @@ def build_app(
             db.update_candidate(conn, candidate["id"], state=db.CANDIDATE_ACCEPTED)
             conn.commit()
         return {"outcome": "succeeded", "result": {"task_job_id": job.get("id"), "candidate_id": candidate["id"]}}
+
+    @app.post("/v1/jobs/usage.draft_skill")
+    def job_draft_skill(request: JobRequest) -> dict:
+        """Params: `candidate_id` or `proposal_id`. Starts the fixed agent task that drafts it as a skill in the
+        project's `.claude/skills/` (the Job's `project_id`, else the one the evidence points to), on an improvement
+        branch the owner reviews. The candidate or proposal is then accepted."""
+        kind = "proposal" if request.params.get("proposal_id") else "candidate"
+        row_id = request.params.get(f"{kind}_id") or ""
+        with lock:
+            row = db.get_plugin_proposal(conn, row_id) if kind == "proposal" else db.get_candidate(conn, row_id)
+        if row is None or row["state"] not in (db.CANDIDATE_OPEN, db.CANDIDATE_ACCEPTED):
+            return {"outcome": "failed", "error": f"no open {kind} with that id"}
+        project = request.project_id or skill_draft.project_of(row, rollup.WORKSHOP_PROJECT)
+        template = {**skill_draft.draft_job(kind, row, project), "created_by": "usage", "depends_on": []}
+        try:
+            job = create_job(template)
+        except RuntimeError as exc:
+            return {"outcome": "failed", "error": str(exc)}
+        with lock:
+            if kind == "proposal":
+                db.set_plugin_proposal_state(conn, row_id, db.CANDIDATE_ACCEPTED)
+            else:
+                db.update_candidate(conn, row_id, state=db.CANDIDATE_ACCEPTED)
+            conn.commit()
+        return {"outcome": "succeeded", "result": {"task_job_id": job.get("id"), f"{kind}_id": row_id, "project_id": project,
+                                                   "skill": template["params"]["title"].removeprefix("Draft skill ")}}
 
     @app.post("/v1/jobs/usage.purge_project")
     def job_purge_project(request: JobRequest) -> dict:

@@ -323,6 +323,18 @@ def backlog(paths: Paths, method: str, path: str = "", *, params: dict | None = 
     return response.json()
 
 
+def toolkit(paths: Paths, path: str, *, params: dict | None = None, timeout: float = 10.0):
+    """A read of Registry & Portfolio's toolkit (`/v1/toolkit/...`); a refusal raises DaemonUnavailable with its reason."""
+    try:
+        with client_for_socket(paths.socket_path("registry"), timeout=timeout) as client:
+            response = client.get(f"/v1/toolkit{path}", params=params or {})
+    except (httpx.TransportError, OSError) as exc:
+        raise DaemonUnavailable(f"the Registry & Portfolio daemon is unreachable: {exc}") from exc
+    if response.status_code >= 400:
+        raise DaemonUnavailable(f"the toolkit refused it: {response.text}")
+    return response.json()
+
+
 class VersionPillarUnavailable(Exception):
     pass
 
@@ -940,21 +952,3 @@ def deployment_rollback_timeout(paths: Paths, project_id: str, deploy_id: str, *
         return response.json()
     except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc
-
-
-class GenerationPillarUnavailable(Exception):
-    pass
-
-
-def generation_request(paths: Paths, method: str, path: str, *, json: dict | None = None, params: dict | None = None,
-                       timeout: float = 30.0):
-    """One call to Image Generation's Pillar Interface; a refusal's reason is in the error."""
-    try:
-        with client_for_socket(paths.socket_path("generation"), timeout=timeout) as client:
-            response = client.request(method, path, json=json, params=params)
-        if response.status_code in (404, 409, 422):
-            raise GenerationPillarUnavailable(f"refused: {response.json().get('detail', response.text)}")
-        response.raise_for_status()
-        return response.json()
-    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
-        raise GenerationPillarUnavailable(f"the Image Generation daemon is unreachable (is the generation pillar enabled?): {exc}") from exc

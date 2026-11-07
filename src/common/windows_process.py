@@ -1,5 +1,5 @@
 """Running a native Windows process from WSL, for a Windows-hosted project (`common/windows.py`'s
-`is_windows_checkout`) whose Claude Remote Control session or deployed server needs to run as real
+`project_host`) whose Claude Remote Control session or deployed server needs to run as real
 Windows process — GPU-backed tools, a project built against its own `.venv-win`, anything that behaves
 differently (or not at all) under WSL2's own Linux kernel — rather than as a Linux process in a WSL
 worktree, which is all `agent/session_flow.py` and `deployment/flow.py` could do before this module
@@ -21,20 +21,25 @@ no Windows port, so this module gives each a from-scratch equivalent instead:
   assignments) is PowerShell's to parse, not `Start-Process`'s fixed FilePath+ArgumentList shape. A
   command written to block in the foreground (every existing manifest already assumes this, for
   `bash -c`) keeps this wrapper alive for exactly as long as the real server runs.
-- `is_alive` / `stop`: `tasklist.exe` / `taskkill.exe /T` (tree-kill, since the actual server is a
-  *child* of `start_server`'s powershell.exe wrapper) called directly — no scripting needed for either.
+- `is_alive` / `stop`: `taskkill.exe /T` (tree-kill, since the actual server is a *child* of
+  `start_server`'s powershell.exe wrapper); liveness compares the process's start time
+  (`start_time`, PowerShell's `(Get-Process -Id).StartTime`) with the one recorded at launch, so a PID
+  Windows has since given to another process reads as dead. Without a recorded time, `tasklist.exe`.
+- `write_pid_record` / `read_pid_record`: the PID file, as JSON {pid, started, cwd}.
 - Restart-on-failure has no Windows equivalent to delegate to either: `deployment/flow.py`'s own
   `WindowsServerSupervisor` polls `is_alive` and calls `start_server` again instead, little-workshop
   standing in for what `systemd --user`'s `Restart=on-failure` already does for a WSL-hosted server.
 
 Every Windows-side call goes through `CommandRunner` like every other subprocess in this project
-(`common/shell.py`), so it is fully fakeable in tests — none of this has ever been run against a real
-Windows machine.
+(`common/shell.py`), so it is fully fakeable in tests; `tools/check_windows_process.py` runs start,
+liveness, stop and PID reuse against the real Windows of the machine it runs on.
 """
 
 from __future__ import annotations
 
 import base64
+import json
+from pathlib import Path
 
 from common.shell import CommandResult, CommandRunner
 
@@ -108,14 +113,34 @@ def run_foreground(runner: CommandRunner, command: str, args: list[str], cwd: st
     return _run_powershell(runner, script, timeout=timeout)
 
 
-def is_alive(runner: CommandRunner, pid: int, *, timeout: float = 10.0) -> bool:
-    """Whether a Windows process with this PID still exists (`tasklist.exe`, called directly —
-    WSL/Windows interop resolves it on the Windows System32 PATH entry, the same way `cmd.exe` already
-    is elsewhere in this project)."""
+def start_time(runner: CommandRunner, pid: int, *, timeout: float = 15.0) -> str | None:
+    """When the Windows process `pid` started (UTC, ISO 8601 with ticks), or None when there is none."""
+    script = (f"$p = Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue; "
+              "if ($p) { $p.StartTime.ToUniversalTime().ToString('o') }")
+    result = _run_powershell(runner, script, timeout=timeout)
+    lines = result.stdout.strip().splitlines() if result.ok else []
+    return lines[-1].strip() if lines and lines[-1].strip() else None
+
+
+def is_alive(runner: CommandRunner, pid: int, started: str | None = None, *, timeout: float = 10.0) -> bool:
+    """Whether the Windows process with this PID still exists — and, given the `started` time recorded at
+    launch, is still that process and not a later one Windows gave the same PID (REQ-000000515). Without
+    it, `tasklist.exe` (called directly: WSL/Windows interop resolves it on the System32 PATH entry)."""
+    if started:
+        return start_time(runner, pid, timeout=timeout) == started
     result = runner.run(["tasklist.exe", "/FI", f"PID eq {pid}", "/NH"], timeout=timeout)
     if not result.ok:
         return False
     return any(str(pid) in line.split() for line in result.stdout.splitlines())
+
+
+def command_lines(runner: CommandRunner, image: str, *, timeout: float = 30.0) -> list[str] | None:
+    """The command lines of every running Windows process named `image` (`Unity.exe`), or None when they
+    cannot be listed."""
+    script = (f"Get-CimInstance Win32_Process -Filter {_ps_literal(f'Name={_ps_literal(image)}')} | "
+              "ForEach-Object { $_.CommandLine }")
+    result = _run_powershell(runner, script, timeout=timeout)
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()] if result.ok else None
 
 
 def stop(runner: CommandRunner, pid: int, *, timeout: float = 10.0) -> None:
@@ -125,3 +150,25 @@ def stop(runner: CommandRunner, pid: int, *, timeout: float = 10.0) -> None:
     PID exits non-zero either way, so the caller checks `is_alive` first rather than this return
     value)."""
     runner.run(["taskkill.exe", "/PID", str(pid), "/T", "/F"], timeout=timeout)
+
+
+def write_pid_record(path: Path, pid: int, started: str | None, cwd: str | None = None) -> None:
+    """The PID file of a launched process: its PID, its start time (`start_time`) and its working directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"pid": pid, "started": started, "cwd": cwd}), encoding="utf-8")
+
+
+def read_pid_record(path: Path) -> dict | None:
+    """{pid, started, cwd} from a PID file (a bare number from before start times were kept: started None),
+    or None when there is no file or it holds neither."""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if text.isdigit():
+        return {"pid": int(text), "started": None, "cwd": None}
+    try:
+        record = json.loads(text)
+        return {"pid": int(record["pid"]), "started": record.get("started") or None, "cwd": record.get("cwd") or None}
+    except (ValueError, KeyError, TypeError):
+        return None

@@ -40,6 +40,18 @@ class ScreenshotManifest:
 
 
 @dataclass
+class HealthManifest:
+    """`[server.health]` (REQ-000000521): after a deploy, the server is probed until healthy (then the deploy is
+    confirmed) or `timeout_seconds` pass (then it is rolled back). `url` is GET-probed; else `port` (default:
+    the server's) must accept a connection."""
+
+    url: str | None = None
+    port: int | None = None
+    timeout_seconds: int = 60
+    interval_seconds: float = 2.0
+
+
+@dataclass
 class ServerManifest:
     name: str
     command: str
@@ -55,6 +67,7 @@ class ServerManifest:
     confirm_timeout_seconds: int | None = None
     tailscale: TailscaleManifest | None = None
     screenshot: ScreenshotManifest | None = None
+    health: HealthManifest | None = None
     env: dict[str, str] = field(default_factory=dict)
     # A server that something else owns (e.g. little-workshop's own dashboard bridge, a
     # persistent systemd unit): Deployment only *reports* its status — it never builds,
@@ -128,6 +141,21 @@ def parse_manifest(text: str) -> ServerManifest:
             viewport=str(sst.get("viewport", "1280,900")),
         )
 
+    health = None
+    if "health" in server:
+        hc = server["health"]
+        if not isinstance(hc, dict):
+            raise ManifestError("[server.health] must be a table")
+        url, hport = hc.get("url"), hc.get("port")
+        if url is not None and (not isinstance(url, str) or not url.startswith(("http://", "https://"))):
+            raise ManifestError("[server.health].url must be an http(s) URL")
+        if hport is not None and (not isinstance(hport, int) or isinstance(hport, bool) or hport <= 0):
+            raise ManifestError("[server.health].port must be a positive integer")
+        timeout = hc.get("timeout_seconds", 60)
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+            raise ManifestError("[server.health].timeout_seconds must be a positive integer")
+        health = HealthManifest(url=url, port=hport, timeout_seconds=timeout, interval_seconds=float(hc.get("interval_seconds", 2.0)))
+
     return ServerManifest(
         name=name,
         command=command,
@@ -139,6 +167,7 @@ def parse_manifest(text: str) -> ServerManifest:
         confirm_timeout_seconds=confirm_timeout,
         tailscale=tailscale,
         screenshot=screenshot,
+        health=health,
         env={str(k): str(v) for k, v in server.get("env", {}).items()},
         external=external,
         unit=unit.strip() if isinstance(unit, str) else None,
@@ -178,6 +207,15 @@ def render_manifest(manifest: ServerManifest) -> str:
         if manifest.tailscale.service:
             lines.append(f"service = {_toml_str(manifest.tailscale.service)}")
             lines.append(f"service_https_port = {manifest.tailscale.service_https_port}")
+    if manifest.health is not None:
+        lines.append("")
+        lines.append("[server.health]")
+        if manifest.health.url:
+            lines.append(f"url = {_toml_str(manifest.health.url)}")
+        if manifest.health.port is not None:
+            lines.append(f"port = {manifest.health.port}")
+        lines.append(f"timeout_seconds = {manifest.health.timeout_seconds}")
+        lines.append(f"interval_seconds = {manifest.health.interval_seconds}")
     if manifest.screenshot is not None:
         lines.append("")
         lines.append("[server.screenshot]")

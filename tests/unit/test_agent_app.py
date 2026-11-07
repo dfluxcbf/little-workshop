@@ -1036,7 +1036,7 @@ def test_a_running_query_session_can_get_remote_control_in_its_own_folder(paths,
     assert not c.get("/v1/remote-control/q1").json()["can_activate"]
 
 
-# --- REQ-000000468: Requirement conflicts are found by code and resolved by a Claude task the user directs ---
+# --- REQ-000000473: Requirement conflicts are found by code once a project's requirements have settled, and resolved by a Claude task the user directs ---
 
 def _conflict(**overrides):
     base = {

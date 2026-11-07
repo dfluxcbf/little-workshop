@@ -43,15 +43,14 @@
       "Bash(lws policy status *)",
       "Bash(lws policy catalog list *)",
       "Bash(lws policy draft list *)",
+      "Bash(lws policy scan-secrets *)",
       "Bash(lws requirements status *)",
       "Bash(lws requirements suite status *)",
       "Bash(lws build run-status *)",
       "Bash(lws agent session-list *)",
-      "Bash(lws generation queue *)",
-      "Bash(lws generation gpu *)",
-      "Bash(lws generation models *)",
-      "Bash(lws generation recipes *)",
-      "Bash(lws generation recipe-show *)",
+      "Bash(lws toolkit sources *)",
+      "Bash(lws toolkit list *)",
+      "Bash(lws windows doctor *)",
       "Bash(lws version status --project-id little-workshop *)",
       "Bash(lws version config-list --project-id little-workshop *)",
       "Bash(lws version issue-list --project-id little-workshop *)",
@@ -84,9 +83,7 @@
       "Bash(lws project backlog list --project-id little-workshop *)",
       "Bash(lws project backlog show --project-id little-workshop *)",
       "Bash(lws api token-list --project-id little-workshop *)",
-      "Bash(lws generation status --project-id little-workshop *)",
-      "Bash(lws generation list --project-id little-workshop *)",
-      "Bash(lws generation setup --project-id little-workshop *)",
+      "Bash(lws toolkit status --project-id little-workshop *)",
       "Bash(lws version feature-start --project-id little-workshop *)",
       "Bash(lws version improvement-start --project-id little-workshop *)",
       "Bash(lws version hotfix-start --project-id little-workshop *)",
@@ -94,7 +91,6 @@
       "Bash(lws version release-candidate-cut --project-id little-workshop *)",
       "Bash(lws version issue-set --project-id little-workshop *)",
       "Bash(lws version issue-unset --project-id little-workshop *)",
-      "Bash(lws version sync-version-files --project-id little-workshop *)",
       "Bash(lws version install-hooks --project-id little-workshop *)",
       "Bash(lws requirements create --project-id little-workshop *)",
       "Bash(lws requirements update --project-id little-workshop *)",
@@ -110,7 +106,7 @@
       "Bash(lws requirements sync-markers --project-id little-workshop *)",
       "Bash(lws build run --project-id little-workshop *)",
       "Bash(lws project backlog add --project-id little-workshop *)",
-      "Bash(lws generation cancel --project-id little-workshop *)",
+      "Bash(lws project backlog update --project-id little-workshop *)",
       "Bash(lws version feature-finish --project-id little-workshop *)",
       "Bash(lws version improvement-finish --project-id little-workshop *)",
       "Bash(lws version hotfix-finish --project-id little-workshop *)",
@@ -173,14 +169,9 @@
       "mcp__little-workshop__workshop_usage_candidates",
       "mcp__little-workshop__workshop_usage_plugin_proposals",
       "mcp__little-workshop__workshop_trigger_list",
-      "mcp__little-workshop__workshop_generation_status",
-      "mcp__little-workshop__workshop_generation_list",
-      "mcp__little-workshop__workshop_generation_queue",
-      "mcp__little-workshop__workshop_generation_wait",
-      "mcp__little-workshop__workshop_generation_gpu",
-      "mcp__little-workshop__workshop_generation_models",
-      "mcp__little-workshop__workshop_generation_recipes",
-      "mcp__little-workshop__workshop_generation_picture_setup",
+      "mcp__little-workshop__workshop_toolkit_sources",
+      "mcp__little-workshop__workshop_toolkit_items",
+      "mcp__little-workshop__workshop_toolkit_status",
       "mcp__little-workshop__workshop_version_feature_start",
       "mcp__little-workshop__workshop_version_improvement_start",
       "mcp__little-workshop__workshop_version_hotfix_start",
@@ -202,8 +193,7 @@
       "mcp__little-workshop__workshop_requirements_sync_markers",
       "mcp__little-workshop__workshop_build_run",
       "mcp__little-workshop__workshop_project_backlog_add",
-      "mcp__little-workshop__workshop_generation_cancel",
-      "mcp__little-workshop__workshop_generation_download",
+      "mcp__little-workshop__workshop_project_backlog_update",
       "mcp__little-workshop__workshop_version_feature_finish",
       "mcp__little-workshop__workshop_version_improvement_finish",
       "mcp__little-workshop__workshop_version_hotfix_finish",
@@ -260,6 +250,7 @@
       "mcp__little-workshop__workshop_project_import",
       "mcp__little-workshop__workshop_project_connect_github",
       "mcp__little-workshop__workshop_project_configure_assets",
+      "mcp__little-workshop__workshop_project_set_governance",
       "mcp__little-workshop__workshop_project_remove",
       "mcp__little-workshop__workshop_project_backlog_delete",
       "mcp__little-workshop__workshop_version_init",
@@ -281,10 +272,11 @@
       "mcp__little-workshop__workshop_usage_configure_claude",
       "mcp__little-workshop__workshop_trigger_add",
       "mcp__little-workshop__workshop_trigger_remove",
-      "mcp__little-workshop__workshop_generation_resume",
-      "mcp__little-workshop__workshop_generation_delete_files",
-      "mcp__little-workshop__workshop_generation_submit",
-      "mcp__little-workshop__workshop_generation_recipe_save",
+      "mcp__little-workshop__workshop_toolkit_add_source",
+      "mcp__little-workshop__workshop_toolkit_install",
+      "mcp__little-workshop__workshop_toolkit_remove",
+      "mcp__little-workshop__workshop_toolkit_update",
+      "mcp__little-workshop__workshop_usage_draft_skill",
       "Bash(lws job stop *)",
       "Bash(lws job policy-confirm *)",
       "Bash(lws job answer *)",
@@ -298,6 +290,8 @@
       "Bash(lws project bootstrap *)",
       "Bash(lws project connect-github *)",
       "Bash(lws project configure-assets *)",
+      "Bash(lws project set-governance *)",
+      "Bash(lws project normalize-eol *)",
       "Bash(lws project import *)",
       "Bash(lws project remove *)",
       "Bash(lws project backlog delete *)",
@@ -317,12 +311,6 @@
       "Bash(lws agent ci-check *)",
       "Bash(lws agent session-start *)",
       "Bash(lws agent session-stop *)",
-      "Bash(lws generation submit *)",
-      "Bash(lws generation resume *)",
-      "Bash(lws generation delete-files *)",
-      "Bash(lws generation recipe-save *)",
-      "Bash(lws generation recipe-import *)",
-      "Bash(lws generation recipe-delete *)",
       "Bash(lws usage configure-claude *)",
       "Bash(lws trigger add *)",
       "Bash(lws trigger remove *)",
@@ -331,6 +319,12 @@
       "Bash(lws trigger install-defaults *)",
       "Bash(lws api token-create *)",
       "Bash(lws api token-revoke *)",
+      "Bash(lws toolkit add-source *)",
+      "Bash(lws toolkit seed *)",
+      "Bash(lws toolkit install *)",
+      "Bash(lws toolkit remove *)",
+      "Bash(lws toolkit update *)",
+      "Bash(lws usage draft-skill *)",
       "Bash(bazel run //:install*)",
       "Bash(bazel run //*_server*)",
       "Bash(python3 tools/sync_policies.py --apply*)"
@@ -369,7 +363,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/lws_scope_guard.py little-workshop",
+            "command": "sh -c '[ -f \"$1\" ] && exec python3 \"$@\"; echo \"little-workshop: $1 is missing in this checkout (an older branch?); the hook did not run\" >&2' hook \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/lws_scope_guard.py little-workshop",
             "timeout": 10
           }
         ]
@@ -379,7 +373,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/test_output_filter.py",
+            "command": "sh -c '[ -f \"$1\" ] && exec python3 \"$@\"; echo \"little-workshop: $1 is missing in this checkout (an older branch?); the hook did not run\" >&2' hook \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/test_output_filter.py",
             "timeout": 10
           }
         ]
@@ -389,18 +383,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/live_install_guard.py",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/newest_request_reminder.py",
+            "command": "sh -c '[ -f \"$1\" ] && exec python3 \"$@\"; echo \"little-workshop: $1 is missing in this checkout (an older branch?); the hook did not run\" >&2' hook \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/live_install_guard.py",
             "timeout": 10
           }
         ]

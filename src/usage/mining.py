@@ -17,6 +17,7 @@ from statistics import median
 
 from usage import counterfactual, signatures
 from usage.pricing import Price
+from common.task_queue import run_task_queue_key
 
 MIN_SESSIONS, MIN_OCCURRENCES, PERIOD_DAYS = 3, 10, 14
 MAX_SEQUENCE = 3
@@ -273,7 +274,7 @@ def automate_job(candidate: dict, project: str) -> dict:
                       if estimate.get("net_if_triggered") is not None else "no trigger can run it: it is not work a pillar does"),
         proposed_form=candidate["proposed_form"], frequency=schedule.get("frequency", "weekly"),
         time_of_day=schedule.get("time_of_day", "02:00"), note=schedule.get("note", ""), examples=examples)
-    return {"type": "agent.run_task", "target_pillar": "agent", "project_id": project, "queue_key": project,
+    return {"type": "agent.run_task", "target_pillar": "agent", "project_id": project, "queue_key": run_task_queue_key(project, {"title": AUTOMATE_TITLE}),
             "params": {"title": AUTOMATE_TITLE, "intent": "task", "review_mode": "manual", "description": description}}
 
 

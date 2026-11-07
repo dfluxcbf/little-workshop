@@ -12,12 +12,12 @@ ALL = ["orchestration", "policy", "registry", "requirements", "version", "build"
 
 # --- REQ-000000314: Pillars are redeployed in batches ordered by their dependencies ---
 
-def test_all_pillars_are_four_batches_in_the_proven_order():
+def test_all_pillars_are_four_batches_with_orchestration_last():
     assert redeploy_batches(ALL) == [
-        ["orchestration"],
         ["agent", "build", "dashboard"],
         ["policy", "registry", "requirements", "version"],
         ["deployment"],
+        ["orchestration"],
     ]
 
 
@@ -33,17 +33,18 @@ def test_pillars_with_no_rule_between_them_are_one_batch():
 
 def test_two_pillars_with_a_rule_between_them_are_two_batches():
     assert redeploy_batches(["version", "dashboard"]) == [["dashboard"], ["version"]]
-    assert redeploy_batches(["deployment", "orchestration"]) == [["orchestration"], ["deployment"]]
+    assert redeploy_batches(["deployment", "orchestration"]) == [["deployment"], ["orchestration"]]
 
 
 def test_a_pillar_that_is_not_chosen_adds_no_batch():
-    # nothing between orchestration and policy is chosen, yet policy still follows orchestration
-    assert redeploy_batches(["policy", "orchestration"]) == [["orchestration"], ["policy"]]
+    # nothing between policy and orchestration is chosen, yet orchestration still follows policy
+    assert redeploy_batches(["policy", "orchestration"]) == [["policy"], ["orchestration"]]
     assert redeploy_batches(["version", "deployment"]) == [["version"], ["deployment"]]
 
 
-def test_core_goes_after_even_deployment_and_an_unknown_pillar_goes_with_the_third_group():
+def test_core_goes_after_even_orchestration_and_an_unknown_pillar_goes_with_the_second_group():
     assert redeploy_batches(["core", "deployment"]) == [["deployment"], ["core"]]
+    assert redeploy_batches(["core", "orchestration"]) == [["orchestration"], ["core"]]
     assert redeploy_batches(["newcomer", "policy"]) == [["newcomer", "policy"]]
     assert redeploy_batches(["newcomer", "agent"]) == [["agent"], ["newcomer"]]
 
@@ -54,7 +55,7 @@ def test_duplicates_and_nothing_chosen():
 
 
 def test_a_cycle_in_the_rules_is_reported(monkeypatch):
-    monkeypatch.setitem(REDEPLOY_AFTER, "orchestration", frozenset({"policy"}))
+    monkeypatch.setitem(REDEPLOY_AFTER, "policy", frozenset({"orchestration"}))
     with pytest.raises(ValueError, match="cycle"):
         redeploy_batches(["orchestration", "policy"])
 
@@ -76,12 +77,12 @@ def test_each_batch_waits_for_every_job_of_the_one_before():
     plan, jobs = _submit(ALL)
     ids = [[row["job_id"] for row in batch] for batch in plan]
     assert [[row["pillar"] for row in batch] for batch in plan] == redeploy_batches(ALL)
-    assert jobs["orchestration"]["depends_on"] == []
     for pillar in ("agent", "build", "dashboard"):
-        assert jobs[pillar]["depends_on"] == ids[0]
+        assert jobs[pillar]["depends_on"] == []
     for pillar in ("policy", "registry", "requirements", "version"):
-        assert jobs[pillar]["depends_on"] == ids[1]
-    assert jobs["deployment"]["depends_on"] == ids[2]
+        assert jobs[pillar]["depends_on"] == ids[0]
+    assert jobs["deployment"]["depends_on"] == ids[1]
+    assert jobs["orchestration"]["depends_on"] == ids[2]
 
 
 def test_the_jobs_are_redeploy_jobs_with_their_own_queue_and_chosen_id():
@@ -95,9 +96,9 @@ def test_the_jobs_are_redeploy_jobs_with_their_own_queue_and_chosen_id():
 
 def test_the_first_batch_can_wait_for_another_job_and_a_confirm_timeout_is_passed_on():
     plan, jobs = _submit(["orchestration", "policy"], depends_on=["release-job"], confirm_timeout_seconds=90)
-    assert jobs["orchestration"]["depends_on"] == ["release-job"]
-    assert jobs["policy"]["depends_on"] == [plan[0][0]["job_id"]]
-    assert jobs["policy"]["params"]["confirm_timeout_seconds"] == 90
+    assert jobs["policy"]["depends_on"] == ["release-job"]
+    assert jobs["orchestration"]["depends_on"] == [plan[0][0]["job_id"]]
+    assert jobs["orchestration"]["params"]["confirm_timeout_seconds"] == 90
 
 
 def test_nothing_to_redeploy_creates_nothing():
@@ -118,3 +119,11 @@ def test_a_batch_is_created_concurrently():
 
     submit_redeploy_batches(create, ["agent", "build", "dashboard"], "abc", created_by="t")
     assert sorted(started) == ["agent", "build", "dashboard"]
+
+
+# --- REQ-000000477: Orchestration is redeployed last, never mid-dispatch ---
+
+def test_orchestration_follows_every_other_pillar_but_core():
+    batches = redeploy_batches([*ALL, "mcp", "usage", "core"])
+    assert batches[-2:] == [["orchestration"], ["core"]]
+    assert all("orchestration" not in batch for batch in batches[:-2])

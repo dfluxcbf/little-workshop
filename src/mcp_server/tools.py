@@ -23,13 +23,12 @@ other pillars to call, not for a human or agent session.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import threading
-from pathlib import Path
 from typing import Any, Callable
 
 from common import redeploy_plan
 from common.paths import Paths
+from common.task_queue import run_task_queue_key
 from mcp_server import client
 
 JSONDict = dict[str, Any]
@@ -167,6 +166,7 @@ def _project_bootstrap(paths: Paths, args: JSONDict) -> Any:
         "remote_host": args.get("remote_host", "github.com"),
         "github_token": args.get("github_token"),
         "ensure_labels": args.get("ensure_labels", True),
+        "interview": args.get("interview", False),
     }
     return client.create_job(
         paths, type="project.bootstrap", target_pillar="registry", project_id=args["name"],
@@ -205,6 +205,55 @@ def _project_configure_assets(paths: Paths, args: JSONDict) -> Any:
     )
 
 
+def _project_set_governance(paths: Paths, args: JSONDict) -> Any:
+    return client.create_job(
+        paths, type="project.set_governance", target_pillar="registry", project_id=args["project_id"],
+        params={"governance": args.get("governance")}, queue_key=args["project_id"], depends_on=[], created_by="mcp",
+    )
+
+
+def _toolkit_sources(paths: Paths, args: JSONDict) -> Any:
+    return [{**{k: v for k, v in s.items() if k != "items"}, "items": len(s["items"])} for s in client.toolkit_sources(paths)]
+
+
+def _toolkit_items(paths: Paths, args: JSONDict) -> Any:
+    return [{k: item[k] for k in ("id", "kind", "name", "description", "runs_code")} for item in client.toolkit_items(paths, args["repo"])]
+
+
+def _toolkit_status(paths: Paths, args: JSONDict) -> Any:
+    return client.toolkit_status(paths, args["project_id"])
+
+
+def _toolkit_job(paths: Paths, kind: str, project_id: str | None, params: JSONDict) -> Any:
+    return client.create_job(paths, type=f"registry.toolkit_{kind}", target_pillar="registry", project_id=project_id, params=params,
+                             queue_key=project_id or "toolkit", depends_on=[], created_by="mcp", timeout=900.0)
+
+
+def _toolkit_add_source(paths: Paths, args: JSONDict) -> Any:
+    return _toolkit_job(paths, "add_source", None, {"repo": args.get("repo"), "seed": args.get("seed") is True})
+
+
+def _toolkit_install(paths: Paths, args: JSONDict) -> Any:
+    return _toolkit_job(paths, "install", args["project_id"], {"repo": args["repo"], "items": args["items"],
+                                                              "confirm_code": args.get("confirm_code") is True})
+
+
+def _toolkit_remove(paths: Paths, args: JSONDict) -> Any:
+    return _toolkit_job(paths, "remove", args["project_id"], {"repo": args["repo"], "items": args.get("items") or []})
+
+
+def _toolkit_update(paths: Paths, args: JSONDict) -> Any:
+    return _toolkit_job(paths, "update", args["project_id"], {"repo": args["repo"], "confirm_code": args.get("confirm_code") is True})
+
+
+def _usage_draft_skill(paths: Paths, args: JSONDict) -> Any:
+    which = {key: args[key] for key in ("candidate_id", "proposal_id") if args.get(key)}
+    if len(which) != 1:
+        raise ValueError("give exactly one of candidate_id or proposal_id")
+    return client.create_job(paths, type="usage.draft_skill", target_pillar="usage", project_id=args["project_id"],
+                             params=which, queue_key=args["project_id"], depends_on=[], created_by="mcp")
+
+
 def _project_remove(paths: Paths, args: JSONDict) -> Any:
     return client.create_job(
         paths, type="project.remove", target_pillar="registry", project_id=args["name"],
@@ -229,8 +278,19 @@ def _backlog_entry_of(paths: Paths, args: JSONDict) -> JSONDict:
 
 
 def _backlog_list(paths: Paths, args: JSONDict) -> Any:
-    return [{"id": e["id"], "title": e["title"], "refined": bool(e["refined_entry"]), "task_prompt": bool(e["task_prompt"]),
-             "updated_at": e["updated_at"]} for e in client.backlog_list(paths, args["project_id"])]
+    status = args.get("status", "open")
+    return [{"id": e["id"], "title": e["title"], "status": e.get("status", "open"), "priority": e.get("priority", "normal"),
+             "refined": bool(e["refined_entry"]), "task_prompt": bool(e["task_prompt"]), "updated_at": e["updated_at"]}
+            for e in client.backlog_list(paths, args["project_id"], status=None if status == "all" else status)]
+
+
+def _backlog_update(paths: Paths, args: JSONDict) -> Any:
+    _backlog_entry_of(paths, args)
+    fields = {key: args[key] for key in ("status", "priority") if args.get(key)}
+    if not fields:
+        raise ValueError("give status and/or priority")
+    entry = client.backlog_update(paths, args["entry_id"], **fields)
+    return {"id": entry["id"], "title": entry["title"], "status": entry["status"], "priority": entry["priority"]}
 
 
 def _backlog_get(paths: Paths, args: JSONDict) -> Any:
@@ -786,11 +846,9 @@ def _agent_run_task(paths: Paths, args: JSONDict) -> Any:
         params["playwright_mcp"] = False
     if args.get("include_standards") is False:
         params["include_standards"] = False
-    if args.get("allow_image_generation"):
-        params["allow_image_generation"] = True
     return client.create_job(
         paths, type="agent.run_task", target_pillar="agent", project_id=args["project_id"],
-        params=params, queue_key=args["project_id"], depends_on=[], created_by="mcp",
+        params=params, queue_key=run_task_queue_key(args["project_id"], params), depends_on=[], created_by="mcp",
     )
 
 
@@ -896,156 +954,6 @@ def _usage_configure_claude(paths: Paths, args: JSONDict) -> Any:
 
 def _agent_runs(paths: Paths, args: JSONDict) -> Any:
     return client.agent_runs(paths, args["project_id"], status=args.get("status"))
-
-
-def _generation_submit(paths: Paths, args: JSONDict) -> Any:
-    body = {"project_id": args["project_id"], "prompts": args["prompts"]}
-    body.update({key: args[key] for key in ("defaults", "name") if args.get(key) is not None})
-    if body.get("defaults") is not None:
-        body["defaults"] = {"prompt": "", **body["defaults"]}
-    return client.generation_send(paths, "POST", "/v1/requests", json=body)
-
-
-def _generation_status(paths: Paths, args: JSONDict) -> Any:
-    return client.generation_get(paths, f"/v1/requests/{args['request_id']}",
-                                 params={"project_id": args["project_id"], "images": str(bool(args.get("images", False))).lower()})
-
-
-def _generation_list(paths: Paths, args: JSONDict) -> Any:
-    return client.generation_get(paths, "/v1/requests", params={"project_id": args["project_id"], "status": args.get("status"),
-                                                                 "limit": args.get("limit") or 20})
-
-
-def _generation_queue(paths: Paths, args: JSONDict) -> Any:
-    return client.generation_get(paths, "/v1/queue")
-
-
-def _generation_models(paths: Paths, args: JSONDict) -> Any:
-    return client.generation_get(paths, "/v1/models", params={"purpose": args.get("purpose")})
-
-
-def _generation_gpu(paths: Paths, args: JSONDict) -> Any:
-    return client.generation_get(paths, "/v1/gpu", params={"max_age": args.get("max_age_seconds")}, timeout=60.0)
-
-
-def _generation_resume(paths: Paths, args: JSONDict) -> Any:
-    return client.generation_send(paths, "POST", "/v1/queue/resume", json={"retry_failed": bool(args.get("retry_failed", False))})
-
-
-def _generation_cancel(paths: Paths, args: JSONDict) -> Any:
-    return client.generation_send(paths, "POST", f"/v1/requests/{args['request_id']}/cancel?project_id={args['project_id']}")
-
-
-def _generation_delete_files(paths: Paths, args: JSONDict) -> Any:
-    return client.generation_send(paths, "DELETE", f"/v1/requests/{args['request_id']}/files?project_id={args['project_id']}")
-
-
-def _generation_recipes(paths: Paths, args: JSONDict) -> Any:
-    if args.get("recipe"):
-        return client.generation_get(paths, f"/v1/recipes/{args['recipe']}")
-    return client.generation_get(paths, "/v1/recipes")
-
-
-def _generation_recipe_save(paths: Paths, args: JSONDict) -> Any:
-    body = {key: args[key] for key in ("title", "description", "graph", "slots", "outputs", "replace") if args.get(key) is not None}
-    body = {"name": args["recipe"], **body}
-    if args.get("request_id") is not None:
-        body["from_image"] = {"request_id": args["request_id"], "idx": int(args.get("idx") or 0)}
-    return client.generation_send(paths, "POST", "/v1/recipes", json=body)
-
-
-def _generation_picture_setup(paths: Paths, args: JSONDict) -> Any:
-    return client.generation_get(paths, f"/v1/requests/{args['request_id']}/images/{int(args['idx'])}/graph",
-                                 params={"project_id": args["project_id"]})
-
-
-def _generation_wait(paths: Paths, args: JSONDict) -> Any:
-    timeout = float(args["timeout_seconds"]) if args.get("timeout_seconds") is not None else GENERATION_WAIT_SECONDS
-    return client.generation_wait(paths, args["request_id"], args["project_id"], max(0.0, min(timeout, GENERATION_WAIT_MAX_SECONDS)))
-
-
-def _sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _generation_download(paths: Paths, args: JSONDict) -> Any:
-    """A finished request's pictures written into a folder of the project's checkout, each one checked against
-    its SHA-256 as fetched and again as written. A file already there with the same checksum is kept; one with
-    another checksum is refused unless `overwrite`."""
-    project_id, request_id = args["project_id"], args["request_id"]
-    status = client.generation_get(paths, f"/v1/requests/{request_id}", params={"project_id": project_id})
-    if status.get("status") != "success":
-        return {"outcome": "failed", "error": f"request {request_id} is {status.get('status')}; only a successful request is downloaded",
-                "status": status.get("status")}
-    files = (status.get("download") or {}).get("files")
-    if files is None:
-        return {"outcome": "failed", "error": f"little-workshop's copies of request {request_id} were deleted; nothing is left to download"}
-    root = Path(client.get_project(paths, project_id)["path"]).resolve()
-    folder = (root / args["folder"]).resolve()
-    if folder != root and root not in folder.parents:
-        return {"outcome": "failed", "error": f"{args['folder']!r} is outside the project's checkout {root}"}
-    overwrite = bool(args.get("overwrite"))
-    conflicts = [entry["name"] for entry in files if (folder / entry["name"]).is_file()
-                 and _sha256((folder / entry["name"]).read_bytes()) != entry["sha256"]]
-    if conflicts and not overwrite:
-        return {"outcome": "failed", "error": "these files exist with other contents (pass overwrite to replace them): " + ", ".join(conflicts)}
-    folder.mkdir(parents=True, exist_ok=True)
-    written = []
-    for entry in files:
-        target = folder / entry["name"]
-        kept = target.is_file() and entry["name"] not in conflicts
-        if not kept:
-            data = client.generation_file(paths, request_id, entry["name"])
-            if _sha256(data) != entry["sha256"]:
-                return {"outcome": "failed", "error": f"{entry['name']} arrived with another SHA-256 than recorded; nothing more was written",
-                        "files": written}
-            partial = target.with_name(target.name + ".part")
-            partial.write_bytes(data)
-            partial.replace(target)
-        verified = _sha256(target.read_bytes()) == entry["sha256"]
-        written.append({"name": entry["name"], "path": str(target.relative_to(root)), "bytes": target.stat().st_size,
-                        "sha256": entry["sha256"], "verified": verified, "already_there": kept})
-        if not verified:
-            return {"outcome": "failed", "error": f"{target} does not match its SHA-256 after writing", "files": written}
-    return {
-        "outcome": "succeeded", "request_id": request_id, "folder": str(folder.relative_to(root)), "files": written,
-        "all_verified": True,
-        "cleanup": {"tool": "workshop_generation_delete_files", "arguments": {"project_id": project_id, "request_id": request_id},
-                    "note": "every file matched its SHA-256; little-workshop's copies can now be deleted (the user confirms it)"},
-    }
-
-
-_GENERATION_IMAGE = {
-    "type": "object", "additionalProperties": False, "required": [],
-    "properties": {
-        "prompt": _prop("string", "What to draw. Needed unless source is given (then it only describes the picture)."),
-        "negative": _prop("string", "What to avoid (ignored by Flux at cfg 1)."),
-        "model": _prop("string", "A configured model, chosen with workshop_generation_models (flux is the default)."),
-        "width": _prop("integer", "Pixels, a multiple of 8 (default: the model's)."),
-        "height": _prop("integer", "Pixels, a multiple of 8 (default: the model's)."),
-        "seed": _prop("integer", "Default: random, recorded."),
-        "steps": _prop("integer", "Default: the model's (Flux schnell 4)."),
-        "cfg": _prop("number", "Default: the model's."),
-        "sampler": _prop("string", "Default: the model's."),
-        "scheduler": _prop("string", "Default: the model's."),
-        "lora": _prop("string", "A LoRA of the model by its name; workshop_generation_models gives each LoRA's purpose and trigger words."),
-        "lora_strength": _prop("number", "Default: the model's (0.9)."),
-        "count": _prop("integer", "Pictures of this prompt, seeds counting up from its seed. Default 1."),
-        "recipe": _prop("string", "Render this recipe (workshop_generation_recipes) instead of a model's text-to-image graph. "
-                                  "PBR textures take two steps: seamless-texture renders tileable textures from the prompt; "
-                                  "look at them, then pbr-maps with a source gives the chosen one's albedo, normal, height, "
-                                  "occlusion, roughness and metallic maps (pbr-texture does both in one go). A recipe fills "
-                                  "only its slots; leave model and lora out."),
-        "source": {"type": "object", "additionalProperties": False, "required": ["request_id", "idx"],
-                   "description": "The done picture a recipe with an image slot (pbr-maps) takes as its input.",
-                   "properties": {"request_id": _prop("string", "The picture's generation request."),
-                                  "idx": _prop("integer", "The picture's index in that request."),
-                                  "role": _prop("string", "One output of a picture that has several (e.g. texture); default its first.")}},
-    },
-}
-_REQUEST_ID = _prop("string", "The generation request's id (from workshop_generation_submit).")
-GENERATION_WAIT_SECONDS = 600.0
-GENERATION_WAIT_MAX_SECONDS = 1800.0
 
 
 def _agent_run_status(paths: Paths, args: JSONDict) -> Any:
@@ -1182,6 +1090,8 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "remote_host": _prop("string", "Git remote host. Default: github.com."),
                  "github_token": _prop("string", "GitHub token, if create_github_repo is true."),
                  "ensure_labels": _prop("boolean", "Ensure the seven little-runner trigger/intent GitHub labels exist. Default: true."),
+                 "interview": _prop("boolean", "Then start a task that interviews the owner over Remote Control (grill-me when "
+                                    "installed) and fills docs/design.md (requirements too for governance full). Default: false."),
              }, ["name", "dest_dir"]), _project_bootstrap),
     ToolSpec("workshop_project_import", "Register an existing, already-checked-out repository — the other half of "
              "project.bootstrap (docs/milestones.md M8). Deliberately mechanical: it only registers what's there "
@@ -1214,14 +1124,30 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "assets_dir": _prop("string", "Folder of the checkout, relative to its root (for example blender_development). Empty: off."),
                  "mcp": _prop("boolean", "Declare the asset-review MCP server in .mcp.json. Default: true."),
              }, ["project_id"]), _project_configure_assets),
+    ToolSpec("workshop_project_set_governance", "Set how much requirement work little-workshop asks of a project: `light` "
+             "runs only the safety policies and asks for no requirements; `full` adds the requirement policies, the "
+             "Definition of Done and the requirement instructions in its Claude files and agent prompts.",
+             _schema({
+                 "project_id": _PROJECT_ID,
+                 "governance": _prop("string", "light or full.", enum=["light", "full"]),
+             }, ["project_id", "governance"]), _project_set_governance),
     ToolSpec("workshop_project_remove", "Hard-delete a registered project: cascades to every pillar's own data for it.",
              _schema({"name": _prop("string", "The project's name.")}, ["name"]), _project_remove),
     ToolSpec("workshop_project_list", "List every registered project, with its overall status.",
              _schema({"status": _prop("string", "Filter by status, e.g. active.")}), _project_list),
     ToolSpec("workshop_project_get", "Get one registered project's full record by name.",
              _schema({"name": _prop("string", "The project's name.")}, ["name"]), _project_get),
-    ToolSpec("workshop_project_backlog_list", "List a project's backlog: each entry's id, title, and whether it has been "
-             "refined and has a task prompt.", _schema({"project_id": _PROJECT_ID}, ["project_id"]), _backlog_list),
+    ToolSpec("workshop_project_backlog_list", "List a project's backlog, highest priority first: each entry's id, title, "
+             "status, priority, and whether it has been refined and has a task prompt.",
+             _schema({"project_id": _PROJECT_ID,
+                      "status": _prop("string", "Which entries. Default: open.", enum=["open", "done", "dropped", "all"])},
+                     ["project_id"]), _backlog_list),
+    ToolSpec("workshop_project_backlog_update", "Set a backlog entry's status (open, done, dropped) and/or priority (high, "
+             "normal, low). Only the owner closes an entry: a task launched from it never does by itself.",
+             _schema({"project_id": _PROJECT_ID, "entry_id": _prop("string", "The backlog entry's id."),
+                      "status": _prop("string", "The new status.", enum=["open", "done", "dropped"]),
+                      "priority": _prop("string", "The new priority.", enum=["high", "normal", "low"])},
+                     ["project_id", "entry_id"]), _backlog_update),
     ToolSpec("workshop_project_backlog_get", "Read one backlog entry: its primary entry (as the owner wrote it), refinement "
              "notes, refined entry and task prompt.",
              _schema({"project_id": _PROJECT_ID, "entry_id": _prop("string", "The backlog entry's id.")}, ["project_id", "entry_id"]), _backlog_get),
@@ -1229,8 +1155,8 @@ TOOLS: tuple[ToolSpec, ...] = (
              "The owner refines it on the Dashboard (Documentation, Backlog).",
              _schema({"project_id": _PROJECT_ID, "text": _prop("string", "The entry, as the owner asked for it.")}, ["project_id", "text"]),
              _backlog_add),
-    ToolSpec("workshop_project_backlog_delete", "Delete a backlog entry and everything it holds. A task prompt made from "
-             "an entry asks for this once its work is done, so the entry is not done twice.",
+    ToolSpec("workshop_project_backlog_delete", "Delete a backlog entry and everything it holds. To close an entry whose "
+             "work is done, set its status to done instead (workshop_project_backlog_update).",
              _schema({"project_id": _PROJECT_ID, "entry_id": _prop("string", "The backlog entry's id.")}, ["project_id", "entry_id"]), _backlog_delete),
 
     ToolSpec("workshop_version_init", "Initialize a repository for lvx-managed Gitflow.",
@@ -1369,7 +1295,7 @@ TOOLS: tuple[ToolSpec, ...] = (
                      ["project_id", "requirement_id"]), _requirements_publish),
     ToolSpec("workshop_requirements_supersede",
              "Replace a requirement (draft or published) in one call: creates the new draft with the old one's "
-             "links, marks the old one superseded, updates the project's docs/requirements.md rows and lists the "
+             "links, marks the old one superseded, updates the project's register rows (docs/requirements.md or its docs/requirements/*.md parts) and lists the "
              "test files whose markers still cite the old id.",
              _schema({
                  "project_id": _PROJECT_ID, "requirement_id": _prop("string", "The id of the requirement replaced."),
@@ -1377,7 +1303,7 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "description": _prop("string", "The new requirement's full text."),
                  "title": _prop("string", "The new title. Default: the old one's."),
                  "category": _prop("string", "The new category. Default: the old one's."),
-                 "register_status": _prop("string", "Last cell of the new docs/requirements.md row. Default: draft."),
+                 "register_status": _prop("string", "Last cell of the new register row. Default: draft."),
              }, ["project_id", "requirement_id", "key", "description"]), _requirements_supersede),
     ToolSpec("workshop_requirements_delete", "Delete a requirement for good.",
              _schema({"project_id": _PROJECT_ID, "requirement_id": _prop("string", "The requirement's id.")},
@@ -1574,16 +1500,14 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "project_id": _PROJECT_ID,
                  "title": _prop("string", "Short title for the task."),
                  "description": _prop("string", "Full task description/instructions."),
-                 "intent": _prop("string", "milestone|bug|docs|task", enum=["milestone", "bug", "docs", "task"]),
+                 "intent": _prop("string", "milestone|bug|docs|task|skill (skill: draft a Claude Code skill in .claude/skills/)", enum=["milestone", "bug", "docs", "task", "skill"]),
                  "review_mode": _prop("string", "manual|auto_approve", enum=["manual", "auto_approve"]),
                  "branch_mode": _prop("string", "new|existing|auto; omit to let branching stay unspecified.", enum=["new", "existing", "auto"]),
                  "branch_type": _prop("string", "Branch-type prefix to use when branch_mode is 'new', e.g. feature."),
                  "base": _prop("string", "Base branch/commit to branch from."),
                  "branch": _prop("string", "Explicit branch name (branch_mode 'existing') or override (branch_mode 'new')."),
                  "playwright_mcp": _prop("boolean", "Attach the Playwright MCP server so the agent can drive the app in a browser (default true)."),
-                 "include_standards": _prop("boolean", "Give the agent a temporary read-only copy of little-workshop's shared_project_standards (default true)."),
-                 "allow_image_generation": _prop("boolean", "Let the agent queue pictures for ComfyUI (workshop_generation_submit). "
-                                                 "Only when the user asked for images in this task; default false, and the guard refuses it then."),
+                 "include_standards": _prop("boolean", "Allow the agent a temporary read-only copy of little-workshop's shared_project_standards, given to a docs task or one that mentions standards (default true)."),
              }, ["project_id", "title"]), _agent_run_task),
     ToolSpec("workshop_agent_finish_task", "Explicitly finish a run awaiting review: publish its branch/PR and report.",
              _schema({"project_id": _PROJECT_ID, "run_id": _prop("string", "The run's id.")}, ["project_id", "run_id"]), _agent_finish_task),
@@ -1621,7 +1545,7 @@ TOOLS: tuple[ToolSpec, ...] = (
              "without judgment, proposed as a Claude Code plugin of hooks and scripts that calls Claude only at its "
              "fallback points. Each gives its scope (one project or all), the steps it covers, how often and at which step "
              "Claude would still be needed, the calls, turns and tokens per occurrence, the weekly cost today and with the "
-             "plugin, the candidates it absorbs and how to install it. Ranked by the net saving per week. The plugins "
+             "plugin, the candidates it absorbs and where it would be drafted as a skill (workshop_usage_draft_skill). Ranked by the net saving per week. The plugins "
              "installed are listed by Claude Code itself (`claude plugin list`, `/plugin`).",
              _schema({"state": _prop("string", "Default open.", enum=["open", "accepted", "dismissed", "done", "all"]),
                       "limit": _prop("integer", "How many, from the costliest. Default 10, at most 50.")}),
@@ -1646,7 +1570,7 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"trigger_id": _prop("string", "The trigger's id.")}, ["trigger_id"]), _trigger_remove),
     ToolSpec("workshop_requirements_sync_markers", "Bring the Requirements pillar in line with the "
              "`# --- REQ-nnnnnnnnn: title ---` markers of the project's test files, in one call: a marked requirement "
-             "the pillar lacks is created from its docs/requirements.md row, and every marked requirement is linked "
+             "the pillar lacks is created from its register row (docs/requirements.md or its docs/requirements/*.md parts), and every marked requirement is linked "
              "to the suite. Use this instead of one workshop_requirements_create and _link_suite call per requirement.",
              _schema({"project_id": _PROJECT_ID, "suite_id": _prop("string", "The suite to link to. Default: the suite named 'Unit tests'."),
                       "dry_run": _prop("boolean", "Only report what would be created and linked.")}, ["project_id"]),
@@ -1691,85 +1615,47 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _agent_session_stop),
     ToolSpec("workshop_agent_session_status", "Whether an ad-hoc session is currently running for a project.",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _agent_session_status),
-    ToolSpec("workshop_generation_submit", "Queue pictures for the local ComfyUI: a set of prompts in one request. little-workshop "
-             "batches them (one graph per model, in a fresh ComfyUI process), detects grey or empty outputs and renders them again "
-             "after restarting ComfyUI. Choose the model (and LoRA) first with workshop_generation_models. Answers at once with "
-             "the request's id, how to probe it and an estimated completion; probe with workshop_generation_status.",
-             _schema({"project_id": _PROJECT_ID,
-                      "prompts": _prop("array", "The prompts: each a string, or an object with its own settings.",
-                                       items={"anyOf": [{"type": "string"}, _GENERATION_IMAGE]}),
-                      "defaults": {**_GENERATION_IMAGE, "properties": {k: v for k, v in _GENERATION_IMAGE["properties"].items() if k != "source"},
-                                   "description": "Settings for every prompt that does not set its own (a source is each prompt's own)."},
-                      "name": _prop("string", "A label for the request.")}, ["project_id", "prompts"]), _generation_submit),
-    ToolSpec("workshop_generation_status", "A generation request's status: queued or running (with the estimated completion), "
-             "failed (retries and restarts used up; the queue is paused for the user), success (with a `download.wget` command "
-             "fetching every picture and checking it against SHA256SUMS, and how to delete little-workshop's copies after) or cancelled.",
-             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID,
-                      "images": _prop("boolean", "Also list every picture (prompt, seed, state, attempts, file).")},
-                     ["project_id", "request_id"]), _generation_status),
-    ToolSpec("workshop_generation_wait", "Wait for a generation request to finish: answers once it succeeded, failed or was "
-             "cancelled, when the queue pauses, or after timeout_seconds, with the same status as workshop_generation_status plus "
-             "`finished` and `waited_seconds`. Not finished: call it again (the status carries the estimated completion).",
-             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID,
-                      "timeout_seconds": _prop("number", f"Default {GENERATION_WAIT_SECONDS:.0f}, at most {GENERATION_WAIT_MAX_SECONDS:.0f}.")},
-                     ["project_id", "request_id"]), _generation_wait),
-    ToolSpec("workshop_generation_download", "Write a successful request's pictures into a folder of the project's checkout and "
-             "check every file against its SHA-256 (as fetched and as written). Files already there with the same checksum are "
-             "kept; different ones are refused unless overwrite. The answer lists each file and, once all are verified, how to "
-             "delete little-workshop's copies.",
-             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID,
-                      "folder": _prop("string", "The destination, relative to the project's checkout (created if missing)."),
-                      "overwrite": _prop("boolean", "Replace files that exist with other contents. Default false.")},
-                     ["project_id", "request_id", "folder"]), _generation_download),
-    ToolSpec("workshop_generation_list", "A project's generation requests, newest first, each with its status and estimate.",
-             _schema({"project_id": _PROJECT_ID, "status": _prop("string", "queued,running,failed,success,cancelled (comma-separated)."),
-                      "limit": _prop("integer", "Default 20.")}, ["project_id"]), _generation_list),
-    ToolSpec("workshop_generation_queue", "The generation queue across projects: whether a failure paused it (and why), the batch "
-             "rendering now, the open requests with their estimates and the next batches.", _schema(), _generation_queue),
-    ToolSpec("workshop_generation_models", "The image models available for workshop_generation_submit, to choose one for the "
-             "picture and the task: each model's purpose (use_for), what it is bad at (avoid_for), licence and commercial use, "
-             "prompting advice, LoRAs with their trigger words, default settings, speed and whether it is installed. Given a "
-             "purpose (icon, ui, concept-art, texture, material-reference, scene, character, sprite, background), the models are "
-             "ranked and one is recommended. Also lists what the service cannot do yet (ControlNet, upscaling, image-to-image), "
-             "so do not promise those; seamless textures and their PBR maps are the pbr-texture recipe (workshop_generation_recipes).",
-             _schema({"purpose": _prop("string", "The kind of picture.", enum=["icon", "ui", "concept-art", "texture", "material-reference",
-                                                                               "scene", "character", "sprite", "background"])}),
-             _generation_models),
-    ToolSpec("workshop_generation_gpu", "How busy the shared GPU is, before GPU work (Unity tests or the Editor, Blender, renders, "
-             "ComfyUI, games): a level (idle, light, busy, saturated) with its reasons, the busiest engine's utilization, the "
-             "memory in use, the processes using it (ComfyUI tagged), what the generation queue will do (rendering, pictures "
-             "waiting, idle in about N s) and advice. Information, not a lock: decide whether to go ahead, wait, or do other "
-             "work first. Takes a few seconds unless a recent sample is reused.",
-             _schema({"max_age_seconds": _prop("number", "Accept a sample this many seconds old (default 15).")}), _generation_gpu),
-    ToolSpec("workshop_generation_recipes", "The recipes workshop_generation_submit can render (pass recipe=<name>): saved ComfyUI "
-             "node setups, each with the slots a prompt fills (prompt, and maybe negative, seed, size, steps, cfg), the files it "
-             "gives (output roles), whether its model files are installed, and its source (builtin, saved from a picture, "
-             "imported from ComfyUI). Built in: pbr-texture, a seamless texture and all its PBR maps. With a recipe name: that "
-             "recipe with its graph and its nodes.",
-             _schema({"recipe": _prop("string", "One recipe to show with its nodes.")}), _generation_recipes),
-    ToolSpec("workshop_generation_picture_setup", "The ComfyUI node setup a picture was rendered with: its graph in ComfyUI's "
-             "API format (what ComfyUI loads), its outputs and its nodes as rows (class, title, values, links).",
-             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID, "idx": _prop("integer", "The picture's index in the request.")},
-                     ["project_id", "request_id", "idx"]), _generation_picture_setup),
-    ToolSpec("workshop_generation_recipe_save", "Save a recipe for later prompts: from a rendered picture (request_id and idx: its "
-             "graph, slots suggested) or from a graph in ComfyUI's API format (Export (API)), with its slots and outputs, or "
-             "suggested when left out. Refused for a built-in name, or an existing one unless replace.",
-             _schema({"recipe": _prop("string", "The recipe's name: lower-case letters, digits and dashes."),
-                      "title": _prop("string", "Optional."), "description": _prop("string", "What it is for."),
-                      "request_id": _REQUEST_ID, "idx": _prop("integer", "The picture's index (with request_id)."),
-                      "graph": _prop("object", "A graph in ComfyUI's API format (instead of request_id)."),
-                      "slots": _prop("object", "{slot: [node id, input name]}; slots are prompt, negative, seed, width, height, steps, cfg."),
-                      "outputs": _prop("array", "[{role, node}] of SaveImage nodes; the first is the primary output.", items={"type": "object"}),
-                      "replace": _prop("boolean", "Overwrite a saved recipe of the same name.")}, ["recipe"]), _generation_recipe_save),
-    ToolSpec("workshop_generation_resume", "Resume a generation queue a failed request paused. A decision for the USER: call it "
-             "only when the user says to, after ComfyUI was checked. `retry_failed` queues the failed requests' pictures again.",
-             _schema({"retry_failed": _prop("boolean", "Render the failed requests' pictures again, attempts reset. Default false.")}),
-             _generation_resume),
-    ToolSpec("workshop_generation_cancel", "Cancel a queued or running generation request; pictures already rendered are kept.",
-             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID}, ["project_id", "request_id"]), _generation_cancel),
-    ToolSpec("workshop_generation_delete_files", "Delete little-workshop's copies of a finished request's pictures. Only after the "
-             "download was checked: wget exited 0 and `sha256sum -c SHA256SUMS` printed OK for every file. Cannot be undone.",
-             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID}, ["project_id", "request_id"]), _generation_delete_files),
+)
+
+
+_TOOLKIT_REPO = _prop("string", "A toolkit source, owner/repo (workshop_toolkit_sources lists them).")
+TOOLS = TOOLS + (
+    ToolSpec("workshop_toolkit_sources", "The toolkit's sources: GitHub repositories of Claude Code skills, agents, commands "
+             "and plugins, each pinned to a commit, with its licence and item count.", _schema(), _toolkit_sources),
+    ToolSpec("workshop_toolkit_items", "The items a toolkit source offers: kind (plugin, skill, agent, command), name, "
+             "description, and the files it would run (hooks, scripts), which an install must confirm.",
+             _schema({"repo": _TOOLKIT_REPO}, ["repo"]), _toolkit_items),
+    ToolSpec("workshop_toolkit_status", "A project's toolkit: what its .claude/toolkit.lock.json records (source, pinned "
+             "commit, licence, items and their files) and the registered items recommended for it. Nothing is installed "
+             "on its own.", _schema({"project_id": _PROJECT_ID}, ["project_id"]), _toolkit_status),
+    ToolSpec("workshop_toolkit_add_source", "Register a GitHub repository as a toolkit source, pinned to its newest commit "
+             "(`seed: true`: the default sources). Installs nothing. Add one only when the USER asked for it.",
+             _schema({"repo": _prop("string", "owner/repo."), "seed": _prop("boolean", "Register the default sources instead.")}),
+             _toolkit_add_source),
+    ToolSpec("workshop_toolkit_install", "Install toolkit items into a project, committed on an improvement/toolkit-<item> "
+             "branch and recorded in .claude/toolkit.lock.json: a plugin with `claude plugin install --scope project`, a "
+             "skill, agent or command copied at the pinned commit. An item that runs code needs `confirm_code` after the "
+             "USER read its files (workshop_toolkit_items lists them).",
+             _schema({"project_id": _PROJECT_ID, "repo": _TOOLKIT_REPO,
+                      "items": {"type": "array", "items": {"type": "string"}, "description": "Item ids (skill:tdd) or names."},
+                      "confirm_code": _prop("boolean", "The user confirmed the code the items run. Default false.")},
+                     ["project_id", "repo", "items"]), _toolkit_install),
+    ToolSpec("workshop_toolkit_remove", "Remove a project's toolkit items exactly as its lock records them (no items: "
+             "everything from the source), committed on an improvement branch.",
+             _schema({"project_id": _PROJECT_ID, "repo": _TOOLKIT_REPO,
+                      "items": {"type": "array", "items": {"type": "string"}, "description": "Item ids or names. Default: all."}},
+                     ["project_id", "repo"]), _toolkit_remove),
+    ToolSpec("workshop_toolkit_update", "Re-pin a toolkit source to its newest commit, list the files that changed, and "
+             "bring the project's items from it to the new pin on an improvement branch (`confirm_code` when changed "
+             "files run code).",
+             _schema({"project_id": _PROJECT_ID, "repo": _TOOLKIT_REPO,
+                      "confirm_code": _prop("boolean", "The user confirmed the changed code. Default false.")},
+                     ["project_id", "repo"]), _toolkit_update),
+    ToolSpec("workshop_usage_draft_skill", "Draft an automation candidate or a plugin proposal as a Claude Code skill of the "
+             "project: starts the fixed agent task (intent skill, manual review) that writes .claude/skills/<name>/SKILL.md "
+             "on an improvement branch for the owner to review.",
+             _schema({"project_id": _PROJECT_ID, "candidate_id": _prop("string", "An open automation candidate."),
+                      "proposal_id": _prop("string", "An open plugin proposal.")}, ["project_id"]), _usage_draft_skill),
 )
 
 TOOLS_BY_NAME: dict[str, ToolSpec] = {tool.name: tool for tool in TOOLS}

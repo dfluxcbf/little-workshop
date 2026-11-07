@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cli import main as cli_main
+from cli.commands import usage as usage_commands
 from common.paths import Paths
 from registry import claude_templates
 from usage import db, mining, plugins, pricing, signatures
@@ -191,22 +192,21 @@ def test_a_proposal_worth_too_little_is_not_listed(conn, monkeypatch):
     assert propose(conn)["proposals"] == []
 
 
-# --- REQ-000000418: A plugin proposal is for one project or for all projects, installed from a local marketplace ---
+# --- REQ-000000507: A plugin proposal is for one project or for all projects, and is drafted as a skill ---
 
 
 def test_requests_from_several_projects_make_a_plugin_for_all_projects(conn):
     finishes(conn, ["improvement"] * 4, projects=("little-workshop", "little-meals"))
     proposal = by_name(propose(conn))["finish-branch"]
     assert proposal["scope"] == plugins.SCOPE_ALL
-    assert proposal["install"]["command"] == "claude plugin install finish-branch@little-workshop --scope user"
-    assert proposal["install"]["list_command"] == "claude plugin list"
+    assert proposal["draft"] == {"skill": "finish-branch", "project_id": "little-workshop", "job": "usage.draft_skill"}
 
 
 def test_requests_from_one_project_make_a_plugin_for_that_project(conn):
     finishes(conn, ["improvement"] * 3, projects=("little-meals",))
     proposal = by_name(propose(conn))["finish-branch"]
     assert proposal["scope"] == "project:little-meals"
-    assert proposal["install"]["scope"] == "project" and "little-meals checkout" in proposal["install"]["where"]
+    assert proposal["draft"]["project_id"] == "little-meals"
 
 
 def test_a_proposal_absorbs_the_candidates_made_of_its_steps():
@@ -252,4 +252,4 @@ def test_an_open_proposal_no_longer_found_is_dropped(conn):
 def test_proposals_are_listed_through_lws_and_readable_without_asking():
     assert "workshop_usage_plugin_proposals" in claude_templates.MCP_READ_ONLY
     args = cli_main.build_parser().parse_args(["usage", "plugin-proposals", "--state", "all"])
-    assert args.func is cli_main.cmd_usage_plugin_proposals and args.state == "all"
+    assert args.func is usage_commands.cmd_usage_plugin_proposals and args.state == "all"

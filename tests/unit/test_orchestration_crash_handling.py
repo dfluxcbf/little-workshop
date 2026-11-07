@@ -174,3 +174,36 @@ def test_a_dispatch_the_pillar_dropped_without_answering_fails_at_once(monkeypat
 def test_a_pillar_redeploy_waits_long_enough_for_the_redeploys_queued_before_it():
     # Deployment runs redeploys one at a time under its lock, so a batch's last one waits for all the others.
     assert dispatch.dispatch_timeout_for("deployment.redeploy_pillar") == 1800.0
+
+
+# --- REQ-000000525: An idempotent Job cut off by an Orchestration restart runs again ---
+
+
+def test_at_start_an_interrupted_policy_check_is_requeued_and_its_gated_job_keeps_waiting(tmp_path, conn, reported):
+    check = Job(type="policy.check_project", target_pillar="policy", project_id="little-workshop", status=JobStatus.RUNNING)
+    gated = Job(type="version.improvement_finish", target_pillar="version", project_id="little-workshop", depends_on=[check.id])
+    for job in (check, gated):
+        db.insert_job(conn, job)
+
+    settled = dispatch.settle_interrupted_dispatches(conn, lambda pillar: tmp_path / f"{pillar}.sock")
+
+    assert settled == [] and reported == []
+    again = db.get_job(conn, check.id)
+    assert again.status == JobStatus.QUEUED and "runs again" in again.error
+    assert db.list_job_runs(conn, check.id)[-1]["outcome"] == "queued"
+    assert db.get_job(conn, gated.id).status == JobStatus.QUEUED  # not failed with it
+
+
+def test_at_start_a_non_idempotent_job_beside_it_still_fails_clearly(tmp_path, conn, reported):
+    check = Job(type="policy.check_project", target_pillar="policy", project_id="p", status=JobStatus.RUNNING)
+    deploy = Job(type="deployment.deploy", target_pillar="deployment", project_id="p", status=JobStatus.RUNNING)
+    for job in (check, deploy):
+        db.insert_job(conn, job)
+
+    settled = dispatch.settle_interrupted_dispatches(conn, lambda pillar: tmp_path / f"{pillar}.sock")
+
+    assert [job.id for job in settled] == [deploy.id]
+    assert db.get_job(conn, deploy.id).status == JobStatus.FAILED and "Orchestration restarted" in db.get_job(conn, deploy.id).error
+    assert db.get_job(conn, check.id).status == JobStatus.QUEUED
+    ((_, kw),) = reported
+    assert deploy.id in kw["detail"] and check.id not in kw["detail"]

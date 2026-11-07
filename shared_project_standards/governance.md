@@ -42,22 +42,12 @@ before relying on either; the maintenance job flags the mismatch.
   `policy-preflight` skill before a gated action. Prose instructions carry context and judgment,
   not the rules a script can check.
 - New policies pass four gates in `policy.author`: EARS compliance, mechanical enforceability,
-  conflict check, then human activation. Drafts are decided in the Dashboard, never auto-approved
-  (`docs/pending_policy_drafts/README.md`); a change to an active policy is reviewed as a change to
+  conflict check, then human activation. Drafts are decided in the Dashboard, never auto-approved; a change to an active policy is reviewed as a change to
   its files.
 - **History-based checks judge only the newest commit or tag, never the whole past.** A past mistake
   must not fail a policy forever.
 - Framework policies are hard rules while in force; changing one is development of little-workshop
   itself and follows the evolution principle above.
-
-## Discrepancy notes
-
-- `docs/governance_policy.md` states "There is no `.lvx/config.json`" for little-workshop. The
-  checkout has a tracked `.lvx/config.json` and `.lvx/state.json` (written by `lws version init`,
-  with `tools/on_version_bump.py` in `version_hooks`). The governance policy's own 2026-09-17
-  amendment reads that rule as a past fact, not a standing invariant; its text has not been updated.
-- `docs/version_policy.md` says `commit-bumps-version` and `branch-commit-dev-suffix` are scoped to
-  little-workshop; the live attachment is wider ([policy_register.md](policy_register.md)).
 
 ## Jobs
 
@@ -66,4 +56,4 @@ arguments. Never free-form and never drafted by Claude. In this checkout (branch
 holds `build`, `run_tests` and `release`; see [README.md](README.md#maintenance) for the job that
 maintains this folder.
 
-Last reviewed: 2026-10-02 (hand edit: policies as code; enforcement by hooks and preflight).
+Last reviewed: 2026-11-07 (hand edit: discrepancy notes resolved in the sources); before that 2026-10-02.

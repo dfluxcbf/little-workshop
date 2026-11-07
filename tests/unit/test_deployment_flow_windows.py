@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from common import windows_process
 from common.paths import Paths
 from common.shell import CommandResult
 from deployment import db
@@ -110,8 +111,8 @@ def test_launch_starts_a_native_windows_process_and_writes_the_pid_file(paths):
 
     assert "5555" in how
     assert not any(c[0] == "systemd-run" for c in runner.calls)
-    pid_path = paths.deployment_windows_pid_path("little-render")
-    assert pid_path.read_text() == "5555"
+    record = windows_process.read_pid_record(paths.deployment_windows_pid_path("little-render"))
+    assert record["pid"] == 5555 and record["started"] and record["cwd"]
 
 
 def test_launch_raises_when_the_native_start_fails(paths):

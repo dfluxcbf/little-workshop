@@ -20,8 +20,8 @@ folder and a `docker-compose.yml`, built with Bazel.
   convention.
 - Its server runs on demand; down is normal.
 - Version propagation: `.lvx/config.json` registers `tools/on_version_bump.py` in `version_hooks` and
-  `.githooks/pre-commit` runs `lws version sync-version-files` on `feature/*` and `improvement/*`
-  branches (checked 2026-10-01); `version-hook-installed` passes (latest recorded outcome).
+  the branch finish runs it when it writes `VERSION` (working branches leave `VERSION` alone since
+  2026-11-07; `.githooks/pre-commit` is retired, `lws version install-hooks` removes it).
 
 ## Documentation to reconcile
 

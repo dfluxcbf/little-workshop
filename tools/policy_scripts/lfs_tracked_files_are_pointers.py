@@ -1,10 +1,10 @@
-"""Policy `lfs-tracked-files-are-pointers` (version pillar; gates commit, branch_finish): where
+"""Policy `lfs-tracked-files-are-pointers` (version pillar; gates branch_finish): where
 the project's .gitattributes routes files to Git LFS (filter=lfs), a commit stores every file it
 adds or changes that those attributes route to LFS as an LFS pointer, never as the file itself.
 
 A clone without git-lfs installed (or a hook that skipped `git lfs install`) commits the binary
-into git history, where it stays for good. Judges the commit being made when the commit-msg hook
-runs it (POLICY_COMMIT_DIR lists its paths; the staged blobs are read from the index), otherwise
+into git history, where it stays for good. Judges the commit being made when one is
+pending (POLICY_COMMIT_DIR lists its paths; the staged blobs are read from the index), otherwise
 HEAD against its first parent. A staged blob the index does not hold (`git commit -a` keeps a
 temporary index) is left to the branch-finish check, which reads the commit itself."""
 

@@ -12,9 +12,10 @@ import functools
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -24,7 +25,7 @@ from common.paths import Paths
 from common.incident import install_incident_reporting, report_incident as report_crash
 from common.worktree_client import WorktreeUnavailable
 from common.registry_client import ProjectResolutionError, registered_project_ids, resolve_project_path
-from requirements import conflicts, db, markers, transfer
+from requirements import conflicts, db, markers, semantic, transfer
 from requirements.ears import ears_error
 from requirements.junit import JUnitParseError, parse_junit_xml
 from requirements.models import (
@@ -37,7 +38,7 @@ from requirements.models import (
     UseCase,
 )
 from requirements.discovery import suite_scope, tests_for_scopes
-from requirements.testrun import TestRunError, collect_sandboxed, run_sandboxed, run_suites_sandboxed
+from requirements.testrun import TestRunError, collect_sandboxed, run_sandboxed, run_suites_sandboxed, run_unity, unity_checkout
 
 
 class JobRequest(BaseModel):
@@ -91,8 +92,10 @@ markers_default_suite = "Unit tests"
 
 # How to resolve a conflict between two requirements; `other` needs the user's guidance.
 CONFLICT_DECISIONS = ("older_wins", "newer_wins", "other")
-# The running pillar analyzes every project's requirements for conflicts this often (and once when it starts).
-CONFLICT_SCAN_SECONDS = 15 * 60
+# A project's requirements are analyzed for conflicts once they have not changed for this long
+# (REQ-000000473); the running pillar looks for such projects every CONFLICT_SCAN_POLL_SECONDS.
+CONFLICT_SCAN_QUIET_SECONDS = 15 * 60
+CONFLICT_SCAN_POLL_SECONDS = 60
 
 
 def analyze_conflicts(conn: sqlite3.Connection, lock: threading.Lock, project_id: str | None = None,
@@ -112,20 +115,39 @@ def analyze_conflicts(conn: sqlite3.Connection, lock: threading.Lock, project_id
         }
 
 
-def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: float | None = None) -> FastAPI:
+def analyze_settled(conn: sqlite3.Connection, lock: threading.Lock, *, now: datetime | None = None,
+                    quiet_seconds: float = CONFLICT_SCAN_QUIET_SECONDS, registered: set[str] | None = None) -> list[str]:
+    """Analyze each project whose requirements last changed at least `quiet_seconds` ago, once, and
+    clear its stamp unless it changed again meanwhile; a burst of edits leads to a single analysis
+    (REQ-000000473). A project that is no longer registered (`registered`) is only cleared."""
+    now = now or datetime.now(timezone.utc)
+    with lock:
+        due = db.conflict_scans_due(conn, settled_before=now - timedelta(seconds=quiet_seconds))
+    analyzed = []
+    for project_id, changed_at in due:
+        if registered is None or project_id in registered:
+            analyze_conflicts(conn, lock, project_id)
+            analyzed.append(project_id)
+        with lock:
+            db.clear_conflict_scan_due(conn, project_id, changed_at)
+    return analyzed
+
+
+def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_poll_seconds: float | None = None) -> FastAPI:
     app = FastAPI(title="little-workshop Requirements & Quality")
     install_incident_reporting(app, paths, pillar="requirements")
     lock = threading.Lock()
 
-    if conflict_scan_seconds:
+    if conflict_scan_poll_seconds:
         def scan() -> None:
+            # No analysis at startup and none on a timer: only a project whose requirements changed.
             while True:
+                time.sleep(conflict_scan_poll_seconds)
                 try:
-                    analyze_conflicts(conn, lock, only=registered_project_ids(paths))
-                except Exception as exc:  # noqa: BLE001 - one failed scan must not end the periodic analysis
+                    analyze_settled(conn, lock, registered=registered_project_ids(paths))
+                except Exception as exc:  # noqa: BLE001 - one failed analysis must not end the loop
                     report_crash(paths, project_id="little-workshop", pillar="requirements",
-                                 context="periodic requirement conflict analysis", exc=exc)
-                time.sleep(conflict_scan_seconds)
+                                 context="requirement conflict analysis after changes settled", exc=exc)
 
         threading.Thread(target=scan, daemon=True, name="requirement conflicts").start()
 
@@ -258,7 +280,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
     def job_supersede_requirement(request: JobRequest) -> dict:
         """Replace a requirement in one step (REQ-000000448): a new draft `key` with the new text, the
         old one's category, use case, milestone and suite links; the old one marked superseded by it;
-        the project's `docs/requirements.md` row marked and the new row added after it; and the test
+        the project's register row (`docs/requirements.md` or a `docs/requirements/*.md` part) marked and
+        the new row added after it; and the test
         files whose markers still cite the old key listed, for re-tagging. Draft or published alike: a
         newer request never has to argue with a published row."""
         params = request.params
@@ -347,7 +370,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
     def job_sync_markers(request: JobRequest) -> dict:
         """Bring the pillar in line with the `# --- REQ-nnnnnnnnn: title ---` markers of the project's
         test files: a marked requirement the pillar lacks is created as a draft from the project's
-        `docs/requirements.md` row (EARS-checked like any other), and every marked requirement is
+        register row (`docs/requirements.md` or a `docs/requirements/*.md` part) (EARS-checked like any other), and every marked requirement is
         linked to the suite (`params.suite_id`, default the suite named "Unit tests"). Nothing is
         deleted or unlinked, and `params.dry_run` only reports."""
         if not request.project_id:
@@ -426,12 +449,22 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
     @_reported
     def job_import_junit(request: JobRequest) -> dict:
         with step("validate_request") as handle:
-            error = _require(request.params, "suite_id", "xml") or (None if request.project_id else "missing project_id")
+            # The suite by id, or by name within the project (`suite_name`: how the Policy pillar records the
+            # JUnit report of a check that ran the suite, without knowing this pillar's ids).
+            error = _require(request.params, "xml") or (
+                None if request.params.get("suite_id") or request.params.get("suite_name") else "missing 'suite_id'"
+            ) or (None if request.project_id else "missing project_id")
             if error:
                 raise _Refused(error)
-            suite_id = request.params["suite_id"]
+            suite_id = request.params.get("suite_id")
             with lock:
-                if db.get_test_suite(conn, suite_id) is None:
+                if suite_id is None:
+                    name = request.params["suite_name"]
+                    suite = next((s for s in db.list_test_suites(conn, project_id=request.project_id) if s.name == name), None)
+                    if suite is None:
+                        raise _Refused(f"{request.project_id} has no test suite named {name!r}")
+                    suite_id = suite.id
+                elif db.get_test_suite(conn, suite_id) is None:
                     raise _Refused(f"test suite {suite_id!r} not found")
             handle.detail = f"suite {suite_id}"
         with step("parse_report") as handle:
@@ -441,6 +474,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
                 raise _Refused(str(exc))
             handle.detail = f"{len(parsed)} test result(s)"
         with step("record_results") as handle:
+            sections = _sections(request.project_id)
             executed_at = datetime.now(timezone.utc)
             with lock:
                 for item in parsed:
@@ -448,10 +482,19 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
                         id=db.new_id(), project_id=request.project_id, suite_id=suite_id,
                         test_name=item.test_name, verdict=item.verdict, detail=item.detail,
                         source="junit", executed_at=executed_at,
+                        requirement_key=markers.requirement_for(item.test_name, sections),
                     ))
             handle.detail = f"{len(parsed)} recorded"
         outcome = run_outcome((suite_id, item) for item in parsed)
         return {"outcome": "succeeded", "result": {"suite_id": suite_id, "imported": outcome.pop("ran"), **outcome}}
+
+    def _sections(project_id: str) -> dict[tuple[str, str], str]:
+        """Which requirement's marker section holds each test of the registered checkout (REQ-000000500); none when
+        the checkout cannot be read, and each requirement is then judged on its suites' whole runs."""
+        try:
+            return markers.test_sections(resolve_project_path(paths, project_id))
+        except (ProjectResolutionError, OSError, httpx.HTTPError):
+            return {}
 
     def _scopes(project_id: str, suite_ids: list[str] | None) -> tuple[dict[str, TestSuite], dict[str, set[str]]]:
         """The project's suites (all, or just `suite_ids`) and each one's scope — the
@@ -510,22 +553,28 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
                     raise _Refused(f"test suite {suite_id!r} not found")
             handle.detail = f"suite {suite_id} at {request.params['commitish']}"
         with step("run_tests") as handle:
+            unity = unity_checkout(paths, request.project_id)
             try:
-                parsed = run_sandboxed(
-                    paths, request.project_id, request.params["commitish"],
-                    test_command=request.params.get("test_command"),
-                )
+                if unity is not None:  # a Windows-hosted Unity project: in its checkout, by its own script
+                    parsed = run_unity(unity, request.params["commitish"], test_command=request.params.get("test_command"))
+                else:
+                    parsed = run_sandboxed(
+                        paths, request.project_id, request.params["commitish"],
+                        test_command=request.params.get("test_command"),
+                    )
             except (TestRunError, WorktreeUnavailable) as exc:
                 raise _Refused(str(exc))
-            handle.detail = f"{len(parsed)} test(s) ran"
+            handle.detail = f"{len(parsed)} test(s) ran" + (" in the Unity Editor" if unity is not None else "")
         with step("record_results") as handle:
+            sections = _sections(request.project_id)
             executed_at = datetime.now(timezone.utc)
             with lock:
                 for item in parsed:
                     db.insert_test_result(conn, TestResult(
                         id=db.new_id(), project_id=request.project_id, suite_id=suite_id,
                         test_name=item.test_name, verdict=item.verdict, detail=item.detail,
-                        source="pytest", executed_at=executed_at,
+                        source="junit" if unity is not None else "pytest", executed_at=executed_at,
+                        requirement_key=markers.requirement_for(item.test_name, sections),
                     ))
             handle.detail = f"{len(parsed)} recorded"
         return {"outcome": "succeeded", "result": {"suite_id": suite_id, **run_outcome((suite_id, item) for item in parsed)}}
@@ -543,6 +592,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
             missing = [sid for sid in suite_ids if sid not in suites]
             if missing:
                 raise _Refused(f"test suite {missing[0]!r} not found in {request.project_id}")
+            if unity_checkout(paths, request.project_id) is not None:
+                raise _Refused("a Unity project's tests run all together in the Unity Editor: run one suite (`suite_id`)")
             handle.detail = f"{len(suites)} suite(s) at {request.params.get('commitish', 'HEAD')}"
         with step("run_tests") as handle:
             try:
@@ -554,6 +605,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
                 raise _Refused(str(exc))
             handle.detail = f"{sum(len(items) for items in by_suite.values())} test(s) ran"
         with step("record_results") as handle:
+            sections = _sections(request.project_id)
             executed_at = datetime.now(timezone.utc)
             summary = []
             with lock:
@@ -563,6 +615,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
                             id=db.new_id(), project_id=request.project_id, suite_id=sid,
                             test_name=item.test_name, verdict=item.verdict, detail=item.detail,
                             source="pytest", executed_at=executed_at,
+                            requirement_key=markers.requirement_for(item.test_name, sections),
                         ))
                     counts: dict[str, int] = {}
                     for item in items:
@@ -578,6 +631,45 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
     @app.post("/v1/jobs/requirements.analyze_conflicts")
     def job_analyze_conflicts(request: JobRequest) -> dict:
         return {"outcome": "succeeded", "result": {"projects": analyze_conflicts(conn, lock, request.project_id, only=None if request.project_id else registered_project_ids(paths))}}
+
+    @app.post("/v1/jobs/requirements.semantic_conflicts")
+    def job_semantic_conflicts(request: JobRequest) -> dict:
+        """Claude's semantic check of the project's published and draft requirements (REQ-000000523): the
+        pairs it suspects conflict, each with its reason, as the result; nothing is recorded."""
+        if not request.project_id:
+            return {"outcome": "failed", "error": "missing project_id"}
+        with reporting(StepReporter(paths, request.job_id)):
+            with step("ask_claude") as handle:
+                with lock:
+                    checked = semantic.checked(db.list_requirements(conn, project_id=request.project_id))
+                if len(checked) < 2:
+                    handle.detail = f"{len(checked)} requirement(s): nothing to compare"
+                    return {"outcome": "succeeded", "result": {"checked": len(checked), "suspected": []}}
+                try:
+                    answer = semantic.ask_claude(paths, semantic.build_prompt(request.project_id, checked),
+                                                 job_id=request.job_id, project_id=request.project_id)
+                except semantic.SemanticCheckError as exc:
+                    return {"outcome": "failed", "error": str(exc)}
+                suspected = semantic.parse_answer(answer, checked)
+                handle.detail = f"{len(suspected)} suspected conflict(s) among {len(checked)} requirement(s)"
+        return {"outcome": "succeeded", "result": {"checked": len(checked), "suspected": suspected}}
+
+    @app.post("/v1/jobs/requirements.record_semantic_conflict")
+    def job_record_semantic_conflict(request: JobRequest) -> dict:
+        """Record one pair a semantic check suspected as an open conflict of kind `semantic` (REQ-000000523).
+        Params: the suspect as the check's result lists it."""
+        suspect = request.params or {}
+        missing = [k for k in ("older_requirement_id", "newer_requirement_id", "older_key", "newer_key", "older_text", "newer_text", "summary")
+                   if not suspect.get(k)]
+        if missing:
+            return {"outcome": "failed", "error": f"missing {', '.join(missing)}"}
+        with lock:
+            for rid in (suspect["older_requirement_id"], suspect["newer_requirement_id"]):
+                found = db.get_requirement(conn, rid)
+                if found is None or (request.project_id and found.project_id != request.project_id):
+                    return {"outcome": "failed", "error": f"requirement {rid!r} is not one of this project's"}
+            conflict = db.record_semantic_conflict(conn, found.project_id, suspect)
+        return {"outcome": "succeeded", "result": conflict}
 
     @app.post("/v1/jobs/requirements.decide_conflict")
     def job_decide_conflict(request: JobRequest) -> dict:
@@ -708,19 +800,30 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, conflict_scan_seconds: 
             # carry their own fixed overhead).
             mappings = db.suites_for_requirements(conn, [r.id for r in requirements])
             all_suite_ids = [sid for suite_ids in mappings.values() for sid in suite_ids]
-            latest_by_suite = db.latest_results_for_suites(conn, all_suite_ids)
+            latest_runs = db.latest_runs_for_suites(conn, all_suite_ids)
             rows = []
             for requirement in requirements:
                 suite_ids = mappings[requirement.id]
-                suite_verdicts = {suite_id: latest_by_suite.get(suite_id) for suite_id in suite_ids}
+                # Per suite, the latest run's results tagged with this requirement, else (no tagged result) the whole
+                # run (REQ-000000500): one failing test no longer fails every requirement of its suite.
+                suite_verdicts: dict[str, TestResult | None] = {}
+                own_tests: list[TestResult] = []
+                for suite_id in suite_ids:
+                    run = latest_runs.get(suite_id)
+                    own = [r for r in run or () if r.requirement_key == requirement.key]
+                    own_tests += own
+                    suite_verdicts[suite_id] = db.worst(own or run) if run else None
                 tested = bool(suite_ids) and all(v is not None for v in suite_verdicts.values())
                 passing = tested and all(v.verdict == TestVerdict.PASSED for v in suite_verdicts.values())
                 done = requirement.status == RequirementStatus.PUBLISHED and passing
+                failing = [r.test_name for r in own_tests if r.verdict in (TestVerdict.FAILED, TestVerdict.ERROR)]
                 rows.append({
                     "requirement_id": requirement.id, "key": requirement.key,
                     "status": requirement.status.value, "suite_ids": suite_ids,
                     "tested": tested, "passing": passing, "done": done,
                     "verdict": _requirement_verdict(tested, [v.verdict for v in suite_verdicts.values() if v is not None]),
+                    "basis": "own tests" if own_tests else "suite",
+                    "own_tests": {"total": len(own_tests), "failing": failing[:FAILING_SHOWN]},
                 })
         return {
             "project_id": project_id, "requirements": rows,

@@ -21,7 +21,7 @@ Exactly one session per project: the dtach socket path is deterministic
 per project (`Paths.session_socket_path`), so "is it running" and "stop
 it" both reduce to matching that path in the process list.
 
-A Windows-hosted project (`common/windows.py`'s `is_windows_checkout`,
+A Windows-hosted project (`common/windows.py`'s `project_host`,
 docs/architecture.md's "Windows-hosted projects") has no WSL process to
 `dtach`/`systemd-run` at all — its session runs as a real Windows
 process instead (`common/windows_process.py`'s `start_background`),
@@ -83,7 +83,7 @@ def is_trusted(project_dir: Path) -> bool:
     posix_key = str(project_dir)
     if _trust_accepted(claude_config_path(), lambda key: key == posix_key):
         return True
-    if not windows.is_windows_checkout(project_dir):
+    if not windows.is_windows_project(project_dir):
         return False
     target = windows.to_windows_path(project_dir).replace("\\", "/").lower()
     return any(_trust_accepted(config_path, lambda key: key.replace("\\", "/").lower() == target)
@@ -119,7 +119,7 @@ class SessionFlow:
         return self.runner.run(["pgrep", "-f", _match(self.paths, project_id)]).ok
 
     def start(self, project_id: str, project_dir: Path) -> str:
-        on_windows = windows.is_windows_checkout(project_dir)
+        on_windows = windows.is_windows_project(project_dir)
         with step("check_session") as handle:
             if not on_windows and not self.runner.run(["which", "dtach"]).ok:
                 raise SessionError("dtach is not installed (sudo apt install -y dtach)")

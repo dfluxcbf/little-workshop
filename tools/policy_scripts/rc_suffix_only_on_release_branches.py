@@ -11,8 +11,7 @@ PROJECT = os.environ.get("POLICY_PROJECT_DIR", "/project")
 RC_RE = re.compile(r"-rc\.\d+\s*$")
 FIX = (
     "Fix: an -rc.N VERSION is written by workshop_version_release_candidate_cut on a release/* "
-    "branch only; elsewhere VERSION is a stable or -dev.N version (`lws version sync-version-files` "
-    "on a working branch)."
+    "branch only; elsewhere VERSION is the stable version the last finish wrote."
 )
 
 

@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from common.windows import project_host
 from registry.models import Project, ProjectSet, ProjectStatus, Ticket, TicketStatus
 
 SCHEMA = """
@@ -50,6 +51,8 @@ CREATE TABLE IF NOT EXISTS backlog_entries (
     refinement_notes TEXT NOT NULL DEFAULT '',
     refined_entry TEXT NOT NULL DEFAULT '',
     task_prompt TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    priority TEXT NOT NULL DEFAULT 'normal',
     primary_updated_at TEXT NOT NULL,
     notes_updated_at TEXT,
     refined_at TEXT,
@@ -58,10 +61,25 @@ CREATE TABLE IF NOT EXISTS backlog_entries (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS backlog_by_project ON backlog_entries (project_name, created_at);
+
+CREATE TABLE IF NOT EXISTS toolkit_sources (
+    repo TEXT PRIMARY KEY,
+    sha TEXT NOT NULL,
+    licence TEXT NOT NULL,
+    default_branch TEXT NOT NULL,
+    items_json TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 # What Claude is doing for an entry, kept on the entry so that nothing has to read Jobs to know it.
-BACKLOG_ACTIVITY = ("refining_since", "refining_job", "refine_error", "prompting_since", "prompting_job", "prompt_error")
+BACKLOG_ACTIVITY = ("refining_since", "refining_job", "refine_error", "prompting_since", "prompting_job", "prompt_error",
+                    "task_job")  # the Job of the task last launched from the entry (REQ-000000524)
+
+# An entry's state and priority (REQ-000000524): the owner sets both; an entry from before them is open, normal.
+BACKLOG_STATUSES = ("open", "done", "dropped")
+BACKLOG_PRIORITIES = ("high", "normal", "low")
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -76,8 +94,20 @@ def connect(path: Path) -> sqlite3.Connection:
     for column in BACKLOG_ACTIVITY:
         if column not in present:
             conn.execute(f"ALTER TABLE backlog_entries ADD COLUMN {column} TEXT")
+    if "status" not in present:
+        conn.execute("ALTER TABLE backlog_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'open'")
+    if "priority" not in present:
+        conn.execute("ALTER TABLE backlog_entries ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'")
     if "assets_dir" not in {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}:
         conn.execute("ALTER TABLE projects ADD COLUMN assets_dir TEXT")
+    if "governance" not in {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}:
+        # Every project registered before the setting existed starts `light` (REQ-000000495).
+        conn.execute("ALTER TABLE projects ADD COLUMN governance TEXT NOT NULL DEFAULT 'light'")
+    if "host" not in {row["name"] for row in conn.execute("PRAGMA table_info(projects)")}:
+        # Every project registered before the field existed gets the host its path says (REQ-000000509).
+        conn.execute("ALTER TABLE projects ADD COLUMN host TEXT NOT NULL DEFAULT 'wsl'")
+        for row in conn.execute("SELECT name, path FROM projects").fetchall():
+            conn.execute("UPDATE projects SET host = ? WHERE name = ?", (project_host(row["path"]), row["name"]))
     conn.commit()
     return conn
 
@@ -95,12 +125,14 @@ def _parse_iso(value: str) -> datetime:
 
 def insert_project(conn: sqlite3.Connection, project: Project) -> None:
     conn.execute(
-        """INSERT INTO projects (name, path, repo_url, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO projects (name, path, repo_url, governance, host, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             project.name,
             project.path,
             project.repo_url,
+            project.governance,
+            project.host,
             project.status.value,
             _iso(project.created_at),
             _iso(project.updated_at),
@@ -115,6 +147,8 @@ def _row_to_project(row: sqlite3.Row) -> Project:
         path=row["path"],
         repo_url=row["repo_url"],
         assets_dir=row["assets_dir"],
+        governance=row["governance"],
+        host=row["host"],
         status=ProjectStatus(row["status"]),
         created_at=_parse_iso(row["created_at"]),
         updated_at=_parse_iso(row["updated_at"]),
@@ -144,6 +178,12 @@ def update_project_repo_url(conn: sqlite3.Connection, name: str, repo_url: str |
     conn.commit()
 
 
+def update_project_governance(conn: sqlite3.Connection, name: str, governance: str) -> None:
+    conn.execute("UPDATE projects SET governance = ?, updated_at = ? WHERE name = ?",
+                 (governance, _iso(datetime.now(timezone.utc)), name))
+    conn.commit()
+
+
 def update_project_assets_dir(conn: sqlite3.Connection, name: str, assets_dir: str | None) -> None:
     conn.execute("UPDATE projects SET assets_dir = ?, updated_at = ? WHERE name = ?",
                  (assets_dir, _iso(datetime.now(timezone.utc)), name))
@@ -157,7 +197,7 @@ def set_project_status(conn: sqlite3.Connection, name: str, status: ProjectStatu
 
 
 def delete_project(conn: sqlite3.Connection, name: str) -> None:
-    """Hard delete — no soft-delete, no undo (docs/open_questions.md OQ-7)."""
+    """Hard delete — no soft-delete, no undo (OQ-7, presentations/17-answering-the-first-round.md)."""
     conn.execute("DELETE FROM projects WHERE name = ?", (name,))
     conn.execute("DELETE FROM project_set_members WHERE project_name = ?", (name,))
     conn.execute("DELETE FROM tickets WHERE project_name = ?", (name,))
@@ -300,12 +340,32 @@ def get_backlog_entry(conn: sqlite3.Connection, entry_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def list_backlog_entries(conn: sqlite3.Connection, *, project_name: str | None = None) -> list[dict]:
-    if project_name is None:
-        rows = conn.execute("SELECT * FROM backlog_entries ORDER BY created_at").fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM backlog_entries WHERE project_name = ? ORDER BY created_at", (project_name,)).fetchall()
+def list_backlog_entries(conn: sqlite3.Connection, *, project_name: str | None = None, status: str | None = None) -> list[dict]:
+    """Highest priority first, then the oldest; `status` keeps only the entries in that state."""
+    query, params = "SELECT * FROM backlog_entries WHERE 1=1", []
+    if project_name is not None:
+        query += " AND project_name = ?"
+        params.append(project_name)
+    if status is not None:
+        query += " AND status = ?"
+        params.append(status)
+    rows = conn.execute(query + " ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, created_at", params).fetchall()
     return [dict(row) for row in rows]
+
+
+def set_backlog_state(conn: sqlite3.Connection, entry_id: str, *, status: str | None = None, priority: str | None = None) -> dict | None:
+    """Set the entry's status and/or priority; None when the entry no longer exists."""
+    fields = {key: value for key, value in (("status", status), ("priority", priority)) if value is not None}
+    if status is not None and status not in BACKLOG_STATUSES:
+        raise ValueError(f"status must be one of {', '.join(BACKLOG_STATUSES)}")
+    if priority is not None and priority not in BACKLOG_PRIORITIES:
+        raise ValueError(f"priority must be one of {', '.join(BACKLOG_PRIORITIES)}")
+    if fields:
+        fields["updated_at"] = _iso(datetime.now(timezone.utc))
+        assignments = ", ".join(f"{key} = ?" for key in fields)
+        conn.execute(f"UPDATE backlog_entries SET {assignments} WHERE id = ?", (*fields.values(), entry_id))
+        conn.commit()
+    return get_backlog_entry(conn, entry_id)
 
 
 def update_backlog_entry(conn: sqlite3.Connection, entry_id: str, **fields) -> dict | None:
@@ -344,3 +404,32 @@ def delete_backlog_entry(conn: sqlite3.Connection, entry_id: str) -> bool:
     if deleted:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     return bool(deleted)
+
+
+# -- toolkit_sources (registry/toolkit.py) ---------------------------------------------------------
+
+
+def save_toolkit_source(conn: sqlite3.Connection, repo: str, *, sha: str, licence: str, default_branch: str, items: list[dict]) -> dict:
+    """Register `repo` pinned at `sha` with the items found there, or re-pin it (keeping when it was added)."""
+    now = _iso(datetime.now(timezone.utc))
+    conn.execute(
+        """INSERT INTO toolkit_sources (repo, sha, licence, default_branch, items_json, added_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(repo) DO UPDATE SET sha = excluded.sha, licence = excluded.licence,
+           default_branch = excluded.default_branch, items_json = excluded.items_json, updated_at = excluded.updated_at""",
+        (repo, sha, licence, default_branch, json.dumps(items), now, now))
+    conn.commit()
+    return get_toolkit_source(conn, repo)
+
+
+def _toolkit_source(row: sqlite3.Row) -> dict:
+    return {"repo": row["repo"], "sha": row["sha"], "licence": row["licence"], "default_branch": row["default_branch"],
+            "items": json.loads(row["items_json"]), "added_at": row["added_at"], "updated_at": row["updated_at"]}
+
+
+def get_toolkit_source(conn: sqlite3.Connection, repo: str) -> dict | None:
+    row = conn.execute("SELECT * FROM toolkit_sources WHERE repo = ?", (repo,)).fetchone()
+    return _toolkit_source(row) if row else None
+
+
+def list_toolkit_sources(conn: sqlite3.Connection) -> list[dict]:
+    return [_toolkit_source(row) for row in conn.execute("SELECT * FROM toolkit_sources ORDER BY repo")]

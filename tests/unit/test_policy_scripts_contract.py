@@ -19,8 +19,9 @@ from policy.models import GatePoint
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "tools" / "policy_scripts"
 MANIFEST = json.loads((SCRIPTS / "policies.json").read_text())["policies"]
-COMMIT_LEVEL = {"commit-bumps-version", "branch-commit-dev-suffix", "version-format",
-                "unity-meta-files-paired", "lfs-tracked-files-are-pointers", "no-committed-secrets",
+# The scripts that judge a pending commit when POLICY_COMMIT_DIR describes one (lws policy evaluate
+# --gate-point commit); none gates `commit` any more: the commit-msg hook runs only the local secret scan.
+COMMIT_LEVEL = {"version-format", "unity-meta-files-paired", "lfs-tracked-files-are-pointers", "no-committed-secrets",
                 "requirement-marker-not-superseded"}
 
 
@@ -98,13 +99,10 @@ def test_every_manifest_entry_has_its_script_and_every_script_an_entry():
             assert entry.get(key) not in (None, ""), (entry["topic"], key)
 
 
-def test_manifest_gate_points_are_real_and_commit_only_on_project_bound_policies():
+def test_manifest_gate_points_are_real_and_none_gates_commit():
     for entry in MANIFEST:
-        points = [GatePoint(g) for g in entry["gate_points"]]
-        if GatePoint.COMMIT in points:
-            assert entry["target_pillar"] != "policy", entry["topic"]
-    gated = {e["topic"] for e in MANIFEST if "commit" in e["gate_points"]}
-    assert gated == COMMIT_LEVEL
+        assert [GatePoint(g) for g in entry["gate_points"]]
+    assert {e["topic"] for e in MANIFEST if "commit" in e["gate_points"]} == set()
 
 
 @pytest.mark.parametrize("entry", MANIFEST, ids=lambda e: e["topic"])
@@ -129,6 +127,7 @@ def test_sync_tool_loads_every_script_and_reports_what_differs():
     assert len(entries) == len(MANIFEST)
     entry = next(e for e in entries if e["topic"] == "version-format")
     assert entry["test_script"] == script("version-format").read_text()
+    entry = {**entry, "gate_points": ["commit", "branch_finish"]}  # a gate point an older pillar may lack
     live = {**{k: entry[k] for k in ("ears_text", "test_script", "target_pillar", "scope_level", "scope_target", "created_by")},
             "gate_points": ["branch_finish"]}
     assert sync.changes(entry, None, set()) == ["missing"]
@@ -137,11 +136,34 @@ def test_sync_tool_loads_every_script_and_reports_what_differs():
     assert sync.changes(entry, {**live, "test_script": "old"}, {"commit"}) == ["test_script"]
 
 
+# --- REQ-000000482: a policy check never re-runs on unchanged inputs ---
+
+def test_sync_tool_compares_and_sends_a_policys_inputs(monkeypatch):
+    sync = _load_sync_tool()
+    entry = next(e for e in sync.load_manifest() if e["topic"] == "python-test-coverage")
+    live = {**{k: entry[k] for k in ("ears_text", "test_script", "target_pillar", "scope_level", "scope_target", "created_by")},
+            "gate_points": entry["gate_points"], "requires": "full"}
+    assert sync.changes(entry, live, set()) == ["inputs [] -> ['pyproject.toml', 'src', 'tests']"]
+    assert sync.changes(entry, {**live, "inputs": ["tests", "src", "pyproject.toml"]}, set()) == []
+    assert sync.changes(entry, {**live, "inputs": entry["inputs"], "requires": None}, set()) == ["requires None -> 'full'"]
+    sent = {}
+
+    def fake_lws(*args):
+        sent.update(json.loads(Path(args[2]).read_text()))
+        return {"result": {"id": "p"}}
+
+    monkeypatch.setattr(sync, "lws", fake_lws)
+    sync.activate(entry, {"id": "p"}, set())
+    assert sent["inputs"] == ["pyproject.toml", "src", "tests"] and sent["requires"] == "full"
+
+
 def test_sync_tool_dry_run_changes_nothing_and_apply_replaces_in_place(monkeypatch, capsys):
     sync = _load_sync_tool()
     entries = sync.load_manifest()
     live = [{**{k: e[k] for k in ("topic", "ears_text", "test_script", "target_pillar", "scope_level", "scope_target", "created_by")},
-             "id": f"id-{e['topic']}", "gate_points": [g for g in e["gate_points"] if g != "commit"]} for e in entries]
+             "id": f"id-{e['topic']}", "gate_points": [g for g in e["gate_points"] if g != "commit"], "inputs": e.get("inputs", []),
+             "requires": e.get("requires")}
+            for e in entries]
     live[0] = {**live[0], "test_script": "stale"}
     calls = []
 
@@ -184,7 +206,7 @@ def test_sync_tool_creates_a_missing_policy_with_its_project_selection(monkeypat
     assert "--policy-id" not in calls[0]
 
 
-# --- REQ-000000307: commit-level policies judge the pending commit --------------------------
+# --- REQ-000000492: commit-level policies judge the pending commit --------------------------
 
 def test_version_format_judges_the_pending_commits_version(tmp_path):
     repo = make_repo(tmp_path)
@@ -193,59 +215,6 @@ def test_version_format_judges_the_pending_commits_version(tmp_path):
     assert outcome == "fail" and "Fix:" in out
     assert verdict("version-format", repo, pending(tmp_path))[0] == "fail"  # the commit removes VERSION
     assert verdict("version-format", repo)[0] == "pass"  # the checkout's own VERSION
-
-
-def test_commit_bumps_version_judges_the_pending_commit_against_head(tmp_path):
-    repo = make_repo(tmp_path)
-    assert verdict("commit-bumps-version", repo, pending(tmp_path, version="0.1.1"))[0] == "pass"
-    outcome, out = verdict("commit-bumps-version", repo, pending(tmp_path, version="0.1.0"))
-    assert outcome == "fail" and "not higher than its parent's 0.1.0" in out and "Fix:" in out
-    assert verdict("commit-bumps-version", repo, pending(tmp_path))[0] == "fail"
-
-
-def test_commit_bumps_version_skips_the_first_commit(tmp_path):
-    repo = tmp_path / "empty"
-    repo.mkdir()
-    git(repo, "init", "-q", "-b", "dev")
-    assert verdict("commit-bumps-version", repo, pending(tmp_path, version="0.1.0"))[0] == "skip"
-
-
-def test_branch_commit_dev_suffix_judges_the_pending_commit(tmp_path):
-    repo = make_repo(tmp_path, branch="dev", version="0.1.0")
-    git(repo, "checkout", "-q", "-b", "feature/x")
-    assert verdict("branch-commit-dev-suffix", repo, pending(tmp_path, version="0.1.1-dev.1"))[0] == "pass"
-    outcome, out = verdict("branch-commit-dev-suffix", repo, pending(tmp_path, version="0.1.1-dev.2"))
-    assert outcome == "fail" and "0.1.1-dev.1" in out
-    commit(repo, "first", version="0.1.1-dev.1")
-    assert verdict("branch-commit-dev-suffix", repo, pending(tmp_path, version="0.1.1-dev.2"))[0] == "pass"
-    assert verdict("branch-commit-dev-suffix", repo, pending(tmp_path, version="0.1.1-dev.3"))[0] == "fail"
-
-
-def test_branch_commit_dev_suffix_skips_a_branch_with_no_commit_of_its_own(tmp_path):
-    repo = make_repo(tmp_path, branch="dev")
-    git(repo, "checkout", "-q", "-b", "improvement/y")
-    outcome, out = verdict("branch-commit-dev-suffix", repo)
-    assert outcome == "skip" and "no commit of its own yet" in out
-    commit(repo, "first", version="0.1.0")
-    assert verdict("branch-commit-dev-suffix", repo)[0] == "fail"
-
-
-def test_commit_cites_requirement_judges_the_pending_message_and_files(tmp_path):
-    repo = make_repo(tmp_path)
-    assert verdict("commit-cites-requirement", repo, pending(tmp_path, "feat: x\n\nREQ-000000001", ["src/a.py"]))[0] == "pass"
-    assert verdict("commit-cites-requirement", repo, pending(tmp_path, "chore\n\nreq-none", ["src/a.py"]))[0] == "pass"
-    outcome, out = verdict("commit-cites-requirement", repo, pending(tmp_path, "feat: x", ["src/a.py", "README.md"]))
-    assert outcome == "fail" and "src/a.py" in out and "Fix:" in out
-    assert verdict("commit-cites-requirement", repo, pending(tmp_path, "x REQ-NONE REQ-000000001", ["docs/a.md"]))[0] == "fail"
-    assert verdict("commit-cites-requirement", repo, pending(tmp_path, "docs only", ["docs/a.md"]))[0] == "skip"
-
-
-def test_commit_cites_requirement_judges_head_without_a_pending_commit(tmp_path):
-    repo = make_repo(tmp_path)
-    commit(repo, "feat: x", path="src/a.py")
-    assert verdict("commit-cites-requirement", repo)[0] == "fail"
-    commit(repo, "feat: y\n\nREQ-000000002", path="src/b.py")
-    assert verdict("commit-cites-requirement", repo)[0] == "pass"
 
 
 # --- REQ-000000308: release back-merges are judged on history --------------------------------
@@ -313,7 +282,7 @@ def test_history_checks_ignore_source_text_that_names_merges(tmp_path):
     assert verdict("hotfix-propagates-by-merge", repo)[0] == "pass"
 
 
-# --- REQ-000000309: the commit hook and the Claude configuration are checked -----------------
+# --- REQ-000000493: the commit hook and the Claude configuration are checked -----------------
 
 def test_commit_policy_hook_installed(tmp_path):
     repo = make_repo(tmp_path)
@@ -321,6 +290,10 @@ def test_commit_policy_hook_installed(tmp_path):
     assert outcome == "fail" and "lws version install-hooks" in out
     (repo / ".githooks").mkdir()
     (repo / ".githooks" / "commit-msg").write_text("#!/bin/sh\nexec lws policy evaluate --project-id x --gate-point commit\n")
+    git(repo, "config", "core.hooksPath", ".githooks")
+    assert verdict("commit-policy-hook-installed", repo)[0] == "fail"  # the hook before the local scan
+    git(repo, "config", "--unset", "core.hooksPath")
+    (repo / ".githooks" / "commit-msg").write_text("#!/bin/sh\nexec lws policy scan-secrets\n")
     assert verdict("commit-policy-hook-installed", repo)[0] == "fail"  # core.hooksPath unset
     git(repo, "config", "core.hooksPath", ".githooks")
     assert verdict("commit-policy-hook-installed", repo)[0] == "pass"
@@ -439,7 +412,7 @@ def test_claude_instructions_valid_checks_skill_and_hook_scripts_and_size(tmp_pa
     assert outcome == "pass" and "advice, not a failure" in out and "limit 200" in out  # REQ-000000451: a warning
 
 
-# --- REQ-000000307: commit-level policies judge the pending commit (the Unity source folders) -
+# --- REQ-000000492: commit-level policies judge the pending commit (the Unity source folders) -
 
 def plain_repo(tmp_path):
     (tmp_path / "plain").mkdir()
@@ -453,16 +426,6 @@ def unity_repo(tmp_path):
     commit(repo, "unity", path="Assets/Existing.cs")
     commit(repo, "unity meta", path="Assets/Existing.cs.meta")
     return repo
-
-
-def test_commit_cites_requirement_covers_a_unity_projects_source(tmp_path):
-    repo = unity_repo(tmp_path)
-    outcome, out = verdict("commit-cites-requirement", repo, pending(tmp_path, "feat: x", ["Assets/Game/A.cs"]))
-    assert outcome == "fail" and "Assets/Game/A.cs" in out
-    assert verdict("commit-cites-requirement", repo, pending(tmp_path, "x\n\nREQ-NONE", ["tools/elm"]))[0] == "pass"
-    assert verdict("commit-cites-requirement", repo, pending(tmp_path, "docs", ["docs/a.md"]))[0] == "skip"
-    plain = plain_repo(tmp_path)
-    assert verdict("commit-cites-requirement", plain, pending(tmp_path, "feat: x", ["Assets/A.cs"]))[0] == "skip"
 
 
 # --- REQ pending (unity-meta-files-paired): an asset and its .meta are committed together -------
@@ -564,8 +527,6 @@ def test_design_index_and_schema_current_runs_both_checks(tmp_path):
 
 def test_version_hook_installed_ignores_git_ignored_folders_and_partial_versions(tmp_path):
     repo = make_repo(tmp_path, version="0.1.5")
-    (repo / ".githooks").mkdir()
-    (repo / ".githooks" / "pre-commit").write_text("#!/bin/sh\nlws version sync-version-files --project-id x\n")
     (repo / ".lvx").mkdir()
     (repo / ".lvx" / "config.json").write_text(json.dumps({"version_hooks": []}))
     (repo / ".gitignore").write_text("Library/\n")
@@ -817,6 +778,23 @@ def test_marker_not_superseded_leaves_an_old_leftover_to_commits_that_touch_it(t
     (repo / "tests" / "test_b.py").write_text((repo / "tests" / "test_b.py").read_text() + "def test_y(): pass\n")
     git(repo, "add", "-A")
     assert verdict("requirement-marker-not-superseded", repo, pending(tmp_path, files=["tests/test_b.py"]))[0] == "fail"
+
+
+def test_marker_not_superseded_reads_every_part_of_a_split_register(tmp_path):
+    repo = _superseded_repo(tmp_path)
+    part = repo / "docs" / "requirements" / "x.md"
+    part.parent.mkdir()
+    (repo / "docs" / "requirements.md").rename(part)
+    (repo / "docs" / "requirements.md").write_text("# Requirements\n\n- [x](requirements/x.md)\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "split")
+    part.write_text(part.read_text().replace("| REQ-000000002 | **T.** text | M3 |", "| REQ-000000002 | **T.** text | removed |"))
+    git(repo, "add", "-A")
+    outcome, out = verdict("requirement-marker-not-superseded", repo, pending(tmp_path, files=["docs/requirements/x.md"]))
+    assert outcome == "fail" and "tests/test_b.py:1: cites REQ-000000002" in out
+    git(repo, "commit", "-q", "-m", "retire in a part")
+    outcome, out = verdict("requirement-marker-not-superseded", repo)
+    assert outcome == "fail" and "tests/test_b.py:1: cites REQ-000000002" in out
 
 
 def test_marker_not_superseded_skips_a_project_without_a_register(tmp_path):

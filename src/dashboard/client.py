@@ -18,7 +18,6 @@ documents for MCP Server.
 from __future__ import annotations
 
 from datetime import datetime
-from urllib.parse import quote
 
 import httpx
 
@@ -284,6 +283,18 @@ def usage_candidates(paths: Paths, *, state: str = "all") -> list[dict]:
     return _get(paths, "usage", "/v1/candidates", params={"state": state}, timeout=10.0)
 
 
+def usage_plugin_proposals(paths: Paths, *, state: str = "open") -> list[dict]:
+    return _get(paths, "usage", "/v1/plugin_proposals", params={"state": state}, timeout=10.0)
+
+
+def toolkit_sources(paths: Paths) -> list[dict]:
+    return _get(paths, "registry", "/v1/toolkit/sources", timeout=10.0)
+
+
+def toolkit_status(paths: Paths, project_id: str) -> dict | None:
+    return _get_optional(paths, "registry", f"/v1/toolkit/status/{project_id}", timeout=10.0)
+
+
 def set_usage_candidate(paths: Paths, candidate_id: str, **fields) -> dict:
     return _send(paths, "usage", "POST", f"/v1/candidates/{candidate_id}", json=fields)
 
@@ -496,8 +507,13 @@ def edit_scheduled_task(paths: Paths, task_id: str, **fields) -> dict:
 # -- backlog (Registry & Portfolio) ---------------------------------------------
 
 
-def backlog_list(paths: Paths, project: str | None = None) -> list[dict]:
-    return _get(paths, "registry", "/v1/backlog", params={"project_name": project} if project else None)
+def backlog_list(paths: Paths, project: str | None = None, *, status: str | None = None) -> list[dict]:
+    params = {**({"project_name": project} if project else {}), **({"status": status} if status else {})}
+    return _get(paths, "registry", "/v1/backlog", params=params or None)
+
+
+def backlog_task_launched(paths: Paths, entry_id: str, job_id: str) -> dict:
+    return _call(paths, "registry", "POST", f"/v1/backlog/{entry_id}/task", json={"job_id": job_id}).json()
 
 
 def backlog_get(paths: Paths, entry_id: str) -> dict | None:
@@ -606,82 +622,3 @@ def gateway_request(paths: Paths, method: str, path: str, project_id: str, *, js
         return response.status_code, response.json()
     except (httpx.TransportError, OSError, ValueError) as exc:
         raise PillarUnavailable("the MCP gateway is unreachable") from exc
-
-
-def generation_call(paths: Paths, method: str, path: str, *, timeout: float = 30.0) -> httpx.Response:
-    """Image Generation's request routes, passed on as they answer (JSON, a picture, or a text list)."""
-    return _call(paths, "generation", method, path, timeout=timeout)
-
-
-def generation_queue(paths: Paths) -> dict:
-    return _call(paths, "generation", "GET", "/v1/queue", timeout=5.0).json()
-
-
-def generation_gpu(paths: Paths, *, measure: bool) -> dict:
-    """The GPU usage report; without `measure`, only a sample the pillar already holds (a page load never waits)."""
-    params = {} if measure else {"cached_only": "true", "max_age": 600}
-    return _call(paths, "generation", "GET", "/v1/gpu", params=params, timeout=60.0 if measure else 5.0).json()
-
-
-def generation_requests(paths: Paths, *, status: str | None = None, project_id: str | None = None, limit: int = 100,
-                        offset: int = 0) -> list[dict]:
-    params = {"limit": limit, "offset": offset, **({"status": status} if status else {}), **({"project_id": project_id} if project_id else {})}
-    return _call(paths, "generation", "GET", "/v1/requests", params=params).json()
-
-
-def generation_models(paths: Paths) -> dict:
-    return _call(paths, "generation", "GET", "/v1/models", timeout=5.0).json()
-
-
-def generation_submit(paths: Paths, body: dict) -> dict:
-    """Queue a request; the pillar refuses (422) an unknown model or LoRA, a bad size or a model not installed."""
-    return _call(paths, "generation", "POST", "/v1/requests", json=body).json()
-
-
-def generation_request(paths: Paths, request_id: str) -> dict:
-    return _call(paths, "generation", "GET", f"/v1/requests/{quote(request_id)}", params={"images": "true"}).json()
-
-
-def generation_cancel(paths: Paths, request_id: str) -> dict:
-    return _call(paths, "generation", "POST", f"/v1/requests/{quote(request_id)}/cancel").json()
-
-
-def generation_delete_files(paths: Paths, request_id: str) -> dict:
-    return _call(paths, "generation", "DELETE", f"/v1/requests/{quote(request_id)}/files").json()
-
-
-def generation_resume(paths: Paths, *, retry_failed: bool) -> dict:
-    return _call(paths, "generation", "POST", "/v1/queue/resume", json={"retry_failed": retry_failed}).json()
-
-
-def generation_image_graph(paths: Paths, request_id: str, idx: int) -> dict:
-    """A picture's ComfyUI graph, its outputs and its nodes as rows."""
-    return _call(paths, "generation", "GET", f"/v1/requests/{quote(request_id)}/images/{idx}/graph").json()
-
-
-def generation_recipes(paths: Paths) -> dict:
-    return _call(paths, "generation", "GET", "/v1/recipes", timeout=5.0).json()
-
-
-def generation_recipe(paths: Paths, name: str) -> dict:
-    return _call(paths, "generation", "GET", f"/v1/recipes/{quote(name)}").json()
-
-
-def generation_recipe_suggest(paths: Paths, graph) -> dict:
-    """The slots and outputs a pasted graph would get; the pillar refuses (422) what is not ComfyUI's API format."""
-    return _call(paths, "generation", "POST", "/v1/recipes/suggest", json={"graph": graph}).json()
-
-
-def generation_recipe_save(paths: Paths, body: dict) -> dict:
-    return _call(paths, "generation", "POST", "/v1/recipes", json=body).json()
-
-
-def generation_recipe_delete(paths: Paths, name: str) -> dict:
-    return _call(paths, "generation", "DELETE", f"/v1/recipes/{quote(name)}").json()
-
-
-def generation_comfy(paths: Paths, action: str | None = None) -> dict:
-    """The hand-over of ComfyUI to the user; `action` is lend, restart or return."""
-    if action is None:
-        return _call(paths, "generation", "GET", "/v1/comfy", timeout=5.0).json()
-    return _call(paths, "generation", "POST", f"/v1/comfy/{action}").json()

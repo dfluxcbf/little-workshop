@@ -13,6 +13,10 @@ branch's own app is started from the worktree on a free port — the
 project's `[server.screenshot]` command, the same scratch-port launch
 Agentic Development's screenshots use — and pytest gets `--base-url`
 pointing at it. The app is stopped again whatever the outcome.
+
+A Windows-hosted Unity project (REQ-000000516) is the exception: its tests need the Unity Editor and the
+project's `Library/`, so `run_unity` runs its `tools/run-unity-tests` in the real checkout instead of a
+worktree, refuses while the editor has the project open, and parses the JUnit report the script writes.
 """
 
 from __future__ import annotations
@@ -24,9 +28,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
 
-from common import playwright
+from common import playwright, windows, windows_process
 from common.paths import Paths
 from common.projectfiles import ProjectFilesClient
+from common.registry_client import ProjectResolutionError, resolve_project
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.worktree_client import provision_worktree, release_worktree
 from requirements.junit import JUnitParseError, ParsedResult, parse_junit_xml
@@ -37,6 +42,10 @@ class TestRunError(Exception):
 
 
 DEFAULT_TEST_COMMAND = ["python3", "-m", "pytest"]
+UNITY_TEST_COMMAND = ["tools/run-unity-tests"]
+UNITY_VERSION_FILE = "ProjectSettings/ProjectVersion.txt"
+UNITY_LOCKFILE = "Temp/UnityLockfile"
+UNITY_RESULTS_DIR = "TestResults"  # gitignored by the unity template (registry/unity_templates.py)
 DEPLOYMENT_MANIFEST = "manifest.deployment.toml"
 UI_APP_LOG = ".requirements-ui-app.log"
 
@@ -200,3 +209,62 @@ def run_suites_sandboxed(
         return by_suite
     finally:
         release_worktree(paths, project_id, worktree_id)
+
+
+# -- Windows-hosted Unity projects (REQ-000000516) ------------------------------------------------------
+
+
+def unity_checkout(paths: Paths, project_id: str) -> Path | None:
+    """The checkout of `project_id` when it is a Windows-hosted Unity project, else None (also when the
+    Registry does not answer: the run then goes the usual way)."""
+    try:
+        project = resolve_project(paths, project_id)
+    except ProjectResolutionError:
+        return None
+    checkout = Path(project.get("path") or "")
+    if windows.is_windows_project(project) and (checkout / UNITY_VERSION_FILE).is_file():
+        return checkout
+    return None
+
+
+def unity_editor_open(checkout: Path, runner: CommandRunner) -> bool:
+    """Whether a Unity Editor has the project open: its `Temp/UnityLockfile` exists and a `Unity.exe` runs
+    with the project's path on its command line (the lockfile alone outlives a crashed editor). When the
+    processes cannot be listed, a lockfile counts as open."""
+    if not (checkout / UNITY_LOCKFILE).exists():
+        return False
+    lines = windows_process.command_lines(runner, "Unity.exe")
+    if lines is None:
+        return True
+    target = windows.to_windows_path(checkout).rstrip("\\").lower()
+    return any(target in line.replace("/", "\\").lower() for line in lines)
+
+
+def run_unity(
+    checkout: Path, commitish: str, *, test_command: list[str] | None = None, runner: CommandRunner = DEFAULT_RUNNER,
+    timeout: float = 3600.0,
+) -> list[ParsedResult]:
+    """The project's Unity tests, run in the checkout itself (its `Library/` reused), which must be at
+    `commitish`; the editor must be closed."""
+    git = windows.git_command(checkout)
+    head = runner.run([*git, "rev-parse", "HEAD"], cwd=checkout).stdout.strip()
+    wanted = runner.run([*git, "rev-parse", "--verify", f"{commitish}^{{commit}}"], cwd=checkout).stdout.strip()
+    if not head or head != wanted:
+        raise TestRunError(f"Unity tests run in the live checkout, which is at {head[:12] or '?'}, not {commitish}: "
+                           "check that commit out first")
+    if unity_editor_open(checkout, runner):
+        raise TestRunError("the Unity Editor has this project open: close it (batch-mode tests need the project "
+                           "to themselves) and run the tests again")
+    report_path = checkout / UNITY_RESULTS_DIR / f"junit-lws-{uuid.uuid4().hex}.xml"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        result = runner.run([*(test_command or UNITY_TEST_COMMAND), f"--junit-xml={report_path}"], cwd=checkout, timeout=timeout)
+        if not report_path.exists():
+            tail = "\n".join((result.stdout + "\n" + result.stderr).strip().splitlines()[-15:])
+            raise TestRunError(f"tools/run-unity-tests produced no JUnit report (exit {result.returncode}): {tail}")
+        try:
+            return parse_junit_xml(report_path.read_text(encoding="utf-8"))
+        except JUnitParseError as exc:
+            raise TestRunError(str(exc)) from exc
+    finally:
+        report_path.unlink(missing_ok=True)

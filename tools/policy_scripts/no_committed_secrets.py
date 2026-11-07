@@ -1,14 +1,17 @@
-"""Policy `no-committed-secrets` (version pillar; gates commit, branch_finish): a commit adds no
+"""Policy `no-committed-secrets` (version pillar; gates branch_finish): a commit adds no
 credential to the project: no private key, no provider token or API key in a recognisable format
 (AWS, GitHub, GitLab, Anthropic, OpenAI, Slack, Google, Stripe, Tailscale), and no environment
 file (`.env`, `.env.<name>`; templates such as `.env.example` are fine).
 
 A secret in git history stays there for good, and every clone and every push copies it. Judges
-the commit being made when the commit-msg hook runs it (POLICY_COMMIT_DIR lists its paths; the
+the commit being made when one is pending (POLICY_COMMIT_DIR lists its paths; the
 staged content is read from the index, or from the checkout when the index does not hold it),
 otherwise HEAD against its first parent. Only what the commit introduces counts: a match already
 present in the file's previous version is left alone, so an old mistake never fails every later
-commit. A line marked `pragma: allowlist secret` (a fake value in a test) is not judged."""
+commit. A line marked `pragma: allowlist secret` (a fake value in a test) is not judged.
+
+The commit-msg hook runs the same detection locally (`lws policy scan-secrets`, little-workshop's
+src/common/secret_scan.py, kept equal to this script by a unit test)."""
 
 import os
 import re

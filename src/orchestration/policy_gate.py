@@ -17,7 +17,7 @@ between two pillars' `src/` trees" rule every other cross-pillar call in
 this project already follows.
 
 Which Job types declare which categories is deliberately partial here —
-`docs/open_questions.md`'s `OQ-3` leaves the full mapping to each
+OQ-3 (`presentations/17-answering-the-first-round.md`) leaves the full mapping to each
 pillar's own future implementation work; the entries below are this
 pass's own concrete, real coverage, not a claim every Job type
 everywhere is categorized yet.
@@ -33,6 +33,7 @@ since blocking an action that already happened is meaningless.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from contextlib import nullcontext
@@ -43,7 +44,7 @@ import httpx
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from common.uds_client import client_for_socket
 from common import systemd
-from orchestration.db import get_job, insert_job, insert_job_run, update_job
+from orchestration.db import get_job, insert_job, insert_job_run, list_jobs, update_job
 from orchestration.models import Job, JobStatus
 from orchestration.queue import cascade_dependency_failures
 
@@ -71,9 +72,19 @@ JOB_TYPE_CATEGORIES: dict[str, set[str]] = {
     "version.support_finish": {"branch_finish"},
 }
 
-# Matching little-runner's own existing confirm_timeout_seconds default
-# exactly, reused rather than picked fresh (docs/pillars/policy_compliance.md).
-CONFIRM_TIMEOUT_SECONDS = 600
+# A held Job waits for the user (REQ-000000474): it is failed after a delay only when Orchestration's
+# environment sets this variable (manifest `[pillars.orchestration] environment`) to a positive number
+# of seconds. Unset, empty or 0: no timer.
+CONFIRM_TIMEOUT_ENV = "LWS_POLICY_CONFIRM_TIMEOUT_SECONDS"
+
+
+def confirm_timeout_seconds() -> int | None:
+    """The opt-in timeout for a held Job, or None (the default) when it waits for the user."""
+    try:
+        seconds = int(os.environ.get(CONFIRM_TIMEOUT_ENV, "") or 0)
+    except ValueError:
+        return None
+    return seconds if seconds > 0 else None
 
 # `project_registration`'s own post-completion category — checked once
 # the real registration has already succeeded, never before (OQ-15).
@@ -121,6 +132,7 @@ def attach_policy_gate(conn: sqlite3.Connection, socket_lookup: SocketLookup, jo
     categories = JOB_TYPE_CATEGORIES.get(job.type)
     if not categories or not job.project_id:
         return job
+    supersede_held(conn, job)
     policies = resolve_gating_policies(socket_lookup, job.project_id, categories, origin=job.origin)
     if not policies:
         return job
@@ -134,6 +146,26 @@ def attach_policy_gate(conn: sqlite3.Connection, socket_lookup: SocketLookup, jo
         job.depends_on = [*job.depends_on, check_job.id]
     update_job(conn, job)
     return job
+
+
+def supersede_held(conn: sqlite3.Connection, job: Job) -> list[Job]:
+    """A newer request for the same gated action cancels the held older one (REQ-000000475): same Job
+    type, same project and the same `branch` parameter (a finish acts on the project's checked-out
+    branch, so most carry none). The older Job's dependants fail with it."""
+    superseded = []
+    for held in list_jobs(conn, status=JobStatus.PENDING_CONFIRMATION):
+        if held.id == job.id or held.type != job.type or held.project_id != job.project_id:
+            continue
+        if held.params.get("branch") != job.params.get("branch"):
+            continue
+        held.status = JobStatus.CANCELLED
+        held.error = f"superseded by job {job.id}"
+        update_job(conn, held)
+        insert_job_run(conn, held.id, outcome="cancelled", detail=held.error, started_at=held.created_at, finished_at=None)
+        superseded.append(held)
+    if superseded:
+        cascade_dependency_failures(conn)
+    return superseded
 
 
 def verify_after_completion(conn: sqlite3.Connection, socket_lookup: SocketLookup, job: Job) -> Job:
@@ -177,12 +209,16 @@ def _policy_check_verdicts(conn: sqlite3.Connection, job: Job) -> list[str]:
 
 
 def enter_pending_confirmation(
-    conn: sqlite3.Connection, job: Job, *, timeout_seconds: int = CONFIRM_TIMEOUT_SECONDS, runner: CommandRunner = DEFAULT_RUNNER,
+    conn: sqlite3.Connection, job: Job, *, timeout_seconds: int | None = None, runner: CommandRunner = DEFAULT_RUNNER,
 ) -> Job:
+    """Hold the Job for the user. `timeout_seconds` (default: `confirm_timeout_seconds()`, off unless
+    configured) arms a timer that fails it if still held then; without one it waits indefinitely."""
     job.status = JobStatus.PENDING_CONFIRMATION
     update_job(conn, job)
     insert_job_run(conn, job.id, outcome="pending_confirmation", detail="policy check failed; awaiting confirmation", started_at=job.created_at, finished_at=None)
-    _arm_confirm_timeout(job.id, timeout_seconds=timeout_seconds, runner=runner)
+    timeout_seconds = timeout_seconds if timeout_seconds is not None else confirm_timeout_seconds()
+    if timeout_seconds:
+        _arm_confirm_timeout(job.id, timeout_seconds=timeout_seconds, runner=runner)
     return job
 
 
@@ -201,7 +237,7 @@ def _arm_confirm_timeout(job_id: str, *, timeout_seconds: int, runner: CommandRu
 
 
 def maybe_gate(
-    conn: sqlite3.Connection, job: Job, *, timeout_seconds: int = CONFIRM_TIMEOUT_SECONDS, runner: CommandRunner = DEFAULT_RUNNER,
+    conn: sqlite3.Connection, job: Job, *, timeout_seconds: int | None = None, runner: CommandRunner = DEFAULT_RUNNER,
 ) -> bool:
     """Called on a Job that `ready_jobs()` already found dispatch-ready
     (every dependency succeeded). Returns True if this call handled the

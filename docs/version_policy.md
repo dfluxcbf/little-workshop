@@ -37,7 +37,7 @@ truth. Format is Semantic Versioning plus two pre-release signals:
 | Form | Example | Meaning |
 |---|---|---|
 | `M.m.p` | `1.4.2` | Stable release |
-| `M.m.p-dev.N` | `1.5.0-dev.3` | Development snapshot |
+| `M.m.p-dev.N` | `1.5.0-dev.3` | Development snapshot (only on branches cut before 2026-11-07) |
 | `M.m.p-rc.N` | `1.5.0-rc.2` | Release candidate, on a release branch |
 
 Precedence: a stable version outranks its own pre-releases; `dev` ranks below
@@ -48,53 +48,25 @@ version changes.
 
 | Stage | Bump |
 |---|---|
-| feature / improvement **finish** | patch on `dev`, dev suffix reset to `1` |
+| feature / improvement **finish** | next patch on `dev`, written once by the finish |
 | release **start** | sets the stable base on the release branch |
 | release **candidate cut** | `-rc.N` only (major/minor/patch unchanged) |
-| release **finish** | minor on `master`; `dev` gets the next patch with `-dev.1` |
+| release **finish** | none on `master` (it keeps the released version); `dev` gets the next patch |
 | hotfix **finish** | patch on `master` |
 | feature/improvement/hotfix/release/support **start**, candidate promote | none |
 
 Production tags are annotated `v<M.m.p>`, RC tags `v<M.m.p>-rc.N`; a tag exists
 exactly once and only on production history.
 
-## Every commit bumps the version (new)
+## Working branches leave the version alone (2026-11-07)
 
-`little-versions` bumps only at stage boundaries, so a working branch could
-carry many commits that all claim the same version. That is no longer allowed.
-
-1. **Every commit shall bump `VERSION`** — the new commit's version must have
-   higher precedence than its parent's. This applies to every branch.
-2. **On a working branch** (anything other than `master`/`dev`, and other than
-   `release/*`, `hotfix/*` and `support/*`, whose versions the stage table
-   above already defines), each commit's `VERSION` is `<M.m.p>-dev.N`:
-   - the **first** commit of the branch is the *next patch* after the version
-     of the commit it branched from, with `N = 1` — from `0.1.0` that is
-     `0.1.1-dev.1`; from a `dev` line at `0.1.1-dev.1` it is `0.1.2-dev.1`;
-   - every later commit keeps that base and increments `N` by exactly one
-     (`0.1.1-dev.2`, `0.1.1-dev.3`, …).
-   The next-patch base is what the feature-finish bump lands on, so the branch
-   version and the `dev` version after merging agree.
-3. **Version-bearing metadata follows `VERSION`.** `tools/sync_versions.py`
-   writes it into `pyproject.toml` in PEP 440 form (`0.1.1-dev.2` →
-   `0.1.1.dev2`) and must be run whenever `VERSION` changes; never edit that
-   field by hand.
-
-### How this is enforced
-
-Two Policy & Compliance policies (`docs/pillars/policy_catalog.md`, section C),
-scoped to little-workshop and gating `commit` and `branch_finish`:
-
-- `commit-bumps-version` — rule 1;
-- `branch-commit-dev-suffix` — rule 2.
-
-Their test scripts live in `tools/policy_scripts/` and compare **only the newest
-commit with its immediate parent**: at `commit` (amended 2026-10-02) the commit
-being made, which `.githooks/commit-msg` refuses when it breaks a rule, and at
-`branch_finish` the branch's HEAD. History is never re-audited: a mistake made
-in the past does not fail the policy forever — it only means the next commit has
-to be right. When the parent's own version is malformed, the newest commit is
-required to be well-formed on its own and nothing more.
+`feature/` and `improvement/` commits never touch `VERSION` or the files that carry it: the finish
+computes the next patch after `dev`'s version and writes it once, with the version hooks
+(`tools/on_version_bump.py` writes `pyproject.toml` and `MODULE.bazel`, PEP 440 form for a
+pre-release). This replaced the per-commit `-dev.N` rule and its two policies
+(`commit-bumps-version`, `branch-commit-dev-suffix`), whose bumps conflicted in every rebase. A
+branch whose commits still carry `X.Y.Z-dev.N` lands on `X.Y.Z`. `version-format` still checks the
+file at the finish.
 
 ## Branch and merge notes
 
@@ -104,6 +76,6 @@ required to be well-formed on its own and nothing more.
   [branching policy](../../docs/policies/branching_policy.md)) still
   observes this repository for basic git hygiene (stray branches, detached
   HEAD, extra worktrees) — read-only, imposing no rule on it.
-- This section will be rewritten once little-workshop manages its own branches
-  through its Version Control & Release pillar end to end — its own first user,
-  per the self-application principle in `docs/governance_policy.md`.
+- little-workshop's own branches, finishes and releases go through its Version Control & Release pillar
+  (`workshop_version_*`), its own first user per the self-application principle in
+  `docs/governance_policy.md`.

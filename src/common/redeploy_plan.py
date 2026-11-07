@@ -6,21 +6,20 @@ nothing to wait for among the others, so a batch's redeploys run side by side, a
 the one before it has succeeded. Choose two pillars with no rule between them and one batch is enough;
 choose them all and there are four.
 
-The order is the one the maintainer proved by hand (2026-10-03: Orchestration alone, then Build &
-Packages, Agentic Development and the Dashboard, then the rest), written as rules so it holds for
-any selection:
+The order, written as rules so it holds for any selection:
 
-- **Orchestration first.** Every pillar creates and settles its Jobs through it, and the redeploy
-  Jobs themselves are dispatched by it: the others should report to the new one, not the old.
-- **Build, Agent, Dashboard second.** They are the pillars that run work for the others (builds,
-  tasks, the user's actions) and have to be on the new Orchestration before anything else restarts.
-  The proven order puts the four pillars below after them; nothing in the code says why, so the rule
-  is recorded as observed, and changing it is a one-line edit here.
-- **Policy, Registry, Requirements, Version next** (and the MCP server, a proxy over all of them).
-- **Deployment last.** It performs the redeploys, so its own restart interrupts the machinery; it
-  also arms a confirmation window. **Core**, if named, goes after even that.
+- **Build, Agent, Dashboard first.** They are the pillars that run work for the others (builds,
+  tasks, the user's actions).
+- **Policy, Registry, Requirements, Version next** (and the MCP server, a proxy over all of them, and
+  Usage). Placing them after the runners is the order the maintainer proved by hand (2026-10-03).
+- **Deployment after those.** It performs the redeploys, so its own restart interrupts the machinery;
+  it also arms a confirmation window.
+- **Orchestration last** (REQ-000000477). It dispatches every Job, the redeploys included, and its
+  restart fails any dispatch in flight: restarted first, it interrupted a gated branch finish
+  (2026-11). Its own redeploy Job also waits until no other dispatch is in flight
+  (`orchestration/queue.py`). **Core**, if named, goes after even that.
 
-A pillar this table does not know goes with the third group.
+A pillar this table does not know goes with the second group.
 """
 
 from __future__ import annotations
@@ -29,25 +28,25 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Iterable
 
-_FIRST = "orchestration"
+_ORCHESTRATION = "orchestration"
 _RUNNERS = ("build", "agent", "dashboard")
-_REST = ("policy", "registry", "requirements", "version", "mcp", "usage", "generation")
+_REST = ("policy", "registry", "requirements", "version", "mcp", "usage")
 _DEPLOYER = "deployment"
 _CORE = "core"
 
 REDEPLOY_AFTER: dict[str, frozenset[str]] = {
-    _FIRST: frozenset(),
-    **{name: frozenset({_FIRST}) for name in _RUNNERS},
-    **{name: frozenset({_FIRST, *_RUNNERS}) for name in _REST},
-    _DEPLOYER: frozenset({_FIRST, *_RUNNERS, *_REST}),
-    _CORE: frozenset({_FIRST, *_RUNNERS, *_REST, _DEPLOYER}),
+    **{name: frozenset() for name in _RUNNERS},
+    **{name: frozenset(_RUNNERS) for name in _REST},
+    _DEPLOYER: frozenset({*_RUNNERS, *_REST}),
+    _ORCHESTRATION: frozenset({*_RUNNERS, *_REST, _DEPLOYER}),
+    _CORE: frozenset({*_RUNNERS, *_REST, _DEPLOYER, _ORCHESTRATION}),
 }
 
 
 def _must_follow(pillar: str) -> frozenset[str]:
     if pillar in REDEPLOY_AFTER:
         return REDEPLOY_AFTER[pillar]
-    return frozenset({_FIRST, *_RUNNERS})  # an unknown pillar goes with the third group
+    return frozenset(_RUNNERS)  # an unknown pillar goes with the second group
 
 
 def redeploy_batches(pillars: Iterable[str]) -> list[list[str]]:

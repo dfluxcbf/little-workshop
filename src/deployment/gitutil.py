@@ -13,11 +13,18 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from common.windows import from_git_path, git_command, git_path, is_windows_project
+
 LOCAL, REMOTE = "local", "remote"
 
 
+def _git(args: list[str], cwd: Path) -> list[str]:
+    """`args` with its `git` replaced by the checkout's own git (`git.exe` for a Windows-hosted one)."""
+    return [*git_command(cwd), *args[1:]] if args and args[0] == "git" else list(args)
+
+
 def run(args: list[str], cwd: Path, check: bool = False) -> subprocess.CompletedProcess:
-    result = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=False)
+    result = subprocess.run(_git(args, cwd), cwd=str(cwd), capture_output=True, text=True, check=False)
     if check and result.returncode != 0:
         raise RuntimeError(f"git command failed: {' '.join(args)}\n{result.stderr.strip() or result.stdout.strip()}")
     return result
@@ -74,7 +81,7 @@ def _batch_read_blobs(repo_dir: Path, refs: list[str]) -> dict[str, str | None]:
     never raises (this is a best-effort read, same as the single-`git show`
     version it replaces)."""
     proc = subprocess.run(
-        ["git", "cat-file", "--batch"], cwd=str(repo_dir),
+        _git(["git", "cat-file", "--batch"], repo_dir), cwd=str(repo_dir),
         input=("\n".join(refs) + "\n").encode("utf-8"), capture_output=True, text=False,
     )
     out = proc.stdout
@@ -104,7 +111,7 @@ def _batch_read_blobs(repo_dir: Path, refs: list[str]) -> dict[str, str | None]:
 def github_base_url(repo_dir: Path) -> str | None:
     """`https://github.com/<owner>/<repo>` from the `origin` remote, whether it
     is an SSH (`git@github.com:o/r.git`) or an HTTPS URL; None if not GitHub."""
-    result = subprocess.run(["git", "remote", "get-url", "origin"], cwd=str(repo_dir), capture_output=True, text=True)
+    result = run(["git", "remote", "get-url", "origin"], repo_dir)
     if result.returncode != 0:
         return None
     url = result.stdout.strip()
@@ -121,7 +128,7 @@ def locate_file_version(repo_dir: Path, content: str, directory: str) -> dict | 
     version of the file — so a link built from it shows what is actually in use,
     not whatever the file has become since. `None` when no committed file matches."""
     hashed = subprocess.run(
-        ["git", "hash-object", "--stdin"], cwd=str(repo_dir), input=content, capture_output=True, text=True,
+        _git(["git", "hash-object", "--stdin"], repo_dir), cwd=str(repo_dir), input=content, capture_output=True, text=True,
     )
     if hashed.returncode != 0:
         return None
@@ -129,13 +136,9 @@ def locate_file_version(repo_dir: Path, content: str, directory: str) -> dict | 
     tracked = run(["git", "ls-tree", "-r", "--name-only", "HEAD", "--", directory], repo_dir).stdout.split()
     for path in tracked:
         for commit in run(["git", "log", "--format=%H", "--", path], repo_dir).stdout.split():
-            found = subprocess.run(
-                ["git", "rev-parse", f"{commit}:{path}"], cwd=str(repo_dir), capture_output=True, text=True,
-            )
+            found = run(["git", "rev-parse", f"{commit}:{path}"], repo_dir)
             if found.returncode == 0 and found.stdout.strip() == blob:
-                version = subprocess.run(
-                    ["git", "show", f"{commit}:VERSION"], cwd=str(repo_dir), capture_output=True, text=True,
-                )
+                version = run(["git", "show", f"{commit}:VERSION"], repo_dir)
                 return {
                     "path": path, "commit": commit,
                     "version": version.stdout.strip() if version.returncode == 0 and version.stdout.strip() else None,
@@ -159,6 +162,22 @@ def branch_location(project_dir: Path, branch: str) -> str | None:
     return None
 
 
+def _worktree_git(project_dir: Path, worktree: Path) -> tuple[list[str], str]:
+    """The git that owns `worktree` and the path to give it. A Windows-hosted project's worktree on the Windows
+    drive (a deploy folder) is `git.exe`'s; one in the WSL filesystem (a test sandbox in the state home) is used
+    by WSL tools, so WSL's git creates and removes it and its `.git` file names a path WSL's git can read."""
+    if is_windows_project(project_dir) and is_windows_project(worktree):
+        return git_command(project_dir), git_path(worktree, project_dir)
+    return ["git"], str(worktree)
+
+
+def _run_with(git: list[str], args: list[str], cwd: Path, check: bool = False) -> subprocess.CompletedProcess:
+    result = subprocess.run([*git, *args], cwd=str(cwd), capture_output=True, text=True, check=False)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"git command failed: {' '.join(args)}\n{result.stderr.strip() or result.stdout.strip()}")
+    return result
+
+
 def add_worktree(project_dir: Path, commitish: str, worktree: Path) -> None:
     """`--detach`: checks out `commitish` without claiming its branch name,
     so this works even when that branch is already checked out elsewhere
@@ -167,14 +186,36 @@ def add_worktree(project_dir: Path, commitish: str, worktree: Path) -> None:
     if worktree.exists():
         remove_worktree(project_dir, worktree)
     worktree.parent.mkdir(parents=True, exist_ok=True)
-    run(["git", "worktree", "add", "--detach", str(worktree), commitish], project_dir, check=True)
+    git, path = _worktree_git(project_dir, worktree)
+    _run_with(git, ["worktree", "add", "--detach", path, commitish], project_dir, check=True)
+
+
+def add_branch_worktree(project_dir: Path, branch: str, worktree: Path, *, base: str | None = None) -> None:
+    """A worktree on `branch` (not detached): created from `base` when given, else the existing local branch.
+    git refuses a branch already checked out elsewhere (the live checkout, another worktree); that is said
+    plainly rather than worked around."""
+    if worktree.exists():
+        remove_worktree(project_dir, worktree)
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    git, path = _worktree_git(project_dir, worktree)
+    args = ["worktree", "add", "-b", branch, path, base] if base else ["worktree", "add", path, branch]
+    result = _run_with(git, args, project_dir)
+    if result.returncode != 0:
+        error = (result.stderr or result.stdout).strip()
+        if "already checked out" in error or "already used by worktree" in error:
+            raise RuntimeError(f"branch {branch!r} is checked out in another checkout; switch that one off it first ({error})")
+        raise RuntimeError(f"git command failed: git {' '.join(args)}\n{error}")
 
 
 def remove_worktree(project_dir: Path, worktree: Path) -> None:
-    run(["git", "worktree", "remove", "--force", str(worktree)], project_dir)
+    git, path = _worktree_git(project_dir, worktree)
+    _run_with(git, ["worktree", "remove", "--force", path], project_dir)
     if worktree.exists():
         shutil.rmtree(worktree, ignore_errors=True)
-    run(["git", "worktree", "prune"], project_dir)
+    if not is_windows_project(project_dir):
+        # Not for a Windows-hosted project: its worktrees belong to two gits (above), and each one's prune
+        # drops the other's as missing. `worktree remove` already dropped this one's record.
+        run(["git", "worktree", "prune"], project_dir)
 
 
 def list_worktrees(project_dir: Path) -> list[WorktreeEntry]:
@@ -184,9 +225,9 @@ def list_worktrees(project_dir: Path) -> list[WorktreeEntry]:
 
     def flush() -> None:
         if "worktree" in block:
-            raw_path = block["worktree"]
+            raw_path = from_git_path(block["worktree"])
             top = run(["git", "rev-parse", "--show-toplevel"], Path(raw_path))
-            path = Path(top.stdout.strip()) if top.returncode == 0 and top.stdout.strip() else Path(raw_path)
+            path = Path(from_git_path(top.stdout.strip())) if top.returncode == 0 and top.stdout.strip() else Path(raw_path)
             branch = block.get("branch", "").removeprefix("refs/heads/") or None
             entries.append(WorktreeEntry(path=path, branch=branch, sha=block.get("HEAD", "")))
 

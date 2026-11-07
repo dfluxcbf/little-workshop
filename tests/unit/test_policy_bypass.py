@@ -283,9 +283,9 @@ def test_evaluate_from_claude_still_blocks_while_the_flag_is_true(api, monkeypat
 
 
 def test_the_cli_tells_the_user_a_violation_was_bypassed():
-    from cli import main
+    from cli.commands import policy
 
-    text = main.format_evaluation({
+    text = policy.format_evaluation({
         "gate_point": "branch_finish", "project_id": "p", "blocking": [], "bypassed": ["tidy"],
         "results": [{"topic": "tidy", "outcome": "fail", "gating": False, "bypassed": True, "ears_text": "r", "detail": "untidy"}]})
     assert "BYPASSED" in text and "tidy failed and would have blocked" in text
@@ -355,11 +355,12 @@ def test_a_bypassed_failure_is_still_recorded_with_its_origin(api, conn, monkeyp
 def _cli(monkeypatch, *, root=True, sudo_user="me", claude=False, calls=None):
     from cli import main
     from cli import client as cli_client
+    from cli.commands import policy as policy_commands
 
     monkeypatch.setattr(main.os, "geteuid", lambda: 0 if root else 1000)
     monkeypatch.setattr(main.os, "environ", {"SUDO_USER": sudo_user} if sudo_user else {})
     monkeypatch.setattr(origins, "invoked_by_claude", lambda *a, **k: claude)
-    monkeypatch.setattr(main, "_bypass_paths", lambda: Paths(config_home=Path("/c"), state_home=Path("/s")))
+    monkeypatch.setattr(policy_commands, "_bypass_paths", lambda: Paths(config_home=Path("/c"), state_home=Path("/s")))
     sent = calls if calls is not None else []
 
     def fake_set(paths, *, enabled, minutes, actor, **kw):

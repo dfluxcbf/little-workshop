@@ -7,7 +7,8 @@ branch operations (`feature`/`improvement`/`hotfix`/`release`/`support`
 start/finish), release-candidate cut/list/promote, version bumping, and
 per-project hook execution — absorbing `little-versions` wholesale. It
 holds no database of its own; git itself, in the target project's own
-repository, is the store. `.lvx/config.json`'s on-disk format is kept
+repository, is the store, with a small per-project state file under the
+state directory (finishes in progress, issue links). `.lvx/config.json`'s on-disk format is kept
 byte-compatible with the standalone tool it replaces on purpose, so every
 already-`lvx`-managed project in this ecosystem needs no migration once
 the ecosystem cutover (M17) happens.
@@ -27,7 +28,9 @@ repository in a half-finished state.
   integration branch, finish by rebase + squash to one `feat (N): name`
   (or `impr (N): name`) commit, squash merge into the integration branch (one commit, no merge
   commit; 2026-10-07), patch-version bump,
-  delete the branch. `--continue`/`--abort` resume or cancel a finish
+  delete the branch. The squash commit's body ends with `Requirements: REQ-…` listing the requirement
+  ids the branch's commit messages cite and its added lines (test markers, register rows) name, the
+  ones the message does not already carry; the squash would otherwise drop them (REQ-000000499). `--continue`/`--abort` resume or cancel a finish
   paused by a real rebase conflict.
 - **Hotfixes** — start from the production branch, finish by merging into
   production, tagging, patch-version bump, and back-merging into the
@@ -127,78 +130,57 @@ repository in a half-finished state.
   in the Job's result, refused or not. Gated like `release_finish`
   (`release`, `branch_finish`).
 - **Release finish back-merges production** (2026-09-24): the integration
-  branch now merges production (not the release branch) after the release,
-  so it also carries the minor bump, finish-state and version-hook commits
-  made on production after the release merge. Before, those stayed
-  production-only and every next release conflicted on `VERSION`,
-  `.lvx/state.json` and hook-written files.
-- **Pre-commit hook only on working branches** (2026-09-24): the installed
-  hook calls `lws version sync-version-files` only on `feature/*` and
-  `improvement/*` (the prefixes are read at install time) — a sync queued
-  behind a Release Job holding the project's queue would otherwise run
-  later, on whatever branch is checked out by then.
-- **Pre-commit sync runs in the CLI, not as a Job** (2026-09-24):
-  `lws version sync-version-files` now syncs the checkout it is run in,
-  synchronously, without the daemon (`--project-id` is still accepted).
-  As a Job it queued behind the project's `queue_key` — held by the very
-  `agent.run_task` making the commit — so it ran only after the run ended:
-  the commits carried no bump and the leftover staged VERSION blocked the
-  run's own finish ("Working tree is dirty"). REQ-000000264.
-- **Pre-commit sync handles an amend and stages only its own changes**
-  (2026-10-02): `git commit --amend` replaces HEAD, so the sync numbers the
-  commit from HEAD's parent (an amended first commit stays `-dev.1`; counted
-  from HEAD it became `-dev.2` and failed `branch-commit-dev-suffix`). Git
-  does not tell a pre-commit hook it is amending, so the sync reads its own
-  process ancestry for the `git commit --amend` that ran the hook. It stages
-  `VERSION` and the files the version hooks changed, no longer every modified
-  or untracked file in the checkout (which swept unrelated work into the
-  commit), and warns when a hook rewrote a file that already had unstaged
-  edits. REQ pending.
-- **Finish resolves version-only rebase conflicts** (2026-09-24): every
-  working branch's first commit bumps VERSION (and the files version_hooks
-  write it into), so two branches cut from the same dev tip always
-  conflicted there once the first had finished, and the second finish
-  stopped for a person. The finish rebase now resolves a conflict hunk
-  whose sides differ only by each commit's own VERSION string (taking
-  upstream's; finish rewrites it anyway) and takes the replayed commit's
-  `.lvx/state.json`; only those, and only inside conflict hunks — any other
-  conflict still stops the finish (`gitops.resolve_version_only_conflicts`,
-  the one exception to M3's never-auto-resolve). `docs/requirements.md` is
-  `merge=union` in `.gitattributes`, since branches only append to it.
-  REQ-000000265.
+  branch merges production (not the release branch) after the release, so
+  the next release merges into production without conflicts. Production
+  keeps the released version (no minor bump, 2026-11-07); `finalize_version`
+  writes it with the version hooks on the release branch, and the
+  integration branch gets the next patch. REQ-000000489.
+- **Working branches leave VERSION alone** (2026-11-07): commits on
+  `feature/*` and `improvement/*` never write VERSION or the files the
+  version hooks write; the finish computes the next patch after the
+  integration branch's version and writes it once
+  (`workflows.finished_version`; a branch whose commits still carry
+  `X.Y.Z-dev.N` lands on `X.Y.Z`). REQ-000000485, REQ-000000269.
+- **Git hooks** (`commands/git_hooks.py`): `lws version install-hooks` (and
+  `version.init` with a project id) writes `.githooks/commit-msg`, which
+  runs `lws policy scan-secrets` (a local scan, no daemon or Docker,
+  `docs/pillars/policy_compliance.md`), sets `core.hooksPath`, and removes
+  the retired VERSION-sync `.githooks/pre-commit` little-workshop once
+  installed (a project's own pre-commit stays). It runs in the CLI on the
+  checkout it is called in and touches nothing else.
+  `lws version sync-version-files` is kept as a no-op for hooks installed
+  before. REQ-000000491, REQ-000000486.
+- **Version state outside the repository** (2026-11-07): finishes in
+  progress, issue links and promoted release candidates are one JSON file
+  per project, `version/projects/<project id>.json` under the state
+  directory (`configstore.state_path`; a checkout whose config names no
+  project is keyed by its path), so recording them never makes a commit. A
+  project without that file yet reads its `.lvx/state.json` once.
+  REQ-000000488.
+- **Finish settles version-only and generated-file rebase conflicts**: the
+  finish rebase resolves a conflict hunk whose sides differ only by each
+  commit's own VERSION string (taking upstream's; the finish rewrites it
+  anyway) and a conflict in `.lvx/state.json` (upstream's removal wins).
+  A conflicted file little-workshop generates is written again from the
+  generator and staged (`version/generated.py`): `.githooks/commit-msg`
+  from `git_hooks`, the retired pre-commit removed, and the generated
+  `.claude/` files from Registry & Portfolio
+  (`POST /v1/projects/{name}/claude_files/regenerated`, the generator being
+  its code), `.claude/settings.json` keeping the project's own entries of
+  both sides. Any other conflict, or no answer from the Registry, still
+  stops the finish. `docs/requirements.md` is `merge=union` in
+  `.gitattributes`, since branches only append to it. REQ-000000487.
 - **Bookkeeping commits cite `REQ-NONE`** (2026-09-24): version bumps,
-  finish/release state, release candidates, changelogs and issue links end
-  with a `REQ-NONE` paragraph (`gitops.no_requirement`), since a version hook
-  can make them touch `src/` (little-home's `src/package.json`) and
-  `commit-cites-requirement` judges every commit that does. Merge commits
-  carry real changes and never cite it. `stabilize`'s "commit pending
-  changes" does not either: what it commits is unknown. REQ-000000266.
-- **A finish lands on the branch's own patch** (2026-09-24): a working
-  branch's commits already carry the next patch (`X.Y.Z-dev.N`, per
-  `branch-commit-dev-suffix`), and the finish then bumped the patch again,
-  so every finish skipped one (0.2.6 → 0.2.8) and the Release job's
-  "minimum patch bumps" counted each finish twice. The finish now lands on
-  `X.Y.Z`; a branch whose VERSION has no -dev suffix still gets the next
-  patch, and the result is always above what the integration branch
-  carried before the merge (`workflows.finished_version`). REQ-000000269.
+  release candidates and changelogs end with a `REQ-NONE` paragraph
+  (`gitops.no_requirement`), since a version hook can make them touch
+  `src/` (little-home's `src/package.json`) and a full-governance project's
+  commits name their requirements. Merge commits carry real changes and never
+  cite it. `stabilize`'s "commit pending changes" does not either: what it
+  commits is unknown. REQ-000000266.
 - **The pillar's own git calls skip the repository's hooks** (2026-09-24):
-  once the pre-commit sync ran synchronously (REQ-000000264), it also ran
-  on the finish's own squash commit, which sits on the integration tip
-  after its `reset --soft` and so looked like a branch's first commit:
-  it bumped to the next patch again (0.2.15 instead of 0.2.14). Every git
-  call the pillar makes now runs with `core.hooksPath=/dev/null`
-  (`gitops.run`); the hook stays for commits an agent or a person makes.
+  every git call the pillar makes runs with `core.hooksPath=/dev/null`
+  (`gitops.run`); the hooks are for commits an agent or a person makes.
   REQ-000000270.
-- **The commit-msg policy hook** (2026-10-02): `lws version install-hooks`
-  (and `version.init` with a project id) also writes `.githooks/commit-msg`,
-  which runs `lws policy evaluate --gate-point commit` on the commit being
-  made, so the policies gating `commit` refuse a bad commit when it is made
-  rather than at the finish (`docs/pillars/policy_compliance.md`,
-  "Enforcement moves to the moment of the change"). `install-hooks` runs in
-  the CLI, on the checkout it is called in, and touches nothing but
-  `.githooks/` and `core.hooksPath` — `version.init` also rewrites
-  `.lvx/config.json`. The pillar's own commits still skip both hooks.
-  REQ-000000306.
 
 ## Steps and questions (2026-10-03)
 
@@ -208,7 +190,7 @@ Release job report their actions as Job steps (`common/step_specs/version.py`; k
 finish steps under `start_`/`finish_` prefixes). Two actions may ask the user, when run as a Job:
 uncommitted changes (commit and continue, continue without, stop) and merge or rebase conflicts the
 code cannot settle itself (continue once resolved and staged, or abort and fail the job);
-version-number-only rebase conflicts are still resolved automatically. Run directly, without a user to
+version-number-only and generated-file rebase conflicts are still resolved automatically. Run directly, without a user to
 ask, a dirty tree raises and a conflict returns the `--continue`/`--abort` message as before.
 These jobs run on a background thread and answer the dispatch call at once only when they finish within
 `SYNC_GRACE_SECONDS`; otherwise `accepted`, completing through Orchestration's callback.
@@ -231,8 +213,10 @@ take yet are tried again every 30 seconds for half an hour.
 - **Calls**: Registry & Portfolio — every job resolves its `project_id`
   into a real repository path via `common.registry_client`, discovered
   through Core, before touching git at all (`version/resolve.py`).
-  Nothing else; git itself (real subprocess calls, `version/gitops.py`)
-  is the only other thing this pillar talks to.
+  A finish's rebase stopped on generated `.claude/` files asks Registry &
+  Portfolio for them (`version/generated.py`). Otherwise git itself (real
+  subprocess calls, `version/gitops.py`) is the only other thing this
+  pillar talks to.
 - **Called by**: Agentic Development, as a synchronous subroutine call
   (not routed through Orchestration a second time) — `new`-mode branch
   creation calls this pillar's own `version.<type>_start` Job directly

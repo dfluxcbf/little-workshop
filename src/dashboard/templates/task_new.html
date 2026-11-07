@@ -7,6 +7,7 @@
 <div class="panel" style="padding:18px 20px">
 <form method="post" action="/tasks/new" id="task-form">
   {% if prefill and prefill.candidate_id %}<input type="hidden" name="candidate_id" value="{{ prefill.candidate_id }}">{% endif %}
+  {% if prefill and prefill.backlog_id %}<input type="hidden" name="backlog_id" value="{{ prefill.backlog_id }}">{% endif %}
   {% include "_task_fields.html" %}
   <label for="when">When</label>
   <select name="when" id="when">

@@ -13,3 +13,4 @@ htmlcov/
 .claude/settings.local.json
 .claude/worktrees/
 .review/
+.lvx/state.json

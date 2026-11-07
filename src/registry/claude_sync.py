@@ -15,8 +15,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from common.windows import is_windows_checkout
-from registry import claude_templates as ct
+from common.windows import git_command, is_windows_project
+from registry import assets_config, claude_templates as ct, gitops, toolkit
 
 PLATFORM_PROJECT = "little-workshop"
 
@@ -43,6 +43,12 @@ def detect_project_id(checkout: Path) -> str:
     return checkout.resolve().name
 
 
+def default_governance(project_id: str) -> str:
+    """The governance a project's files are generated for when the Registry's setting is not at hand: little-workshop
+    keeps `full`, every other project `light` (the Registry's default)."""
+    return "full" if project_id == PLATFORM_PROJECT else "light"
+
+
 def options_for(project_id: str) -> dict:
     return dict(ct.OWN_SETTINGS) if project_id == PLATFORM_PROJECT else {}
 
@@ -65,9 +71,12 @@ def detect_plugins(checkout: Path) -> tuple[str, ...]:
 
 
 def options_in(checkout: Path, project_id: str) -> dict:
-    """`options_for`, with the plugins the checkout's languages call for."""
+    """`options_for`, with the plugins the checkout's languages call for and those its toolkit lock enables, and
+    whether it is a Windows-hosted checkout (hooks that also run natively on Windows)."""
     options = options_for(project_id)
-    options.setdefault("plugins", detect_plugins(checkout))
+    if is_windows_project(checkout):
+        options["windows"] = True
+    options["plugins"] = (*options.get("plugins", detect_plugins(checkout)), *toolkit.lock_plugins(checkout))
     return options
 
 
@@ -88,9 +97,10 @@ def is_generated_entry(entry: str, owned: set[str]) -> bool:
 
 
 def is_guard_entry(entry: dict) -> bool:
-    """A hook entry the generator writes: the scope guard, the test-output filter or the reminder."""
+    """A hook entry the generator writes or once wrote: the scope guard, the test-output filter, the live-install
+    guard, the retired reminder."""
     return any(path in (hook.get("command") or "") for hook in entry.get("hooks") or []
-               for path in (ct.GUARD_PATH, ct.TEST_FILTER_PATH, ct.REMINDER_PATH))
+               for path in (ct.GUARD_PATH, ct.TEST_FILTER_PATH, ct.REMINDER_PATH, ct.LIVE_INSTALL_GUARD_PATH))
 
 
 def merged_settings(project_id: str, template: str, current: dict | None, options: dict | None = None) -> dict:
@@ -108,11 +118,9 @@ def merged_settings(project_id: str, template: str, current: dict | None, option
         permissions[key] = permissions[key] + [e for e in extra if e not in permissions[key]]
     hooks = dict(generated["hooks"])
     for event, entries in (current.get("hooks") or {}).items():
-        if event not in hooks:
-            hooks[event] = entries
-            continue
-        kept = [e for e in entries if not is_guard_entry(e) and e not in hooks[event]]
-        hooks[event] = hooks[event] + kept
+        kept = [e for e in entries if not is_guard_entry(e) and e not in hooks.get(event, [])]
+        if event in hooks or kept:  # an event left only with a retired generated hook is dropped
+            hooks[event] = hooks.get(event, []) + kept
     merged = {"permissions": permissions, "hooks": hooks}
     plugins = {**(current.get("enabledPlugins") or {}), **(generated.get("enabledPlugins") or {})}
     if plugins:
@@ -121,15 +129,79 @@ def merged_settings(project_id: str, template: str, current: dict | None, option
     return merged
 
 
-def wanted_files(checkout: Path, project_id: str, template: str) -> dict[str, str]:
+def _generated(checkout: Path, project_id: str, template: str, options: dict, governance: str | None) -> dict[str, str]:
+    files = ct.claude_files(project_id, template, governance=governance or default_governance(project_id), **options)
+    return {rel: ct.keep_project_section(text, _read(checkout / rel)) for rel, text in files.items()}
+
+
+def _read(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def wanted_files(checkout: Path, project_id: str, template: str, governance: str | None = None) -> dict[str, str]:
     options = options_in(checkout, project_id)
-    files = ct.claude_files(project_id, template, windows=is_windows_checkout(checkout), **options)
+    files = _generated(checkout, project_id, template, options, governance)
     try:
         current = json.loads((checkout / ct.SETTINGS_PATH).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         current = None
     files[ct.SETTINGS_PATH] = json.dumps(merged_settings(project_id, template, current, options), indent=2) + "\n"
+    if options.get("windows") and template != "unity":  # Unity keeps its template's rules (REQ-000000511)
+        attributes = gitops.eol_gitattributes(_read(checkout / ".gitattributes"))
+        if attributes is not None:
+            files[".gitattributes"] = attributes
+    mcp = _mcp_json(checkout, project_id, bool(options.get("windows")))
+    if mcp is not None:
+        files[".mcp.json"] = mcp
     return files
+
+
+def _mcp_json(checkout: Path, project_id: str, windows: bool) -> str | None:
+    """The checkout's `.mcp.json` with its `asset-review` entry made right for its host, or None when it
+    declares none (whether a project has the server is `project.configure_assets`' decision)."""
+    try:
+        data = json.loads((checkout / ".mcp.json").read_text(encoding="utf-8"))
+        servers = data["mcpServers"]
+        if assets_config.MCP_NAME not in servers:
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    servers[assets_config.MCP_NAME] = assets_config.mcp_entry(project_id, windows=windows)
+    return json.dumps(data, indent=2) + "\n"
+
+
+def _union_settings(sides: list[dict]) -> dict | None:
+    """One settings document holding every entry of each side: permission lists and hook entries joined, other
+    keys from the first side that has them."""
+    sides = [side for side in sides if isinstance(side, dict)]
+    if not sides:
+        return None
+    union: dict = {"permissions": {}, "hooks": {}}
+    for side in sides:
+        for group, joined in (("permissions", union["permissions"]), ("hooks", union["hooks"])):
+            for key, entries in (side.get(group) or {}).items():
+                if isinstance(entries, list):
+                    joined.setdefault(key, [])
+                    joined[key] += [e for e in entries if e not in joined[key]]
+        for key, value in side.items():
+            union.setdefault(key, value)
+    return union
+
+
+def regenerated(checkout: Path, project_id: str, settings_sides: list[dict] | None = None,
+                governance: str | None = None) -> dict:
+    """What each generated Claude file of the checkout should be, for a rebase or merge stopped on them:
+    {"files": {path: text}, "retired": [paths]}. `.claude/settings.json` keeps the entries the project
+    added on every side given (the two sides of the conflict), merged into the generated table."""
+    template = detect_template(checkout)
+    options = options_in(checkout, project_id)
+    files = _generated(checkout, project_id, template, options, governance)
+    current = _union_settings(list(settings_sides or []))
+    files[ct.SETTINGS_PATH] = json.dumps(merged_settings(project_id, template, current, options), indent=2) + "\n"
+    return {"files": files, "retired": list(ct.RETIRED_FILES)}
 
 
 def briefing_note(checkout: Path) -> str | None:
@@ -143,24 +215,35 @@ def briefing_note(checkout: Path) -> str | None:
     return f"no AGENTS.md briefing: start one from claude_templates.agents_md() ending with `{ct.SHARED_BRIEFING_IMPORT}`"
 
 
-def pending(checkout: Path, project_id: str | None = None, template: str | None = None) -> dict:
-    """{"project_id", "template", "files": {relative path: text to write}, "changed": ["created x", ...], "note"}:
+def pending(checkout: Path, project_id: str | None = None, template: str | None = None,
+            governance: str | None = None) -> dict:
+    """{"project_id", "template", "files": {relative path: text to write, or None to remove}, "changed": ["created x", ...], "note"}:
     what the checkout's generated files should be and which of them differ now."""
     project_id = project_id or detect_project_id(checkout)
     template = template or detect_template(checkout)
     files, changed = {}, []
-    for rel, text in wanted_files(checkout, project_id, template).items():
+    for rel, text in wanted_files(checkout, project_id, template, governance).items():
         path = checkout / rel
         current = path.read_text(encoding="utf-8") if path.is_file() else None
         if current != text:
             files[rel] = text
             changed.append(f"{'created' if current is None else 'updated'} {rel}")
+    for rel in ct.RETIRED_FILES:  # generated once, no longer: removed (None)
+        if (checkout / rel).is_file():
+            files[rel] = None
+            changed.append(f"removed {rel}")
     return {"project_id": project_id, "template": template, "files": files, "changed": changed, "note": briefing_note(checkout)}
 
 
-def write(checkout: Path, files: dict[str, str]) -> None:
+def write(checkout: Path, files: dict[str, str | None]) -> None:
+    """Write each file; a file whose text is None is retired and removed. A Windows-hosted checkout gets
+    `core.autocrlf=false` too (REQ-000000511)."""
+    gitops.pin_autocrlf(checkout)
     for rel, text in files.items():
         path = checkout / rel
+        if text is None:
+            path.unlink(missing_ok=True)
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
@@ -170,27 +253,40 @@ COMMIT_MESSAGE = "impr (-1): claude-files-sync\n\nThe Claude files little-worksh
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    return subprocess.run([*git_command(cwd), *args], cwd=cwd, capture_output=True, text=True)
 
 
-def sync_on_branch(checkout: Path, project_id: str, start_branch: Callable[[str, str], dict]) -> dict:
-    """Write a project's pending Claude files on an improvement branch of their own and commit them there.
-    The branch is left for the owner to finish: this never merges. `start_branch(project_id, name)`
-    asks the Version pillar for the branch and returns the settled Job."""
-    report = pending(checkout, project_id)
+def commit_on_branch(checkout: Path, project_id: str, start_branch: Callable[[str, str], dict], name: str,
+                     message: str, write_files: Callable[[], list[str]]) -> dict:
+    """Start the improvement branch `name` on a clean checkout, let `write_files` change it (returning the paths it
+    changed) and commit those paths there: {"written", "branch", "detail"}. The branch is left for the owner to
+    finish: this never merges. `start_branch(project_id, name)` asks the Version pillar for the branch and returns
+    the settled Job. An error `write_files` raises is the caller's; the branch stays, with whatever it wrote."""
+    if _git(["status", "--porcelain"], checkout).stdout.strip():
+        return {"written": False, "detail": "skipped: the checkout has uncommitted changes"}
+    job = start_branch(project_id, name)
+    if job.get("status") != "succeeded":
+        return {"written": False, "detail": f"skipped: could not start the branch: {job.get('error') or job.get('status')}"}
+    branch = (job.get("result") or {}).get("branch") or f"improvement/{name}"
+    paths = write_files()
+    _git(["add", "-A", "--", *paths], checkout)
+    commit = _git(["commit", "-m", message], checkout)
+    if commit.returncode != 0:
+        return {"written": True, "branch": branch,
+                "detail": f"written on {branch}, not committed: {(commit.stderr or commit.stdout).strip()[-400:]}"}
+    return {"written": True, "branch": branch, "detail": f"committed on {branch}; finish it with workshop_version_improvement_finish"}
+
+
+def sync_on_branch(checkout: Path, project_id: str, start_branch: Callable[[str, str], dict],
+                   governance: str | None = None) -> dict:
+    """Write a project's pending Claude files on an improvement branch of their own and commit them there."""
+    report = pending(checkout, project_id, governance=governance)
     result = {"project_id": project_id, "changed": report["changed"], "note": report["note"], "written": False}
     if not report["changed"]:
         return {**result, "detail": "in sync"}
-    if _git(["status", "--porcelain"], checkout).stdout.strip():
-        return {**result, "detail": "skipped: the checkout has uncommitted changes"}
-    job = start_branch(project_id, SYNC_BRANCH_NAME)
-    if job.get("status") != "succeeded":
-        return {**result, "detail": f"skipped: could not start the branch: {job.get('error') or job.get('status')}"}
-    branch = (job.get("result") or {}).get("branch") or f"improvement/{SYNC_BRANCH_NAME}"
-    write(checkout, report["files"])
-    _git(["add", "--", *report["files"]], checkout)
-    commit = _git(["commit", "-m", COMMIT_MESSAGE], checkout)
-    if commit.returncode != 0:
-        return {**result, "written": True, "branch": branch,
-                "detail": f"written on {branch}, not committed: {(commit.stderr or commit.stdout).strip()[-400:]}"}
-    return {**result, "written": True, "branch": branch, "detail": f"committed on {branch}; finish it with workshop_version_improvement_finish"}
+
+    def write_files() -> list[str]:
+        write(checkout, report["files"])
+        return list(report["files"])
+
+    return {**result, **commit_on_branch(checkout, project_id, start_branch, SYNC_BRANCH_NAME, COMMIT_MESSAGE, write_files)}

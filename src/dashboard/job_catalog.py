@@ -13,6 +13,8 @@ import shlex
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
+from common.task_queue import run_task_queue_key
+
 # Every project little-workshop manages builds with Bazel and installs with
 # `bazel run //:install` (each manifest.deployment.toml's `install`).
 BUILD_COMMAND = ["bazel", "build", "//..."]
@@ -69,6 +71,33 @@ def _analyze_conflicts(project: str, values: dict) -> dict:
             "params": {}}
 
 
+def _semantic_conflicts(project: str, values: dict) -> dict:
+    # Read-only (REQ-000000523): Claude's suspected pairs come back in the result; the user records any of them.
+    return {"type": "requirements.semantic_conflicts", "target_pillar": "requirements", "project_id": project, "queue_key": None,
+            "params": {}}
+
+
+DOCS_AUDIT_TIMEOUT_SECONDS = 1800
+DOCS_AUDIT_PROMPT = """Audit this project's documentation against its code. You can read the checkout and change nothing.
+
+Read the documents (`README.md`, `docs/**/*.md`, `.claude/AGENTS.md` and other instruction files), and for each concrete statement they make about the code (a module, a command, a flag, an endpoint, a file layout, a default value, a behaviour, a step order), check it against the code. Report only statements the code contradicts or no longer supports: not style, not missing documentation, not plans clearly marked as future.
+
+Answer in Markdown, one entry per contradiction, most misleading first:
+
+### <document path>:<line>
+- **The document says:** <the statement, quoted briefly>
+- **The code does:** <what is actually there, with the file and line that shows it>
+- **Fix:** <the smallest correction to the document (or, when the code looks wrong, say so)>
+
+End with one line: `N contradictions found in M documents read.` When you find none, say so and list the documents you read."""
+
+
+def _docs_audit(project: str, values: dict) -> dict:
+    # A read-only query in the project's checkout (REQ-000000522): the report is the Job's result, nothing is edited.
+    return {"type": "agent.query", "target_pillar": "agent", "project_id": project, "queue_key": None,
+            "params": {"prompt": DOCS_AUDIT_PROMPT, "read_checkout": True, "timeout_seconds": DOCS_AUDIT_TIMEOUT_SECONDS}}
+
+
 def _release(project: str, values: dict) -> dict:
     # The project's own queue: nothing else may branch, build or launch it mid-release.
     return {"type": "version.release", "target_pillar": "version", "project_id": project, "queue_key": project,
@@ -83,8 +112,8 @@ STANDARDS_DESCRIPTION = f"""Update the `{STANDARDS_FOLDER}/` folder at the root 
 
 Review, in full, before writing anything:
 
-1. Every little-workshop standard: `docs/governance_policy.md`, `docs/requirements_policy.md`, `docs/version_policy.md`, `docs/architecture.md`, `docs/design.md`, `docs/milestones.md`, `docs/open_questions.md`, `docs/pillars/*.md`, the agent prompt templates under `src/agent/templates/prompts/`, `src/dashboard/job_catalog.py`, and the super-repo's `/home/crist/little-projects/docs/policies/*.md`.
-2. Every policy registered in Policy & Compliance: run `lws policy list` and `lws policy projects list` for each policy's rule, scope, gate points and the projects it is attached to; its code in `tools/policy_scripts/` (one script per policy plus `policies.json`); and any pending drafts in `docs/pending_policy_drafts/`.
+1. Every little-workshop standard: `docs/governance_policy.md`, `docs/requirements_policy.md`, `docs/version_policy.md`, `docs/architecture.md`, `docs/design.md`, `docs/milestones.md`, `docs/pillars/*.md`, the agent prompt templates under `src/agent/templates/prompts/`, `src/dashboard/job_catalog.py`, and the super-repo's `/home/crist/little-projects/docs/policies/*.md`.
+2. Every policy registered in Policy & Compliance: run `lws policy list` and `lws policy projects list` for each policy's rule, scope, gate points and the projects it is attached to; its code in `tools/policy_scripts/` (one script per policy plus `policies.json`); and any pending drafts (`lws policy draft list`).
 3. Every registered project (`lws project list`): its `.claude/AGENTS.md` (or a `CLAUDE.md` where one remains) and `.claude/rules/`, `README.md`, `docs/*_policy.md`, and any project-specific policy. A project on a Windows drive (`/mnt/c/...`) is read where it is.
 
 Then update every document in `{STANDARDS_FOLDER}/`:
@@ -105,7 +134,7 @@ Rules:
 
 def _update_standards(project: str, values: dict) -> dict:
     # The project's own queue: it edits the checkout, so nothing else may branch it meanwhile.
-    return {"type": "agent.run_task", "target_pillar": "agent", "project_id": project, "queue_key": project,
+    return {"type": "agent.run_task", "target_pillar": "agent", "project_id": project, "queue_key": run_task_queue_key(project, {"title": STANDARDS_TITLE}),
             "params": {"title": STANDARDS_TITLE, "intent": "docs", "review_mode": "manual", "description": STANDARDS_DESCRIPTION,
                        "include_standards": False}}
 
@@ -154,6 +183,19 @@ CATALOG: tuple[JobSpec, ...] = (
         description=("Compare the project's requirements for conflicts now, instead of waiting for the next check "
                      "(every 15 minutes). Conflicts found are on the Conflicts page."),
         make=_analyze_conflicts,
+    ),
+    JobSpec(
+        key="semantic_conflicts", label="Check requirement conflicts (semantic)",
+        description=("Has Claude read the project's published and draft requirements and list the pairs it suspects "
+                     "conflict in meaning, each with its reason. Nothing is recorded: record a suspected pair as a "
+                     "conflict from this job's page. The automatic check stays the word-based one."),
+        make=_semantic_conflicts,
+    ),
+    JobSpec(
+        key="docs_audit", label="Audit docs against code",
+        description=("Has Claude read the project's documents and its code, without changing anything, and report each "
+                     "statement in the docs that the code contradicts, with where and a fix. The report is on this job's page."),
+        make=_docs_audit,
     ),
     JobSpec(
         key="release", label="Release",

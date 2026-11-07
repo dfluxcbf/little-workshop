@@ -65,7 +65,7 @@ still running after 60 seconds instead of waiting until systemd kills
 the process at 90, and tells the policy sandbox that the pillar is
 stopping (`serving.stopping`).
 
-Ten pillars (twelve since 2026-10-23: Usage & Efficiency, then Image Generation), each its own process, its own SQLite file, and its own Pillar
+Eleven pillars (Usage & Efficiency was added 2026-10-04), each its own process, its own SQLite file, and its own Pillar
 Interface (a small FastAPI app bound to a Unix domain socket):
 
 | Pillar | Goal | Absorbs | Enabled by default |
@@ -80,8 +80,7 @@ Interface (a small FastAPI app bound to a Unix domain socket):
 | **Agentic Development** | Claude does real implementation work on a real branch, safely, and the human stays in control of when it's finished. | little-runner's `issue_flow.py`/`branching.py`/`report.py`/`screenshots.py`/`sessions.py`, generalized from GitHub-issue-only triggers | Optional — a project not using agentic dev never starts it. Fully specified: `docs/pillars/agentic_development.md`. |
 | **Dashboard** | A human can see and act on everything above, without a terminal. | little-runner's `web/`, extended with panels for every other pillar | Optional — a headless/automation-only setup can disable it. Visual identity decided: see `presentations/06-visual-identity.md`. |
 | **MCP Server** | An agent (Claude, or another tool) can see and act on everything above, without a terminal. | little-requirements' and little-versions' MCP tool surfaces, unified and namespaced | Optional — but the common case, since Claude is this ecosystem's primary caller |
-| **Usage & Efficiency** | Claude is used knowingly: what every session on this machine costs is recorded, interpreted and reduced. | Nothing absorbed: new with `docs/claude_usage_optimization.md` (accepted 2026-10-04) | Optional, on by default — switched off, nothing is collected and nothing else changes. Specified: `docs/pillars/usage.md`. |
-| **Image Generation** | A picture asked for is a picture delivered, whatever ComfyUI does in between. | little-shop-of-things' `ls_runner.py` (fresh ComfyUI per graph, grey check), generalized into a queue | Optional, off by default — only a machine with ComfyUI starts it. Specified: `docs/pillars/generation.md`. |
+| **Usage & Efficiency** | Claude is used knowingly: what every session on this machine costs is recorded, interpreted and reduced. | Nothing absorbed: new (2026-10-04) | Optional, on by default — switched off, nothing is collected and nothing else changes. Specified: `docs/pillars/usage.md`. |
 
 Dashboard and MCP Server hold no domain data of their own — both are thin,
 stateless proxies translating their caller's request (an HTTP request, an
@@ -105,7 +104,9 @@ subcommands added as that pillar is actually built rather than designed
 as one command tree up front. Needed earlier than Dashboard or MCP
 Server: it's the only interface that can exist before any pillar with a
 web or agent-facing surface does, and is what actually exercises Core
-and Orchestration during their own construction.
+and Orchestration during their own construction. Each pillar's
+subcommands are a module of `src/cli/commands/` whose
+`register(subparsers)` adds them; `src/cli/main.py` assembles the tree.
 
 **No compatibility shims, by direct decision (corrected 2026-09-17;
 this section previously described the opposite)**: the five absorbed
@@ -194,7 +195,6 @@ number of distinctly-named files per project.
 | `.dashboard` | Dashboard |
 | `.mcp` | MCP Server |
 | `.usage` | Usage & Efficiency |
-| `.generation` | Image Generation |
 
 Examples: `retention.policy.json` (Policy & Compliance's, for one project),
 `manifest.deployment.toml` (Deployment & Servers', for one project's server
@@ -343,25 +343,48 @@ directly. Two bridges reach little-workshop from there, both ending in WSL:
   forwards to the MCP pillar's gateway mode, which runs the MCP tools as that project
   (docs/pillars/mcp_server.md, "HTTP gateway"; docs/pillars/dashboard.md, "HTTP gateway").
 
-`common/windows.py` also holds the path translation (`C:\x` <-> `/mnt/c/x`, `\\wsl.localhost\<distro>\...`)
-and `is_windows_checkout`, which decides whether a project's generated briefing gets its "Windows" section.
+`common/windows.py` also holds the path translation (`C:\x` <-> `/mnt/c/x`, `\\wsl.localhost\<distro>\...`,
+honouring `[automount] root` in /etc/wsl.conf) and `project_host`, the one answer to "is this project
+Windows-hosted": the Registry's `host` field (`wsl` | `windows`, set from the path at bootstrap and import,
+REQ-000000509), or the path when only a path is at hand. little-workshop stays WSL-driven; for a `windows`
+project it uses Windows' own tools where they matter:
 
-(2026-10-28.) `is_windows_checkout` also decides *where* little-workshop itself runs the two long-lived
-processes a Windows-hosted project needs — its Claude Remote Control session and its deployed server —
-rather than always forcing them into a WSL process, which is all it could do before this. Both run as
-real Windows processes instead (`common/windows_process.py`: PowerShell's own `Start-Process -PassThru`
-for a detached, hidden launch; `tasklist.exe`/`taskkill.exe /T` for liveness and tree-kill), since neither
-`dtach` (keeps a session alive, detached from its launcher) nor `systemd --user` (restarts a server on
-failure, answers "is it running") has a Windows port:
+- **One git: `git.exe`** (`git_command`, REQ-000000510): the Registry, Deployment, Agentic Development and
+  Version pillars run `git.exe -C <C:\checkout>` (path arguments as Windows paths), not WSL's git on the 9p
+  mount (half the time, and the same index and line-ending view as the user's Windows tools). A worktree in the
+  WSL filesystem (a test sandbox) stays WSL git's, so its `.git` file names a path that git can read; neither
+  side runs `git worktree prune` on such a project, since each git would drop the other's worktrees.
+- **Line endings pinned** (REQ-000000511): bootstrap, import and the Claude files sync set `core.autocrlf=false`;
+  a non-Unity project's `.gitattributes` starts `* text=auto eol=lf` (Unity keeps its template's rules);
+  `lws project normalize-eol` renormalizes once, on an improvement branch. An agent task stages only the paths it
+  changed beyond line endings (REQ-000000512).
+- **Hooks that work on both sides, failing closed** (REQ-000000513): Claude Code runs the generated hooks with
+  WSL's bash or, natively, Git Bash. They run through `.claude/hooks/run_hook.sh`, which picks `python3`, `py -3`
+  or `python` (on Windows `python3` is usually the Store stub); with none, the guard blocks. `.mcp.json` starts
+  `lws` as `cmd.exe /c lws.cmd`.
+- **Shims** (REQ-000000463, REQ-000000517): `lws windows install-shim` writes `lws.cmd` and its sh twin `lws`
+  (what a Git for Windows hook finds), both forwarding `GIT_INDEX_FILE`, `GIT_DIR` and `GIT_WORK_TREE` through
+  `WSLENV`. Without `lws`, the commit-msg hook refuses a commit under Git for Windows. `lws windows doctor`
+  checks the shims, a Windows Python, each project's `core.autocrlf` and mirrored networking (REQ-000000514).
+
+(2026-10-28.) A Windows-hosted project's two long-lived processes — its Claude Remote Control session and its
+deployed server — run as real Windows processes (`common/windows_process.py`: PowerShell's `Start-Process
+-PassThru` for a detached, hidden launch; `taskkill.exe /T` to tree-kill), since neither `dtach` nor `systemd
+--user` has a Windows port. `tools/check_windows_process.py` runs start, liveness, stop and PID reuse against the
+machine's real Windows.
 
 - **Agentic Development** (`src/agent/session_flow.py`): a Windows-hosted session's PID is tracked in a
   plain file (`Paths.session_windows_pid_path`) instead of matching a `dtach` socket in the WSL process
   list — there is no WSL process to find at all.
-- **Deployment & Servers** (`src/deployment/flow.py`, `src/deployment/windows_supervisor.py`): a
-  Windows-hosted server's PID is tracked the same way (`Paths.deployment_windows_pid_path`); its manifest
-  `command` is PowerShell, the Windows-side counterpart of `bash -c`. `WindowsServerSupervisor` polls every
-  tracked PID and relaunches a dead one — little-workshop standing in for `Restart=on-failure`, since there
-  is no Windows unit to delegate that to.
+- **Deployment & Servers** (`src/deployment/flow.py`, `src/deployment/windows_supervisor.py`): the server is
+  installed into a kept folder per commit, `C:\little-workshop\deploy\<project>\<sha>` (`git.exe worktree`),
+  and runs from there; the newest two stay (REQ-000000515). Its PID file records the PID, the process's start
+  time and the folder, so a PID Windows reused reads as dead. The manifest `command` is PowerShell.
+  `WindowsServerSupervisor` polls the tracked process and relaunches a dead one from its folder — standing in
+  for `Restart=on-failure`.
+- **Requirements** (`src/requirements/testrun.py`): a Windows-hosted Unity project's `run_tests` runs
+  `tools/run-unity-tests` in the checkout itself (its `Library/` reused), refuses while the editor has the
+  project open, and records the JUnit report (REQ-000000516).
 
 ## Feature mapping
 

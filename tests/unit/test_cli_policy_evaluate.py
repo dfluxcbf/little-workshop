@@ -1,5 +1,5 @@
-"""The client side of commit-time and preflight policy checks: reading the pending commit,
-`lws policy evaluate`, both clients, the MCP tool, and the git hooks that call it."""
+"""The client side of policy checks: reading the pending commit, `lws policy evaluate`, both clients,
+the MCP tool, the git hooks and the commit-msg hook's local secret scan."""
 
 from __future__ import annotations
 
@@ -14,11 +14,12 @@ from fastapi import FastAPI, HTTPException
 
 from cli import client as cli_client
 from cli import commit_info, main
+from cli.commands import policy as policy_commands
 from common.paths import Paths
 from mcp_server import client as mcp_client
 from mcp_server import tools as tools_mod
 from version.commands.init import cmd_init
-from version.commands.sync_version_files import install_commit_msg_hook, install_git_hooks
+from version.commands.git_hooks import install_commit_msg_hook, install_git_hooks
 
 from socket_test_helpers import patch_core_discovery, patch_socket_apps
 
@@ -60,7 +61,7 @@ RESULT = {
 }
 
 
-# --- REQ-000000299: the pending commit, read the way git builds it ------------------------------
+# --- REQ-000000483: the pending commit, read the way git builds it ------------------------------
 
 def test_clean_message_drops_comments_and_the_verbose_diff():
     raw = "feat: x\n\nREQ-NONE\n# Please enter the commit message\n# ------------------------ >8 ------------------------\ndiff --git a b\n"
@@ -102,17 +103,17 @@ def test_pending_commit_without_a_staged_version(repo, tmp_path):
     assert commit_info.checkout_root(tmp_path) is None
 
 
-# --- REQ-000000299 / REQ-000000300: lws policy evaluate --------------------------------------------
+# --- REQ-000000483: lws policy evaluate ------------------------------------------------------------
 
 def test_format_evaluation_shows_failures_with_their_rule_and_fix():
-    text = main.format_evaluation(RESULT)
+    text = policy_commands.format_evaluation(RESULT)
     assert text.splitlines()[0] == "little-workshop policies gating commit for proj: 2 failed, 1 passed"
     assert "FAIL commit-bumps-version\n  rule: Each commit raises VERSION." in text
     assert "  VERSION 0.1.0 is not higher. Fix: raise it." in text
     assert "FAIL advisory (gating off for this project: reported, never blocks)" in text
     assert "version-format" not in text
     assert "Blocked by: commit-bumps-version." in text
-    assert "no policy gates it" in main.format_evaluation({"gate_point": "release", "project_id": "p", "results": []})
+    assert "no policy gates it" in policy_commands.format_evaluation({"gate_point": "release", "project_id": "p", "results": []})
 
 
 def test_evaluate_at_commit_sends_the_pending_commit_and_refuses_on_a_blocking_failure(paths, repo, tmp_path, monkeypatch, capsys):
@@ -226,7 +227,7 @@ def test_mcp_tool_evaluates_through_the_policy_pillar(tmp_path, monkeypatch):
     assert "commit" not in schema["properties"]["gate_point"]["enum"]
 
 
-# --- REQ-000000306: the hooks are installed without touching the version configuration ----------
+# --- REQ-000000491: the hooks are installed without touching the version configuration ----------
 
 def _lvx_config(repo):
     (repo / ".lvx").mkdir(exist_ok=True)
@@ -237,20 +238,31 @@ def _lvx_config(repo):
     }))
 
 
-def test_install_git_hooks_writes_both_hooks_and_sets_hooks_path(repo):
+def test_install_git_hooks_writes_the_commit_msg_hook_and_sets_hooks_path(repo):
     _lvx_config(repo)
     written = install_git_hooks(repo, "little-widget")
-    assert [p.name for p in written] == ["pre-commit", "commit-msg"]
+    assert [p.name for p in written] == ["commit-msg"]
     hook = (repo / ".githooks" / "commit-msg").read_text()
-    assert "lws policy evaluate --project-id 'little-widget' --gate-point commit" in hook and "--fail-open" in hook
+    assert "exec lws policy scan-secrets" in hook and "policy evaluate" not in hook
     assert (repo / ".githooks" / "commit-msg").stat().st_mode & stat.S_IXUSR
     assert _git(repo, "config", "--get", "core.hooksPath").strip() == ".githooks"
 
 
-def test_version_init_with_a_project_id_installs_both_hooks(repo):
+def test_install_git_hooks_removes_the_retired_version_sync_and_keeps_a_projects_own_pre_commit(repo):
+    hooks = repo / ".githooks"
+    hooks.mkdir()
+    (hooks / "pre-commit").write_text("#!/bin/sh\nlws version sync-version-files --project-id 'x' || true\n")
+    install_git_hooks(repo, "little-widget")
+    assert not (hooks / "pre-commit").exists()
+    (hooks / "pre-commit").write_text("#!/bin/sh\nmake lint\n")
+    install_git_hooks(repo, "little-widget")
+    assert (hooks / "pre-commit").read_text() == "#!/bin/sh\nmake lint\n"
+
+
+def test_version_init_with_a_project_id_installs_the_commit_msg_hook(repo):
     result = cmd_init(repo, project_id="little-widget")
     assert result.success and "commit-msg" in result.message
-    assert (repo / ".githooks" / "pre-commit").is_file() and (repo / ".githooks" / "commit-msg").is_file()
+    assert (repo / ".githooks" / "commit-msg").is_file() and not (repo / ".githooks" / "pre-commit").exists()
 
 
 def test_lws_version_install_hooks_acts_on_the_current_checkout_only(paths, repo, tmp_path, monkeypatch, capsys):
@@ -263,6 +275,20 @@ def test_lws_version_install_hooks_acts_on_the_current_checkout_only(paths, repo
     assert (repo / ".lvx" / "config.json").read_text() == before
     monkeypatch.chdir(tmp_path)
     assert main.main(["version", "install-hooks", "--project-id", "little-widget"]) == 1
+
+
+# --- REQ-000000486: the pre-commit version sync is retired ------------------------------------------
+
+def test_lws_version_sync_version_files_changes_nothing(repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    assert main.main(["version", "sync-version-files", "--project-id", "little-widget"]) == 0
+    assert "branch finish" in capsys.readouterr().err
+    assert (repo / "VERSION").read_text() == "0.1.0\n" and not _git(repo, "status", "--porcelain").strip()
+
+
+# --- REQ-000000490: the commit-msg hook scans the commit for secrets, locally -----------------------
+
+FAKE_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"  # an AWS access key id's shape, split so this file holds none
 
 
 def _fake_lws(tmp_path, script: str) -> str:
@@ -281,16 +307,61 @@ def _run_hook(repo, path_env, message="feat: x"):
                           cwd=repo, env={"PATH": path_env, "HOME": str(repo)})
 
 
-def test_the_commit_msg_hook_refuses_a_commit_its_policies_refuse(repo, tmp_path):
-    install_commit_msg_hook(repo, "little-widget")
-    path_env = _fake_lws(tmp_path, 'case "$*" in *--help*) exit 0;; esac\necho "Blocked by: commit-bumps-version" >&2\nexit 1\n')
+def test_lws_policy_scan_secrets_refuses_a_staged_secret(repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    (repo / "config.py").write_text(f"KEY = '{FAKE_KEY}'\n")
+    (repo / "notes.txt").write_text("nothing to see\n")
+    _git(repo, "add", "notes.txt")
+    assert main.main(["policy", "scan-secrets"]) == 0  # the secret is not staged
+    _git(repo, "add", "config.py")
+    assert main.main(["policy", "scan-secrets"]) == 1
+    err = capsys.readouterr().err
+    assert "config.py:1: an AWS access key id (AKIAABCD...)" in err and FAKE_KEY not in err and "Fix:" in err
+
+
+def test_lws_policy_scan_secrets_refuses_an_env_file_and_ignores_old_and_allowed_values(repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    (repo / "config.py").write_text(f"KEY = '{FAKE_KEY}'\n")
+    _git(repo, "add", "config.py")
+    _git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "an old mistake")
+    (repo / "config.py").write_text(f"KEY = '{FAKE_KEY}'\nOTHER = 1\nTEST = 'AKIA' 'x'  # pragma: allowlist secret\n")
+    (repo / ".env.example").write_text("TOKEN=\n")
+    _git(repo, "add", "config.py", ".env.example")
+    assert main.main(["policy", "scan-secrets"]) == 0
+    (repo / ".env").write_text("TOKEN=x\n")
+    _git(repo, "add", "-f", ".env")
+    assert main.main(["policy", "scan-secrets"]) == 1
+    assert ".env: an environment file" in capsys.readouterr().err
+
+
+def test_the_commit_msg_hook_refuses_what_the_scan_refuses(repo, tmp_path):
+    install_commit_msg_hook(repo)
+    path_env = _fake_lws(tmp_path, 'case "$*" in *--help*) exit 0;; esac\necho "commit refused: it adds 1 secret(s)" >&2\nexit 1\n')
     result = _run_hook(repo, path_env)
-    assert result.returncode == 1 and "Blocked by" in result.stderr
+    assert result.returncode == 1 and "commit refused" in result.stderr
 
 
 def test_the_commit_msg_hook_lets_the_commit_through_when_it_cannot_check(repo, tmp_path):
-    install_commit_msg_hook(repo, "little-widget")
+    install_commit_msg_hook(repo)
     no_lws = _run_hook(repo, "/usr/bin:/bin")
     assert no_lws.returncode == 0 and "lws not found" in no_lws.stderr
-    old_lws = _run_hook(repo, _fake_lws(tmp_path, "echo \"invalid choice: 'evaluate'\" >&2\nexit 2\n"))
+    old_lws = _run_hook(repo, _fake_lws(tmp_path, "echo \"invalid choice: 'scan-secrets'\" >&2\nexit 2\n"))
     assert old_lws.returncode == 0 and "predates" in old_lws.stderr
+
+
+def test_the_secret_scan_uses_the_no_committed_secrets_policys_own_patterns():
+    """The hook's scan and the policy script it stands in for detect the same things."""
+    import importlib.util
+    import sys
+    from common import secret_scan
+
+    script = Path(__file__).resolve().parents[2] / "tools" / "policy_scripts" / "no_committed_secrets.py"
+    spec = importlib.util.spec_from_file_location("no_committed_secrets_policy", script)
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    sys.modules.pop("no_committed_secrets_policy", None)
+    assert [(k, p.pattern) for k, p in secret_scan.KINDS] == [(k, p.pattern) for k, p in policy.KINDS]
+    for name in ("ENV_FILE", "ENV_TEMPLATE"):
+        assert getattr(secret_scan, name).pattern == getattr(policy, name).pattern
+    assert secret_scan.ALLOW_MARKER == policy.ALLOW_MARKER and secret_scan.MAX_BYTES == policy.MAX_BYTES
+    assert secret_scan.FIX == policy.FIX

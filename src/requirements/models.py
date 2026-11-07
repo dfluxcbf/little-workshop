@@ -81,4 +81,6 @@ class TestResult(BaseModel):
     verdict: TestVerdict
     detail: str = ""
     source: str = "manual"  # "manual" | "pytest" | "junit"
+    # The requirement whose marker section in the test file holds this test, when one does (REQ-000000500).
+    requirement_key: str | None = None
     executed_at: datetime = Field(default_factory=_now)

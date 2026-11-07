@@ -41,8 +41,21 @@ LIFECYCLE_SKILL_PATH = ".claude/skills/workshop-lifecycle/SKILL.md"
 POLICIES_SKILL_PATH = ".claude/skills/policies-digest/SKILL.md"
 POLICIES_SCRIPT_PATH = ".claude/skills/policies-digest/scripts/digest.py"
 TEST_FILTER_PATH = ".claude/hooks/test_output_filter.py"
+# A Windows-hosted project's hooks run through this dispatcher (REQ-000000513).
+HOOK_RUNNER_PATH = ".claude/hooks/run_hook.sh"
+# Generated once, now retired: the sync removes the file and its settings entry (REQ-000000478).
 REMINDER_PATH = ".claude/hooks/newest_request_reminder.py"
+RETIRED_FILES = (REMINDER_PATH,)
 INSTRUCTIONS_RULE_PATH = ".claude/rules/claude-instructions.md"
+# The project's own rule for what a session learned (claude-reflect's rules and the like): never generated, always
+# loaded (no `paths`), and where the guard sends a refused CLAUDE.md write (REQ-000000498).
+LEARNED_RULES_PATH = ".claude/rules/learned.md"
+# A generated Markdown file ends with this block; what the project writes between the two markers is its own: the
+# sync keeps it and the guard lets Claude edit it (REQ-000000497). Claude Code strips the comments.
+PROJECT_SECTION_START = "<!-- project -->"
+PROJECT_SECTION_END = "<!-- /project -->"
+PROJECT_SECTION = f"{PROJECT_SECTION_START}\n{PROJECT_SECTION_END}\n"
+GOVERNANCE_LEVELS = ("light", "full")
 # Imported by the project's briefing: `@little-workshop.md` from `.claude/AGENTS.md`,
 # `@.claude/little-workshop.md` from a root `AGENTS.md`.
 SHARED_BRIEFING_PATH = ".claude/little-workshop.md"
@@ -66,9 +79,9 @@ _PROJECT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 LWS_READ_ONLY_ANY = (
     "core status", "project list", "job list", "job status", "job wait", "job watch", "job queue show",
     "schedule list", "schedule status", "schedule queue get", "trigger list", "usage candidates", "usage plugin-proposals",
-    "policy list", "policy status", "policy catalog list", "policy draft list",
+    "policy list", "policy status", "policy catalog list", "policy draft list", "policy scan-secrets",
     "requirements status", "requirements suite status", "build run-status", "agent session-list",
-    "generation queue", "generation gpu", "generation models", "generation recipes", "generation recipe-show",
+    "toolkit sources", "toolkit list", "windows doctor",
 )
 
 # From here to LWS_GATED each command takes `--project-id`, and the rule pre-allowing it carries
@@ -84,19 +97,18 @@ LWS_READ_ONLY = (
     "build run-list", "build package-list",
     "agent runs", "agent run-status", "agent ci-list", "agent ci-status",
     "usage summary", "usage findings", "project backlog list", "project backlog show", "api token-list",
-    "generation status", "generation list", "generation setup",
+    "toolkit status",
 )
 
 LWS_ROUTINE = (
     "version feature-start", "version improvement-start", "version hotfix-start", "version support-start",
     "version release-candidate-cut", "version issue-set", "version issue-unset",
-    "version sync-version-files", "version install-hooks",
+    "version install-hooks",
     "requirements create", "requirements update", "requirements supersede", "requirements suite create",
     "requirements use-case create", "requirements milestone create", "requirements link",
     "requirements unlink", "requirements result record", "requirements import-junit",
     "requirements run-tests", "requirements sync-markers",
-    "build run", "project backlog add",
-    "generation cancel",
+    "build run", "project backlog add", "project backlog update",
 )
 
 LWS_GATED = (
@@ -112,17 +124,16 @@ LWS_ASK = (
     "job stop", "job policy-confirm", "job answer",
     "schedule add", "schedule edit", "schedule remove", "schedule trigger", "schedule cancel",
     "schedule postpone", "schedule queue set",
-    "project bootstrap", "project connect-github", "project configure-assets", "project import", "project remove", "project backlog delete",
+    "project bootstrap", "project connect-github", "project configure-assets", "project set-governance", "project normalize-eol", "project import", "project remove", "project backlog delete",
     "version init", "version config-add-hook", "version config-remove-hook",
     "requirements publish", "requirements delete", "requirements suite delete", "requirements import",
     "policy projects set",
     "deployment set-manifest", "deployment seed-confirmation",
     "agent run-task", "agent finish-task", "agent skip-task", "agent ci-check",
     "agent session-start", "agent session-stop",
-    "generation submit", "generation resume", "generation delete-files",
-    "generation recipe-save", "generation recipe-import", "generation recipe-delete",
     "usage configure-claude", "trigger add", "trigger remove", "trigger enable", "trigger disable", "trigger install-defaults",
     "api token-create", "api token-revoke",
+    "toolkit add-source", "toolkit seed", "toolkit install", "toolkit remove", "toolkit update", "usage draft-skill",
 )
 
 # Administration of little-workshop itself, as MCP_PLATFORM.
@@ -142,6 +153,7 @@ LWS_UNLISTED = (
     "deployment rollback-timeout", "deployment redeploy-pillar-worker", "deployment rollback-pillar-worker",
     "worktree provision", "worktree release", "mcp serve", "asset-mcp serve", "windows install-shim",
     "bypass_policies",  # the user's alone (needs sudo); the command itself refuses Claude
+    "version sync-version-files",  # retired: a no-op left for pre-commit hooks installed before
 )
 
 # Why a raw command is refused, and the little-workshop route the policies gate instead. The
@@ -158,9 +170,8 @@ ROUTES = {
             "remote; a push the user asks for is theirs to run",
     "branch-delete": "workshop_version_<type>_finish deletes a finished branch",
     "destructive": "it discards work that may not be yours: ask the user what to remove",
-    "no-verify": "the commit hooks write VERSION and run the commit-gated policies: fix what the hook reports and "
-                 "commit again",
-    "hooks-path": "core.hooksPath stays .githooks, where the VERSION sync and the commit-gated policies run",
+    "no-verify": "the commit-msg hook refuses a commit that adds a secret: take the secret out and commit again",
+    "hooks-path": "core.hooksPath stays .githooks, where the commit-msg secret scan runs",
     "systemd": "servers run through workshop_deployment_deploy / _stop / _status",
     "publish": "packages are published with workshop_build_publish_pypi / _vsix (wheel-filename-has-version runs "
                "there)",
@@ -213,7 +224,7 @@ READ_ONLY_BASH = (
     "gh pr view*", "gh pr list*", "gh pr checks*", "gh issue view*", "gh issue list*",
 )
 
-# Local commits are the normal flow; the pre-commit hook and the commit-msg policy hook judge them.
+# Local commits are the normal flow; the commit-msg hook scans them for secrets.
 COMMIT_BASH = ("git add*", "git commit*")
 
 # The policy-preflight skill's script: it only evaluates policies, records and holds nothing.
@@ -242,7 +253,48 @@ READ_DENY = {
 PLUGIN_MARKETPLACE = "claude-plugins-official"
 LSP_PLUGINS = ("pyright-lsp", "typescript-lsp", "clangd-lsp", "csharp-lsp")
 # What a freshly scaffolded project of each template gets; an existing checkout's are detected.
+_PLUGIN_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*")  # a toolkit plugin, `name@marketplace`
 TEMPLATE_PLUGINS = {"python": ("pyright-lsp",), "bazel": (), "unity": ("csharp-lsp",)}
+
+def hook_command(script: str, *args: str, windows: bool = False) -> str:
+    """The command of a generated hook that runs `script` (a path in the checkout) with `args`. A checkout
+    without the script (an older branch) gets a notice and exit 0, never a hook error that blocks the tool
+    call (REQ-000000494). Every generated hook command is built here, so a platform's shell is one change.
+    `windows`: a Windows-hosted checkout, whose sessions run in WSL or natively on Windows (Git Bash's `sh`):
+    the script runs through `HOOK_RUNNER_PATH`, which finds a working Python on either side (REQ-000000513)."""
+    tail = "".join(f" {arg}" for arg in args)
+    missing = "little-workshop: $1 is missing in this checkout (an older branch?); the hook did not run"
+    run = f'sh "$(dirname "$1")/{HOOK_RUNNER_PATH.rsplit("/", 1)[1]}"' if windows else "python3"
+    return (f'sh -c \'[ -f "$1" ] && exec {run} "$@"; echo "{missing}" >&2\' hook '
+            f'"${{CLAUDE_PROJECT_DIR}}"/{script}{tail}')
+
+
+def hook_runner_sh() -> str:
+    """`.claude/hooks/run_hook.sh`: runs a generated hook script with the first Python that really runs. On
+    Windows `python3` is often the Microsoft Store stub, which prints "Python was not found" and fails: a hook
+    failing that way does not block, so the guard was silently off in native sessions. With no Python, the
+    scope guard blocks (exit 2) and the other hooks pass with a notice (REQ-000000513)."""
+    return f"""#!/bin/sh
+# Generated by little-workshop (src/registry/claude_templates.py); do not edit by hand.
+# Runs a generated hook script ($1) with the first Python that works: python3 (WSL, Linux, a real
+# Windows install), else the Windows launcher `py -3`, else python. Stdin (the hook input) is left
+# for the script.
+script="$1"
+shift
+for python in python3 "py -3" python; do
+    if $python -c 'import sys' </dev/null >/dev/null 2>&1; then
+        exec $python "$script" "$@"
+    fi
+done
+case "$script" in
+    *{GUARD_PATH.rsplit("/", 1)[1]})
+        echo "little-workshop guard unavailable: no Python found (install Python 3 for Windows with the py launcher); the tool call is refused" >&2
+        exit 2 ;;
+esac
+echo "little-workshop: no Python found; $script did not run" >&2
+exit 0
+"""
+
 
 # little-workshop's own Claude Code settings: the scaffolded table plus what only this repository needs
 # (REQ-000000295). Its checked-in .claude/ files are claude_files("little-workshop", "python",
@@ -258,7 +310,7 @@ OWN_SETTINGS = dict(
         "matcher": "Bash",
         "hooks": [{
             "type": "command",
-            "command": f'python3 "${{CLAUDE_PROJECT_DIR}}"/{LIVE_INSTALL_GUARD_PATH}',
+            "command": hook_command(LIVE_INSTALL_GUARD_PATH),
             "timeout": 10,
         }],
     },),
@@ -280,7 +332,7 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 GUARD_MATCHER = "|".join(("Bash", *EDIT_TOOLS, f"{MCP}.*"))
 
 
-def guard_hooks(project_id: str, extra_pre_tool_use: tuple[dict, ...] = ()) -> dict:
+def guard_hooks(project_id: str, extra_pre_tool_use: tuple[dict, ...] = (), *, windows: bool = False) -> dict:
     """The `hooks` block registering the guard for Bash, the file-edit tools and every
     little-workshop MCP tool, then any project-specific PreToolUse entries (little-workshop's own
     live-install guard)."""
@@ -289,7 +341,7 @@ def guard_hooks(project_id: str, extra_pre_tool_use: tuple[dict, ...] = ()) -> d
             "matcher": GUARD_MATCHER,
             "hooks": [{
                 "type": "command",
-                "command": f'python3 "${{CLAUDE_PROJECT_DIR}}"/{GUARD_PATH} {_checked_id(project_id)}',
+                "command": hook_command(GUARD_PATH, _checked_id(project_id), windows=windows),
                 "timeout": 10,
             }],
         }, {
@@ -298,36 +350,28 @@ def guard_hooks(project_id: str, extra_pre_tool_use: tuple[dict, ...] = ()) -> d
             "matcher": "Bash",
             "hooks": [{
                 "type": "command",
-                "command": f'python3 "${{CLAUDE_PROJECT_DIR}}"/{TEST_FILTER_PATH}',
+                "command": hook_command(TEST_FILTER_PATH, windows=windows),
                 "timeout": 10,
             }],
         }, *extra_pre_tool_use],
-        # Every prompt: the newest request outranks what was decided before (REQ-000000447). A
-        # sentence read once at session start loses to the docs and memories reread mid-task.
-        "UserPromptSubmit": [{
-            "hooks": [{
-                "type": "command",
-                "command": f'python3 "${{CLAUDE_PROJECT_DIR}}"/{REMINDER_PATH}',
-                "timeout": 10,
-            }],
-        }],
     }
 
 
 def settings(project_id: str, template: str = "python", *, platform: bool = False,
              extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = (),
-             extra_hooks: tuple[dict, ...] = (), plugins: tuple[str, ...] = ()) -> dict:
-    """The `.claude/settings.json` of project `project_id`.
+             extra_hooks: tuple[dict, ...] = (), plugins: tuple[str, ...] = (), windows: bool = False) -> dict:
+    """The `.claude/settings.json` of project `project_id`; `windows` for a Windows-hosted checkout.
 
     Every `lws` command that takes `--project-id` is pre-allowed only with this project's id; the
     guard hook denies a call that names another. `platform=True` (little-workshop itself) also
     pre-allows the tools that administer little-workshop rather than a project. `extra_hooks` are
     PreToolUse entries added after the scope guard and the test-output filter; `plugins` are the
-    code-intelligence plugins of the project's languages (`LSP_PLUGINS`)."""
+    code-intelligence plugins of the project's languages (`LSP_PLUGINS`, by bare name) and the `plugin@marketplace`
+    keys its toolkit lock enables (`registry/toolkit.py`)."""
     project = _checked_id(project_id)
-    unknown = [plugin for plugin in plugins if plugin not in LSP_PLUGINS]
+    unknown = [plugin for plugin in plugins if plugin not in LSP_PLUGINS and not _PLUGIN_KEY.fullmatch(plugin)]
     if unknown:
-        raise ValueError(f"unknown plugin(s) {', '.join(unknown)}, expected some of {', '.join(LSP_PLUGINS)}")
+        raise ValueError(f"unknown plugin(s) {', '.join(unknown)}, expected some of {', '.join(LSP_PLUGINS)} or plugin@marketplace")
     if template not in TEST_BASH:
         raise ValueError(f"unknown template {template!r}, expected one of {', '.join(TEST_BASH)}")
     bash = (*READ_ONLY_BASH, *COMMIT_BASH, *TEST_BASH[template], *SKILL_BASH, *extra_allow)
@@ -346,18 +390,34 @@ def settings(project_id: str, template: str = "python", *, platform: bool = Fals
             "ask": ask,
             "deny": [f"Bash({c})" for c, _ in DENY_REROUTED] + [f"Read({path})" for path in READ_DENY[template]],
         },
-        "hooks": guard_hooks(project, extra_hooks),
+        "hooks": guard_hooks(project, extra_hooks, windows=windows),
     }
     if plugins:
-        out["enabledPlugins"] = {f"{plugin}@{PLUGIN_MARKETPLACE}": True for plugin in plugins}
+        out["enabledPlugins"] = {plugin if "@" in plugin else f"{plugin}@{PLUGIN_MARKETPLACE}": True for plugin in plugins}
     return out
 
 
 def settings_json(project_id: str, template: str = "python", *, platform: bool = False,
                   extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = (),
-                  extra_hooks: tuple[dict, ...] = (), plugins: tuple[str, ...] = ()) -> str:
+                  extra_hooks: tuple[dict, ...] = (), plugins: tuple[str, ...] = (), windows: bool = False) -> str:
     return json.dumps(settings(project_id, template, platform=platform, extra_allow=extra_allow,
-                               extra_ask=extra_ask, extra_hooks=extra_hooks, plugins=plugins), indent=2) + "\n"
+                               extra_ask=extra_ask, extra_hooks=extra_hooks, plugins=plugins, windows=windows), indent=2) + "\n"
+
+
+def _project_section(text: str) -> tuple[int, int] | None:
+    start = text.find(PROJECT_SECTION_START)
+    end = text.find(PROJECT_SECTION_END, start + 1) if start >= 0 else -1
+    return (start + len(PROJECT_SECTION_START), end) if start >= 0 and end >= 0 else None
+
+
+def keep_project_section(generated: str, current: str | None) -> str:
+    """`generated` with the project's own section taken from `current` (the file as the checkout holds it), where
+    both carry the markers (REQ-000000497)."""
+    ours = _project_section(generated)
+    theirs = _project_section(current) if current else None
+    if ours is None or theirs is None:
+        return generated
+    return generated[:ours[0]] + current[theirs[0]:theirs[1]] + generated[ours[1]:]
 
 
 # The guard hook (REQ-000000297, extended REQ pending). A real, standalone script copied into each
@@ -378,10 +438,7 @@ JSON on stdin. It refuses, and says what to do instead:
   merge, tag, push, cherry-pick, branch deletion, --no-verify, a core.hooksPath
   override, systemd, twine, gh...), in any spelling it can parse;
 - an edit of a file little-workshop generates (VERSION, .githooks, its .claude/
-  files) or of a CLAUDE.md, which would stop Claude Code reading AGENTS.md;
-- in a run that skips permission prompts (an agent task), image generation the
-  user did not allow for it, and the generation queue's user decisions (resume,
-  deleting the copies): nobody is there to be asked.
+  files) or of a CLAUDE.md, which would stop Claude Code reading AGENTS.md.
 Input it cannot read passes: the permission rules in settings.json and the
 policies are the other gates. Generated by little-workshop
 (registry/claude_templates.py): change the generator, not this copy."""
@@ -393,13 +450,6 @@ import shlex
 import sys
 
 PREFIX = "mcp__little-workshop__"
-# Image generation needs the user's request or permission: a run that skips permission prompts may queue pictures
-# only when the user allowed it for that run (the agent task's "May generate images"), and never takes the queue's
-# user decisions.
-GENERATION_ALLOWED_ENV = "LITTLE_WORKSHOP_IMAGE_GENERATION"
-GENERATION_SUBMIT = ("workshop_generation_submit", ("generation", "submit"))
-GENERATION_USER_DECISIONS = {"workshop_generation_resume": ("generation", "resume"),
-                             "workshop_generation_delete_files": ("generation", "delete-files")}
 # MCP tools whose project_id is optional: left out, they act on every project.
 NEEDS_PROJECT_ID = frozenset((
 @@NEEDS_PROJECT_ID@@
@@ -419,6 +469,8 @@ GENERATED = @@GENERATED@@
 GIT_HOOKS = @@GIT_HOOKS@@
 EDIT_TOOLS = @@EDIT_TOOLS@@
 STRAY_INSTRUCTIONS = ("CLAUDE.md", "CLAUDE.local.md")
+LEARNED_RULES = @@LEARNED_RULES@@
+SECTION_START, SECTION_END = @@SECTION_MARKERS@@
 SHELLS = ("bash", "sh", "zsh", "dash")
 OPERATORS = set("();<>|&`")
 HEREDOC = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_]\w*)\1")
@@ -573,29 +625,7 @@ def without_env_assignments(words):
     return words[i:]
 
 
-def generation_violation(name, unattended):
-    """Why this run may not take this image-generation step, or None. `name` is the MCP tool's."""
-    if not unattended:
-        return None  # a session with permission prompts asks the user (settings.json lists these as `ask`)
-    if name == GENERATION_SUBMIT[0] and os.environ.get(GENERATION_ALLOWED_ENV) != "allowed":
-        return ("image generation needs the user's request or permission, and this run cannot ask. Say in your report "
-                "which pictures you would generate and why; the user can allow it for a task (\"May generate images\", "
-                "allow_image_generation)")
-    if name in GENERATION_USER_DECISIONS:
-        return (f"{name} is the user's decision, and this run cannot ask: report it instead (the Dashboard's Images "
-                "page has the button)")
-    return None
-
-
-def lws_generation_name(words):
-    """The MCP tool an `lws generation ...` command stands for, or None."""
-    pair = tuple(words[:2])
-    if pair == GENERATION_SUBMIT[1]:
-        return GENERATION_SUBMIT[0]
-    return next((name for name, command in GENERATION_USER_DECISIONS.items() if command == pair), None)
-
-
-def bash_violation(command, own, unattended=False):
+def bash_violation(command, own):
     for words in simple_commands(command):
         words = without_env_assignments(words)
         if not words:
@@ -611,16 +641,12 @@ def bash_violation(command, own, unattended=False):
                 if problem:
                     return (f"this checkout is project {own!r} but the lws command {problem}. Work on other "
                             "projects belongs in a session started from the little-projects root.")
-                name = lws_generation_name(words[i + 1:])
-                problem = name and generation_violation(name, unattended)
-                if problem:
-                    return problem
                 break
             if base in SHELLS:
                 for j, option in enumerate(words[i + 1:], i + 1):
                     if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
                         if j + 1 < len(words):
-                            problem = bash_violation(words[j + 1], own, unattended)
+                            problem = bash_violation(words[j + 1], own)
                             if problem:
                                 return problem
                         break
@@ -644,6 +670,34 @@ def mcp_violation(tool, args, own):
     return None
 
 
+def outside_section(text):
+    """The text before and after the project's own section of a generated file, or None without one."""
+    start = text.find(SECTION_START)
+    end = text.find(SECTION_END, start + 1) if start >= 0 else -1
+    return (text[:start], text[end:]) if start >= 0 and end >= 0 else None
+
+
+def edits_only_own_section(full, args):
+    """Whether the edit changes nothing of a generated file but its project-owned section."""
+    try:
+        with open(full, encoding="utf-8") as fh:
+            current = fh.read()
+    except (OSError, UnicodeDecodeError):
+        return False
+    kept = outside_section(current)
+    if kept is None:
+        return False
+    if isinstance(args.get("content"), str):
+        return outside_section(args["content"]) == kept
+    edited = current
+    for edit in args.get("edits") or [args]:
+        old, new = edit.get("old_string"), edit.get("new_string")
+        if not isinstance(old, str) or not isinstance(new, str) or not old or old not in edited:
+            return False
+        edited = edited.replace(old, new) if edit.get("replace_all") else edited.replace(old, new, 1)
+    return outside_section(edited) == kept
+
+
 def edit_violation(args, root, own):
     """Why editing this file is refused, or None. Paths outside the checkout pass."""
     path = args.get("file_path") or args.get("notebook_path")
@@ -655,13 +709,16 @@ def edit_violation(args, root, own):
         return None
     if rel.rsplit("/", 1)[-1] in STRAY_INSTRUCTIONS or rel == ".claude/CLAUDE.md":
         return (f"{rel} is refused here: Claude Code reads AGENTS.md only where no CLAUDE.md, .claude/CLAUDE.md or "
-                "CLAUDE.local.md exists. Put project guidance in .claude/AGENTS.md or a path-scoped "
-                ".claude/rules/ file, and personal notes in ~/.claude/.")
-    if rel in GENERATED:
-        return f"{rel} is refused here: {GENERATED[rel]}."
+                "CLAUDE.local.md exists. Write a learned rule (claude-reflect's included) as a bullet in "
+                f"{LEARNED_RULES}, project guidance in .claude/AGENTS.md or a path-scoped .claude/rules/ file, and "
+                "personal notes in ~/.claude/.")
+    if rel in GENERATED and not edits_only_own_section(full, args):
+        own_section = (f" Only the part between {SECTION_START} and {SECTION_END} is the project's to edit."
+                       if rel.endswith(".md") else "")
+        return f"{rel} is refused here: {GENERATED[rel]}.{own_section}"
     if rel in GIT_HOOKS:
         return (f"{rel} is refused here: `lws version install-hooks --project-id {own}` writes it (generator: "
-                "little-workshop's src/version/commands/sync_version_files.py).")
+                "little-workshop's src/version/commands/git_hooks.py).")
     return None
 
 
@@ -675,16 +732,13 @@ def main():
         return
     if not own or not isinstance(args, dict):
         return
-    unattended = event.get("permission_mode") == "bypassPermissions"
     if tool.startswith(PREFIX):
         problem = mcp_violation(tool, args, own)
         if problem:
             problem = (f"this checkout is project {own!r} but {problem}. Work on other projects belongs in a "
                        "session started from the little-projects root.")
-        else:
-            problem = generation_violation(tool[len(PREFIX):], unattended)
     elif tool == "Bash":
-        problem = bash_violation(str(args.get("command", "")), own, unattended)
+        problem = bash_violation(str(args.get("command", "")), own)
     elif tool in EDIT_TOOLS:
         problem = edit_violation(args, os.environ.get("CLAUDE_PROJECT_DIR") or event.get("cwd"), own)
     else:
@@ -709,9 +763,9 @@ def generated_files_reasons() -> dict[str, str]:
     reasons = {path: regenerate for path in (GUARD_PATH, PREFLIGHT_SKILL_PATH, PREFLIGHT_SCRIPT_PATH,
                                              LIFECYCLE_SKILL_PATH, INSTRUCTIONS_RULE_PATH, SHARED_BRIEFING_PATH,
                                              POLICIES_SKILL_PATH, POLICIES_SCRIPT_PATH, TEST_FILTER_PATH,
-                                             REMINDER_PATH)}
-    reasons["VERSION"] = ("little-workshop writes VERSION: the pre-commit hook on feature/ and improvement/ branches "
-                          "(`lws version sync-version-files`), the finish and release commands elsewhere")
+                                             HOOK_RUNNER_PATH)}
+    reasons["VERSION"] = ("little-workshop writes VERSION: the feature, improvement, hotfix and release finishes write it "
+                          "once; working branches leave it alone")
     return reasons
 
 
@@ -729,7 +783,9 @@ def scope_guard_py() -> str:
             .replace("@@ROUTES@@", literal(ROUTES))
             .replace("@@GENERATED@@", literal(generated_files_reasons()))
             .replace("@@GIT_HOOKS@@", repr(GIT_HOOK_PATHS))
-            .replace("@@EDIT_TOOLS@@", repr(EDIT_TOOLS)))
+            .replace("@@EDIT_TOOLS@@", repr(EDIT_TOOLS))
+            .replace("@@LEARNED_RULES@@", repr(LEARNED_RULES_PATH))
+            .replace("@@SECTION_MARKERS@@", repr((PROJECT_SECTION_START, PROJECT_SECTION_END))))
 
 
 # The policy-preflight skill (REQ-000000301): the same two files in every project. The skill tells
@@ -752,15 +808,16 @@ python3 .claude/skills/policy-preflight/scripts/preflight.py                    
 python3 .claude/skills/policy-preflight/scripts/preflight.py --gate-point release
 ```
 
-It evaluates the policies in little-workshop's sandbox (`lws policy evaluate`: the checks the gate runs,
-nothing recorded or held). If the installed `lws` or the running Policy pillar predates that, it runs the
-same policy scripts here and says so. Exit 0: nothing blocks; 1: a gating policy fails; 2: the policies
-could not be evaluated. A policy that runs the test suite (python-test-coverage) takes minutes.
+It evaluates the policies in little-workshop's sandbox (`lws policy evaluate`: the checks the gate runs;
+nothing is held, and a verdict on committed, unchanged files is recorded so the gate reuses it). If the
+installed `lws` or the running Policy pillar predates that, it runs the same policy scripts here and says
+so. Exit 0: nothing blocks; 1: a gating policy fails; 2: the policies could not be evaluated. At
+`release`, the policy that runs the test suite (python-test-coverage) takes minutes.
 
 ## Acting on the result
 
-Each failure names the policy, its rule and what to change. Fix the cause in the project, commit (the
-commit-msg hook re-checks the commit-level policies), and run the preflight again until nothing blocks.
+Each failure names the policy, its rule and what to change. Fix the cause in the project, commit, and run
+the preflight again until nothing blocks.
 
 A policy is the project's agreed rule, so change the project, not the policy, and leave a held action for
 the user to confirm. If a failure looks wrong, or cannot be fixed in this project, report it with the
@@ -774,7 +831,7 @@ checkout, and print every failure with its reason. The `policy-preflight` skill'
     python3 .claude/skills/policy-preflight/scripts/preflight.py [--gate-point branch_finish]
 
 Evaluates in little-workshop's policy sandbox (`lws policy evaluate`: the checks the gate itself
-runs, nothing recorded or held). When the installed lws or the running Policy pillar predates
+runs; nothing is held, and verdicts on committed files are recorded for the gate to reuse). When the installed lws or the running Policy pillar predates
 that, it runs the same policy scripts here, outside the sandbox, and says so.
 Exit 0: nothing blocks. 1: a gating policy fails. 2: the policies could not be evaluated.
 Generated by little-workshop (registry/claude_templates.py): change the generator, not this copy."""
@@ -920,7 +977,7 @@ if __name__ == "__main__":
 
 def preflight_skill_md() -> str:
     """The text of `.claude/skills/policy-preflight/SKILL.md`."""
-    return _PREFLIGHT_SKILL
+    return _PREFLIGHT_SKILL + "\n" + PROJECT_SECTION
 
 
 def preflight_py() -> str:
@@ -930,10 +987,16 @@ def preflight_py() -> str:
 
 # The workshop-lifecycle skill (REQ pending): the routes and the steps before a finish, loaded
 # when the work reaches one of them instead of in every session.
-def lifecycle_skill_md(name: str, *, platform: bool = False) -> str:
+def lifecycle_skill_md(name: str, *, platform: bool = False, governance: str = "light") -> str:
     """The text of `.claude/skills/workshop-lifecycle/SKILL.md`. `platform=True` (little-workshop itself)
-    adds the route for redeploying its pillars."""
+    adds the route for redeploying its pillars; `governance` `full` the requirement routes (REQ-000000496)."""
     project = _checked_id(name)
+    requirements = (
+        "| Create, update or supersede a requirement | `workshop_requirements_create` / `_update` / `_supersede` |\n"
+        "| Register and link the requirements the tests' `REQ-` markers name | `workshop_requirements_sync_markers`: "
+        "one call, instead of a create and a link per requirement |\n"
+        if governance == "full" else ""
+    )
     redeploy = (
         "| Redeploy little-workshop's pillars | After a branch finish, `workshop_deployment_redeploy_changed_pillars` "
         "(the pillars the branch touched, found for you; a trigger may already have started it: check "
@@ -960,8 +1023,7 @@ the guard refuses them. Name the project in every call: `project_id` `{project}`
 | Cut, promote or finish a release | `workshop_version_release_start`, `workshop_version_release_candidate_cut` / `_promote`, `workshop_version_release_finish` |
 | Deploy, stop or inspect the server | `workshop_deployment_deploy`, `_stop`, `_status` |
 | Publish a package | `workshop_build_publish_pypi`, `workshop_build_publish_vsix` |
-| Create or update a requirement; record a Definition-of-Done run | `workshop_requirements_create` / `_update`; `workshop_requirements_run_tests` (or `_import_junit`) |
-| Register and link the requirements the tests' `REQ-` markers name | `workshop_requirements_sync_markers`: one call, instead of a create and a link per requirement |
+{requirements}| Record a test run | `workshop_requirements_run_tests` (or `_import_junit`) |
 | Know the branch, version or policy state | `workshop_version_status`, `workshop_policy_results` |
 | Create the GitHub repository and push to it | `workshop_project_connect_github` |
 | Wait for a Job (a test run, a finish, a deploy) | `workshop_job_wait`: one call that returns when the Job settles, is held or asks a question. Never repeat `workshop_job_status` or `sleep` |
@@ -971,11 +1033,15 @@ policies.
 
 ## Finishing a branch
 
-1. Run the project's Definition-of-Done test suite and record the run with `workshop_requirements_run_tests`.
-2. Run the `policy-preflight` skill and fix what blocks.
-3. Finish with `workshop_version_<type>_finish`. A finish that lands in `pending_confirmation` was held by a
+1. Run the `policy-preflight` skill and fix what blocks.
+2. Finish with `workshop_version_<type>_finish`. A finish that lands in `pending_confirmation` was held by a
    policy: report which one (`workshop_policy_results`) and leave the confirmation to the user.
-"""
+
+No separate Definition-of-Done run before a finish. In a Python project the release's coverage check runs
+the suite once and records it; elsewhere record the run (`workshop_requirements_run_tests` or `_import_junit`)
+before the release.
+
+{PROJECT_SECTION}"""
 
 
 # The policies digest (REQ-000000339): which policies cover this project and what each requires,
@@ -994,13 +1060,14 @@ Run it from the repository root:
 
 ```
 python3 {POLICIES_SCRIPT_PATH} --project-id {project}            # every policy attached to the project
-python3 {POLICIES_SCRIPT_PATH} --project-id {project} --gate commit
+python3 {POLICIES_SCRIPT_PATH} --project-id {project} --gate branch_finish
 ```
 
 It prints one line per policy: its name, the actions it gates and its rule, read live from
 little-workshop, so it is never out of date. To check the project against them, use the `policy-preflight`
 skill; to see the last recorded results, `workshop_policy_results`.
-"""
+
+{PROJECT_SECTION}"""
 
 
 _POLICIES_DIGEST_SOURCE = r'''#!/usr/bin/env python3
@@ -1138,44 +1205,14 @@ def test_output_filter_py() -> str:
     return _TEST_FILTER_SOURCE
 
 
-# The newest request outranks what was decided before (REQ-000000447). Earlier choices live in many
+# The newest request outranks what was decided before (REQ-000000478). Earlier choices live in many
 # places a long task rereads (design docs, house settings, memories, requirement rows, tests pinning a
-# look) and each reads as a rule, so the shared section states the order and a UserPromptSubmit hook
-# repeats it with every prompt.
+# look) and each reads as a rule, so the shared section states the order.
 NEWEST_REQUEST_WINS = (
-    "The user's newest request outranks what was decided before. Design docs, house settings in instruction\n"
-    "files, Claude's memories, requirement rows and tests that pin a look record earlier choices, often\n"
-    "simplifications made for that stage; none is a reason to do less than, or other than, what the user\n"
-    "now asks. When one conflicts, follow the request and change the old item in the same work (edit the doc,\n"
-    "supersede or remove the requirement, update the test, rewrite the memory), and say what you changed.\n"
-    "Read the request and the files it names in full. When it is unclear, ask; never settle it with an\n"
-    "earlier decision."
+    "The user's newest request outranks earlier decisions (design docs, instruction files, memories,\n"
+    "requirement rows, tests that pin a look): follow it, change the old item in the same work and\n"
+    "say what you changed. Read the request and the files it names in full; when it is unclear, ask."
 )
-
-_REMINDER_SOURCE = r'''#!/usr/bin/env python3
-"""UserPromptSubmit hook: adds little-workshop's precedence rule to the context of every prompt, so it
-holds through a long task and after compaction, not only at session start.
-
-Generated by little-workshop (registry/claude_templates.py): change the generator, not this copy."""
-
-import json
-import sys
-
-RULE = @@RULE@@
-
-if __name__ == "__main__":
-    try:
-        json.load(sys.stdin)
-    except ValueError:
-        pass
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                             "additionalContext": "little-workshop: " + RULE}}))
-'''
-
-
-def newest_request_reminder_py() -> str:
-    return _REMINDER_SOURCE.replace("@@RULE@@", repr(NEWEST_REQUEST_WINS.replace("\n", " ")))
-
 
 # The path-scoped rule on the instructions themselves (REQ pending): where an instruction belongs,
 # what checks them and what little-workshop generates. It loads when Claude reads an instruction file.
@@ -1198,7 +1235,9 @@ Where an instruction lives decides when it loads, so put each one where it is ne
 - A procedure, above all one with a script, is a skill: `.claude/skills/<name>/SKILL.md`, whose `description`
   says when to use it, with its scripts under `scripts/`. It loads when the task calls for it.
 - A rule that must hold every time is a hook (`.claude/hooks/`, registered in `.claude/settings.json`) or a
-  little-workshop policy (the commit hook and the gates run them), not a sentence: a sentence is advice.
+  little-workshop policy (the gates run them), not a sentence: a sentence is advice.
+- A rule learned in a session (a correction, claude-reflect's "learned rules") is a bullet in
+  `{LEARNED_RULES_PATH}`: the project's own rule file, without `paths`, so it loads in every session.
 
 When changing them, update or delete an existing line before adding one, and add only what the code does not
 show (commands, pitfalls, reasons, conventions that differ from the defaults), checked against the repository.
@@ -1210,9 +1249,11 @@ little-workshop generates `.claude/little-workshop.md`, this rule, the `policy-p
 `workshop-lifecycle` skills, `.claude/hooks/lws_scope_guard.py` and the permission table and guard hook in
 `.claude/settings.json` (entries the project adds beside them are kept). Change them in little-workshop's
 `src/registry/claude_templates.py` and rewrite them with its `tools/sync_claude_files.py`; the guard refuses hand
-edits. Never add a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`: Claude Code then stops reading
-`AGENTS.md`.
-"""
+edits, except between `{PROJECT_SECTION_START}` and `{PROJECT_SECTION_END}` in a generated Markdown file: that part is
+the project's and the sync keeps it. The project's own rules, skills and agents are never touched. Never add a
+`CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`: Claude Code then stops reading `AGENTS.md`.
+
+{PROJECT_SECTION}"""
 
 
 # The briefing section every project shares (REQ-000000294, REQ-000000305), imported by the
@@ -1235,81 +1276,58 @@ service, a `.bat`) can reach little-workshop too; little-workshop itself stays i
 """
 
 
-def shared_briefing_md(name: str, *, platform: bool = False, windows: bool = False) -> str:
-    """The text of `.claude/little-workshop.md`; `windows` adds how Windows code reaches little-workshop."""
+def shared_briefing_md(name: str, *, platform: bool = False, windows: bool = False, governance: str = "light") -> str:
+    """The text of `.claude/little-workshop.md`; `windows` adds how Windows code reaches little-workshop, `governance`
+    `full` the requirement work (REQ-000000496)."""
     project = _checked_id(name)
-    scope = (
-        "As little-workshop's own project, this session also administers little-workshop: it authors, activates\n"
-        "and configures policies and redeploys the pillars; registering projects belongs in `little-projects`."
-        if platform else
-        "Work on another project, policy authoring and project registration belong in a session started from\n"
-        "`little-projects`."
+    scope = ("This session also administers little-workshop (policies, pillar redeploys)." if platform
+             else "Other projects belong in a session started from `little-projects`.")
+    requirements = (
+        "\nGovernance `full`: behaviour changes ship with tests under `# --- REQ-nnnnnnnnn: <title> ---` sections and\n"
+        "their requirements created or superseded; cite the ids in commit messages.\n"
+        if governance == "full" else ""
     )
     return f"""## little-workshop
 
-This project is registered in little-workshop as `{project}`, which runs its branches, releases, deploys and
-publishes and checks its policies at each step. Use the `little-workshop` MCP tools (`workshop_<pillar>_*`) or
-`lws`, naming the project every time (`project_id` `{project}`, `--project-id {project}`); the
-`workshop-lifecycle` skill has the routes and the steps before a finish.
-{scope}
-
+little-workshop runs the branches, releases, deploys and publishes of `{project}`, checking its policies at
+each: use the `workshop_*` MCP tools (`project_id` `{project}`) or `lws --project-id {project}`
+(routes: the `workshop-lifecycle` skill). {scope}
+{requirements}
 {NEWEST_REQUEST_WINS}
-
-Image generation: little-workshop renders pictures on this machine's ComfyUI. Generate only when the user asked
-for images, or after asking the user and getting a yes; never on your own initiative. Choose the model for the
-picture with `workshop_generation_models` (purpose, licence, prompting, LoRAs; pass a purpose for a
-recommendation). `workshop_generation_submit` queues a set of prompts (batching, restarts and re-rendering grey
-outputs are its job) and asks for permission;
-`workshop_generation_wait` waits for the request, and `workshop_generation_download` writes the pictures into a
-folder of this project, checking every SHA-256. A recipe is a saved ComfyUI node setup a prompt can render instead
-of a model (`workshop_generation_recipes`; submit with `recipe`). PBR textures take two steps: `seamless-texture`
-renders tileable textures from the prompt; after choosing one, `pbr-maps` with the picture as `source` gives its
-albedo, normal, height, occlusion, roughness and metallic maps. `workshop_generation_picture_setup` shows the nodes
-a picture was rendered with. In an agent task it works only when the user allowed it for that
-task; otherwise say in the report which pictures you would generate. Resuming a paused queue and deleting
-little-workshop's copies are the user's decisions.
-The GPU is shared (ComfyUI, the Unity Editor, Blender, the desktop): before GPU work, read
-`workshop_generation_gpu` (usage level, who uses it, when the queue is idle) and decide whether to go ahead, wait
-or do other work first. It informs; nothing is locked.
 {windows_briefing_md(project) if windows else ""}
-These are checked, not remembered. When one refuses something, its message says what to do instead:
+Checked, and each refusal says what to do instead: `.githooks/commit-msg` refuses a secret (`VERSION` is
+written by the finish); a finish, release, deploy or publish holds a failing policy in `pending_confirmation`
+(run the `policy-preflight` skill first, report a hold); the guard `lws_scope_guard.py` refuses raw git, systemd
+and publishing commands, other projects, edits of generated files and any `CLAUDE.md` (a learned rule goes in
+`{LEARNED_RULES_PATH}`); human decisions prompt.
 
-- Every commit: `.githooks/pre-commit` writes `VERSION` on `feature/` and `improvement/` branches, and
-  `.githooks/commit-msg` runs the policies gating `commit` (`VERSION` raised and well-formed,
-  no committed secrets, no test left citing a retired requirement) and refuses a commit that breaks one.
-- A branch finish, release, deploy or publish: little-workshop runs the policies gating it and holds a failing
-  action in `pending_confirmation`. Run the `policy-preflight` skill first, and report a held action rather
-  than working around it.
-- This session: `.claude/hooks/lws_scope_guard.py` refuses the raw git, systemd and publishing commands that
-  would skip those checks, calls that name another project, and hand edits of what little-workshop generates
-  (`VERSION`, `.githooks/`, its `.claude/` files) or of a `CLAUDE.md`.
-- Decisions that stand in for a human (confirming a held action, finishing or skipping an agent task,
-  scheduling) always prompt.
-"""
+{PROJECT_SECTION}"""
 
 
 def claude_files(project_id: str, template: str = "python", *, platform: bool = False,
                  extra_allow: tuple[str, ...] = (), extra_ask: tuple[str, ...] = (),
                  extra_hooks: tuple[dict, ...] = (), plugins: tuple[str, ...] = (),
-                 windows: bool = False) -> dict[str, str]:
+                 windows: bool = False, governance: str = "light") -> dict[str, str]:
     """Path (relative to the project root) -> text of every `.claude/` file little-workshop
     generates: the settings, the guard, the shared briefing section, the instructions rule and the
     two skills. The `AGENTS.md` is separate (`agents_md`): a registered project keeps its own and
     imports the shared section from it."""
-    return {
+    files = {
         SETTINGS_PATH: settings_json(project_id, template, platform=platform, extra_allow=extra_allow,
-                                     extra_ask=extra_ask, extra_hooks=extra_hooks, plugins=plugins),
+                                     extra_ask=extra_ask, extra_hooks=extra_hooks, plugins=plugins, windows=windows),
         GUARD_PATH: scope_guard_py(),
-        SHARED_BRIEFING_PATH: shared_briefing_md(project_id, platform=platform, windows=windows),
+        SHARED_BRIEFING_PATH: shared_briefing_md(project_id, platform=platform, windows=windows, governance=governance),
         INSTRUCTIONS_RULE_PATH: instructions_rule_md(),
-        LIFECYCLE_SKILL_PATH: lifecycle_skill_md(project_id, platform=platform),
+        LIFECYCLE_SKILL_PATH: lifecycle_skill_md(project_id, platform=platform, governance=governance),
         PREFLIGHT_SKILL_PATH: preflight_skill_md(),
         PREFLIGHT_SCRIPT_PATH: preflight_py(),
         POLICIES_SKILL_PATH: policies_skill_md(project_id),
         POLICIES_SCRIPT_PATH: policies_digest_py(),
         TEST_FILTER_PATH: test_output_filter_py(),
-        REMINDER_PATH: newest_request_reminder_py(),
     }
+    if windows:
+        files[HOOK_RUNNER_PATH] = hook_runner_sh()
+    return files
 
 
 # Kept out of Claude's context (Claude Code strips block-level HTML comments), for whoever edits the file.
@@ -1321,8 +1339,12 @@ that must hold every time in a hook or a little-workshop policy, not in a senten
 section little-workshop generates for every project. -->"""
 
 
-def agents_md(name: str) -> str:
+def agents_md(name: str, governance: str = "light") -> str:
     """`.claude/AGENTS.md` for the python layout (REQ-000000294); the unity layout has its own."""
+    working = (
+        "\n## Working here\n\n- Behaviour changes ship with tests tagged with the requirement ids they cover.\n"
+        if governance == "full" else ""
+    )
     return f"""# {name}
 
 {BRIEFING_NOTE}
@@ -1334,11 +1356,6 @@ code.
 
 - Tests: `python3 -m pytest tests/unit` (the Definition-of-Done suite: network-free, never skipping).
 - Build every artifact: `bazel build //:all`; install the project: `bazel run //:install`.
-
-## Working here
-
-- Behaviour changes ship with tests tagged with the requirement ids they cover, and a commit that changes
-  `src/` cites them (`REQ-nnnnnnnnn`) or `REQ-NONE`.
-
+{working}
 {SHARED_BRIEFING_IMPORT}
 """

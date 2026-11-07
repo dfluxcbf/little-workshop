@@ -142,8 +142,9 @@ def _version_at(repo: Path, ref: str) -> GitflowVersion:
 def patch_bumps(repo: Path, integration_ref: str, production_ref: str, released: bool) -> tuple[int, str]:
     """How many patch bumps the integration branch carries since the last release.
 
-    A release leaves production at X.(Y+1).0 and starts the integration branch's
-    next patch line at X.(Y+1).1 (see `cmd_release_finish`); every finished
+    A release leaves production at the released X.Y.Z and starts the integration
+    branch's next patch line at X.Y.(Z+1) (see `cmd_release_finish`; releases
+    before 2026-11-07 left production at X.(Y+1).0, the same rule); every finished
     feature/improvement bumps the patch after that. So the count is the
     integration patch minus the patch its line started at: production's patch
     plus one after a release, production's own patch before any release. A

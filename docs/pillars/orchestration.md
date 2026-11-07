@@ -134,12 +134,12 @@ that pillar's existing Job type.
   own local time; little-workshop runs on one household's machine, not
   across timezones, so there's no per-task timezone field to get wrong.
 - **A settled policy-gated Job frees its queue** (2026-09-24): a Job in
-  `pending_confirmation` holds its `queue_key` like a running one. When the
-  confirmation window times out, the queue is pumped right away (before,
+  `pending_confirmation` holds its `queue_key` like a running one. When it
+  is settled (confirmed, cancelled, superseded or, if configured, timed out), the queue is pumped right away (before,
   a Job queued behind it waited, every dependency green, for the next
   unrelated Job to arrive). `stop` on a `pending_confirmation` Job now
   declines it (`cancelled`, dependents failed) instead of answering "not
-  running" and leaving it to hold the queue for the full 10 minutes.
+  running" and leaving it to hold the queue.
   REQ-000000268.
 - **A Job that has to wait is answered at once** (2026-09-24): `POST
   /v1/jobs` used to pump the queue inline and answer only once the new Job
@@ -243,6 +243,10 @@ summary (`total`, `done`, `current`, `attention`).
     process never finished, one with no `running` run row, which an accepted Job has; whether its pillar
     did it is unknown, so it is not run again. What depends on it fails too, and one incident
     (`InterruptedDispatch`) lists them (REQ-000000403). An accepted Job is left to its pillar.
+    The exception is an idempotent type (`dispatch.IDEMPOTENT_JOB_TYPES`: `policy.check_project`,
+    `policy.check_all`, `requirements.analyze_conflicts`, `usage.analyze`, which only record a verdict or an
+    analysis): it is requeued with a run row saying so and runs again, so a gated Job waiting on its policy
+    check is not failed with it (REQ-000000525).
 
 
 ## Interfacing
@@ -276,8 +280,7 @@ what every *other* pillar was asked to do.
 
 ## Triggers (2026-10-04)
 
-M21 (REQ-000000343, REQ-000000344); the reasons are in
-[../claude_usage_optimization.md](../claude_usage_optimization.md) §13. A git hook runs code at fixed points in
+M21 (REQ-000000343, REQ-000000344). A git hook runs code at fixed points in
 git and a Claude Code hook at fixed points in a session; a **trigger** is the same idea one level up: when an
 event happens in little-workshop, create a Job. A schedule fires on time; a trigger fires on an event.
 
@@ -312,6 +315,12 @@ Trigger { id, name, on: { event, filter }, job_template, enabled }
 - **little-workshop's own triggers** (`triggers.DEFAULTS`, added by `install-defaults`, each once): after a
   branch finishes on little-workshop, `deployment.redeploy_changed_pillars` and a `registry.sync_claude_files`
   report (it does not write); after a Claude session ends, `usage.ingest_transcripts`.
+- **Redeploys wait for quiet** (`orchestration/queue.py`). `deployment.redeploy_changed_pillars` stays queued
+  while any other Job, a redeploy aside, is running or queued; a Job waiting behind one held in
+  `pending_confirmation` does not count, since a held Job waits for the user (REQ-000000476). Orchestration's
+  own `deployment.redeploy_pillar` comes last in the redeploy order and stays queued while any other Job is
+  being dispatched (claimed and not yet answered), so its restart never interrupts a dispatch such as a gated
+  finish (REQ-000000477).
 
 ## Plan pressure (2026-10-04)
 

@@ -137,6 +137,8 @@ def import_project(conn: sqlite3.Connection, data: dict, *, project_id: str) -> 
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             [(db.new_id(), project_id, new_ids[t.suite_id], t.test_name, t.verdict.value, t.detail, t.source, db._iso(t.executed_at))
              for t in results if t.suite_id in new_ids])
+        if requirements:
+            db.stamp_conflict_scan_due(conn, project_id)
 
     return {
         "project_id": project_id, "renumbered": renumbered,
@@ -156,4 +158,5 @@ def delete_project(conn: sqlite3.Connection, project_id: str) -> dict:
             table: conn.execute(f"DELETE FROM {table} WHERE project_id = ?", (project_id,)).rowcount
             for table in ("requirements", "test_suites", "use_cases", "milestones", "test_results", "requirement_conflicts")
         }
+        conn.execute("DELETE FROM conflict_scan_due WHERE project_id = ?", (project_id,))  # nothing left to analyze
     return removed

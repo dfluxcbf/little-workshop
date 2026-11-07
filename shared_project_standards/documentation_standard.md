@@ -1,7 +1,7 @@
 # Documentation standard
 
 Sources: `docs/governance_policy.md` ("The `docs/{design,architecture,milestones}.md` habit — kept in
-full"), `docs/open_questions.md`, `docs/requirements.md` conventions, `docs/pillars/README.md`, the
+full"), `docs/requirements.md` conventions, `docs/pillars/README.md`, the
 agent prompt `src/agent/templates/prompts/docs.md`.
 
 > The super-repo's `docs/policies/documentation_policy.md` and `docs/README.md` are referenced by
@@ -17,7 +17,7 @@ Every project has, under `docs/`:
 | `architecture.md` | How it is implemented | Components, interfaces, configuration and data locations, data model, feature mapping, technical decisions with reasons, dependencies, build, additional folders |
 | `milestones.md` | The work sequence | An overview table (ID, objective, depends on, status) then one section per milestone: objective, dependencies, status. Requirements are listed by id, not restated |
 | `requirements.md` or the Requirements pillar | The requirements | See [requirements_standard.md](requirements_standard.md) |
-| `open_questions.md` | The single tracker of unresolved questions | See below |
+| `open_questions.md` (optional) | The tracker of unresolved questions, while there are any | See below |
 | `requirements_policy.md`, `version_policy.md` | The project's own policy statement | Either point at the governing policy or state the rule in full, plus a "Project-specific notes" section |
 
 Larger projects add `docs/pillars/<name>.md` (one per component: description, purpose and goal,
@@ -49,6 +49,8 @@ Claude Code reads `AGENTS.md` only where there is none, and does not read `AGENT
 
 ## Open questions (`open_questions.md`)
 
+- A project with no open items keeps no tracker (little-workshop removed its own 2026-11-07; open work is in
+  its backlog).
 - Stable ids `OQ-NNN`, assigned in raised order, never reused, even when dropped.
 - Each item has: where it comes from; first designed; design goal; pillars affected; what is
   actually being asked; why it matters; possible interpretations; a **Your answer** field.

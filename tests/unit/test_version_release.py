@@ -64,6 +64,8 @@ def test_release_candidate_promote_unknown_rc_fails(tmp_path):
     assert result.success is False
 
 
+# --- REQ-000000489: production keeps the released version, dev moves to the next patch -----------
+
 def test_release_finish_merges_prod_and_backmerges_dev(tmp_path):
     repo = make_repo(tmp_path)
     _git(["checkout", "dev"], repo)
@@ -76,12 +78,13 @@ def test_release_finish_merges_prod_and_backmerges_dev(tmp_path):
 
     assert list_tags(repo, "v0.1.0") == ["v0.1.0"]
 
+    assert result.data["production_version"] == "0.1.0" and result.data["next_version"] == "0.1.1"
     _git(["checkout", "master"], repo)
-    assert (repo / "VERSION").read_text().strip() == "0.2.0"
+    assert (repo / "VERSION").read_text().strip() == "0.1.0"
     assert (repo / "release_notes.md").exists()
 
     _git(["checkout", "dev"], repo)
-    assert (repo / "VERSION").read_text().strip() == "0.2.1"
+    assert (repo / "VERSION").read_text().strip() == "0.1.1"
     assert (repo / "release_notes.md").exists()
 
     branches = subprocess.run(["git", "branch"], cwd=repo, capture_output=True, text=True).stdout
@@ -147,9 +150,8 @@ def test_release_finish_conflict_supports_abort(tmp_path):
 
 
 def test_a_second_release_finishes_without_conflicts_even_with_version_hooks(tmp_path):
-    """The finish commits the minor bump (and what version_hooks write) on
-    production after the release merge; the back-merge must carry those to the
-    integration branch, or the next release conflicts on every one of them."""
+    """The back-merge carries production's release merge to the integration branch, or the next release
+    conflicts on VERSION and every file version_hooks write; production's files carry the released version."""
     import json
 
     repo = make_repo(tmp_path)
@@ -166,11 +168,11 @@ def test_a_second_release_finishes_without_conflicts_even_with_version_hooks(tmp
     _git(["checkout", "dev"], repo)
     _git(["merge", "--ff-only", "master"], repo)
 
-    for expected in ("0.1.0", "0.2.1"):
+    for expected in ("0.1.0", "0.1.1"):
         cmd_release_start(repo)
         result = cmd_release_finish(repo)
         assert result.success, result.message
         assert result.data["stable_version"] == expected
-    assert list_tags(repo, "v*") == ["v0.1.0", "v0.2.1"]
+    assert list_tags(repo, "v*") == ["v0.1.0", "v0.1.1"]
     _git(["checkout", "master"], repo)
-    assert (repo / "pyproject.toml").read_text() == 'version = "0.3.0"\n'
+    assert (repo / "pyproject.toml").read_text() == 'version = "0.1.1"\n'

@@ -28,11 +28,7 @@ MCP_READ_ONLY = (
     "workshop_agent_ci_status", "workshop_agent_session_status",
     "workshop_schedule_list", "workshop_schedule_status", "workshop_schedule_queue_get",
     "workshop_usage_summary", "workshop_usage_findings", "workshop_usage_candidates", "workshop_usage_plugin_proposals",
-    "workshop_trigger_list",
-    "workshop_generation_status", "workshop_generation_list", "workshop_generation_queue", "workshop_generation_wait",
-    "workshop_generation_gpu",
-    "workshop_generation_models",
-    "workshop_generation_recipes", "workshop_generation_picture_setup",
+    "workshop_trigger_list", "workshop_toolkit_sources", "workshop_toolkit_items", "workshop_toolkit_status",
 )
 
 # Routine, reversible day-to-day work on the project (each takes the project's `project_id`).
@@ -46,8 +42,7 @@ MCP_ROUTINE = (
     "workshop_requirements_milestone_create", "workshop_requirements_link_suite",
     "workshop_requirements_unlink_suite", "workshop_requirements_result_record",
     "workshop_requirements_import_junit", "workshop_requirements_run_tests", "workshop_requirements_sync_markers",
-    "workshop_build_run", "workshop_project_backlog_add",
-   "workshop_generation_cancel", "workshop_generation_download",
+    "workshop_build_run", "workshop_project_backlog_add", "workshop_project_backlog_update",
 )
 
 # Policy-gated lifecycle actions on the project. A failing policy holds them in
@@ -68,16 +63,15 @@ MCP_ASK = (
     "workshop_agent_run_task", "workshop_agent_finish_task", "workshop_agent_skip_task",
     "workshop_agent_ci_check", "workshop_agent_session_start", "workshop_agent_session_stop",
     "workshop_project_bootstrap", "workshop_project_import", "workshop_project_connect_github",
-    "workshop_project_configure_assets", "workshop_project_remove", "workshop_project_backlog_delete",
+    "workshop_project_configure_assets", "workshop_project_set_governance", "workshop_project_remove", "workshop_project_backlog_delete",
     "workshop_version_init", "workshop_version_config_add_hook", "workshop_version_config_remove_hook",
     "workshop_deployment_set_manifest", "workshop_deployment_seed_confirmation",
     "workshop_requirements_publish", "workshop_requirements_delete", "workshop_requirements_suite_delete",
     "workshop_job_stop", "workshop_job_answer", "workshop_schedule_add", "workshop_schedule_remove", "workshop_schedule_trigger",
     "workshop_schedule_cancel", "workshop_schedule_postpone", "workshop_schedule_queue_set",
     "workshop_usage_configure_claude", "workshop_trigger_add", "workshop_trigger_remove",
-    "workshop_generation_resume", "workshop_generation_delete_files",
-    "workshop_generation_submit",
-    "workshop_generation_recipe_save",
+    "workshop_toolkit_add_source", "workshop_toolkit_install", "workshop_toolkit_remove", "workshop_toolkit_update",
+    "workshop_usage_draft_skill",
 )
 
 # Administration of little-workshop itself (policies, its own pillars): they name no project, so

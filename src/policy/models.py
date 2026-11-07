@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -91,6 +92,12 @@ class Policy(BaseModel):
     enabled: bool = True
     gate_points: list[GatePoint] = Field(default_factory=list)
     projects: list[PolicyProject] = Field(default_factory=list)
+    # The repository paths the check reads (e.g. ["src", "tests"]). With them, a verdict is reused
+    # while the committed content of those paths is unchanged; without them, while HEAD is.
+    inputs: list[str] = Field(default_factory=list)
+    # The project governance the policy needs (REQ-000000496): `full` skips it, not applicable, on a `light`
+    # project; None applies it to every project.
+    requires: Literal["full"] | None = None
     created_at: datetime = Field(default_factory=_now)
     amended_at: datetime = Field(default_factory=_now)
 
@@ -141,8 +148,8 @@ class PolicyCheckResult(BaseModel):
     detail: str = ""
     job_id: str | None = None
     checked_at: datetime = Field(default_factory=_now)
-    # Fingerprint of what was actually checked (project HEAD commit SHA plus
-    # the policy's own amended_at) — lets policy.check_project recognize an
+    # Fingerprint of what was actually checked (the git tree of the policy's
+    # `inputs`, or the project's HEAD commit, plus the policy's own amended_at) — lets policy.check_project recognize an
     # unchanged (project, policy) pair and skip re-running the sandbox
     # (docs/pillars/policy_compliance.md's "once per change" rule).
     checked_state: str = ""

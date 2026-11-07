@@ -76,10 +76,10 @@ are the current state of every pillar.
   are not built.
 - **Workbench additions (2026-09-21, Control merged into Dashboard 2026-09-22,
   toolbar/task/job/policy workflow overhauled 2026-09-23)**:
-  - **Navigation** is grouped (regrouped 2026-10-03; Backlog and Schedule added 2026-10-04; Generation split
-    from Actions 2026-10-25, REQ-000000462). The bottom toolbar has Dashboard (standalone), Documentation, Actions,
-    Generation, Policies and System; a group button reveals its pages (Documentation: Review, Backlog, Report, Conflicts (2026-10-30);
-    Actions: Task list, New task, Jobs, New job, Schedule, Triggers; Generation: Images, New images, Recipes;
+  - **Navigation** is grouped (regrouped 2026-10-03; Backlog and Schedule added 2026-10-04). The bottom toolbar
+    has Dashboard (standalone), Documentation, Actions, Policies and System; a group button reveals its pages
+    (Documentation: Review, Backlog, Report, Conflicts (2026-10-30);
+    Actions: Task list, New task, Jobs, New job, Schedule, Triggers;
     Policies: Policies, New policy; System: Pillars, Incidents, Statistics, Claude usage, Settings) with Back returning to the main row, and the
     group of the current page stays open. On a wide screen the top bar holds the groups and a
     sub-navigation row lists the active group's pages. Review is the documentation review (`/docs`).
@@ -164,6 +164,9 @@ are the current state of every pillar.
   - **Settings** (`/settings`, new 2026-09-23, absorbed Needs attention): the attention feed that
     used to be its own page (`/attention`) now lives under Settings; `/attention.json` is
     unchanged as a JSON endpoint and the banner's link now points to `/settings`.
+    Each project card shows its governance (`light` or `full`) and a **Make full / Make light** button
+    (`POST /projects/{name}/governance`, the `project.set_governance` Job; REQ-000000495). The Report shows,
+    per requirement, whether its verdict came from its own tests or its suites' whole runs (REQ-000000500).
   - **Data catalog** was removed (2026-09-23) — it duplicated what each owning pillar's own Report/
     Pillars/Secrets panels already show live.
 - **Docs — documentation review** (`/docs`, `/docs/{project}`, `/docs/{project}/view?path=`; 2026-09-28):
@@ -356,6 +359,16 @@ are the current state of every pillar.
   pillar behind this panel is down" is simply the real answer to show,
   rendered as a visible banner, never a 500).
 
+## Claude jobs in the catalog (2026-11-07)
+
+- **Audit docs against code** (REQ-000000522): an `agent.query` Job with `read_checkout` (Read, Grep and Glob in
+  the project's checkout, nothing changed; up to 1800 s) whose prompt (`job_catalog.DOCS_AUDIT_PROMPT`) asks for
+  each documentation statement the code contradicts, with document and line, what the code does and a fix. On
+  demand only. The Job's page shows Claude's answer for any `agent.query` Job in a card of its own.
+- **Check requirement conflicts (semantic)** (REQ-000000523): `requirements.semantic_conflicts`; its page lists
+  the suspected pairs with reasons and a **Record as a conflict** button per pair
+  (`POST /jobs/{id}/record-conflict/{n}`, then the conflict's page). The peek shows its Claude session.
+
 ## Job page: the checklist (2026-10-03)
 
 REQ-000000312.
@@ -403,6 +416,11 @@ path) says which page to return to.
   `docs/architecture.md`'s PI section already treats "never a network
   port" as an absolute rule with browser-facing exposure handled
   entirely outside the pillar process.
+- **Code layout**: `dashboard/app.py`'s `build_app` sets up the app (templates, static files, `_render`, the
+  live event stream) and includes one `APIRouter` per area from `dashboard/routes/` (`routes.AREAS`, in the
+  order overlapping paths must be matched). Each area's `build_router(ctx)` gets the shared state (`paths`,
+  `templates`, `render`, `starting`, `background`) and leaves on `ctx` the helpers another area calls; the
+  module-level helpers stay in `app.py`.
 
 ## Data model
 
@@ -437,7 +455,8 @@ Everything else on a page is a live read of the pillar that owns it.
 The New task form (also the scheduled and retry paths) has an **Include shared project standards** checkbox,
 checked by default (REQ-000000288). A hidden `include_standards=0` input precedes the checkbox so an unchecked box
 still posts; a request that omits the field counts as included. The value is stored as the boolean
-`include_standards` in the `agent.run_task` params, and a retry reuses the original run's value.
+`include_standards` in the `agent.run_task` params, and a retry reuses the original run's value. Checked, it allows the copy; the run still gets it only for a docs task or one that mentions standards
+(REQ-000000479).
 
 ## Deciding policy-gated jobs; tagged attention cards (2026-10-01)
 
@@ -555,8 +574,7 @@ Claude is working on it). An entry's page (`/backlog/{project}/{entry}`) shows i
   entry**: it saves both fields, then starts `registry.backlog_refine`, which has Claude write a new
   refined entry from the primary entry, the current refined entry and the notes, and replaces it;
 - **Task prompt**, with a copy icon at its top right corner and **Generate task prompt**
-  (`registry.backlog_task_prompt`, from the refined entry; it ends with the instruction to delete
-  the entry once the work is done). Disabled until the entry is refined.
+  (`registry.backlog_task_prompt`, from the refined entry). Disabled until the entry is refined.
 
 Both have Claude read the project's checkout, which it cannot change (since 2026-10-05,
 `docs/pillars/registry_portfolio.md`, "Backlog"); the task prompt's card says so.
@@ -567,12 +585,14 @@ Portfolio, REQ-000000385), so the backlog pages read no Jobs; a mark older than 
 630 s Orchestration waits for either Job; ten minutes until 2026-10-05, when Claude only had the entry's
 text) is shown as an attempt that did not finish.
 **Launch task** opens New task (`/tasks/new?backlog=<id>`) with the entry's title and its task prompt
-in the Task box, the text written for the task and the only one that ends by having it delete the entry;
-while there is no task prompt yet, the refined entry, and while the entry is not refined, the primary
-entry, the form saying which (until 2026-10-05 it gave the refined entry, so a launched task never
-deleted its entry). **Delete from backlog** asks first, then
-deletes the entry and everything it holds. The pages follow the `backlog` topic, so an entry refined,
-prompted or deleted elsewhere (`lws`, an MCP tool, Claude at the end of a task) shows at once, and a
+in the Task box; while there is no task prompt yet, the refined entry, and while the entry is not refined,
+the primary entry, the form saying which. Starting it records the task's Job on the entry; the entry stays
+open. **Status and priority** (REQ-000000524): the entry's page sets both; the project's page shows one status
+at a time (`?status=open` by default, `done`, `dropped`, `all`), highest priority first, then the most
+recently updated; the Backlog index counts open entries. Once the run of the task last launched from an open
+entry succeeded (awaiting finish or finished, completion `done`), its page offers **Mark done**. **Delete from
+backlog** asks first, then deletes the entry and everything it holds. The pages follow the `backlog` topic, so
+an entry changed or deleted elsewhere (`lws`, an MCP tool) shows at once, and a
 deleted one says it is gone. The store is Registry & Portfolio's (`docs/pillars/registry_portfolio.md`,
 "Backlog").
 
@@ -834,94 +854,3 @@ $token = Get-Content .little-workshop-token
 Invoke-RestMethod -Method Post http://127.0.0.1:8790/api/v1/tools/workshop_version_status `
   -Headers @{Authorization = "Bearer $token"} -ContentType application/json -Body '{"kind": "feature"}'
 ```
-
-## Images: the generation queue (2026-10-23)
-
-`/generation` (Generation → Images) shows Image Generation's queue: tiles for its state (idle, rendering,
-paused), the open requests, the pictures waiting, the batch rendering and the batches ahead, then every request
-as a card with its status, progress and estimate, filtered by status. While the queue is paused, a card says
-why and holds the user's decision: **Resume the queue**, with "render the failed requests again" ticked by
-default. `/generation/<id>` shows one request: its estimate, its pictures (a thumbnail of each one rendered, opening the picture's own page, the
-status and error of the others), Cancel while it is open, and once it succeeded the `wget` command with a copy
-button and **Delete the copies**, which needs the box "wget exited 0 and every checksum printed OK" ticked.
-A GPU card shows the last GPU usage sample (level, busiest engine, memory, the top processes with ComfyUI
-marked, advice); the page never measures on load, its "Measure now" button does (docs/pillars/generation.md,
-"GPU usage"). The paused queue's attention card links to the failed request's page. The pages follow the live topic
-`generation` (the pause, the batch and the open requests, not the ticking seconds), which also refreshes the
-attention list. With the pillar off, the page says the Core manifest has to enable it.
-
-## Images: every request, and New images (2026-10-24)
-
-The Images page lists every request, newest first, 50 to a page with **Newer** and **Older** links, filtered by
-status and by project (a select of the registered projects; `?project=` also takes a removed one). Its **New
-images** button, and Generation → New images, open `/generation/new` (REQ-000000447): the project, a name, the prompts
-one per line, the model (the pillar's `/v1/models`: each with what it is for, a model not installed shown but not
-selectable, and a note with its licence, commercial use, speed, default size and prompting advice), a LoRA of that
-model (with its trigger words), width and height (multiples of 8, blank for the model's default) and pictures per
-prompt, and under "More settings" the negative prompt, steps and seed. The page shows the last GPU sample it holds
-(never measuring on load) with a link to measure. The form sends one request: every line a prompt with that count,
-the settings as the request's `defaults`. Queued, it opens the request's page; refused (an unknown or uninstalled
-model, a bad size, too many pictures) or with no prompt, it shows the form again as typed, with the reason. This is
-the user asking for pictures, so it needs no other confirmation (docs/pillars/generation.md, "Asking for pictures").
-A generation request is not a Job, so this form is not a `job_catalog.py` entry; its fields are typed all the same.
-
-## Images: one picture with its prompt and settings (2026-10-24)
-
-A picture on a request's page opens `/generation/<id>/pictures/<idx>` in the Dashboard (REQ-000000452), not the raw
-PNG: the picture large (fitted to the screen), its full prompt with a copy button and its negative prompt, every
-setting it was rendered with (model, LoRA file and strength, size, steps, CFG, sampler, scheduler, seed, and any
-other resolved setting such as the file label), its status, attempts, finish time and error, and its file (name,
-size, SHA-256, **Open the file** for the raw PNG). Previous and Next step through the request's pictures; the
-request's name leads back. A picture not rendered yet shows its placeholder and the same settings. On a phone the
-prompt and settings sit below the picture.
-
-
-## Images: recipes, a picture's nodes and ComfyUI (2026-10-24)
-
-The pages for docs/pillars/generation.md's "Recipes", "Node setup" and "Hand-over":
-
-- **ComfyUI card** on the Images page (REQ-000000455): **Open ComfyUI** lends ComfyUI to the user. The card then
-  follows the hand-over through the live topic `generation`: waiting for the batch, starting, then "yours" with
-  **Open ComfyUI ↗** (`comfy_public_url`, a new tab), when it comes back by itself, **Restart** and **Give back**.
-  While it is lent, the queue tile reads "Waiting for you".
-- **Recipes** (Generation → Recipes, `/generation/recipes`, REQ-000000453): every recipe as a card (title,
-  description, source or "missing files", node count, output roles). `/generation/recipes/<name>` shows what a
-  prompt fills (each slot with its value and node), the outputs, **Use with new prompts** (New images with the
-  recipe chosen), **Download workflow (API JSON)**, **Delete** for a saved or imported one, and its nodes.
-  `/generation/recipes/import` takes a pasted or uploaded Export (API) file in two steps: **Read the graph** shows
-  the suggested slots (a select of every literal input per slot) and outputs (keep or drop each SaveImage, name
-  its role); **Save the recipe** saves it, or shows the form again with the pillar's reason.
-- **New images** gains a **Recipe** select (none by default: a model's text-to-image). Choosing one hides the model
-  and LoRA, shows the recipe's description, files and slots, and sends `recipe` in the request's `defaults`.
-- **The picture page** (REQ-000000456) shows the recipe instead of the model and only the settings the picture
-  has, a **Maps** grid with every output by role when there are several, **Reuse this setup** (Save as recipe,
-  by name), and a **Nodes** card: every node of the graph it renders (title, class, values, links as
-  `← #node.output`, outputs and slots marked) with **Download workflow (API JSON)**.
-
-## Images: PBR maps from chosen pictures (2026-10-24)
-
-The second step of docs/pillars/generation.md's "Pictures as input" (REQ-000000460), shown while the generation
-pillar's `pbr-maps` recipe is not missing files (`MAPS_RECIPE` in `dashboard/app.py`):
-
-- **A request's page**: each done picture gets a **Make maps** tick, and **Make PBR maps for the chosen
-  pictures** posts them to `/generation/<id>/maps`. That submits one `pbr-maps` request in the pictures'
-  project, named "<request>: maps of #0, #2", one material per picture, and opens it. Pictures that are
-  themselves maps get no tick, nor do pictures whose copies were deleted.
-- **A picture's page**: a **Make PBR maps** card does the same for that one picture.
-- **A material's picture page**: **Made from** in its settings, the source's thumbnail linking back to it.
-- **New images** does not offer `pbr-maps` or any recipe taking a picture: those start from pictures, not prompts.
-
-## Images: the material sphere (2026-10-25)
-
-A done picture with albedo, normal, occlusion, roughness and metallic maps, its files still stored, gets a
-**Material** card on its page (REQ-000000461): the maps on a sphere in `<model-viewer>` (the vendored copy the
-Assets page uses), turned by dragging and zoomed by pinching or scrolling. A `pbr-maps` or `pbr-texture` picture
-has them; any picture missing one does not get the card.
-
-- The sphere is `GET /generation/material-sphere.glb`, a UV sphere built in memory by `dashboard/sphere.py`
-  (positions, normals, tangents, UVs repeating twice around the equator, so a square texture keeps its
-  proportions), with one material whose metallic and roughness factors are 1.
-- `static/material.js` puts the maps on it once it loads: albedo as the base colour, normal, and occlusion,
-  roughness and metallic packed on a canvas into the red, green and blue of one texture, the way glTF reads
-  them. Every texture repeats.
-- The height map has no glTF slot, so the surface stays smooth.

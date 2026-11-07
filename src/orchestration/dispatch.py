@@ -55,8 +55,8 @@ DECLARED_UNSTOPPABLE_JOB_TYPES: frozenset[str] = frozenset({
     "version.release",
 })
 
-# Per-Job-type dispatch timeout overrides — `docs/open_questions.md`'s
-# `OQ-14` (resolved 2026-09-17): the 20s default was never chosen with a
+# Per-Job-type dispatch timeout overrides — OQ-14
+# (resolved 2026-09-17): the 20s default was never chosen with a
 # real, slow Job type in mind, and a Job type whose real implementation
 # genuinely calls the Claude CLI (`agent.query`, itself real-network,
 # non-deterministic latency) can legitimately take longer than that. A
@@ -115,6 +115,8 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     # checkout (600s ceiling; the registry waits 620s for it).
     "registry.backlog_refine": 630.0,
     "registry.backlog_task_prompt": 630.0,
+    # Toolkit Jobs read a GitHub repository file by file (gh api) and may run `claude plugin install`.
+    **{f"registry.toolkit_{kind}": 900.0 for kind in ("add_source", "install", "remove", "update")},
     # 2026-10-05 finding, the OQ-14 class once more: a redeploy batch's Jobs are dispatched side by
     # side, but Deployment & Servers runs them one at a time under its lock, so the last one waits for
     # every redeploy before it (each a smoke check, a stop, a 20-try health probe and maybe a CLI
@@ -131,6 +133,12 @@ JOB_TYPE_TIMEOUTS: dict[str, float] = {
     # overhead under load rather than real handler work. A modest margin over the default, well short of
     # a real synchronous Job's ceiling.
     "agent.confirm_incident": 60.0,
+    # Phase 6 (2026-11-07): an import waits for its Claude-file sync Job (300s) and a branch_finish preflight
+    # (900s); a catalog query (the docs-drift audit) asks Claude for up to 1800s, the semantic conflict check
+    # for up to 900s.
+    "project.import": 1260.0,
+    "agent.query": 1830.0,
+    "requirements.semantic_conflicts": 930.0,
 }
 
 
@@ -172,6 +180,19 @@ _clock = time.monotonic
 INTERRUPTED_DISPATCH_REASON = (
     "interrupted: Orchestration restarted while dispatching this Job to the {pillar} pillar, "
     "so whether the pillar did it is unknown"
+)
+
+
+# Job types that are safe to run again when it is unknown whether their pillar did them (REQ-000000525): each
+# only computes and records a verdict or an analysis, so a second run records the same thing again. A dispatch
+# of one cut off by an Orchestration restart is requeued instead of failed, so a gated Job waiting on it
+# (a branch finish behind its policy check) is not failed with it.
+IDEMPOTENT_JOB_TYPES = frozenset({
+    "policy.check_project", "policy.check_all", "requirements.analyze_conflicts", "usage.analyze",
+})
+REQUEUED_AFTER_RESTART = (
+    "requeued: Orchestration restarted while dispatching this Job to the {pillar} pillar; it only records a verdict, "
+    "so it runs again"
 )
 
 
@@ -318,8 +339,9 @@ def settle_interrupted_dispatches(
     until its dispatch call returns; one its pillar accepted also has a `running` run row, kept until
     the pillar calls back. A `running` Job without that row was claimed by the previous process, which
     died before the pillar answered: only the 6-hour timeout would ever settle it, holding its
-    queue_key and what depends on it all that time. Fail each (whether its pillar did it is unknown,
-    so it is not run again), fail its dependants, and report them in one incident."""
+    queue_key and what depends on it all that time. An idempotent one (`IDEMPOTENT_JOB_TYPES`) is
+    requeued to run again; any other is failed (whether its pillar did it is unknown, so it is not run
+    again) with its dependants, and those are reported in one incident. Returns the failed Jobs."""
     now = now or datetime.now(timezone.utc)
     settled: list[Job] = []
     for job in list_jobs(conn, status=JobStatus.RUNNING):
@@ -327,6 +349,12 @@ def settle_interrupted_dispatches(
         if runs and runs[-1]["outcome"] == JobStatus.RUNNING.value:
             continue  # accepted: its pillar completes it, or the running-Job timeout does
         claimed_at = job.updated_at
+        if job.type in IDEMPOTENT_JOB_TYPES:
+            job.status = JobStatus.QUEUED
+            job.error = REQUEUED_AFTER_RESTART.format(pillar=job.target_pillar)
+            update_job(conn, job)
+            insert_job_run(conn, job.id, outcome=JobStatus.QUEUED.value, detail=job.error, started_at=claimed_at, finished_at=now)
+            continue
         job.status = JobStatus.FAILED
         job.error = INTERRUPTED_DISPATCH_REASON.format(pillar=job.target_pillar)
         update_job(conn, job)

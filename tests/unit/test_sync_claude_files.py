@@ -90,7 +90,7 @@ def test_the_project_id_and_template_are_read_from_the_checkout(tmp_path):
 def test_little_workshops_own_checkout_is_in_sync():
     tool = _tool()
     wanted = tool.wanted_files(REPO, "little-workshop", "python")
-    assert wanted == claude_templates.claude_files("little-workshop", "python", **claude_templates.OWN_SETTINGS)
+    assert wanted == claude_templates.claude_files("little-workshop", "python", governance="full", **claude_templates.OWN_SETTINGS)
     for rel, text in wanted.items():
         assert (REPO / rel).read_text() == text, rel
 
@@ -105,14 +105,64 @@ def test_a_retired_rule_is_dropped_not_kept_as_the_projects_own(tmp_path):
     assert "Bash(git merge *)" in deny and deny[-1] == "Read(./secrets/**)"
 
 
-# --- REQ-000000447: the reminder hook is generated, the project's own prompt hooks are kept ----
+# --- REQ-000000478: the retired reminder hook is removed, the project's own prompt hooks are kept ----
 
-def test_a_projects_own_prompt_hook_is_kept_beside_the_reminder_and_the_reminder_is_not_doubled(tmp_path):
+REMINDER_ENTRY = {"hooks": [{"type": "command", "command": f'python3 "${{CLAUDE_PROJECT_DIR}}"/{claude_templates.REMINDER_PATH}',
+                             "timeout": 10}]}
+
+
+def test_the_retired_reminder_and_its_entry_are_removed_and_a_projects_own_prompt_hook_is_kept(tmp_path, capsys):
     current = claude_templates.settings("little-widget", "python")
     own_hook = {"hooks": [{"type": "command", "command": "python3 .claude/hooks/own_prompt_hook.py"}]}
-    current["hooks"]["UserPromptSubmit"].append(own_hook)
+    current["hooks"]["UserPromptSubmit"] = [REMINDER_ENTRY, own_hook]
+    root = _checkout(tmp_path, settings=current)
+    (root / claude_templates.REMINDER_PATH).parent.mkdir(parents=True)
+    (root / claude_templates.REMINDER_PATH).write_text("old\n")
+    _tool().main(["--checkout", str(root), "--write"])
+    assert f"removed {claude_templates.REMINDER_PATH}" in capsys.readouterr().out
+    assert not (root / claude_templates.REMINDER_PATH).exists()
+    merged = json.loads((root / ".claude" / "settings.json").read_text())
+    assert merged["hooks"]["UserPromptSubmit"] == [own_hook]
+
+
+def test_an_event_left_with_only_the_reminder_is_dropped(tmp_path):
+    current = claude_templates.settings("little-widget", "python")
+    current["hooks"]["UserPromptSubmit"] = [REMINDER_ENTRY]
     root = _checkout(tmp_path, settings=current)
     _tool().main(["--checkout", str(root), "--write"])
-    merged = json.loads((root / ".claude" / "settings.json").read_text())
-    generated = claude_templates.settings("little-widget", "python")
-    assert merged["hooks"]["UserPromptSubmit"] == generated["hooks"]["UserPromptSubmit"] + [own_hook]
+    assert "UserPromptSubmit" not in json.loads((root / ".claude" / "settings.json").read_text())["hooks"]
+
+
+# --- REQ-000000497: generated Claude files keep a project-owned section -----------------------
+
+def test_sync_keeps_the_project_section_and_never_removes_the_projects_own_files(tmp_path):
+    root = _checkout(tmp_path)
+    tool = _tool()
+    tool.sync(root, "little-widget", None, True)
+    briefing = root / claude_templates.SHARED_BRIEFING_PATH
+    briefing.write_text("stale top\n" + briefing.read_text().replace(
+        "<!-- /project -->", "- Our own rule.\n<!-- /project -->"))
+    own = {rel: f"own {rel}\n" for rel in (claude_templates.LEARNED_RULES_PATH, ".claude/rules/ui.md",
+                                           ".claude/skills/ours/SKILL.md", ".claude/agents/reviewer.md")}
+    for rel, text in own.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+
+    changed = tool.sync(root, "little-widget", None, True)
+
+    assert changed == [f"updated {claude_templates.SHARED_BRIEFING_PATH}"]
+    text = briefing.read_text()
+    assert not text.startswith("stale top") and "- Our own rule.\n<!-- /project -->" in text
+    assert all((root / rel).read_text() == body for rel, body in own.items())
+    assert tool.sync(root, "little-widget", None, True) == []
+
+
+# --- REQ-000000496: requirement work is asked only of full-governance projects -------------
+
+def test_sync_writes_the_governance_it_is_given(tmp_path):
+    root = _checkout(tmp_path)
+    tool = _tool()
+    tool.sync(root, "little-widget", None, True)
+    assert "Governance `full`" not in (root / claude_templates.SHARED_BRIEFING_PATH).read_text()
+    assert tool.sync(root, "little-widget", None, True, "full")
+    assert "Governance `full`" in (root / claude_templates.SHARED_BRIEFING_PATH).read_text()

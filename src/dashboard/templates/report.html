@@ -50,6 +50,8 @@
         <span class="report-title">{{ r.title }}</span>
       </summary>
       {% if r.description %}<p class="report-desc">{{ r.description }}</p>{% endif %}
+      {% if r.basis == 'own tests' %}<p class="muted">Judged on its own {{ r.own_tests.total }} test{{ '' if r.own_tests.total == 1 else 's' }}{% if r.own_tests.failing %}; failing: {% for t in r.own_tests.failing %}<code>{{ t }}</code>{{ ', ' if not loop.last }}{% endfor %}{% endif %}.</p>
+      {% elif r.basis == 'suite' %}<p class="muted">No test of its own was found in its suites' latest runs: judged on the whole runs.</p>{% endif %}
       {% if r.verdict == 'draft' %}
       <form class="report-approve" method="post" action="/report/{{ project }}/approve">
         <input type="hidden" name="requirement_id" value="{{ r.id }}">

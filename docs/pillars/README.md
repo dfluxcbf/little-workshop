@@ -1,27 +1,19 @@
 # Pillar specifications
 
-One document per pillar — description, purpose & goal, responsibilities,
-and interfacing (which other pillars it calls, which call it, and why).
-See `docs/architecture.md` for the Components table these are grounded
-in, and `docs/milestones.md` for what's actually been built so far.
+One document per pillar: description, purpose and goal, responsibilities, and interfacing (which other pillars
+it calls, which call it, and why). `docs/architecture.md` has the Components table they are grounded in.
 
-Core and `lws` are deliberately not here: `docs/architecture.md` is
-explicit that Core is not a pillar (the bootstrap/supervision layer every
-pillar runs under), and `lws` is one of three thin, stateless proxies
-(alongside Dashboard and the MCP Server) rather than a pillar in its own
-right.
+Core and `lws` are not here: Core is the bootstrap and supervision layer every pillar runs under, and `lws` is
+one of three thin, stateless proxies (with the Dashboard and the MCP Server).
 
-| Pillar | Status |
-|---|---|
-| [Orchestration](orchestration.md) | Built (M1, M9) |
-| [Policy & Compliance](policy_compliance.md) (+ [catalog](policy_catalog.md)) | Built (M12); catalog population in progress (M13, 1/59 entries) |
-| [Registry & Portfolio](registry_portfolio.md) | Built (M2, M8) |
-| [Requirements & Quality](requirements_quality.md) | Built (M10) |
-| [Version Control & Release](version_control_release.md) | Built (M3) |
-| [Build & Packages](build_packages.md) | Built (M11) |
-| [Deployment & Servers](deployment_servers.md) | Built (M4, M5) |
-| [Agentic Development](agentic_development.md) | Built (M6) — fully specified |
-| [Dashboard](dashboard.md) | Not yet built (M14) |
-| [MCP Server](mcp_server.md) | Built (M7) |
-| [Usage & Efficiency](usage.md) | Built (M19–M22): collection, findings, automation mining, token-aware operation; not yet deployed on this machine |
-| [Image Generation](generation.md) | Built (M23): a ComfyUI queue with grey-output recovery; optional, not yet in this machine's manifest |
+- [Orchestration](orchestration.md)
+- [Policy & Compliance](policy_compliance.md) and its [catalog](policy_catalog.md)
+- [Registry & Portfolio](registry_portfolio.md)
+- [Requirements & Quality](requirements_quality.md)
+- [Version Control & Release](version_control_release.md)
+- [Build & Packages](build_packages.md)
+- [Deployment & Servers](deployment_servers.md)
+- [Agentic Development](agentic_development.md)
+- [Dashboard](dashboard.md)
+- [MCP Server](mcp_server.md)
+- [Usage & Efficiency](usage.md)

@@ -331,7 +331,7 @@ def test_new_task_form_and_submit(test_client, monkeypatch):
         follow_redirects=False,
     )
     assert response.status_code == 303 and response.headers["location"].startswith("/tasks")
-    assert captured["type"] == "agent.run_task" and captured["queue_key"] == "little-widget"
+    assert captured["type"] == "agent.run_task" and captured["queue_key"] == "little-widget:task:fix-it"
     assert captured["params"]["intent"] == "bug"
 
 
@@ -1679,22 +1679,6 @@ def test_bottom_toolbar_groups_related_pages_under_one_button(test_client, monke
     assert "/projects/new" not in bar
 
 
-
-# --- REQ-000000462: Image generation has its own Generation group in the navigation ---
-
-
-def test_image_generation_pages_have_their_own_generation_group(test_client, monkeypatch):
-    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [])
-    monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
-    text = test_client.get("/policies").text
-    bar = text[text.index('<nav class="tabbar"'):]
-    assert bar.count('data-open="generation"') == 1 and "<span>Generation</span>" in bar
-    generation_row = re.search(r'data-view="generation">(.*?)</div>', bar, re.S).group(1)
-    for href, label in (("/generation", "Images"), ("/generation/new", "New images"), ("/generation/recipes", "Recipes")):
-        assert f'href="{href}"' in generation_row and f"<span>{label}</span>" in generation_row
-    actions_row = re.search(r'data-view="actions">(.*?)</div>', bar, re.S).group(1)
-    assert "/generation" not in actions_row
-
 def test_the_group_of_the_current_page_is_open_and_highlighted(test_client, monkeypatch):
     monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [])
     monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
@@ -1876,7 +1860,7 @@ def test_new_project_submits_a_bootstrap_job_into_the_workspace(test_client, mon
     assert response.status_code == 303 and response.headers["location"].startswith("/?message=")
     job = jobs[0]
     assert job["type"] == "project.bootstrap" and job["target_pillar"] == "registry"
-    assert job["params"] == {"name": "little-new", "dest_dir": str(tmp_path), "description": "A thing", "create_github_repo": False, "public": False}
+    assert job["params"] == {"name": "little-new", "dest_dir": str(tmp_path), "description": "A thing", "create_github_repo": False, "public": False, "interview": False}
     assert "created" in unquote(response.headers["location"])
 
 
@@ -2479,7 +2463,7 @@ def test_update_standards_queues_a_docs_task_for_little_workshop(test_client, mo
     assert response.status_code == 303 and "Update Standards Documentation started for little-workshop" in unquote(response.headers["location"])
     _wait_for(created)
     job = created[0]
-    assert (job["type"], job["target_pillar"], job["project_id"], job["queue_key"]) == ("agent.run_task", "agent", "little-workshop", "little-workshop")
+    assert (job["type"], job["target_pillar"], job["project_id"], job["queue_key"]) == ("agent.run_task", "agent", "little-workshop", "little-workshop:task:update-standards-documentation")
     params = job["params"]
     assert (params["title"], params["intent"], params["review_mode"]) == ("Update Standards Documentation", "docs", "manual")
     assert params["include_standards"] is False  # it edits the original; a copy would only mislead it
@@ -3116,11 +3100,11 @@ def test_the_pillars_page_redeploys_the_chosen_pillars_in_batches(test_client, m
     response = test_client.post("/pillars/redeploy", data={"pillar": ["policy", "orchestration", "dashboard"], "commit": "abc123"}, follow_redirects=False)
     assert done.wait(5)
     by_pillar = {f["project_id"]: f for f in created}
-    assert by_pillar["orchestration"]["depends_on"] == []
-    assert by_pillar["dashboard"]["depends_on"] == [by_pillar["orchestration"]["id"]]
+    assert by_pillar["dashboard"]["depends_on"] == []
     assert by_pillar["policy"]["depends_on"] == [by_pillar["dashboard"]["id"]]
+    assert by_pillar["orchestration"]["depends_on"] == [by_pillar["policy"]["id"]]
     assert {f["created_by"] for f in created} == {"dashboard"} and {f["params"]["commit"] for f in created} == {"abc123"}
-    assert "Orchestration → Dashboard → Policy & Compliance (abc123)" in unquote(response.headers["location"])
+    assert "Dashboard → Policy & Compliance → Orchestration (abc123)" in unquote(response.headers["location"])
 
 
 def test_redeploying_every_pillar_includes_usage_and_names_each_pillar(test_client, monkeypatch):
@@ -3143,8 +3127,8 @@ def test_redeploying_every_pillar_includes_usage_and_names_each_pillar(test_clie
     by_pillar = {f["project_id"]: f for f in created}
     assert sorted(by_pillar["usage"]["depends_on"]) == sorted(by_pillar[n]["id"] for n in ("agent", "build", "dashboard"))
     assert by_pillar["usage"]["id"] in by_pillar["deployment"]["depends_on"]
-    assert ("Orchestration → Agentic Development, Build & Packages, Dashboard → Policy & Compliance, Registry & Portfolio, "
-            "Requirements & Quality, Usage & Efficiency, Version Control & Release → Deployment & Servers (HEAD)") in unquote(response.headers["location"])
+    assert ("Agentic Development, Build & Packages, Dashboard → Policy & Compliance, Registry & Portfolio, "
+            "Requirements & Quality, Usage & Efficiency, Version Control & Release → Deployment & Servers → Orchestration (HEAD)") in unquote(response.headers["location"])
 
 
 # --- REQ-000000334: Usage is read through lws, the MCP server and the Dashboard ---
@@ -3503,7 +3487,7 @@ def test_a_refused_remote_control_is_reported_and_an_unknown_action_is_ignored(t
     assert "Unknown" in unquote(test_client.post("/jobs/j1/remote-control/bogus", follow_redirects=False).headers["location"])
 
 
-# --- REQ-000000468: Requirement conflicts are found by code and resolved by a Claude task the user directs ---
+# --- REQ-000000473: Requirement conflicts are found by code once a project's requirements have settled, and resolved by a Claude task the user directs ---
 
 def _conflict_row(**overrides):
     base = {
@@ -3557,3 +3541,39 @@ def test_the_conflicts_list_filters_by_status_and_project(test_client, monkeypat
     monkeypatch.setattr(client, "requirement_conflicts", lambda paths, project_id=None, status=None: calls.append((project_id, status)) or [_conflict_row()])
     text = test_client.get("/requirements/conflicts", params={"project": "little-widget", "status": "resolving"}).text
     assert ("little-widget", "resolving") in calls and 'href="/requirements/conflicts/c1"' in text
+
+
+# --- REQ-000000495: a project's governance level is a Registry setting ----------------------
+
+def test_settings_shows_each_projects_governance_and_changes_it(test_client, monkeypatch):
+    _stub_attention(monkeypatch, policies=[], results=[], jobs=[])
+    monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [
+        {"name": "little-meals", "path": "/x", "status": "active", "governance": "light"},
+        {"name": "little-workshop", "path": "/y", "status": "active", "governance": "full"}])
+    page = test_client.get("/settings").text
+    assert "light governance" in page and "full governance" in page
+    assert "Make full</button>" in page and "Make light</button>" in page
+    submitted = []
+    monkeypatch.setattr(client, "create_job", lambda paths, **f: submitted.append(f) or {"status": "succeeded"})
+    response = test_client.post("/projects/little-meals/governance", data={"governance": "full"}, follow_redirects=False)
+    assert response.status_code in (302, 303) and "full%20governance" in response.headers["location"]
+    assert (submitted[0]["type"], submitted[0]["project_id"], submitted[0]["params"]) == (
+        "project.set_governance", "little-meals", {"governance": "full"})
+
+
+# --- REQ-000000500: a requirement's verdict uses its own tests --------------------------------
+
+def test_report_says_whether_a_requirement_was_judged_on_its_own_tests(test_client, monkeypatch):
+    _stub_report(monkeypatch)
+    monkeypatch.setattr(client, "requirements_report", lambda paths, project: {"requirements": [
+        {"requirement_id": "r1", "status": "published", "tested": True, "passing": True, "done": True,
+         "verdict": "passed", "basis": "own tests", "own_tests": {"total": 2, "failing": []}},
+        {"requirement_id": "r2", "status": "published", "tested": True, "passing": False, "done": False,
+         "verdict": "failed", "basis": "own tests", "own_tests": {"total": 1, "failing": ["t::b"]}},
+        {"requirement_id": "r3", "status": "published", "tested": True, "passing": False, "done": False,
+         "verdict": "failed", "basis": "suite", "own_tests": {"total": 0, "failing": []}},
+    ]})
+    text = test_client.get("/report", params={"project": "little-widget"}).text
+    assert "Judged on its own 2 tests." in text[text.index("<code>REQ-1</code>"):][:800]
+    assert "failing: <code>t::b</code>" in text[text.index("<code>REQ-2</code>"):][:800]
+    assert "judged on the whole runs" in text[text.index("<code>REQ-3</code>"):][:800]

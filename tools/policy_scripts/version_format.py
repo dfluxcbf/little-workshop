@@ -1,8 +1,8 @@
-"""Policy `version-format` (version pillar; gates commit, branch_finish): the project's
+"""Policy `version-format` (version pillar; gates branch_finish): the project's
 VERSION file holds <major>.<minor>.<patch>, optionally followed by -dev.<N> or -rc.<N>.
 
-Judges the commit being made when the commit-msg hook runs it (POLICY_COMMIT_DIR holds its
-staged VERSION), otherwise the checkout's VERSION file."""
+Judges the commit being made when POLICY_COMMIT_DIR describes one (its staged VERSION), otherwise
+the checkout's VERSION file."""
 
 import os
 import re
@@ -13,9 +13,8 @@ PROJECT = os.environ.get("POLICY_PROJECT_DIR", "/project")
 COMMIT_DIR = os.environ.get("POLICY_COMMIT_DIR")
 SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(dev|rc)\.(0|[1-9]\d*))?$")
 FIX = (
-    "Fix: VERSION holds one line such as 1.4.2, 1.4.3-dev.1 or 1.5.0-rc.2. On a feature/ or "
-    "improvement/ branch the pre-commit hook writes it (`lws version sync-version-files`); release "
-    "and hotfix finishes write it themselves."
+    "Fix: VERSION holds one line such as 1.4.2, 1.4.3-dev.1 or 1.5.0-rc.2. Working branches leave it "
+    "as their base has it; the feature, improvement, hotfix and release finishes write it."
 )
 
 

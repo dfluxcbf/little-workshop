@@ -99,7 +99,7 @@ def test_the_dashboard_shows_the_entrys_own_activity_without_reading_jobs(tmp_pa
              "refining_since": datetime.now(timezone.utc).isoformat(), "refining_job": "job-7", "refine_error": None,
              "prompting_since": None, "prompting_job": None, "prompt_error": "agent.query failed: over budget"}
     monkeypatch.setattr(client, "backlog_get", lambda paths, entry_id: dict(entry))
-    monkeypatch.setattr(client, "backlog_list", lambda paths, project=None: [dict(entry)])
+    monkeypatch.setattr(client, "backlog_list", lambda paths, project=None, **kw: [dict(entry)])
     reads = []  # the attention banner reads Jobs by status on every page; the backlog itself reads none
     monkeypatch.setattr(client, "list_jobs", lambda paths, **kw: reads.append(kw) or [])
     monkeypatch.setattr(client, "agent_peek", lambda paths, job_id, **kw: {"available": True, "running": True, "events": [], "next": 0, "skipped": 0})

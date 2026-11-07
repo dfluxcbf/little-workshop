@@ -2,7 +2,7 @@
 (`docs/pillars/policy_compliance.md`'s "Test-script execution sandbox")
 — a generated test script is unattended, AI-written code, re-run
 repeatedly against real project state, so it runs inside a real Docker
-container: read-only bind mounts, no writable filesystem, and (this
+container: read-only bind mounts, no writable filesystem but its own empty output directory, and (this
 implementation's own documented simplification — see
 `docs/requirements.md`'s M12 section) `--network none` rather than the
 spec's finer-grained "Pillar-Interface-only, safe-endpoints-only"
@@ -104,10 +104,20 @@ def remove_running_containers(*, runner: CommandRunner = DEFAULT_RUNNER) -> list
     return names
 
 
+# The one writable place a check has: an empty directory of its own, read back after the run. A check
+# that runs the project's test suite writes the run's JUnit report here (OUTPUT_JUNIT), which the pillar
+# records as the project's "Unit tests" run.
+OUTPUT_DIR = "/policy/output"
+OUTPUT_JUNIT = "junit.xml"
+JUNIT_LIMIT = 16 * 1024 * 1024
+
+
 @dataclass
 class SandboxResult:
     outcome: CheckOutcome
     detail: str
+    # The JUnit report the check left in OUTPUT_DIR, if any.
+    junit: str | None = None
 
 
 def git_dir_mount(project_dir: Path) -> dict[Path, str | tuple[str, ...]]:
@@ -228,7 +238,8 @@ def run_policy_check(
     guessed here. `env` is passed to the script as environment variables;
     `inputs` are small text files the caller hands the script (a pending
     commit's message, its staged files and VERSION), mounted read-only at
-    `/policy/input/<name>` — data the caller computed, never a host path."""
+    `/policy/input/<name>` — data the caller computed, never a host path. The check may write to
+    OUTPUT_DIR; a JUnit report it leaves there comes back as the result's `junit`."""
     ensure_image(runner=runner, tag=tag)
 
     container_name = f"lws-policy-check-{uuid.uuid4().hex[:12]}"
@@ -238,6 +249,9 @@ def run_policy_check(
         script_path.write_text(test_script, encoding="utf-8")
         input_dir = Path(scratch) / "input"
         input_dir.mkdir()
+        output_dir = Path(scratch) / "output"
+        output_dir.mkdir()
+        output_dir.chmod(0o777)  # whatever user the container's process runs as
         for name, content in (inputs or {}).items():
             if "/" in name or name.startswith("."):
                 raise ValueError(f"invalid sandbox input name {name!r}")
@@ -252,6 +266,7 @@ def run_policy_check(
             "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "COLUMNS=400",
             "-v", f"{script_path}:/policy/test_policy.py:ro",
             "-v", f"{input_dir}:/policy/input:ro",
+            "-v", f"{output_dir}:{OUTPUT_DIR}", "-e", f"POLICY_OUTPUT_DIR={OUTPUT_DIR}",
         ]
         for name, value in sorted((env or {}).items()):
             argv += ["-e", f"{name}={value}"]
@@ -279,10 +294,22 @@ def run_policy_check(
             runner.run(["docker", "rm", "-f", container_name])
             with _running_lock:
                 _running.discard(container_name)
+        junit = _read_output(output_dir / OUTPUT_JUNIT)
 
     if serving.stopping.is_set():
         # Whatever the run printed, the stop may have cut it: no verdict, the check runs again.
         raise SandboxInterrupted("the policy pillar was asked to stop while the check ran")
     if result.returncode == -1:
         raise SandboxUnavailable("policy check did not complete within its time ceiling")
-    return _parse_verdict(result.stdout, result.returncode)
+    verdict = _parse_verdict(result.stdout, result.returncode)
+    verdict.junit = junit
+    return verdict
+
+
+def _read_output(path: Path) -> str | None:
+    try:
+        if not path.is_file() or path.stat().st_size > JUNIT_LIMIT:
+            return None
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None

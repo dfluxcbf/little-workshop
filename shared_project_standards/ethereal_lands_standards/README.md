@@ -31,8 +31,9 @@ All of [../](../README.md) applies, with the adaptations in [documentation.md](d
 ## Policies
 
 Attached 2026-10-02, gating on: every all-projects policy (the version and commit rules,
-`commit-cites-requirement`, `merge-commit-message-format`, the release-tag rules, the hook, Claude
-configuration, LFS and `.meta` checks; the Python-only ones skip it), plus its project policy
+the release-tag rules, the hook, Claude
+configuration, LFS and `.meta` checks; the Python-only ones skip it, and the requirement ones, which need
+`full` governance, do not apply while it is `light`), plus its project policy
 `design-index-and-schema-current`. `back-merge-no-ff` and `hotfix-propagates-by-merge` stay little-workshop's.
 See [../policy_register.md](../policy_register.md). The commit-time ones run from `.githooks/commit-msg`; the
 project's `AGENTS.md` names what enforces each rule rather than restating it.

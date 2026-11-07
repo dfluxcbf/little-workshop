@@ -14,8 +14,6 @@ paths:
   reach it. Pass the explicit `tests/unit` path, for coverage runs too.
 - Tag tests with the requirement ids they cover: a `# --- REQ-nnnnnnnnn: <title> ---` section per requirement
   (`shared_project_standards/requirements_standard.md`).
-- Never run ComfyUI, its supervisor or the GPU from a test (expensive, never needed to validate): an autouse
-  fixture in `tests/unit/test_generation.py` fails any test that would; stub the client instead.
 - `tests/ui`: the pytest-playwright `page` fixture and relative URLs (`page.goto("/")`) only.
 - Reuse `tests/unit/conftest.py` and `tests/unit/socket_test_helpers.py` before adding new helpers.
 - A policy script is tested as the artifact it is: run it with pytest in a subprocess against a scratch git

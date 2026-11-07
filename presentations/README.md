@@ -71,7 +71,7 @@ restating it.
     Claude-CLI-driven import through its MCP entry point, reach the same
     registration; project sets move there from Policy & Compliance.
 16. [Tracking Open Questions](16-tracking-open-questions.md) — introduces
-    [`docs/open_questions.md`](../docs/open_questions.md), the single
+    `docs/open_questions.md` (removed 2026-11-07, once empty), the single
     tracker every scattered "Left open" section now points to instead of
     duplicating; catches a gap that had quietly gone unresolved for seven
     decks; splits into an enforceable "the file exists" policy and an

@@ -1,6 +1,5 @@
-"""A finished working branch lands on the patch its commits were already
-working toward, never one past it. REQ-000000269; the installed hook
-never re-bumps it, REQ-000000270."""
+"""A finished working branch lands on the next patch, written once by the finish; a branch whose
+commits still carry -dev versions lands on their patch, never one past it."""
 
 import subprocess
 
@@ -13,6 +12,8 @@ from version.workflows import finished_version
 
 V = GitflowVersion.parse
 
+
+# --- REQ-000000269: a finish lands on the branch's own patch ---------------------------------------
 
 @pytest.mark.parametrize(
     ("merged", "target_before", "expected"),
@@ -48,38 +49,44 @@ def test_a_finish_after_dev_suffixed_commits_lands_on_their_patch(tmp_path):
     assert (repo / "VERSION").read_text().strip() == "0.1.1"
 
 
-def test_the_installed_pre_commit_hook_does_not_rebump_a_finish(tmp_path, monkeypatch):
-    """The finish's own squash commit sits on the integration tip after its
-    `reset --soft`, which the hook took for a branch's first commit and
-    bumped again. The pillar's git calls skip the repository's hooks."""
-    import sys
-    from pathlib import Path
+# --- REQ-000000485: working branches leave VERSION alone; the finish writes it once -------------
 
-    from version.commands.sync_version_files import install_pre_commit_hook
+def test_a_branch_that_never_touched_version_lands_on_the_next_patch_in_one_bump(tmp_path):
+    repo = make_repo(tmp_path)  # VERSION 0.1.0
+    _git(["checkout", "dev"], repo)
+    cmd_topic_start(repo, prefix="feature", name="widgets")
+    for n in (1, 2):
+        (repo / "widgets.py").write_text(f"a = {n}\n", encoding="utf-8")
+        _git(["add", "-A"], repo)
+        _git(["commit", "-m", f"wip {n}"], repo)
+    assert (repo / "VERSION").read_text() == "0.1.0\n"
+    before = subprocess.run(["git", "rev-parse", "dev"], cwd=repo, capture_output=True, text=True).stdout.strip()
 
+    result = cmd_topic_finish(repo, prefix="feature", commit_label="feat")
+
+    assert result.success, result.message
+    assert result.data["new_version"] == "0.1.1" and (repo / "VERSION").read_text() == "0.1.1\n"
+    log = subprocess.run(["git", "log", "--format=%s", f"{before}..dev"], cwd=repo, capture_output=True, text=True).stdout
+    assert log.splitlines() == ["chore: bump version to 0.1.1", "feat (-1): widgets"]  # no state commits
+
+
+# --- REQ-000000270: the pillar's own git calls skip the repository's hooks -----------------------
+
+def test_a_refusing_commit_hook_does_not_stop_the_pillars_own_commits(tmp_path):
     repo = make_repo(tmp_path)
-    install_pre_commit_hook(repo, "little-widget")
+    hooks = repo / ".githooks"
+    hooks.mkdir()
+    (hooks / "commit-msg").write_text("#!/bin/sh\necho refused >&2\nexit 1\n", encoding="utf-8")
+    (hooks / "commit-msg").chmod(0o755)
     _git(["add", "-A"], repo)
-    _git(["commit", "--no-verify", "-m", "chore: install hook"], repo)
+    _git(["commit", "--no-verify", "-m", "chore: a hook"], repo)
+    _git(["config", "core.hooksPath", ".githooks"], repo)
     _git(["checkout", "dev"], repo)
     _git(["merge", "--ff-only", "master"], repo)
     cmd_topic_start(repo, prefix="feature", name="widgets")
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    src_dir = Path(__file__).resolve().parents[2] / "src"
-    (bin_dir / "lws").write_text(
-        f"#!{sys.executable}\nimport sys\nsys.path.insert(0, {str(src_dir)!r})\nfrom cli.main import main\nsys.exit(main())\n",
-        encoding="utf-8",
-    )
-    (bin_dir / "lws").chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
-    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "no-daemon"))
-
     (repo / "widgets.py").write_text("a = 1\n", encoding="utf-8")
     _git(["add", "-A"], repo)
-    _git(["commit", "-m", "feat: widgets"], repo)  # through the hook: 0.1.1-dev.1
-    assert (repo / "VERSION").read_text().strip() == "0.1.1-dev.1"
+    _git(["commit", "--no-verify", "-m", "feat: widgets"], repo)
 
     result = cmd_topic_finish(repo, prefix="feature", commit_label="feat")
 

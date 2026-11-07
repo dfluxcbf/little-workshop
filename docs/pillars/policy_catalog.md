@@ -17,9 +17,7 @@ the sandbox's actual mount paths, so the real Claude CLI guessed at a
 resolution convention that doesn't exist — see `docs/requirements.md`'s
 M13 section (REQ-000000132) for the full story. This document is the
 input to that pipeline, not a
-record of having run it for everything below. This catalog's own open
-items are tracked centrally in
-[`../open_questions.md`](../open_questions.md), not inline.
+record of having run it for everything below.
 
 **Enforceability was applied retroactively to this whole catalog**, not
 just the one entry it was first caught on (see "Considered and rejected"
@@ -99,7 +97,7 @@ deliberately *not* turned into entries:
 
 | Source rule | Why not |
 |---|---|
-| Version counters `dev.X`/`rc.X` are monotonic per base version (`little-versions`) | Subsumed by `commit-bumps-version`, which already requires each commit's version to outrank its parent's. |
+| Version counters `dev.X`/`rc.X` are monotonic per base version (`little-versions`) | Command behavior: the finish and release commands write `VERSION`, and working branches leave it alone (2026-11-07). |
 | `release start` derives the version itself and commits `.lvx/` state with it; `feature finish --continue`/`--abort`; hook failure never rolls back a bump (`little-versions`) | Command behavior of the tool — Version Control & Release pillar code, tier 1 in `policy_compliance.md`'s three-tier model. |
 | Milestone requirement sets are derived through use cases, never stored (`little-requirements`) | Data-model invariant of Requirements & Quality, not a property of a project checkout. |
 | Agent result file outside the repository; `LRUN_STATUS` marker, a missing one counts as `partial`; repository slot is a record, not a lock; queue pumps in a detached process; `deploy_id` guards stale timers; a failed rollback stays `pending` (`little-runner`) | Hard-coded invariants of Agentic Development / Orchestration / Deployment — tier 1, never expressed as policy. |
@@ -125,7 +123,7 @@ deliberately *not* turned into entries:
 | `doc-no-verbatim-duplication` | IF an identical text block appears in two documentation files, THEN it shall be flagged for correction to one authoritative source with a link from the other. | `documentation_policy.md` — narrowed from "the same content" (semantic, unenforceable — judging two differently-worded passages as "the same idea" is a human call) to verbatim/near-verbatim text matching, which a diff can actually verify. |
 | `milestone-requirements-linked-and-passing` | WHEN a milestone is marked done, the requirements it implements shall be linked and their tests shall pass. | `documentation_policy.md`; `requirements_policy.md` — narrowed from the original's full definition-of-done (which also named "documentation updated" and "implementation complete," neither independently machine-checkable) to the two sub-clauses a test script can actually verify. |
 | `milestone-own-branch` | Each milestone shall be worked on its own short-lived branch. | `documentation_policy.md` |
-| `open-questions-document-exists` | The project shall contain a `docs/open_questions.md` file with an Open section and a Resolved table. | `docs/open_questions.md`'s own "As a policy" section — the enforceable half of that document's tracking convention; the other half ("Claude CLI documented every question it surfaced") isn't independently machine-checkable and stays a convention, not a policy, for the same reason `undefined-purpose-honesty` was dropped rather than narrowed. |
+| `open-questions-document-exists` | The project shall contain a `docs/open_questions.md` file with an Open section and a Resolved table. | `shared_project_standards/documentation_standard.md`'s open-questions convention — its enforceable half; the other half ("Claude CLI documented every question it surfaced") isn't independently machine-checkable and stays a convention, not a policy, for the same reason `undefined-purpose-honesty` was dropped rather than narrowed. |
 
 ## C. Version control &amp; branching
 
@@ -143,8 +141,6 @@ deliberately *not* turned into entries:
 | `abandoned-branch` | IF an unmerged short-lived branch has had no commits for longer than its project's staleness window, THEN it shall be reported as an abandoned-branch violation. | `branching_policy.md` |
 | `no-detached-head` | IF a repository has a detached `HEAD` outside a brief, tool-managed operation, THEN it shall be reported as a violation. | `branching_policy.md` |
 | `single-worktree` | IF a repository has more than one active `git worktree` outside a short-lived, tool-managed one, THEN it shall be reported as a violation. | `branching_policy.md` |
-| `commit-bumps-version` | WHEN a commit is made, the commit's `VERSION` shall have a higher version precedence than its parent commit's `VERSION`. | little-workshop `version_policy.md` — new (2026-09-21); `little-versions` bumps only at stage boundaries. Judges only the newest commit against its immediate parent, so a past mistake never fails it forever. |
-| `branch-commit-dev-suffix` | WHEN a commit is made on a working branch (not `master`/`dev`, `release/*`, `hotfix/*` or `support/*`), the commit's `VERSION` shall be the next patch version of the commit the branch was cut from with the suffix `-dev.N`, where N is 1 for the branch's first commit and one more than its parent's N for every later commit. | little-workshop `version_policy.md` — new (2026-09-21); the per-commit version on a working branch is what `little-versions` never defined. Same newest-commit-only rule. |
 | `version-format` | The project's `VERSION` file shall contain a semantic version `<major>.<minor>.<patch>`, optionally followed by `-dev.<N>` or `-rc.<N>`. | `little-versions` target_design.md / release-policy.md, "Version format" |
 | `production-version-stable` | WHILE the checked-out branch is the production branch, the project's `VERSION` file shall contain a stable version with no pre-release suffix. | `little-versions` release-policy.md — release finish "normalizes to stable version" |
 | `rc-suffix-only-on-release-branches` | IF the project's `VERSION` file carries an `-rc.<N>` suffix, THEN the checked-out branch shall be a `release/*` branch. | `little-versions` release-policy.md — "`-rc.X` on release branch only" |
@@ -165,7 +161,7 @@ deliberately *not* turned into entries:
 | `draft-published-lifecycle` | A requirement shall have a status of draft or published; draft shall be mutable and the default, published shall be immutable. | `little-requirements` design.md |
 | `local-only-no-auth` | WHERE a tool runs a local HTTP server, the server shall bind to localhost with no built-in authentication and shall never be exposed except via Tailscale. | `little-requirements` architecture.md; generalizes the same choice in `little-pypi`, `little-runner` |
 | `requirement-marker-registered` | The project's pytest configuration shall register a `requirement` marker. | `requirements_policy.md` ("registered in `pyproject.toml`") |
-| `requirement-marker-not-superseded` | Where the project keeps a `docs/requirements.md` register, a commit shall leave no test citing a requirement whose row is marked superseded or removed (REQ-000000449). | `requirements_policy.md` — a requirement never caps a newer request (2026-10-24). Judges what the commit introduces. |
+| `requirement-marker-not-superseded` | Where the project keeps a `docs/requirements.md` register (with its `docs/requirements/*.md` parts), a commit shall leave no test citing a requirement whose row is marked superseded or removed (REQ-000000449). | `requirements_policy.md` — a requirement never caps a newer request (2026-10-24). Judges what the commit introduces. |
 | `requirement-marker-id-format` | Every `requirement` marker in the project's tests shall reference an identifier of the form `REQ-` followed by nine digits. | `requirements_policy.md` — "not invented text". Complements `requirement-id-format`, which is about how identifiers are generated. |
 
 ## E. Build &amp; packaging
@@ -249,14 +245,10 @@ borrowed from elsewhere:
 
 ## Gaps — no existing source covers these
 
-Identified by their absence, not mined from a document — originally
-tracked inline here; now tracked as `OQ-4` through `OQ-8` in
-[`../open_questions.md`](../open_questions.md), this project's single
-open-item tracker, so a gap has exactly one place to be marked resolved
-rather than two that can drift apart. Generated-artifact sandboxing, the
-one gap this section used to list, was resolved 2026-09-15 — see
-`policy_compliance.md`'s "Test-script execution sandbox" and
-`open_questions.md`'s Resolved log.
+Identified by their absence, not mined from a document: `OQ-4` through
+`OQ-8`, all resolved 2026-09-15 (`../../presentations/17-answering-the-first-round.md`).
+Generated-artifact sandboxing was resolved the same day — see
+`policy_compliance.md`'s "Test-script execution sandbox".
 
 ## Resolved 2026-09-15
 
@@ -298,6 +290,5 @@ one gap this section used to list, was resolved 2026-09-15 — see
 
 ## Open questions for you
 
-Tracked as `OQ-1` and `OQ-2` in [`../open_questions.md`](../open_questions.md)
-— this catalog's own open items now live there rather than in a
-second list here.
+`OQ-1` and `OQ-2`, both resolved 2026-09-15
+(`../../presentations/17-answering-the-first-round.md`, `18-catalog-confirmed.md`).

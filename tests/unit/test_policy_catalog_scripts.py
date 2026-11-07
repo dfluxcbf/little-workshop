@@ -197,6 +197,29 @@ def test_python_test_coverage_passes_when_fully_covered(tmp_path):
     assert result.returncode == 0 and "passed" in result.stdout
 
 
+# --- REQ-000000484: a check that runs the test suite records the Unit tests run ---
+
+def test_python_test_coverage_leaves_the_runs_junit_report_in_the_output_dir(tmp_path):
+    script = _write_coverage_script(tmp_path)
+    project = _python_project(tmp_path)
+    output = tmp_path / "output"
+    output.mkdir()
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", str(script), "-q", "-p", "no:cacheprovider"], capture_output=True, text=True,
+        env={**os.environ, "POLICY_PROJECT_DIR": str(project), "POLICY_OUTPUT_DIR": str(output)},
+    )
+    assert result.returncode == 0, result.stdout
+    report = (output / "junit.xml").read_text()
+    assert 'name="test_add"' in report and 'name="test_sub"' in report
+
+
+def test_python_test_coverage_gates_the_release_and_is_fingerprinted_by_its_inputs():
+    manifest = json.loads((SCRIPTS / "policies.json").read_text())["policies"]
+    entry = next(e for e in manifest if e["topic"] == "python-test-coverage")
+    assert entry["gate_points"] == ["release"]
+    assert entry["inputs"] == ["pyproject.toml", "src", "tests"]
+
+
 def test_python_test_coverage_script_is_the_manifest_entrys_script():
     # The Dashboard finds a policy's script under tools/policy_scripts/ by blob hash, and
     # tools/sync_policies.py pushes exactly the file its manifest entry names.

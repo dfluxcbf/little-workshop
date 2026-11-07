@@ -27,16 +27,7 @@ from real evidence, re-runnably (requirements, suites and links matched by key
 or name; every run records a fresh batch of results; `--dry-run` writes
 nothing):
 
-- `lreq` — a project tracked by the old `little-requirements` tool. Its
-  database gives the requirements (draft stays draft, published is published),
-  the suites and which tests verify which requirement; a JUnit report of a real
-  run gives what the tests did. The old tool identified a test by the sha256 of
-  its node id (`tests/test_x.py::Class::test`, or `classname::name` for
-  vitest); the importer reproduces those ids and reports how many matched, and
-  which known tests were missing from the run. Each suite's results are the
-  tests that verify its requirements; tests no requirement points at go to a
-  "Tests without a requirement link" suite so nothing real is left out.
-- `register` — little-workshop's own `docs/requirements.md`, which has no
+- `register` — little-workshop's own register (`docs/requirements/*.md`), which has no
   per-requirement test links: milestones are created from its sections, `done`
   rows are published, and every done requirement is linked to one "Unit tests"
   suite holding the whole real run (so a failing test anywhere makes them all
@@ -76,8 +67,9 @@ to 'is it done'" (`docs/architecture.md`).
   a new key and text: it creates the new draft with the old one's
   category, use case, milestone and suite links, marks the old one
   `superseded` (`superseded_by` names the new key), marks the old row
-  of the project's `docs/requirements.md` "superseded by" and adds the
-  new row after it, and returns the test files whose markers still cite
+  of the project's register "superseded by" and adds the new row after
+  it in the same file (`docs/requirements.md`, or the `docs/requirements/*.md`
+  part that holds it where the register is split), and returns the test files whose markers still cite
   the old key. A superseded requirement cannot be published and is left
   out of the definition-of-done report; the policy
   `requirement-marker-not-superseded` refuses a commit that leaves a
@@ -101,6 +93,11 @@ to 'is it done'" (`docs/architecture.md`).
   `junit.py` parser `import_junit` uses directly, and always releases
   the worktree again — success or failure — so a failed run never leaks
   disk, and the project's own working checkout is never touched.
+  The exception is a Windows-hosted Unity project (REQ-000000516): `run_tests` by `suite_id` runs its
+  `tools/run-unity-tests` in the checkout itself (the editor's `Library/` reused), refusing when the
+  checkout is not at the `commitish` or a Unity Editor has the project open (`Temp/UnityLockfile` and a
+  `Unity.exe` naming its path), and records the JUnit report as `junit` results; `suite_ids` is refused
+  for it (the editor runs all its tests at once).
 - **The definition-of-done report** (`GET /v1/report`) — this pillar's
   own half of the multi-pillar definition-of-done concept
   (`docs/pillars/policy_compliance.md`): a requirement is `done` only
@@ -120,7 +117,7 @@ to 'is it done'" (`docs/architecture.md`).
   `lws requirements export`, `import`, `report --md/--csv/--json-file`,
   and `test-structure-create` match the old tool's own `requirement
   export`/`import`, `report --csv/--md/--json`, and `test-structure
-  create`. All four are additions to `src/cli/main.py` only — no new
+  create`. All four are additions to `src/cli/commands/requirements.py` only — no new
   Pillar Interface route, since each is either a local file-writing
   convenience over an existing read (`export`/`report`) or repeated
   calls to the Job types M10 already exposed (`import`, one
@@ -145,10 +142,8 @@ to 'is it done'" (`docs/architecture.md`).
 ## Interfacing
 
 - **Calls**: Deployment & Servers, for worktree provisioning during
-  `run_tests`. Registry & Portfolio is not called directly — every
-  operation is already `project_id`-scoped by the caller, the same way
-  Version Control & Release resolves a project without this pillar
-  owning that lookup itself.
+  `run_tests`. Registry & Portfolio, only by `run_tests`, to learn
+  whether the project is a Windows-hosted Unity one.
 - **Called by**: `lws requirements ...`, the `workshop_requirements_*`
   MCP tools, and Orchestration for every Job type above — including a
   recurring `ScheduledTask` (M9) for periodic test runs, no different
@@ -199,7 +194,7 @@ markers of the project's test files (`requirements/markers.py`; files git tracks
 directory) and brings the pillar in line with them in one Job:
 
 - A marked requirement the pillar lacks is created as a draft from its row in the project's
-  `docs/requirements.md` (`| REQ-… | **Title.** text | status |`), EARS-checked like any other. A marker with
+  register (`docs/requirements.md` and its `docs/requirements/*.md` parts; `| REQ-… | **Title.** text | status |`), EARS-checked like any other. A marker with
   no such row (or an empty one) is reported under `missing_text` and not created; one whose text is not EARS
   is created all the same and listed under `not_ears`.
 - Every marked requirement is linked to `params.suite_id`, or to the suite named "Unit tests".
@@ -207,6 +202,19 @@ directory) and brings the pillar in line with them in one Job:
 
 It replaces one `workshop_requirements_create` and one `_link_suite` call per requirement.
 `lws requirements sync-markers --project-id <id>`, `workshop_requirements_sync_markers`.
+
+## Per-requirement verdicts (2026-11-07)
+
+A recorded test result carries `requirement_key`: the requirement whose `# --- REQ-nnnnnnnnn: … ---` section of
+the registered checkout's Python test file holds the test (`markers.test_sections`, read when `import_junit` or
+`run_tests` records a run; a test belongs to the nearest marker above it, and any other `# --- … ---` header,
+`REQ-NONE`'s included, ends a section). The JUnit `classname::name` is matched by module (or module of its class)
+and function name, without pytest's `[parameters]`. In `/v1/report`, a requirement's verdict on a suite is the worst
+of that suite's latest-run results tagged with its key, so one failing test no longer fails every requirement of
+the suite; a suite whose latest run has none of its tests falls back to the whole run, as before. Each row says
+which basis it used (`basis`: `own tests` | `suite`) and `own_tests` (`total`, `failing` names); the Dashboard's
+Report shows it. Without a readable checkout (or for other languages) nothing is tagged and every verdict is the
+suite's. REQ-000000500.
 
 ## A test Job's answer: counts, not every result (2026-10-05)
 
@@ -221,7 +229,7 @@ themselves stay at `GET /v1/test_results`. Agentic Development's CI check reads 
 
 ## Requirement conflicts (2026-10-30)
 
-REQ-000000468. `requirements/conflicts.py` compares a project's requirements with code alone, so the same
+REQ-000000473. `requirements/conflicts.py` compares a project's requirements with code alone, so the same
 requirements always give the same conflicts. Each description is read as EARS statements: each sentence, and
 each `, and the <system> shall …` within one, keeping the sentence's `While`/`When`/`Where`/`If` clauses. Words
 are compared in lower case, without punctuation and without `a`/`an`/`the`. Two requirements of one project
@@ -238,9 +246,13 @@ the statements involved, so every analysis finds a conflict under the same id. T
 `resolved` when an analysis no longer finds it (because a requirement was changed or deleted). A resolved
 conflict that comes back is `open` again.
 
-The running pillar analyzes every project when it starts and every 15 minutes after that
-(`CONFLICT_SCAN_SECONDS`). `requirements.analyze_conflicts` does the same for one project, or for all of them
-when no project is given; it is in the Dashboard's New Job catalog as "Check requirement conflicts". Reads:
+The running pillar analyzes a project once its requirements have settled (REQ-000000473). Every requirement
+write (`insert_requirement`, `update_requirement`, `delete_requirement`, and a backup import) stamps the project
+in `conflict_scan_due (project_id, changed_at)`, which survives a restart. Once a minute
+(`CONFLICT_SCAN_POLL_SECONDS`) the pillar analyzes each registered project whose stamp is at least 15 minutes old
+(`CONFLICT_SCAN_QUIET_SECONDS`) and removes the stamp unless a change re-stamped it meanwhile, so a burst of edits
+leads to one analysis. Nothing is analyzed at startup or on a timer, and an unchanged project never again.
+`requirements.analyze_conflicts` analyzes one project, or all of them when no project is given, on demand; it is in the Dashboard's New Job catalog as "Check requirement conflicts". Reads:
 `GET /v1/conflicts?project_id&status`, `GET /v1/conflicts/{id}` (with both requirements as they are now, or
 None once deleted), and `GET /v1/conflicts/version`, which the Dashboard's live stream polls. MCP:
 `workshop_requirements_conflicts`.
@@ -255,6 +267,15 @@ decision and the Job on the conflict through `requirements.decide_conflict`. The
 requirements only through this pillar: a draft can be edited, a published one is deleted and, where some of it
 still holds, replaced under the next free key. The conflict is resolved when the next analysis no longer finds
 it. A conflict still `resolving` can be resolved again from its page, for example when its task failed.
+
+**Semantic check (REQ-000000523).** Optional and user-started only: the New Job catalog's "Check requirement
+conflicts (semantic)" runs `requirements.semantic_conflicts`, which sends the project's published and draft
+requirements to Claude (`agent.query`, no file access; `requirements/semantic.py`) and returns the pairs it
+suspects conflict in meaning, each with its texts, summary and reason, in the Job's result; nothing is recorded.
+The Job's page lists them with **Record as a conflict**, which runs `requirements.record_semantic_conflict`: an
+`open` conflict of kind `semantic` (the same pair and texts again reopen it). The lexical analysis neither finds
+nor resolves such a conflict; it resolves it once either requirement was deleted, superseded or edited after it
+was recorded. Deciding and resolving it work as for any other conflict.
 
 
 ## Backup, import and deletion of a project's requirements (2026-11-01)

@@ -19,6 +19,9 @@ STEPS: dict[str, tuple[StepSpec, ...]] = {
         StepSpec("collect_tests", "Collect the project's tests in a sandboxed checkout"),
         StepSpec("match_suites", "Match each test to the suites that cover it"),
     ),
+    "requirements.semantic_conflicts": (
+        StepSpec("ask_claude", "Have Claude compare the published and draft requirements for conflicts in meaning"),
+    ),
     "requirements.import_junit": (
         StepSpec("validate_request", "Validate the request and find the suite"),
         StepSpec("parse_report", "Parse the JUnit report"),

@@ -23,7 +23,7 @@ def _files(base: Path) -> set[str]:
 
 
 def test_the_copy_holds_the_root_markdown_and_that_projects_folder_only(tmp_path):
-    """REQ-000000286."""
+    """REQ-000000479."""
     copy = standards.make_copy(_tree(tmp_path), "ethereal-lands", run_id="r1")
     assert copy.name == "shared_project_standards"
     assert _files(copy) == {"README.md", "governance.md", "ethereal_lands_standards/README.md", "ethereal_lands_standards/unity.md"}
@@ -31,7 +31,7 @@ def test_the_copy_holds_the_root_markdown_and_that_projects_folder_only(tmp_path
 
 
 def test_a_project_without_a_folder_gets_the_shared_files_alone(tmp_path):
-    """REQ-000000286."""
+    """REQ-000000479."""
     copy = standards.make_copy(_tree(tmp_path), "little-widget", run_id="r2")
     assert _files(copy) == {"README.md", "governance.md"}
     standards.remove_copy(copy)
@@ -50,7 +50,7 @@ def test_the_copy_is_a_temporary_directory_that_remove_copy_deletes(tmp_path):
 
 
 def test_the_original_folder_is_left_untouched(tmp_path):
-    """REQ-000000286."""
+    """REQ-000000479."""
     root = _tree(tmp_path)
     before = _files(root)
     standards.remove_copy(standards.make_copy(root, "ethereal-lands", run_id="r4"))

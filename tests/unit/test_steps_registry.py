@@ -78,7 +78,7 @@ def test_bootstrap_reports_every_declared_step_but_the_version_init_the_endpoint
     dest.mkdir()
     bootstrap_project(conn, paths, BootstrapParams(name="little-widget", dest_dir=str(dest)))
     declared = [s.key for s in STEPS["project.bootstrap"]]
-    assert recorder.keys() == [k for k in declared if k != "init_version"]
+    assert recorder.keys() == [k for k in declared if k not in ("init_version", "start_interview")]
     assert recorder.final("create_github") == ("succeeded", "not requested")
 
 
@@ -92,7 +92,8 @@ def test_bootstrap_reports_a_failing_step_with_its_message(recorder, conn, paths
 
 def test_import_reports_its_declared_steps(recorder, conn, paths, tmp_path):
     import_project(conn, paths, ImportParams(name="widget", path=str(_repo(tmp_path))))
-    assert recorder.keys() == [s.key for s in STEPS["project.import"]]
+    # The sync and the preflight are the endpoint's (registry/app.py's after_import).
+    assert recorder.keys() == [s.key for s in STEPS["project.import"] if s.key not in ("sync_claude_files", "preflight")]
 
 
 def test_import_reports_a_missing_directory_as_a_failed_check(recorder, conn, paths, tmp_path):

@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from common.paths import Paths
 from dashboard import app as app_module
 from dashboard import client
+from dashboard.routes import backlog as backlog_routes
 from test_dashboard_app import _job, _policy, _stub_jobs, _usage_summary
 
 
@@ -36,7 +37,7 @@ def created(monkeypatch):
         return {"id": f"job{len(jobs)}", "status": "queued"}
 
     monkeypatch.setattr(client, "create_job", create_job)
-    monkeypatch.setattr(app_module, "_fire_and_forget", lambda paths, on_done=None, **job: jobs.append(job))
+    monkeypatch.setattr(backlog_routes, "_fire_and_forget", lambda paths, on_done=None, **job: jobs.append(job))
     return jobs
 
 
@@ -52,7 +53,7 @@ def _backlog(monkeypatch, entries):
     store = {e["id"]: dict(e) for e in entries}
     calls = []
     monkeypatch.setattr(client, "list_projects", lambda paths, status=None: [{"name": "little-meals", "status": "active"}, {"name": "little-home", "status": "active"}])
-    monkeypatch.setattr(client, "backlog_list", lambda paths, project=None: [dict(e) for e in store.values() if project in (None, e["project_name"])])
+    monkeypatch.setattr(client, "backlog_list", lambda paths, project=None, **kw: [dict(e) for e in store.values() if project in (None, e["project_name"])])
     monkeypatch.setattr(client, "backlog_get", lambda paths, entry_id: dict(store[entry_id]) if entry_id in store else None)
 
     def add(paths, project, text):

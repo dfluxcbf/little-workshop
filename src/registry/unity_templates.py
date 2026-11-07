@@ -166,10 +166,10 @@ and is managed from WSL by little-workshop.
 - `Library/`, `Temp/`, `Obj/`, `Logs/`, `UserSettings/` and `Build*/` are
   Unity's and git-ignored: never edit or commit them.
 - An asset is added, moved, renamed or deleted together with its `.meta`
-  file, whose GUID the Editor writes; the commit hook refuses a commit that
+  file, whose GUID the Editor writes; the branch finish refuses a commit that
   separates them (`unity-meta-files-paired`).
 - Binary assets go through Git LFS, which `.gitattributes` routes (run
-  `git lfs install` once per clone); the commit hook refuses one committed
+  `git lfs install` once per clone); the branch finish refuses one committed
   as a plain blob (`lfs-tracked-files-are-pointers`).
 
 ## Tests

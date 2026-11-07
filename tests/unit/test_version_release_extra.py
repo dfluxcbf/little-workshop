@@ -182,7 +182,7 @@ def test_release_finish_continue_resumes_prod_merge_then_hits_a_second_conflict_
     continue2 = cmd_release_finish(repo, action="continue")
     assert continue2.success, continue2.message
     assert continue2.data["stable_version"] == "0.1.0"
-    assert continue2.data["next_version"] == "0.2.1"
+    assert continue2.data["next_version"] == "0.1.1"
     assert current_branch(repo) == "dev"
     assert not is_merge_in_progress(repo)
 

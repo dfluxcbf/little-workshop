@@ -2,6 +2,7 @@
 paths:
   - "src/dashboard/job_catalog.py"
   - "src/dashboard/app.py"
+  - "src/dashboard/routes/*.py"
 ---
 # User-triggered jobs
 

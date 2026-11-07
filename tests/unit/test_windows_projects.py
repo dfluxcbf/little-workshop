@@ -14,6 +14,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cli import main as cli_main
+from cli.commands import api as api_commands
+from cli.commands import windows as windows_commands
 from common import api_tokens, tool_access, windows
 from common.paths import Paths
 from dashboard import app as dashboard_app
@@ -145,7 +147,7 @@ def test_lws_from_windows_without_a_registry_answer_leaves_argparse_to_complain(
 
 def test_main_translates_only_when_the_shim_started_it(monkeypatch):
     seen = []
-    monkeypatch.setattr(cli_main, "cmd_api_token_list", lambda args: seen.append(args.project_id) or 0)
+    monkeypatch.setattr(api_commands, "cmd_api_token_list", lambda args: seen.append(args.project_id) or 0)
     monkeypatch.setattr(cli_main.client, "list_projects",
                         lambda p: {"projects": [{"name": "proj", "path": "/mnt/c/proj"}]})
     monkeypatch.setattr(cli_main.os, "getcwd", lambda: "/mnt/c/proj/sub")
@@ -167,7 +169,7 @@ def test_install_shim_writes_lws_cmd_with_crlf_and_adds_the_folder_to_the_user_p
 
     monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-26.04")
     monkeypatch.setattr(windows, "mount_root", lambda *a: str(tmp_path) + "/")
-    monkeypatch.setattr(cli_main.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw.get("env", {}))) or Done())
+    monkeypatch.setattr(windows_commands.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw.get("env", {}))) or Done())
     args = cli_main.build_parser().parse_args(
         ["windows", "install-shim", "--dir", "C:\\Tools\\lws", "--lws-path", "/home/crist/.local/bin/lws"])
     assert args.func(args) == 0
@@ -182,7 +184,7 @@ def test_install_shim_writes_lws_cmd_with_crlf_and_adds_the_folder_to_the_user_p
 def test_install_shim_with_no_path_never_runs_powershell(monkeypatch, tmp_path):
     monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-26.04")
     monkeypatch.setattr(windows, "mount_root", lambda *a: str(tmp_path) + "/")
-    monkeypatch.setattr(cli_main.subprocess, "run", lambda *a, **k: pytest.fail("no subprocess expected"))
+    monkeypatch.setattr(windows_commands.subprocess, "run", lambda *a, **k: pytest.fail("no subprocess expected"))
     args = cli_main.build_parser().parse_args(
         ["windows", "install-shim", "--dir", "D:\\bin", "--no-path", "--lws-path", "/usr/local/bin/lws"])
     assert args.func(args) == 0
@@ -367,10 +369,10 @@ def test_the_windows_section_is_only_in_a_windows_hosted_projects_briefing():
 
 
 def test_sync_and_bootstrap_write_the_windows_section_for_a_windows_checkout(monkeypatch, tmp_path):
-    monkeypatch.setattr(claude_sync, "is_windows_checkout", lambda path: True)
+    monkeypatch.setattr(claude_sync, "is_windows_project", lambda path: True)
     wanted = claude_sync.wanted_files(tmp_path, "proj", "python")
     assert "lws.cmd" in wanted[claude_templates.SHARED_BRIEFING_PATH]
-    monkeypatch.setattr(scaffold, "is_windows_checkout", lambda path: True)
+    monkeypatch.setattr(scaffold, "is_windows_project", lambda path: True)
     scaffold.create_project_tree(tmp_path / "proj", "proj")
     assert "lws.cmd" in (tmp_path / "proj" / claude_templates.SHARED_BRIEFING_PATH).read_text(encoding="utf-8")
 

@@ -1,14 +1,9 @@
-"""Policy `version-hook-installed` (version pillar; gates branch_finish): every project has the
-VERSION auto-sync pre-commit hook (.githooks/pre-commit, calling `lws version sync-version-
-files`) installed, and, where another file besides VERSION carries the
-project's version, a propagation script registered in .lvx/config.json's
-version_hooks -- both artifacts of REQ-000000241 (little-workshop), not
-implementation-in-the-project (same reasoning back-merge-no-ff/hotfix-
-propagates-by-merge were corrected for, 2026-09-22): the hook's own code
-lives entirely in little-workshop and is installed, never hand-written,
-by `lws version install-hooks` (also run by `lws version init`). Shallow
-read only, matching every other policy in this catalog: current repo state,
-no commit-history walk."""
+"""Policy `version-hook-installed` (version pillar; gates branch_finish): where another file besides
+VERSION carries the project's version, a propagation script is registered in .lvx/config.json's
+version_hooks, so the finish that writes VERSION writes that file too. Working branches leave
+VERSION alone (little-workshop's REQ-000000485); the propagation runs only when a finish or release
+writes the version. Shallow read only, matching every other policy in this catalog: current repo
+state, no commit-history walk."""
 
 import json
 import os
@@ -73,22 +68,9 @@ def _other_file_carries_the_version(base):
     return None
 
 
-def test_version_hook_installed_and_propagation_registered_where_needed():
+def test_version_propagation_registered_where_needed():
     if not (PROJECT / ".git").exists():
         pytest.fail(f"{PROJECT} is not a git checkout")
-
-    hook_path = PROJECT / ".githooks" / "pre-commit"
-    assert hook_path.is_file(), (
-        ".githooks/pre-commit is missing. Fix: run 'lws version install-hooks "
-        "--project-id <this project>' in the checkout to install the VERSION "
-        "auto-sync pre-commit hook (REQ-000000241), then commit .githooks/."
-    )
-    hook_text = hook_path.read_text(encoding="utf-8", errors="replace")
-    assert "lws version sync-version-files" in hook_text, (
-        ".githooks/pre-commit exists but doesn't call 'lws version "
-        "sync-version-files', so it isn't the hook little-workshop installs. "
-        "Fix: run 'lws version install-hooks --project-id <this project>'."
-    )
 
     config_path = PROJECT / ".lvx" / "config.json"
     assert config_path.is_file(), (

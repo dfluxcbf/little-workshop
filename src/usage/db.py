@@ -569,7 +569,7 @@ def drop_stale_candidates(conn: sqlite3.Connection, found: set[str]) -> int:
 
 # -- plugin proposals ----------------------------------------------------------------
 
-PROPOSAL_DATA = ("usage", "steps", "rare_steps", "fallbacks", "projects", "install", "examples", "absorbs")
+PROPOSAL_DATA = ("usage", "steps", "rare_steps", "fallbacks", "projects", "draft", "examples", "absorbs")
 
 
 def record_plugin_proposal(conn: sqlite3.Connection, proposal: dict) -> str:
@@ -593,6 +593,11 @@ def list_plugin_proposals(conn: sqlite3.Connection, *, state: str | None = CANDI
     """Plugin proposals ranked by the net saving per week; the states are the candidates' ones."""
     sql = "SELECT * FROM plugin_proposals" + (" WHERE state = ?" if state else "") + " ORDER BY weekly_value DESC, occurrences DESC"
     return [_candidate(row) for row in conn.execute(sql, (state,) if state else ())]
+
+
+def get_plugin_proposal(conn: sqlite3.Connection, proposal_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM plugin_proposals WHERE id = ?", (proposal_id,)).fetchone()
+    return _candidate(row) if row else None
 
 
 def set_plugin_proposal_state(conn: sqlite3.Connection, proposal_id: str, state: str) -> bool:

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Version hook run by `lws version sync-version-files` (and, for a
-release/hotfix/support finish, its own finish commands) after every version
-bump. Called with the new version string as the first positional argument
+"""Version hook run by little-workshop's finish and release commands after
+every version bump. Called with the new version string as the first positional argument
 (also available as the LVX_NEW_VERSION environment variable), cwd set to the
 repo root. Propagates VERSION into every other version-bearing file in this
 repo.

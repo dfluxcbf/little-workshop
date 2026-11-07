@@ -8,10 +8,57 @@ from __future__ import annotations
 
 import sqlite3
 
-from orchestration.db import get_job, get_queue_capacity, list_jobs, update_job
+from orchestration.db import get_job, get_queue_capacity, list_job_runs, list_jobs, update_job
 from orchestration.models import Job, JobStatus
 
 _LOCKING_STATUSES = (JobStatus.RUNNING.value, JobStatus.PENDING_CONFIRMATION.value)
+
+# little-workshop's own redeploys. The automatic redeploy after a finish waits until nothing else is
+# going on (REQ-000000476); Orchestration's own redeploy restarts the process that dispatches Jobs,
+# so it waits until no other dispatch is in flight (REQ-000000477).
+REDEPLOY_CHANGED = "deployment.redeploy_changed_pillars"
+REDEPLOY_PILLAR = "deployment.redeploy_pillar"
+_REDEPLOYS = (REDEPLOY_CHANGED, REDEPLOY_PILLAR)
+
+
+def _held_behind_confirmation(conn: sqlite3.Connection, job: Job) -> bool:
+    """A queued Job waiting on a Job held for the user: it may wait indefinitely, so it is not work."""
+    for dep_id in job.depends_on:
+        dep = get_job(conn, dep_id)
+        if dep is not None and dep.status == JobStatus.PENDING_CONFIRMATION:
+            return True
+    return False
+
+
+def workshop_busy(conn: sqlite3.Connection, job: Job) -> bool:
+    """Another Job, not a redeploy, is running or queued (and not just waiting behind a held one)."""
+    for other in list_jobs(conn, status=JobStatus.RUNNING) + list_jobs(conn, status=JobStatus.QUEUED):
+        if other.id == job.id or other.type in _REDEPLOYS:
+            continue
+        if other.status == JobStatus.QUEUED and _held_behind_confirmation(conn, other):
+            continue
+        return True
+    return False
+
+
+def dispatch_in_flight(conn: sqlite3.Connection, job: Job) -> bool:
+    """Another Job is claimed and its dispatch call has not been answered yet: a `running` Job without
+    the `running` run row an accepted dispatch leaves (see dispatch.settle_interrupted_dispatches)."""
+    for other in list_jobs(conn, status=JobStatus.RUNNING):
+        if other.id == job.id:
+            continue
+        runs = list_job_runs(conn, other.id)
+        if not (runs and runs[-1]["outcome"] == JobStatus.RUNNING.value):
+            return True
+    return False
+
+
+def _waits_for_quiet(conn: sqlite3.Connection, job: Job) -> bool:
+    if job.type == REDEPLOY_CHANGED:
+        return workshop_busy(conn, job)
+    if job.type == REDEPLOY_PILLAR and job.params.get("pillar") == "orchestration":
+        return dispatch_in_flight(conn, job)
+    return False
 
 
 def is_ready(conn: sqlite3.Connection, job: Job) -> bool:
@@ -35,7 +82,7 @@ def is_ready(conn: sqlite3.Connection, job: Job) -> bool:
         if running_count >= get_queue_capacity(conn, job.queue_key):
             return False
 
-    return True
+    return not _waits_for_quiet(conn, job)
 
 
 def ready_jobs(conn: sqlite3.Connection) -> list[Job]:

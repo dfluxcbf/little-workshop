@@ -1,5 +1,5 @@
 {
-  "_about": "Every Policy & Compliance policy, as code: its EARS rule, scope and gate points, with its script beside this file. tools/sync_policies.py compares these with the live pillar and, with --apply, replaces what differs. A new topic's 'projects' seeds its project selection once; after that the selection is managed in the pillar (Dashboard, lws policy projects set).",
+  "_about": "Every Policy & Compliance policy, as code: its EARS rule, scope, gate points, optionally 'requires': 'full' (the policy applies only to projects of full governance; light ones skip it as not applicable) and, optionally, the 'inputs' (repository paths) whose committed content its verdict depends on, with its script beside this file. tools/sync_policies.py compares these with the live pillar and, with --apply, replaces what differs. A new topic's 'projects' seeds its project selection once; after that the selection is managed in the pillar (Dashboard, lws policy projects set).",
   "policies": [
     {
       "topic": "version-format",
@@ -9,48 +9,9 @@
       "created_by": "framework",
       "ears_text": "The project's VERSION file shall contain a semantic version in the form <major>.<minor>.<patch>, optionally followed by -dev.<N> or -rc.<N>.",
       "gate_points": [
-        "commit",
         "branch_finish"
       ],
       "script": "version_format.py"
-    },
-    {
-      "topic": "commit-bumps-version",
-      "target_pillar": "version",
-      "scope_level": "all_projects",
-      "scope_target": null,
-      "created_by": "user",
-      "ears_text": "WHEN a commit is made, the commit's VERSION file shall have a higher version precedence than its parent commit's VERSION file.",
-      "gate_points": [
-        "commit",
-        "branch_finish"
-      ],
-      "script": "commit_bumps_version.py"
-    },
-    {
-      "topic": "branch-commit-dev-suffix",
-      "target_pillar": "version",
-      "scope_level": "all_projects",
-      "scope_target": null,
-      "created_by": "user",
-      "ears_text": "WHEN a commit is made on a working branch (not master, dev, release/*, hotfix/* or support/*), the commit's VERSION shall be the next patch version of the commit the branch was cut from with the suffix -dev.N, where N is 1 for the branch's first commit and one more than its parent's N for every later commit.",
-      "gate_points": [
-        "commit",
-        "branch_finish"
-      ],
-      "script": "branch_commit_dev_suffix.py"
-    },
-    {
-      "topic": "commit-cites-requirement",
-      "target_pillar": "version",
-      "scope_level": "all_projects",
-      "scope_target": null,
-      "created_by": "user",
-      "ears_text": "WHEN a commit changes a file under src/ or, in a Unity project, under Assets/, Packages/, ProjectSettings/ or tools/, the commit message shall cite either at least one requirement id in the form REQ-nnnnnnnnn or, if the commit affects no requirement, REQ-NONE (in any letter case); IF a commit message cites REQ-NONE, THEN it shall not cite any requirement id.",
-      "gate_points": [
-        "branch_finish"
-      ],
-      "script": "commit_cites_requirement.py"
     },
     {
       "topic": "unity-meta-files-paired",
@@ -60,7 +21,6 @@
       "created_by": "framework",
       "ears_text": "WHERE the project is a Unity project, WHEN a commit adds or deletes a file or folder under Assets/, the commit shall add or delete that file's or folder's .meta file with it, and shall not add or delete a .meta file apart from its asset.",
       "gate_points": [
-        "commit",
         "branch_finish"
       ],
       "script": "unity_meta_files_paired.py",
@@ -99,7 +59,6 @@
       "created_by": "framework",
       "ears_text": "WHERE the project's .gitattributes routes files to Git LFS, WHEN a commit adds or changes a file that .gitattributes routes to Git LFS, the commit shall store that file as a Git LFS pointer.",
       "gate_points": [
-        "commit",
         "branch_finish"
       ],
       "script": "lfs_tracked_files_are_pointers.py",
@@ -138,7 +97,6 @@
       "created_by": "user",
       "ears_text": "WHEN a commit adds or changes a file, the commit shall not introduce a private key, a provider token or API key in a recognisable format, or an environment file (.env or .env.<name>, other than a template such as .env.example).",
       "gate_points": [
-        "commit",
         "branch_finish"
       ],
       "script": "no_committed_secrets.py",
@@ -179,6 +137,7 @@
       "gate_points": [
         "branch_finish"
       ],
+      "requires": "full",
       "script": "merge_commit_message_format.py"
     },
     {
@@ -211,7 +170,7 @@
       "scope_level": "all_projects",
       "scope_target": null,
       "created_by": "framework",
-      "ears_text": "WHERE another file besides VERSION carries a project's version, the system shall have the VERSION auto-sync pre-commit hook installed and a propagation script registered in version_hooks.",
+      "ears_text": "WHERE another file besides VERSION carries a project's version, the project shall have a propagation script registered in version_hooks.",
       "gate_points": [
         "branch_finish"
       ],
@@ -223,7 +182,7 @@
       "scope_level": "all_projects",
       "scope_target": null,
       "created_by": "framework",
-      "ears_text": "The project shall have the commit-msg git hook that runs its commit-gated policies installed: .githooks/commit-msg shall call `lws policy evaluate --gate-point commit`, and git's core.hooksPath shall point at .githooks.",
+      "ears_text": "The project shall have the commit-msg git hook little-workshop installs: .githooks/commit-msg shall run `lws policy scan-secrets`, and git's core.hooksPath shall point at .githooks.",
       "gate_points": [
         "branch_finish"
       ],
@@ -321,6 +280,7 @@
       "gate_points": [
         "branch_finish"
       ],
+      "requires": "full",
       "script": "requirement_marker_registered.py"
     },
     {
@@ -333,6 +293,7 @@
       "gate_points": [
         "branch_finish"
       ],
+      "requires": "full",
       "script": "requirement_marker_id_format.py"
     },
     {
@@ -341,11 +302,11 @@
       "scope_level": "all_projects",
       "scope_target": null,
       "created_by": "user",
-      "ears_text": "WHERE the project keeps a docs/requirements.md register, the project shall require that a commit leave no test citing a requirement whose register row is marked superseded or removed.",
+      "ears_text": "WHERE the project keeps a docs/requirements.md register (with its docs/requirements/*.md parts, where it is split), the project shall require that a commit leave no test citing a requirement whose register row is marked superseded or removed.",
       "gate_points": [
-        "commit",
         "branch_finish"
       ],
+      "requires": "full",
       "script": "requirement_marker_not_superseded.py"
     },
     {
@@ -356,9 +317,15 @@
       "created_by": "user",
       "ears_text": "The project's own Python test suite shall cover at least 90 percent of its statements.",
       "gate_points": [
-        "branch_finish"
+        "release"
       ],
-      "script": "python_test_coverage.py"
+      "requires": "full",
+      "script": "python_test_coverage.py",
+      "inputs": [
+        "pyproject.toml",
+        "src",
+        "tests"
+      ]
     },
     {
       "topic": "issue-form-installed",

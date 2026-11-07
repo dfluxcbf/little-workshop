@@ -117,3 +117,56 @@ def test_cascade_failure_propagates_to_dependents(conn):
     assert {j.id for j in changed} == {child.id, grandchild.id}
     assert db.get_job(conn, child.id).status == JobStatus.FAILED
     assert db.get_job(conn, grandchild.id).status == JobStatus.FAILED
+
+
+def _redeploy_changed(conn):
+    job = Job(type="deployment.redeploy_changed_pillars", target_pillar="deployment", project_id="little-workshop")
+    db.insert_job(conn, job)
+    return job
+
+
+def _orchestration_redeploy(conn):
+    job = Job(type="deployment.redeploy_pillar", target_pillar="deployment", project_id="orchestration",
+              params={"pillar": "orchestration", "commit": "abc"})
+    db.insert_job(conn, job)
+    return job
+
+
+# --- REQ-000000476: The automatic pillar redeploy waits until the workshop is idle ---
+
+def test_the_changed_pillars_redeploy_runs_when_nothing_else_is_going_on(conn):
+    assert is_ready(conn, _redeploy_changed(conn)) is True
+
+
+@pytest.mark.parametrize("status", [JobStatus.QUEUED, JobStatus.RUNNING])
+def test_the_changed_pillars_redeploy_waits_for_any_project_job(conn, status):
+    db.insert_job(conn, Job(type="agent.run_task", target_pillar="agent", project_id="little-meals", status=status))
+    job = _redeploy_changed(conn)
+    assert is_ready(conn, job) is False
+    assert job not in ready_jobs(conn)
+
+
+def test_other_redeploys_and_jobs_behind_a_held_job_do_not_keep_it_waiting(conn):
+    db.insert_job(conn, Job(type="deployment.redeploy_pillar", target_pillar="deployment", project_id="policy", status=JobStatus.RUNNING))
+    held = Job(type="version.feature_finish", target_pillar="version", project_id="little-meals", status=JobStatus.PENDING_CONFIRMATION)
+    db.insert_job(conn, held)
+    db.insert_job(conn, Job(type="noop", target_pillar="reference", project_id="little-meals", depends_on=[held.id]))
+    assert is_ready(conn, _redeploy_changed(conn)) is True
+
+
+# --- REQ-000000477: Orchestration is redeployed last, never mid-dispatch ---
+
+def test_orchestration_redeploy_waits_while_another_dispatch_is_in_flight(conn):
+    finish = Job(type="version.feature_finish", target_pillar="version", project_id="little-meals", status=JobStatus.RUNNING)
+    db.insert_job(conn, finish)  # claimed, its dispatch call not answered yet
+    job = _orchestration_redeploy(conn)
+    assert is_ready(conn, job) is False
+    db.insert_job_run(conn, finish.id, outcome="running", detail="accepted", started_at=finish.created_at, finished_at=None)
+    assert is_ready(conn, job) is True  # accepted: it survives Orchestration's restart
+
+
+def test_another_pillars_redeploy_does_not_wait_for_dispatches(conn):
+    db.insert_job(conn, Job(type="version.feature_finish", target_pillar="version", project_id="little-meals", status=JobStatus.RUNNING))
+    job = Job(type="deployment.redeploy_pillar", target_pillar="deployment", project_id="policy", params={"pillar": "policy"})
+    db.insert_job(conn, job)
+    assert is_ready(conn, job) is True

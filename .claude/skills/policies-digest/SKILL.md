@@ -9,9 +9,12 @@ Run it from the repository root:
 
 ```
 python3 .claude/skills/policies-digest/scripts/digest.py --project-id little-workshop            # every policy attached to the project
-python3 .claude/skills/policies-digest/scripts/digest.py --project-id little-workshop --gate commit
+python3 .claude/skills/policies-digest/scripts/digest.py --project-id little-workshop --gate branch_finish
 ```
 
 It prints one line per policy: its name, the actions it gates and its rule, read live from
 little-workshop, so it is never out of date. To check the project against them, use the `policy-preflight`
 skill; to see the last recorded results, `workshop_policy_results`.
+
+<!-- project -->
+<!-- /project -->

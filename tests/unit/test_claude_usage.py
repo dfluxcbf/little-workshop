@@ -1,4 +1,4 @@
-"""M18, the quick wins of docs/claude_usage_optimization.md: the usage every Claude run reports is
+"""M18, the Claude-usage quick wins: the usage every Claude run reports is
 kept, `agent.query` runs where its cache is reused, and a Job is waited for in one call."""
 
 import json

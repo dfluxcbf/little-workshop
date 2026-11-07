@@ -307,6 +307,20 @@ def test_import_junit_fails_cleanly_for_unknown_suite(client):
     assert response.json()["outcome"] == "failed"
 
 
+# --- REQ-000000484: a check that runs the test suite records the Unit tests run ---
+
+def test_import_junit_finds_the_suite_by_name_within_the_project(client):
+    suite = _create_suite(client, name="Unit tests")
+    response = client.post("/v1/jobs/requirements.import_junit", json={
+        "job_id": "j", "project_id": "p1", "params": {"suite_name": "Unit tests", "xml": '<testsuite><testcase classname="t" name="a" /></testsuite>'},
+    }).json()
+    assert response["outcome"] == "succeeded" and response["result"]["suite_id"] == suite["id"]
+    missing = client.post("/v1/jobs/requirements.import_junit", json={
+        "job_id": "j", "project_id": "other", "params": {"suite_name": "Unit tests", "xml": "<testsuite/>"},
+    }).json()
+    assert missing["outcome"] == "failed" and "no test suite named" in missing["error"]
+
+
 def test_run_tests_fails_cleanly_for_unknown_suite(client):
     response = client.post("/v1/jobs/requirements.run_tests", json={
         "job_id": "j", "project_id": "p1", "params": {"suite_id": "ghost", "commitish": "HEAD"},
@@ -558,6 +572,21 @@ def test_supersede_without_a_register_row_or_a_checkout_still_replaces_the_requi
     assert result["superseded"]["status"] == "superseded"
 
 
+def test_supersede_marks_the_row_in_the_part_of_a_split_register_that_holds_it(client, checkout):
+    from requirements import markers
+
+    (checkout / "docs" / "requirements.md").write_text("# Requirements\n\n- [Parts](requirements/a.md)\n")
+    (checkout / "docs" / "requirements").mkdir()
+    (checkout / "docs" / "requirements" / "a.md").write_text("# A\n")
+    (checkout / "docs" / "requirements" / "b.md").write_text(REGISTER)
+    assert markers.register(checkout)["REQ-000000009"] == {"title": "Other", "description": "x"}
+    old = _create_requirement(client, key="REQ-000000001")
+    assert _supersede(client, old["id"])["result"]["register_updated"] is True
+    lines = (checkout / "docs" / "requirements" / "b.md").read_text().splitlines()
+    assert lines[2].endswith("| M3, superseded by REQ-000000002 |") and lines[3].startswith("| REQ-000000002 |")
+    assert (checkout / "docs" / "requirements" / "a.md").read_text() == "# A\n"
+
+
 # --- REQ-000000450: the EARS form is advice, never a refusal ------------------------------------
 
 def test_a_description_not_in_ears_form_is_kept_with_a_warning(client, checkout):
@@ -572,3 +601,69 @@ def test_a_description_not_in_ears_form_is_kept_with_a_warning(client, checkout)
     superseded = _supersede(client, created["result"]["id"], key="REQ-000000007", description="make it green")
     assert superseded["outcome"] == "succeeded" and superseded["result"]["warnings"]
 
+
+
+# --- REQ-000000500: a requirement's verdict uses its own tests --------------------------------
+
+def _marked_checkout(tmp_path):
+    import subprocess
+    root = tmp_path / "proj"
+    (root / "tests" / "unit").mkdir(parents=True)
+    (root / "tests" / "unit" / "test_x.py").write_text(
+        "# --- REQ-000000001: a works ---\n\ndef test_a():\n    pass\n\n\nclass TestA:\n    def test_method(self):\n        pass\n\n"
+        "# --- REQ-000000002: b works ---\n\ndef test_b():\n    pass\n\n"
+        "# --- REQ-NONE: helpers ---\n\ndef test_helper():\n    pass\n"
+    )
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    return root
+
+
+def test_marker_sections_map_each_test_to_its_requirement(tmp_path):
+    from requirements import markers
+
+    sections = markers.test_sections(_marked_checkout(tmp_path))
+    assert sections == {("tests.unit.test_x", "test_a"): "REQ-000000001", ("tests.unit.test_x", "test_method"): "REQ-000000001",
+                        ("tests.unit.test_x", "test_b"): "REQ-000000002"}
+    assert markers.requirement_for("tests.unit.test_x::test_b[1-2]", sections) == "REQ-000000002"
+    assert markers.requirement_for("tests.unit.test_x.TestA::test_method", sections) == "REQ-000000001"
+    assert markers.requirement_for("tests.unit.test_x::test_helper", sections) is None
+    assert markers.requirement_for("bare", sections) is None
+
+
+def test_one_failing_test_fails_only_its_own_requirement(client, monkeypatch, tmp_path):
+    root = _marked_checkout(tmp_path)
+    monkeypatch.setattr("requirements.app.resolve_project_path", lambda paths, project_id: root)
+    suite = _create_suite(client)
+    keys = {}
+    for key in ("REQ-000000001", "REQ-000000002", "REQ-000000003"):
+        requirement = _create_requirement(client, key=key)
+        keys[key] = requirement["id"]
+        client.post("/v1/jobs/requirements.link_requirement_to_suite", json={
+            "job_id": "j", "project_id": "p1", "params": {"requirement_id": requirement["id"], "suite_id": suite["id"]}})
+    xml = ('<testsuite><testcase classname="tests.unit.test_x" name="test_a" />'
+           '<testcase classname="tests.unit.test_x" name="test_b"><failure message="boom"/></testcase></testsuite>')
+    client.post("/v1/jobs/requirements.import_junit", json={
+        "job_id": "j", "project_id": "p1", "params": {"suite_id": suite["id"], "xml": xml}})
+
+    results = {r["test_name"]: r["requirement_key"] for r in client.get("/v1/test_results", params={"suite_id": suite["id"]}).json()}
+    assert results == {"tests.unit.test_x::test_a": "REQ-000000001", "tests.unit.test_x::test_b": "REQ-000000002"}
+    rows = {r["key"]: r for r in client.get("/v1/report", params={"project_id": "p1"}).json()["requirements"]}
+    assert (rows["REQ-000000001"]["verdict"], rows["REQ-000000001"]["basis"]) == ("passed", "own tests")
+    assert rows["REQ-000000002"]["verdict"] == "failed"
+    assert rows["REQ-000000002"]["own_tests"] == {"total": 1, "failing": ["tests.unit.test_x::test_b"]}
+    # no test of its own in the run: judged on the whole suite, as before
+    assert (rows["REQ-000000003"]["verdict"], rows["REQ-000000003"]["basis"]) == ("failed", "suite")
+
+
+def test_results_are_untagged_when_the_checkout_cannot_be_read(client, monkeypatch):
+    from common.registry_client import ProjectResolutionError
+
+    def unresolvable(paths, project_id):
+        raise ProjectResolutionError("registry down")
+
+    monkeypatch.setattr("requirements.app.resolve_project_path", unresolvable)
+    suite = _create_suite(client)
+    xml = '<testsuite><testcase classname="tests.unit.test_x" name="test_a" /></testsuite>'
+    assert client.post("/v1/jobs/requirements.import_junit", json={
+        "job_id": "j", "project_id": "p1", "params": {"suite_id": suite["id"], "xml": xml}}).json()["outcome"] == "succeeded"
+    assert [r["requirement_key"] for r in client.get("/v1/test_results", params={"suite_id": suite["id"]}).json()] == [None]

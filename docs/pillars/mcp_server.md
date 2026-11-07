@@ -117,3 +117,6 @@ A second, per-project MCP server lives beside this one: `lws asset-mcp serve --p
 declared in a project's own `.mcp.json` rather than registered at user scope, so only projects that opted in have it.
 Its tools (`asset_list`, `asset_export`, `asset_status`) and the bundle they write are in `dashboard.md` ("Assets").
 This server's catalog gains `workshop_project_configure_assets`, the route that opts a project in.
+
+`workshop_project_set_governance` (`project_id`, `governance` `light`|`full`; always asks) sets a project's governance
+(`registry_portfolio.md`, "Governance").

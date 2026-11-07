@@ -15,6 +15,7 @@ DEPLOY = (
     StepSpec("launch", "Launch the new version and wait for it to listen"),
     StepSpec("expose", "Expose the server through Tailscale"),
     StepSpec("confirm_gate", "Open the confirmation window (automatic rollback if unconfirmed)"),
+    StepSpec("health_probe", "Probe the server until healthy: confirm it, or roll back (when the manifest has [server.health])"),
 )
 
 REDEPLOY_PILLAR = (

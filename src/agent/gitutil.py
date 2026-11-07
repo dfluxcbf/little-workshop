@@ -12,8 +12,14 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from common.windows import git_command
+
 
 def run(args: list[str], cwd: Path, check: bool = False) -> subprocess.CompletedProcess:
+    """`args` run in `cwd`, a `git` among them with the checkout's own git (`git.exe` for a Windows-hosted
+    project, REQ-000000510)."""
+    if args and args[0] == "git":
+        args = [*git_command(cwd), *args[1:]]
     result = subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, check=False)
     if check and result.returncode != 0:
         raise RuntimeError(f"git command failed: {' '.join(args)}\n{result.stderr.strip() or result.stdout.strip()}")
@@ -81,8 +87,19 @@ def checkout_remote_tracking(project_dir: Path, branch: str) -> None:
     run(["git", "branch", f"--set-upstream-to=origin/{branch}", branch], project_dir)
 
 
+def changed_paths(project_dir: Path) -> list[str]:
+    """The paths a task changed: untracked files, and tracked ones that differ from HEAD by more than line
+    endings (a CRLF-only difference is the two gits' noise, not the task's work; REQ-000000512)."""
+    untracked = run(["git", "ls-files", "--others", "--exclude-standard", "-z"], project_dir).stdout.split("\0")
+    changed = run(["git", "diff", "HEAD", "--ignore-cr-at-eol", "--name-only", "-z"], project_dir).stdout.split("\0")
+    return sorted({path for path in (*untracked, *changed) if path})
+
+
 def commit_if_dirty(project_dir: Path, message: str) -> bool:
-    run(["git", "add", "-A"], project_dir)
+    """Stage exactly `changed_paths` and commit them; False when there is nothing to commit."""
+    paths = changed_paths(project_dir)
+    if paths:
+        run(["git", "add", "-A", "--", *paths], project_dir)
     result = run(["git", "diff", "--cached", "--quiet"], project_dir)
     if result.returncode != 0:
         run(["git", "commit", "-q", "-m", message], project_dir, check=True)

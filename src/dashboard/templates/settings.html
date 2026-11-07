@@ -40,8 +40,14 @@
     <span class="polcard-meta">
       <span class="chip">{{ p.path }}</span>
       {% if p.repo_url %}<span class="chip">{{ p.repo_url }}</span>{% else %}<span class="chip">no remote</span>{% endif %}
+      {% set governance = p.governance or "light" %}
+      <span class="chip" title="light: only the safety policies, no requirement work; full: requirements and their policies too">{{ governance }} governance</span>
     </span>
     <div class="gate-actions">
+      <form method="post" action="/projects/{{ p.name }}/governance">
+        <input type="hidden" name="governance" value="{{ 'light' if governance == 'full' else 'full' }}">
+        <button type="submit" class="btn" data-busy="Changing…" data-confirm="{% if governance == 'full' %}Make {{ p.name }} light? Its requirement policies stop applying and its Claude files and agent prompts stop asking for requirement work (after the next Claude files sync).{% else %}Make {{ p.name }} full? Its requirement policies apply at the next finish, and its Claude files and agent prompts ask for requirement work (after the next Claude files sync).{% endif %}">Make {{ 'light' if governance == 'full' else 'full' }}</button>
+      </form>
       {% if p.repo_url %}
       <form method="post" action="/projects/{{ p.name }}/archive">
         <button type="submit" class="danger" data-busy="Archiving…" data-confirm="Archive {{ p.name }}? It drops out of the project list, but its registry data and checkout are kept — its remote is the backup. Restore it any time from the Archived tab below.">Archive</button>

@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from common.windows import is_windows_checkout
-from registry import claude_templates, templates, unity_templates
+from common.windows import is_windows_project
+from registry import claude_templates, gitops, templates, unity_templates
 
 TEMPLATES = ("python", "unity")
 
@@ -28,8 +28,9 @@ def create_project_tree(dest: Path, name: str, template: str = "python") -> list
         raise FileExistsError(f"{dest} already exists")
     # Built before anything is written: a name that cannot be a project id raises here, not
     # halfway through the tree (REQ-000000296).
+    windows = is_windows_project(dest)
     claude_files = claude_templates.claude_files(name, template, plugins=claude_templates.TEMPLATE_PLUGINS[template],
-                                                 windows=is_windows_checkout(dest))
+                                                 windows=windows)
 
     written: list[Path] = []
 
@@ -62,6 +63,8 @@ def create_project_tree(dest: Path, name: str, template: str = "python") -> list
 
     write("README.md", templates.readme_md(name))
     write(".gitignore", templates.gitignore())
+    if windows:
+        write(".gitattributes", gitops.eol_gitattributes(None))
     for rel_path, content in claude_files.items():
         write(rel_path, content)
     write(claude_templates.AGENTS_PATH, claude_templates.agents_md(name))

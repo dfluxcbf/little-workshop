@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Toolkit — little-workshop{% endblock %}
+{% block content %}
+<h1>Toolkit</h1>
+<p class="lede">Public Claude Code skills, agents, commands and plugins, from GitHub repositories pinned to a commit. Pick a
+  project to install into: each install or removal is committed on an <code>improvement/toolkit-…</code> branch of the
+  project and recorded in its <code>.claude/toolkit.lock.json</code>. Nothing is installed on its own; an item that runs code
+  shows its files and asks first.</p>
+{% if error %}<div class="card fail">{{ error }}</div>{% endif %}
+
+<section class="card toolkit-picker">
+  <form method="get" action="/toolkit" class="row">
+    <label for="tk-project">Project</label>
+    <select name="project" id="tk-project">
+      <option value="">— choose a project —</option>
+      {% for name in projects %}<option value="{{ name }}"{{ ' selected' if name == project }}>{{ name }}</option>{% endfor %}
+    </select>
+    <button type="submit" class="btn">Show</button>
+  </form>
+</section>
+
+{% if project and status %}
+<div class="toolkit-columns">
+  <section class="card toolkit-panel">
+    <h2>Recommended for {{ project }}</h2>
+    <p class="muted">From the project's kind ({{ status.kinds | join(', ') or 'none' }}) and its Claude usage findings.</p>
+    <div class="toolkit-stack">
+    {% for r in status.recommended %}
+      <div class="polcard toolkit-item">
+        <span class="polcard-head"><span class="polcard-topic">{{ r.item.name }}</span>
+          {% if r.item.runs_code %}<span class="pill warn" title="{{ r.item.runs_code | join('\n') }}">runs code</span>{% endif %}</span>
+        {% if r.item.description %}<span class="polcard-ears">{{ r.item.description }}</span>{% endif %}
+        <span class="polcard-meta"><span class="chip">{{ r.repo }}</span><span class="chip gate">{{ r.why }}</span></span>
+        <form method="post" action="/toolkit/install" class="gate-actions">
+          <input type="hidden" name="repo" value="{{ r.repo }}"><input type="hidden" name="project" value="{{ project }}">
+          <input type="hidden" name="items" value="{{ r.item.id }}">
+          {% if r.item.runs_code %}<input type="hidden" name="confirm_code" value="1">{% endif %}
+          <button type="submit" class="btn primary" data-busy="Installing…"{% if r.item.runs_code %} data-confirm="{{ r.item.name }} runs code: {{ r.item.runs_code | join(', ') }}. Install it into {{ project }}?"{% endif %}>Install</button>
+        </form>
+      </div>
+    {% else %}
+      <p class="muted">Nothing to recommend{% if not sources %}: add the default sources below first{% endif %}.</p>
+    {% endfor %}
+    </div>
+  </section>
+
+  <section class="card toolkit-panel">
+    <h2>Installed in {{ project }}</h2>
+    <div class="toolkit-stack">
+    {% for s in status.installed %}
+      <div class="polcard toolkit-item">
+        <span class="polcard-head"><span class="polcard-topic">{{ s.repo }}</span><span class="chip">{{ s.licence }}</span></span>
+        <span class="polcard-meta"><span class="chip">at {{ (s.sha or '')[:12] }}</span></span>
+        <ul class="toolkit-installed">
+          {% for i in s['items'] %}
+          <li><code>{{ i.id }}</code>{% if i.plugin %} <span class="chip">plugin {{ i.plugin }}</span>{% endif %}
+            {% if i.missing %}<span class="pill fail" title="{{ i.missing | join('\n') }}">{{ i.missing | length }} file(s) missing</span>{% endif %}
+            <form method="post" action="/toolkit/remove" class="inline">
+              <input type="hidden" name="repo" value="{{ s.repo }}"><input type="hidden" name="project" value="{{ project }}">
+              <input type="hidden" name="items" value="{{ i.id }}">
+              <button type="submit" class="danger" data-busy="Removing…" data-confirm="Remove {{ i.id }} from {{ project }}? Exactly the files its lock records are deleted, on a branch.">Remove</button>
+            </form></li>
+          {% endfor %}
+        </ul>
+        <form method="post" action="/toolkit/update" class="gate-actions">
+          <input type="hidden" name="repo" value="{{ s.repo }}"><input type="hidden" name="project" value="{{ project }}">
+          <input type="hidden" name="confirm_code" value="1">
+          <button type="submit" class="btn" data-busy="Updating…" data-confirm="Re-pin {{ s.repo }} to its newest commit and update {{ project }}'s items from it? Changed scripts and hooks are installed too: read the diff the Job lists before finishing the branch.">Update</button>
+        </form>
+      </div>
+    {% else %}
+      <p class="muted">Nothing from the toolkit is installed in {{ project }}.</p>
+    {% endfor %}
+    </div>
+  </section>
+</div>
+{% elif project %}
+<div class="card fail">The toolkit of {{ project }} could not be read (is its checkout there?).</div>
+{% endif %}
+
+<h2 class="section-label">Sources</h2>
+<div class="policy-list">
+  {% for s in sources or [] %}
+  <div class="polcard toolkit-source">
+    <span class="polcard-head"><span class="polcard-topic">{{ s.repo }}</span><span class="chip gate">{{ s.licence }}</span></span>
+    <span class="polcard-meta">
+      <span class="chip">at {{ s.sha[:12] }}</span><span class="chip">{{ s['items'] | length }} items</span>
+      <span class="chip">pinned {{ s.updated_at[:10] }}</span>
+    </span>
+    <details class="toolkit-items">
+      <summary>Items</summary>
+      {% for i in s['items'] %}
+      <div class="toolkit-row">
+        <span class="chip">{{ i.kind }}</span>
+        <span class="toolkit-name"><strong>{{ i.name }}</strong>{% if i.description %}<span class="muted"> — {{ i.description | truncate(160) }}</span>{% endif %}</span>
+        {% if i.runs_code %}<span class="pill warn" title="{{ i.runs_code | join('\n') }}">runs code ({{ i.runs_code | length }})</span>{% endif %}
+        {% if project %}
+        <form method="post" action="/toolkit/install" class="inline">
+          <input type="hidden" name="repo" value="{{ s.repo }}"><input type="hidden" name="project" value="{{ project }}">
+          <input type="hidden" name="items" value="{{ i.id }}">
+          {% if i.runs_code %}<input type="hidden" name="confirm_code" value="1">{% endif %}
+          <button type="submit" data-busy="Installing…"{% if i.runs_code %} data-confirm="{{ i.name }} runs code: {{ i.runs_code | join(', ') | truncate(600) }}. Install it into {{ project }}?"{% endif %}>Install</button>
+        </form>
+        {% endif %}
+      </div>
+      {% else %}<p class="muted">No item found at this commit.</p>{% endfor %}
+    </details>
+    <form method="post" action="/toolkit/update" class="gate-actions">
+      <input type="hidden" name="repo" value="{{ s.repo }}">
+      <button type="submit" class="btn" data-busy="Re-pinning…">Re-pin to newest</button>
+    </form>
+  </div>
+  {% else %}
+  <div class="card">
+    <p>No source yet. The defaults are mattpocock/skills, DietrichGebert/ponytail (its skills), BayramAnnakov/claude-reflect
+      and pbakaus/impeccable; adding them pins each to its newest commit and installs nothing.</p>
+    <form method="post" action="/toolkit/seed"><button type="submit" class="btn primary" data-busy="Adding…">Add the default sources</button></form>
+  </div>
+  {% endfor %}
+</div>
+
+<section class="card toolkit-add">
+  <h2>Add a source</h2>
+  <form method="post" action="/toolkit/add_source" class="row">
+    <input type="text" name="repo" placeholder="owner/repo" pattern="[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+" required>
+    <button type="submit" class="btn" data-busy="Adding…">Add</button>
+  </form>
+  <p class="muted">Suggested sources, with their licences and the projects they fit: <code>docs/toolkit_sources.md</code>.</p>
+</section>
+{% endblock %}

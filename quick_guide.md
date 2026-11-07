@@ -176,5 +176,5 @@ available.
 | What does each pillar actually do? | `docs/pillars/<name>.md` |
 | What's built vs. still planned? | `docs/milestones.md` |
 | What was actually implemented, requirement by requirement? | `docs/requirements.md` |
-| What's genuinely unresolved right now? | `docs/open_questions.md` |
+| What's genuinely unresolved right now? | the backlog (`lws project backlog list --project-id little-workshop`) |
 | Why does this project not depend on the tools it's absorbing? | `docs/governance_policy.md` |

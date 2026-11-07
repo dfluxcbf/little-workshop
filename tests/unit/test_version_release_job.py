@@ -124,11 +124,11 @@ def test_patch_bumps_before_any_release_count_from_production_s_own_patch(repo):
 
 
 def test_patch_bumps_after_a_release_skip_the_line_s_own_first_bump(repo):
-    run_release(repo, "p", {}, FakeServices(), job_id="r1")  # releases 0.1.0: master 0.2.0, dev 0.2.1
+    run_release(repo, "p", {}, FakeServices(), job_id="r1")  # releases 0.1.0: master stays 0.1.0, dev 0.1.1
     assert patch_bumps(repo, "dev", "master", released=True)[0] == 0
     _finish_topic(repo, "one", "x = 1\n")
     _finish_topic(repo, "two", "y = 2\n")
-    assert patch_bumps(repo, "dev", "master", released=True)[0] == 2  # 0.2.1 -> 0.2.3
+    assert patch_bumps(repo, "dev", "master", released=True)[0] == 2  # 0.1.1 -> 0.1.3
 
 
 @pytest.mark.parametrize(("combine", "min_delta", "min_bumps", "expected"), [
@@ -146,7 +146,7 @@ def test_last_production_tag_is_the_newest_stable_tag_on_production(repo):
     run_release(repo, "p", {}, FakeServices(), job_id="r1")
     _finish_topic(repo, "one", "x = 1\n")
     run_release(repo, "p", {}, FakeServices(), job_id="r2")
-    assert last_production_tag(repo, "master") == "v0.2.2"
+    assert last_production_tag(repo, "master") == "v0.1.2"
 
 
 def test_merge_check_passes_when_dev_holds_everything_on_production(repo):
@@ -347,12 +347,12 @@ def test_little_workshop_itself_redeploys_every_enabled_pillar_in_dependency_ord
         "version": {"status": "healthy"}, "mcp": {"status": "disabled"},
     })
     result = relaunch(services, "little-workshop", repo, "dev", "r1")
-    assert result["batches"] == [["orchestration"], ["agent"], ["version"], ["deployment"]]
-    assert result["pillars"] == ["orchestration", "agent", "version", "deployment"]
+    assert result["batches"] == [["agent"], ["version"], ["deployment"], ["orchestration"]]
+    assert result["pillars"] == ["agent", "version", "deployment", "orchestration"]
     jobs = {j["params"]["pillar"]: j for j in services.of_type("deployment.redeploy_pillar")}
     assert set(jobs) == {"orchestration", "agent", "version", "deployment"}
-    assert jobs["orchestration"]["depends_on"] == ["r1"]  # nothing starts before the release job is done
-    for earlier, later in (("orchestration", "agent"), ("agent", "version"), ("version", "deployment")):
+    assert jobs["agent"]["depends_on"] == ["r1"]  # nothing starts before the release job is done
+    for earlier, later in (("agent", "version"), ("version", "deployment"), ("deployment", "orchestration")):
         assert jobs[later]["depends_on"] == [jobs[earlier]["id"]]
     assert result["job_ids"] == [jobs[p]["id"] for p in result["pillars"]]
     assert {j["params"]["commit"] for j in jobs.values()} == {_git(["rev-parse", "dev"], repo).strip()}

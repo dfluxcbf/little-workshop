@@ -42,7 +42,7 @@ def test_bootstrap_scaffolds_the_preflight_skill(tmp_path, template):
 
 
 def test_workshops_own_generated_claude_files_match_the_generator():
-    for rel, text in claude_templates.claude_files("little-workshop", "python", **claude_templates.OWN_SETTINGS).items():
+    for rel, text in claude_templates.claude_files("little-workshop", "python", governance="full", **claude_templates.OWN_SETTINGS).items():
         assert (REPO / rel).read_text() == text, rel
 
 
@@ -164,8 +164,8 @@ def test_agents_md_says_what_enforces_the_rules(agents):
     assert agents.rstrip().endswith(claude_templates.SHARED_BRIEFING_IMPORT)
     assert "<!-- A briefing" in agents
     shared = claude_templates.shared_briefing_md("little-widget")
-    for needle in (".githooks/commit-msg", ".githooks/pre-commit", "refuses the raw git", "policy-preflight",
-                   "pending_confirmation", "lws_scope_guard", "no committed secrets"):
+    for needle in (".githooks/commit-msg", "a secret", "written by the finish", "refuses raw git",
+                   "policy-preflight", "pending_confirmation", "lws_scope_guard"):
         assert needle in shared, needle
 
 

@@ -5,6 +5,7 @@ paths:
   - "src/registry/scaffold.py"
   - "src/registry/unity_templates.py"
   - "src/cli/main.py"
+  - "src/cli/commands/*.py"
   - "src/mcp_server/tools.py"
   - "tools/sync_claude_files.py"
 ---

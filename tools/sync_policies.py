@@ -2,7 +2,7 @@
 """Bring Policy & Compliance's live policies in line with tools/policy_scripts/.
 
 Each entry of tools/policy_scripts/policies.json is one policy: its EARS rule, scope, gate
-points and the script beside the manifest. Without --apply this only prints what differs
+points, governance it requires, inputs and the script beside the manifest. Without --apply this only prints what differs
 from the live pillar (`lws policy list`). With --apply it replaces each differing policy in
 place (`lws policy activate --policy-id`, which keeps the policy's project selection) and
 creates a missing one, selecting the projects its entry names (`lws policy projects set`).
@@ -62,6 +62,10 @@ def changes(entry: dict, live: dict | None, without: set[str]) -> list[str]:
         found.append("test_script")
     if sorted(wanted_gate_points(entry, without)) != sorted(live["gate_points"]):
         found.append(f"gate_points {sorted(live['gate_points'])} -> {sorted(wanted_gate_points(entry, without))}")
+    if sorted(entry.get("inputs", [])) != sorted(live.get("inputs", [])):
+        found.append(f"inputs {sorted(live.get('inputs', []))} -> {sorted(entry.get('inputs', []))}")
+    if entry.get("requires") != live.get("requires"):
+        found.append(f"requires {live.get('requires')!r} -> {entry.get('requires')!r}")
     for key in ("target_pillar", "scope_level", "scope_target", "created_by"):
         if entry[key] != live[key]:
             found.append(f"{key} {live[key]!r} -> {entry[key]!r}")
@@ -72,6 +76,8 @@ def activate(entry: dict, live: dict | None, without: set[str]) -> dict:
     draft = {key: entry[key] for key in (
         "ears_text", "test_script", "topic", "target_pillar", "scope_level", "scope_target", "created_by",
     )}
+    draft["inputs"] = entry.get("inputs", [])
+    draft["requires"] = entry.get("requires")
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(draft, fh)
         path = fh.name

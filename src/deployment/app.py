@@ -54,6 +54,11 @@ class RollbackTimeoutRequest(BaseModel):
 class ProvisionWorktreeRequest(BaseModel):
     project_id: str
     commitish: str = "HEAD"
+    # On a branch instead of detached (created from `commitish` when `new_branch`); `on_windows`: a
+    # Windows-hosted project's worktree on its own drive (REQ-000000518).
+    branch: str | None = None
+    new_branch: bool = False
+    on_windows: bool = False
 
 
 ResolveFn = Callable[[Paths, str | None], Path]
@@ -179,7 +184,7 @@ def build_app(
             try:
                 manifest = _load_manifest(paths, request.project_id)
                 project_dir = resolve(paths, request.project_id)
-                report = flow.down(request.project_id, manifest, on_windows=windows.is_windows_checkout(project_dir))
+                report = flow.down(request.project_id, manifest, on_windows=windows.is_windows_project(project_dir))
             except (DeploymentError, ProjectResolutionError) as exc:
                 return {"outcome": "failed", "error": str(exc)}
         return {
@@ -346,7 +351,7 @@ def build_app(
         on_windows = False
         if not manifest.external:
             try:
-                on_windows = windows.is_windows_checkout(resolve(paths, project_id))
+                on_windows = windows.is_windows_project(resolve(paths, project_id))
             except ProjectResolutionError:
                 pass
         result = read(flow.status, project_id, manifest, on_windows=on_windows)
@@ -415,16 +420,22 @@ def build_app(
             project_dir = resolve(paths, request.project_id)
         except ProjectResolutionError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
-        worktree_id, path = worktrees.provision(paths, project_dir, request.commitish)
+        try:
+            worktree_id, path = worktrees.provision(
+                paths, project_dir, request.commitish, project_id=request.project_id, branch=request.branch,
+                new_branch=request.new_branch, on_windows=request.on_windows,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         return {"worktree_id": worktree_id, "path": str(path)}
 
     @app.delete("/v1/worktrees/{worktree_id}")
-    def release_worktree(worktree_id: str, project_id: str) -> dict:
+    def release_worktree(worktree_id: str, project_id: str, on_windows: bool = False) -> dict:
         try:
             project_dir = resolve(paths, project_id)
         except ProjectResolutionError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
-        worktrees.release(paths, project_dir, worktree_id)
+        worktrees.release(paths, project_dir, worktree_id, project_id=project_id, on_windows=on_windows)
         return {"released": True}
 
     return app

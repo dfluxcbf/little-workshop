@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -438,3 +440,58 @@ def test_secrets_cache_expires_after_its_ttl(client, monkeypatch):
     app_client.get("/v1/secrets")
 
     assert len(calls) == 2  # a real refresh happened once the TTL elapsed
+
+
+# --- REQ-000000487: the generated Claude files a stopped rebase is settled with -------------------
+
+def test_regenerated_claude_files_merge_the_project_entries_of_both_sides(client, tmp_path):
+    from registry import claude_templates as ct
+
+    app_client, workdir = client
+    sides = []
+    for extra in ("Bash(make a*)", "Bash(make b*)"):
+        side = ct.settings("little-widget", "bazel")
+        side["permissions"]["allow"].append(extra)
+        sides.append(side)
+    response = app_client.post("/v1/projects/little-widget/claude_files/regenerated",
+                               json={"checkout": str(workdir), "settings_sides": sides})
+    assert response.status_code == 200
+    answer = response.json()
+    assert answer["files"][ct.SHARED_BRIEFING_PATH] == ct.claude_files("little-widget", "bazel")[ct.SHARED_BRIEFING_PATH]
+    allow = json.loads(answer["files"][ct.SETTINGS_PATH])["permissions"]["allow"]
+    assert allow.count("Bash(make a*)") == 1 and allow.count("Bash(make b*)") == 1
+    assert ct.REMINDER_PATH in answer["retired"]
+    missing = app_client.post("/v1/projects/little-widget/claude_files/regenerated", json={"checkout": str(tmp_path / "nope")})
+    assert missing.status_code == 404
+
+
+# --- REQ-000000495: a project's governance level is a Registry setting ----------------------
+
+def test_a_project_starts_light_and_set_governance_changes_it(client):
+    app_client, workdir = client
+    app_client.post("/v1/jobs/project.bootstrap", json={"job_id": "j1", "params": {"name": "little-widget", "dest_dir": str(workdir)}})
+    assert app_client.get("/v1/projects/little-widget").json()["governance"] == "light"
+    body = app_client.post("/v1/jobs/project.set_governance",
+                           json={"job_id": "j2", "project_id": "little-widget", "params": {"governance": "full"}}).json()
+    assert body["outcome"] == "succeeded" and body["result"]["governance"] == "full"
+    assert app_client.get("/v1/projects/little-widget").json()["governance"] == "full"
+    refused = app_client.post("/v1/jobs/project.set_governance",
+                              json={"job_id": "j3", "project_id": "little-widget", "params": {"governance": "strict"}}).json()
+    assert refused["outcome"] == "failed" and "light, full" in refused["error"]
+    ghost = app_client.post("/v1/jobs/project.set_governance",
+                            json={"job_id": "j4", "project_id": "ghost", "params": {"governance": "full"}}).json()
+    assert ghost["outcome"] == "failed" and "not found" in ghost["error"]
+
+
+def test_projects_registered_before_the_setting_are_light(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE projects (name TEXT PRIMARY KEY, path TEXT NOT NULL, repo_url TEXT, status TEXT NOT NULL, "
+                "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    old.execute("INSERT INTO projects VALUES ('old', '/x', NULL, 'active', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')")
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    assert db.get_project(conn, "old").governance == "light"
+    conn.close()

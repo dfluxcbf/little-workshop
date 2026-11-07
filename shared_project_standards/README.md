@@ -57,12 +57,12 @@ agent task (intent `docs`, manual review) that asks Claude to:
 
 1. review every little-workshop standard: `docs/governance_policy.md`, `docs/requirements_policy.md`,
    `docs/version_policy.md`, `docs/architecture.md`, `docs/design.md`, `docs/milestones.md`,
-   `docs/open_questions.md`, `docs/pillars/*.md`, the agent prompt templates under
+   `docs/pillars/*.md`, the agent prompt templates under
    `src/agent/templates/prompts/`, `src/dashboard/job_catalog.py`, and the super-repo's
    `docs/policies/*.md`;
 2. review every policy registered in Policy & Compliance (`lws policy list`,
-   `lws policy projects list`), their code in `tools/policy_scripts/`, plus any pending drafts in
-   `docs/pending_policy_drafts/`;
+   `lws policy projects list`), their code in `tools/policy_scripts/`, plus any pending drafts
+   (`lws policy draft list`);
 3. review every registered project's `.claude/AGENTS.md`, `README.md` and `docs/*_policy.md`;
 4. update every document in this folder, add a folder for any project that lacks one, and keep the
    folder of a project that is no longer registered, saying so in its README.

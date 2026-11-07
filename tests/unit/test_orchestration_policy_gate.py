@@ -283,9 +283,9 @@ def test_maybe_gate_true_and_flips_to_pending_confirmation_when_verdict_is_fail(
     db.insert_job(conn, job)
 
     fake_runner = FakeRunner()
-    assert policy_gate.maybe_gate(conn, job, runner=fake_runner) is True
+    assert policy_gate.maybe_gate(conn, job, runner=fake_runner, timeout_seconds=600) is True
     assert db.get_job(conn, job.id).status == JobStatus.PENDING_CONFIRMATION
-    assert fake_runner.calls  # the watchdog was armed for real
+    assert fake_runner.calls  # an explicit timeout arms the watchdog for real
 
 
 def test_maybe_gate_false_for_not_applicable_verdict(conn):
@@ -415,3 +415,74 @@ def test_usage_analyze_dispatch_timeout_exceeds_default():
     from orchestration.dispatch import DEFAULT_DISPATCH_TIMEOUT_SECONDS, dispatch_timeout_for
 
     assert dispatch_timeout_for("usage.analyze") >= 300 > DEFAULT_DISPATCH_TIMEOUT_SECONDS
+
+
+def _held(conn, *, job_type="version.feature_finish", project_id="proj-a", params=None):
+    job = Job(type=job_type, target_pillar="version", project_id=project_id, params=params or {},
+              status=JobStatus.PENDING_CONFIRMATION)
+    db.insert_job(conn, job)
+    return job
+
+
+# --- REQ-000000474: A held action waits for the user ---
+
+def _failing_check_and_job(conn):
+    check = Job(type="policy.check_project", target_pillar="policy", project_id="proj-a", status=JobStatus.SUCCEEDED, result={"outcome": "fail"})
+    db.insert_job(conn, check)
+    job = Job(type="version.feature_finish", target_pillar="version", project_id="proj-a", depends_on=[check.id])
+    db.insert_job(conn, job)
+    return job
+
+
+def test_a_held_job_arms_no_timer_by_default(conn, monkeypatch):
+    monkeypatch.delenv(policy_gate.CONFIRM_TIMEOUT_ENV, raising=False)
+    job = _failing_check_and_job(conn)
+    fake_runner = FakeRunner()
+    assert policy_gate.maybe_gate(conn, job, runner=fake_runner) is True
+    assert db.get_job(conn, job.id).status == JobStatus.PENDING_CONFIRMATION
+    assert fake_runner.calls == []
+
+
+@pytest.mark.parametrize("value", ["", "0", "-5", "soon"])
+def test_an_unset_zero_or_invalid_timeout_setting_means_no_timer(monkeypatch, value):
+    monkeypatch.setenv(policy_gate.CONFIRM_TIMEOUT_ENV, value)
+    assert policy_gate.confirm_timeout_seconds() is None
+
+
+def test_the_timeout_setting_opts_in_to_the_timer(conn, monkeypatch):
+    monkeypatch.setenv(policy_gate.CONFIRM_TIMEOUT_ENV, "900")
+    job = _failing_check_and_job(conn)
+    fake_runner = FakeRunner()
+    assert policy_gate.maybe_gate(conn, job, runner=fake_runner) is True
+    (argv,) = fake_runner.calls
+    assert "--on-active=900s" in argv and argv[-1] == job.id
+
+
+# --- REQ-000000475: A newer request supersedes a held action ---
+
+def test_a_new_finish_cancels_the_held_one_and_its_dependants(conn, monkeypatch):
+    monkeypatch.setattr(policy_gate, "resolve_gating_policies", lambda *a, **k: [])
+    held = _held(conn)
+    dependant = Job(type="noop", target_pillar="reference", project_id="proj-a", depends_on=[held.id])
+    db.insert_job(conn, dependant)
+    newer = Job(type="version.feature_finish", target_pillar="version", project_id="proj-a")
+    db.insert_job(conn, newer)
+    policy_gate.attach_policy_gate(conn, lambda pillar: None, newer)
+    cancelled = db.get_job(conn, held.id)
+    assert cancelled.status == JobStatus.CANCELLED and cancelled.error == f"superseded by job {newer.id}"
+    assert db.list_job_runs(conn, held.id)[-1]["outcome"] == "cancelled"
+    assert db.get_job(conn, dependant.id).status == JobStatus.FAILED
+
+
+@pytest.mark.parametrize("other", [
+    {"job_type": "version.improvement_finish"},
+    {"project_id": "proj-b"},
+    {"params": {"branch": "feature/other"}},
+])
+def test_a_held_job_of_another_type_project_or_branch_stays_held(conn, monkeypatch, other):
+    monkeypatch.setattr(policy_gate, "resolve_gating_policies", lambda *a, **k: [])
+    held = _held(conn, **other)
+    newer = Job(type="version.feature_finish", target_pillar="version", project_id="proj-a")
+    db.insert_job(conn, newer)
+    policy_gate.attach_policy_gate(conn, lambda pillar: None, newer)
+    assert db.get_job(conn, held.id).status == JobStatus.PENDING_CONFIRMATION

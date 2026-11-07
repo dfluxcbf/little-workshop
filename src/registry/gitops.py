@@ -13,15 +13,42 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from common.windows import git_command, is_windows_project
+
+# The line every non-Unity Windows-hosted project's .gitattributes starts with: text stored and checked out
+# with LF whichever git touches it, so WSL tools and Windows tools see the same files (REQ-000000511).
+EOL_RULE = "* text=auto eol=lf"
+
 
 def run(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    if args and args[0] == "git":
+        args = [*git_command(cwd), *args[1:]]
     return subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def pin_autocrlf(path: Path) -> bool:
+    """`core.autocrlf=false` in a Windows-hosted checkout (Windows' git defaults to true, WSL's to nothing, so
+    the two disagreed about every text file); False and nothing done for a WSL checkout."""
+    if not is_windows_project(path):
+        return False
+    run(["git", "config", "core.autocrlf", "false"], cwd=path)
+    return True
+
+
+def eol_gitattributes(current: str | None) -> str | None:
+    """The .gitattributes text holding `EOL_RULE` first, or None when `current` already has it."""
+    lines = (current or "").splitlines()
+    if EOL_RULE in (line.strip() for line in lines):
+        return None
+    kept = [line for line in lines if line.strip() not in ("* text=auto", "* text=auto eol=crlf")]
+    return "\n".join([EOL_RULE, *kept]) + "\n"
 
 
 def init_repo_and_commit(
     path: Path, *, commit_message: str = "first", author_email: str | None = None
 ) -> None:
     run(["git", "init", "-b", "master"], cwd=path)
+    pin_autocrlf(path)
     if author_email:
         run(["git", "config", "user.email", author_email], cwd=path)
         run(["git", "config", "user.name", "little-workshop"], cwd=path)
@@ -46,7 +73,7 @@ def remote_url(path: Path) -> str | None:
     something to require or synthesize the way `project.bootstrap`
     creates it."""
     result = subprocess.run(
-        ["git", "remote", "get-url", "origin"], cwd=path, capture_output=True, text=True
+        [*git_command(path), "remote", "get-url", "origin"], cwd=path, capture_output=True, text=True
     )
     if result.returncode != 0:
         return None

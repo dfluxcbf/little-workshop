@@ -14,8 +14,8 @@ from version.gitops import (
     create_and_checkout, create_annotated_tag, current_branch, get_tag_commit, is_ancestor,
     is_dirty, is_merge_in_progress, list_tags, merge_abort, merge_commit, merge_no_ff, run, tag_exists, no_requirement,
 )
-from version.stages import GitflowVersion, bump_minor, bump_patch, normalize_to_stable
-from version.workflows import checkout_existing_branch, clear_untracked_state_file, delete_branch_if_configured, merge_conflict_result, read_version, require_checked_out_branch, success_with_hook_warnings, write_version
+from version.stages import GitflowVersion, bump_patch, normalize_to_stable
+from version.workflows import checkout_existing_branch, delete_branch_if_configured, merge_conflict_result, read_version, require_checked_out_branch, success_with_hook_warnings, write_version
 
 
 def _commit_lvx_and_version(repo_root: Path, ver: GitflowVersion) -> None:
@@ -133,7 +133,6 @@ def cmd_release_candidate_promote(repo_root: Path, rc_number: int) -> CommandRes
         return CommandResult(success=False, message=f"RC tag {tag!r} does not exist for release line {cur!r}.")
 
     set_promoted_rc(repo_root, cur, rc_number)
-    commit_if_dirty(repo_root, no_requirement(f"chore(version): promote RC {rc_number} for {cur}"))
 
     return CommandResult(success=True, message=f"Promoted RC {rc_number} ({tag}) as the release target.", data={"rc_number": rc_number, "tag": tag})
 
@@ -141,10 +140,8 @@ def cmd_release_candidate_promote(repo_root: Path, rc_number: int) -> CommandRes
 def _abort_release(repo_root: Path, release_branch: str) -> None:
     if is_merge_in_progress(repo_root):
         merge_abort(repo_root)
-    clear_untracked_state_file(repo_root)
     checkout_existing_branch(repo_root, release_branch)
     clear_release_finish_state(repo_root)
-    commit_if_dirty(repo_root, no_requirement("chore(version): abort release finish"))
 
 
 def _release_finish_post_prod_merge(
@@ -158,18 +155,10 @@ def _release_finish_post_prod_merge(
         else:
             handle.detail = f"{production_tag} already exists"
 
-    bumped_ver = bump_minor(stable_ver)
-    with step("bump_version") as handle:
-        write_version(repo_root, bumped_ver)
-        hook_errors.extend(run_version_hooks(repo_root, str(bumped_ver)))
-        commit_if_dirty(repo_root, no_requirement(f"chore: bump version to {bumped_ver}"))
-        handle.detail = f"{stable_ver} -> {bumped_ver} on {prod}"
-
     save_release_finish_state(
         repo_root, release_branch=release_branch, stable_version=str(stable_ver), production_branch=prod,
         integration_branch=integ, merge_message=f"Back-merge release {stable_ver} into {integ}", phase="dev_backmerge",
     )
-    commit_if_dirty(repo_root, no_requirement("chore(version): advance release finish state to dev_backmerge"))
 
     back_message = f"Back-merge release {stable_ver} into {integ}"
     conflict = None
@@ -177,11 +166,8 @@ def _release_finish_post_prod_merge(
         checkout(repo_root, integ)
         handle.detail = f"{prod} into {integ}"
         try:
-            # Back-merge production, not the release branch: production now also holds
-            # the minor bump and finish-state commits made after the release merge.
-            # Leaving those off the integration branch made every *next* release
-            # conflict on VERSION, .lvx/state.json and whatever version_hooks write
-            # (2026-09-24, found building the Release job).
+            # Back-merge production, not the release branch, so the integration branch
+            # holds the release merge itself and the next release merges without conflicts.
             merge_no_ff(repo_root, prod, back_message)
         except MergeConflictError as exc:
             if not can_ask():
@@ -197,15 +183,15 @@ def _release_finish_post_prod_merge(
             first_error=str(conflict),
         )
 
-    return _release_finish_establish_next_patch(repo_root, release_branch, stable_ver, prod, integ, bumped_ver, hook_errors)
+    return _release_finish_establish_next_patch(repo_root, release_branch, stable_ver, prod, integ, hook_errors)
 
 
 def _release_finish_establish_next_patch(
-    repo_root: Path, release_branch: str, stable_ver: GitflowVersion, prod: str, integ: str,
-    bumped_ver: GitflowVersion, hook_errors: list,
+    repo_root: Path, release_branch: str, stable_ver: GitflowVersion, prod: str, integ: str, hook_errors: list,
 ) -> CommandResult:
+    """Production keeps the released version; the integration branch moves on to the next patch."""
     production_tag = stable_ver.production_tag()
-    next_ver = bump_patch(bumped_ver)
+    next_ver = bump_patch(stable_ver)
     with step("next_patch") as handle:
         write_version(repo_root, next_ver)
         hook_errors.extend(run_version_hooks(repo_root, str(next_ver)))
@@ -215,17 +201,16 @@ def _release_finish_establish_next_patch(
     with step("delete_branch") as handle:
         delete_branch_if_configured(repo_root, release_branch)
         clear_release_finish_state(repo_root)
-        commit_if_dirty(repo_root, no_requirement("chore(version): clear release finish state"))
         handle.detail = release_branch
 
     return success_with_hook_warnings(
         message=(
-            f"Released {stable_ver} (production tag {production_tag}). Minor bumped to {bumped_ver} on {prod}. "
+            f"Released {stable_ver} (production tag {production_tag}); {prod} stays at {stable_ver}. "
             f"Next patch line established at {next_ver} on {integ}."
         ),
         hook_errors=hook_errors,
         data={
-            "stable_version": str(stable_ver), "production_version": str(bumped_ver), "next_version": str(next_ver),
+            "stable_version": str(stable_ver), "production_version": str(stable_ver), "next_version": str(next_ver),
             "tag": production_tag, "production_branch": prod, "integration_branch": integ,
         },
     )
@@ -234,9 +219,7 @@ def _release_finish_establish_next_patch(
 def _release_finish_post_dev_backmerge(
     repo_root: Path, release_branch: str, stable_ver: GitflowVersion, prod: str, integ: str
 ) -> CommandResult:
-    return _release_finish_establish_next_patch(
-        repo_root, release_branch, stable_ver, prod, integ, bump_minor(stable_ver), hook_errors=[],
-    )
+    return _release_finish_establish_next_patch(repo_root, release_branch, stable_ver, prod, integ, hook_errors=[])
 
 
 def cmd_release_finish(repo_root: Path, force: bool = False, action: str | None = None) -> CommandResult:
@@ -247,10 +230,8 @@ def cmd_release_finish(repo_root: Path, force: bool = False, action: str | None 
         if is_merge_in_progress(repo_root):
             merge_abort(repo_root)
         release_branch = (finish_state or {}).get("release_branch", "release branch")
-        clear_untracked_state_file(repo_root)
         checkout_existing_branch(repo_root, release_branch)
         clear_release_finish_state(repo_root)
-        commit_if_dirty(repo_root, no_requirement("chore(version): abort release finish"))
         return CommandResult(success=True, message=f"Aborted release finish for {release_branch!r}. Repository restored.")
 
     if action == "continue":
@@ -330,11 +311,13 @@ def _release_finish_normal(repo_root: Path, force: bool) -> CommandResult:
                 raise StepFailed(f"Promoted RC {rc_tag} is not reachable from HEAD. Cannot finish.")
             handle.detail = rc_tag
 
+    finalize_errors: list[str] = []
     with step("finalize_version") as handle:
+        # Production keeps this version after the release, so every file version_hooks writes carries it too.
         current_file_ver = read_version(repo_root)
-        if not current_file_ver.is_stable():
-            vfile = write_version(repo_root, stable_ver)
-            commit_file(repo_root, vfile, no_requirement(f"chore: finalize release version {stable_ver}"))
+        write_version(repo_root, stable_ver)
+        finalize_errors = run_version_hooks(repo_root, str(stable_ver))
+        if commit_if_dirty(repo_root, no_requirement(f"chore: finalize release version {stable_ver}")):
             handle.detail = f"{current_file_ver} -> {stable_ver}"
         else:
             handle.detail = f"already {current_file_ver}"
@@ -347,7 +330,6 @@ def _release_finish_normal(repo_root: Path, force: bool) -> CommandResult:
             repo_root, release_branch=release_branch, stable_version=str(stable_ver), production_branch=prod,
             integration_branch=integ, merge_message=merge_message, phase="prod_merge",
         )
-        commit_if_dirty(repo_root, no_requirement("chore(version): begin release finish"))
 
     conflict = None
     with step("merge_production") as handle:
@@ -369,7 +351,7 @@ def _release_finish_normal(repo_root: Path, force: bool) -> CommandResult:
             first_error=str(conflict),
         )
 
-    return _release_finish_post_prod_merge(repo_root, release_branch, stable_ver, prod, integ, hook_errors=[])
+    return _release_finish_post_prod_merge(repo_root, release_branch, stable_ver, prod, integ, hook_errors=finalize_errors)
 
 
 def cmd_release_status(repo_root: Path) -> CommandResult:

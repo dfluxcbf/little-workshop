@@ -11,7 +11,7 @@ from version.common import CommandResult, ensure_clean_tree, get_integration_bra
 from version.configstore import clear_hotfix_finish_state, get_issue_link, load_hotfix_finish_state, save_hotfix_finish_state
 from version.gitops import MergeConflictError, checkout, commit_if_dirty, create_annotated_tag, current_branch, is_merge_in_progress, merge_abort, merge_commit, merge_no_ff, no_requirement
 from version.stages import GitflowVersion, bump_patch
-from version.workflows import checkout_existing_branch, clear_untracked_state_file, create_prefixed_branch, delete_branch_if_configured, merge_conflict_result, read_version, require_checked_out_branch, success_with_hook_warnings, write_version
+from version.workflows import checkout_existing_branch, create_prefixed_branch, delete_branch_if_configured, merge_conflict_result, read_version, require_checked_out_branch, success_with_hook_warnings, write_version
 
 
 def cmd_hotfix_start(repo_root: Path, name: str, issue: int | None = None, force: bool = False) -> CommandResult:
@@ -47,7 +47,6 @@ def _hotfix_finish_post_prod_merge(
         new_version=str(new_ver),
         phase="dev_backmerge",
     )
-    commit_if_dirty(repo_root, no_requirement("chore(version): advance hotfix finish state to dev_backmerge"))
 
     back_message = f"Back-merge hotfix {hotfix_branch[len('hotfix/'):]} into {integ}"
     with step("merge_integration") as handle:
@@ -72,7 +71,6 @@ def _hotfix_finish_post_prod_merge(
     with step("delete_branch") as handle:
         delete_branch_if_configured(repo_root, hotfix_branch)
         clear_hotfix_finish_state(repo_root)
-        commit_if_dirty(repo_root, no_requirement("chore(version): clear hotfix finish state"))
         handle.detail = hotfix_branch
 
     return success_with_hook_warnings(
@@ -85,10 +83,8 @@ def _hotfix_finish_post_prod_merge(
 def _abort_hotfix(repo_root: Path, hotfix_branch: str) -> None:
     if is_merge_in_progress(repo_root):
         merge_abort(repo_root)
-    clear_untracked_state_file(repo_root)
     checkout_existing_branch(repo_root, hotfix_branch)
     clear_hotfix_finish_state(repo_root)
-    commit_if_dirty(repo_root, no_requirement("chore(version): abort hotfix finish"))
 
 
 def cmd_hotfix_finish(repo_root: Path, force: bool = False, action: str | None = None) -> CommandResult:
@@ -99,10 +95,8 @@ def cmd_hotfix_finish(repo_root: Path, force: bool = False, action: str | None =
         if is_merge_in_progress(repo_root):
             merge_abort(repo_root)
         hotfix_branch = (finish_state or {}).get("hotfix_branch", "hotfix branch")
-        clear_untracked_state_file(repo_root)
         checkout_existing_branch(repo_root, hotfix_branch)
         clear_hotfix_finish_state(repo_root)
-        commit_if_dirty(repo_root, no_requirement("chore(version): abort hotfix finish"))
         return CommandResult(success=True, message=f"Aborted hotfix finish for {hotfix_branch!r}. Repository restored.")
 
     if action == "continue":
@@ -136,7 +130,6 @@ def cmd_hotfix_finish(repo_root: Path, force: bool = False, action: str | None =
             tag = new_ver.production_tag()
             delete_branch_if_configured(repo_root, hotfix_branch)
             clear_hotfix_finish_state(repo_root)
-            commit_if_dirty(repo_root, no_requirement("chore(version): clear hotfix finish state"))
             return CommandResult(
                 success=True,
                 message=f"Hotfix {hotfix_name} finished. Tag {tag} created on {prod}.",
@@ -181,7 +174,6 @@ def _hotfix_finish_normal(repo_root: Path, force: bool) -> CommandResult:
             repo_root, hotfix_branch=cur, production_branch=prod, integration_branch=integ,
             merge_message=merge_msg, new_version=str(new_ver), phase="prod_merge",
         )
-        commit_if_dirty(repo_root, no_requirement("chore(version): begin hotfix finish"))
 
     conflict = None
     with step("merge_production") as handle:

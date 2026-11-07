@@ -17,25 +17,12 @@ back to the root document, because it is not bound by it.
   empty database file) has been removed as part of declaring this
   independence.
 
-## What's tracked, and how, until the Requirements & Quality pillar exists
+## Where they live
 
-Right now, "requirements" for little-workshop live in **`docs/requirements.md`**
-— resolved 2026-09-15, correcting this document's own earlier wording,
-which said they'd be "recorded directly in `docs/milestones.md`." That
-undersold what implementation-scale requirements actually need: dozens of
-them across ten pillars, each wanting its own row, with `milestones.md`'s
-"Requirements" column holding references to them rather than their text.
-This is deliberately less structured than `lreq`'s
-Project→Suite→Requirement→TestResult model — that's an accepted, temporary
-cost, not an oversight. Adopting `lreq` now to avoid that cost would recreate
-the exact dependency `docs/governance_policy.md` explains this project can't
-carry while it's designing that dependency's eventual replacement.
-
-The `REQ-#########` identifier concept is kept as a *pattern*, not a
-mandate: sequential, unambiguous, assigned in creation order, recorded in
-`docs/requirements.md` — never invented loosely, never reused, but also
-never requiring `lreq` to mint it. See that file's own "Conventions"
-section for the full shape.
+The Requirements & Quality pillar holds little-workshop's requirements (it is its own first user, per the
+self-application principle in `docs/governance_policy.md`). `docs/requirements.md` and the per-pillar files
+under `docs/requirements/` are the register that mirrors it: one row per requirement, created with the same
+`REQ-#########` id as the pillar row (sequential, assigned in creation order, never reused).
 
 ## Requirements are the source of truth for every implementation request (2026-09-21)
 
@@ -46,10 +33,9 @@ section for the full shape.
   requirement that supersedes it in the same change, and never blocks a new request; reworded
   2026-10-24, it read "is locked"); one that removes behaviour removes them. The commits
   that implement the request cite the affected ids (`REQ-nnnnnnnnn`) in their messages.
-  Judging that the mapping is *right* is a review matter; the mechanical part — commits under
-  `src/` cite an id — is the `commit-cites-requirement` policy, filed as a draft for approval in
-  the app. Since 2026-10-24 it gates the branch finish only, never a single commit: a citation is
-  form, not protection, and a check of form never refuses work in progress.
+  Judging that the mapping is *right* is a review matter. No policy checks the citations (2026-11-07:
+  `commit-cites-requirement` was retired, since the squash at the finish discarded what it checked);
+  the finish lists the ids the branch names in the squash commit's `Requirements:` line instead.
 - **A requirement records a request; it never caps the next one** (2026-10-24). When the user
   asks for something that contradicts a requirement, a test or a design note, the request wins:
   the same change supersedes or removes the old row and updates its tests. The look of an
@@ -61,7 +47,7 @@ section for the full shape.
   where the definition-of-done report counts them. Publishing mid-work only makes the next change
   a supersede.
 - **Superseding is one call** (2026-10-24): `workshop_requirements_supersede` creates the new
-  row, marks the old one superseded in the pillar and in `docs/requirements.md`, and lists the
+  row, marks the old one superseded in the pillar and in the register, and lists the
   tests still tagged with the old id; the policy `requirement-marker-not-superseded` refuses a
   commit that leaves one of them behind.
 - **`REQ-NONE`: a commit that affects no requirement says so** (2026-09-24). A commit
@@ -70,8 +56,7 @@ section for the full shape.
   affected"; it is not a label for any particular kind of change, and it is never cited
   alongside a real `REQ-nnnnnnnnn` id. little-workshop's own bookkeeping commits (version
   bumps, finish/release state, release candidates, changelogs) cite it; merge commits,
-  which carry a branch's real changes, never do. `commit-cites-requirement` accepts either
-  and refuses both together. `REQ-NONE` is recognised in any letter case (`Req-NONE`,
+  which carry a branch's real changes, never do. `REQ-NONE` is recognised in any letter case (`Req-NONE`,
   `req-none`; amended 2026-09-24); requirement ids stay uppercase, and little-workshop's own
   commits write `REQ-NONE`.
 - **Requirements follow EARS.** A description reads `<The system> shall <response>`, optionally
@@ -83,8 +68,7 @@ section for the full shape.
 
 ## Project-specific notes
 
-- No test suites exist yet (design-only round, no `src/`/`tests/` content).
-- This section will be rewritten, not just appended to, the day the
-  Requirements & Quality pillar can track little-workshop's own
-  requirements — at which point little-workshop becomes its own first user,
-  per the self-application principle in `docs/governance_policy.md`.
+- The unit suite (`tests/unit`) is the "Unit tests" suite every requirement links to; tests carry
+  `# --- REQ-nnnnnnnnn: <title> ---` sections, which `workshop_requirements_sync_markers` reads.
+- Removed behaviour (2026-11-07): a draft requirement is deleted from the pillar and its row removed;
+  a published one is superseded by one that states the removal.

@@ -9,6 +9,15 @@
 {%- endmacro %}
 {% macro tokens(n) -%}{{ "{:,.1f} M".format(n / 1000000) if n >= 1000000 else "{:,.0f} k".format(n / 1000) if n >= 1000 else n }}{%- endmacro %}
 {% macro pct(v) -%}{{ "—" if v is none else "{:.1f}%".format(v * 100) }}{%- endmacro %}
+{% macro draft_skill(kind, row_id, default_project) %}
+<form class="inline" method="post" action="/usage/draft_skill">
+  <input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="row_id" value="{{ row_id }}">
+  <select name="project" aria-label="Project the skill is drafted in">
+    {% for name in projects %}<option value="{{ name }}"{{ ' selected' if name == default_project }}>{{ name }}</option>{% endfor %}
+  </select>
+  <button type="submit" data-busy="Starting…">Draft as a skill</button>
+</form>
+{% endmacro %}
 {% block content %}
 {% if summary %}
 <p class="muted stats-head">Every Claude session on this machine, from telemetry, hooks, run results and the transcript backfill.
@@ -199,12 +208,29 @@
     {% if c.examples %}<ul>{% for e in c.examples %}<li class="muted">{{ e.project }}: {% for call in e.calls %}<code class="usage-signature">{{ call }}</code>{{ '' if loop.last else ' → ' }}{% endfor %}</li>{% endfor %}</ul>{% endif %}
     {% if c.replacement %}<p class="muted">Replaced by <code>{{ c.replacement }}</code>: about ${{ "{:,.2f}".format(c.tokens_avoided) }} of weighted tokens avoided so far.</p>{% endif %}
     <div class="row">
-      {% if c.state == 'open' %}<a class="btn primary" href="/tasks/new?candidate={{ c.id }}">Make it a task</a>{% endif %}
+      {% if c.state == 'open' %}<a class="btn primary" href="/tasks/new?candidate={{ c.id }}">Make it a task</a>
+      {{ draft_skill('candidate', c.id, (c.examples or [{}])[0].project) }}{% endif %}
       <form class="inline" method="post" action="/usage/candidates/{{ c.id }}/dismiss"><button type="submit">Dismiss</button></form>
     </div>
   </details>
   {% else %}
   <p class="muted">No candidate yet. Mining runs weekly (<code>usage.mine_automation</code>).</p>
+  {% endfor %}
+</section>
+
+<section class="card" id="proposals" data-live-region>
+  <h2>Plugin proposals</h2>
+  <p class="muted">Whole requests Claude handles the same way, mostly without judgment. "Draft as a skill" starts a task that writes
+    the request as a draft skill in the project's <code>.claude/skills/</code>, on an improvement branch you review.</p>
+  {% for p in proposals %}
+  <details class="stats-table">
+    <summary><code class="usage-signature">{{ p.name }}</code> &middot; {{ p.occurrences }}&times; in {{ p.sessions }} session{{ '' if p.sessions == 1 else 's' }}
+      &middot; saves about ${{ "{:,.2f}".format(p.weekly_value) }} a week &middot; {{ p.scope }}</summary>
+    {% if p.steps %}<p class="muted">Steps: {% for st in p.steps %}<code>{{ st.step }}</code>{{ '' if loop.last else ' → ' }}{% endfor %}</p>{% endif %}
+    <div class="row">{{ draft_skill('proposal', p.id, (p.draft or {}).project_id) }}</div>
+  </details>
+  {% else %}
+  <p class="muted">No open proposal.</p>
   {% endfor %}
 </section>
 

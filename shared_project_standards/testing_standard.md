@@ -19,7 +19,8 @@ Sources: `docs/requirements_policy.md`, agent prompts (`bug.md`, `milestone.md`,
    projects beside the checkout). A skip degrades the whole suite's verdict.
 4. **Coverage:** a Python project's own suite covers at least 90 percent of statements
    (`python-test-coverage`, measured on `tests/unit` when it exists, otherwise `tests/`; skipped for
-   a project without `pyproject.toml`, `src/` or `tests/`).
+   a project without `pyproject.toml`, `src/` or `tests/`). It gates the release, and its run is recorded
+   as the project's "Unit tests" run.
 5. **Playwright is the standard for UI and UX.** Tests use pytest-playwright's `page` fixture and
    relative URLs (`page.goto("/")`) so they run against whatever `--base-url` they receive;
    little-workshop starts the branch's app and passes it. Where a Playwright MCP server is attached,

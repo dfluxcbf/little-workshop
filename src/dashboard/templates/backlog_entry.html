@@ -8,6 +8,20 @@
 <h1>{{ entry.title }}</h1>
 <p class="muted">Added {{ entry.created_at | reltime }} &middot; updated {{ entry.updated_at | reltime }}</p>
 
+{% if task_succeeded and entry.status == "open" %}
+<form class="flash row" method="post" action="/backlog/{{ project }}/{{ entry.id }}/state">
+  <span>The task launched from this entry succeeded (<a href="/tasks/{{ task_run.project_id }}/{{ task_run.id }}">{{ task_run.title }}</a>).</span>
+  <input type="hidden" name="status" value="done"><button type="submit" class="primary" data-busy="Saving…">Mark done</button>
+</form>
+{% endif %}
+<form class="row backlog-state" method="post" action="/backlog/{{ project }}/{{ entry.id }}/state">
+  <label for="backlog-status">Status</label>
+  <select name="status" id="backlog-status">{% for s in statuses %}<option value="{{ s }}"{{ ' selected' if entry.status == s }}>{{ s }}</option>{% endfor %}</select>
+  <label for="backlog-priority">Priority</label>
+  <select name="priority" id="backlog-priority">{% for p in priorities %}<option value="{{ p }}"{{ ' selected' if entry.priority == p }}>{{ p }}</option>{% endfor %}</select>
+  <button type="submit" data-busy="Saving…">Set</button>
+</form>
+
 <form method="post" action="/backlog/{{ project }}/{{ entry.id }}/save" class="backlog-form">
   <section class="dcard">
     <div class="dcard-head"><span class="dcard-title">Primary entry</span><span class="dcard-note">as first written</span></div>
@@ -51,7 +65,7 @@
     </form>
     {% endif %}
   </div>
-  <p class="muted">Written from the refined entry, with Claude reading the project's checkout (it cannot change it), and replaced each time. It ends by asking Claude to delete this entry from the backlog once the work is done.</p>
+  <p class="muted">Written from the refined entry, with Claude reading the project's checkout (it cannot change it), and replaced each time. The task never closes this entry: mark it done yourself once the work is in.</p>
 </section>
 
 <div class="row backlog-actions">

@@ -13,7 +13,7 @@ Requests are grouped by the **family** of their action, with the variants of one
 (`workshop_version_feature_finish`, `workshop_version_hotfix_finish` and `lws version improvement-finish` are all
 `version_finish`), so that one plugin covers every variant. A group is proposed when judgment was needed in at
 most `MAX_FALLBACK_RATE` of its requests. Nothing here uses Claude, and nothing is built from it: a person
-decides."""
+decides, and may draft a proposal as a skill (`skill_draft.py`)."""
 
 from __future__ import annotations
 
@@ -23,13 +23,12 @@ from collections import Counter
 from datetime import date, timedelta
 from statistics import median
 
-from usage import counterfactual, mining, signatures
+from usage import counterfactual, mining, rollup, signatures, skill_draft
 from usage.pricing import Price
 
 MAX_FALLBACK_RATE = 0.25  # Claude needed in at most one request in four: "only in rare occasions"
 CORE_SHARE = 0.25  # a step in at least this share of a group's requests is the plugin's; rarer ones are listed apart
 MAX_FALLBACK_CALLS = 8  # the longest run of judgment calls taken for a fallback inside a request
-MARKETPLACE = "little-workshop"  # the local marketplace the plugins are installed from
 SCOPE_ALL = "all-projects"
 # Calls a plugin makes no use of: loading a tool's schema, a session's to-do list. They are neither steps nor judgment.
 NOISE = ("ToolSearch(", "TodoWrite(")
@@ -260,16 +259,11 @@ def frequency(days_seen: set[str], period_days: int, occurrences: int) -> str:
     return "weekly" if occurrences / (period_days / 7) >= 1 else "occasional"
 
 
-def install(name: str, scope: str) -> dict:
-    """How the plugin is installed once built, with Claude Code's own plugin commands, from the local marketplace."""
-    everywhere = scope == SCOPE_ALL
-    return {
-        "marketplace": MARKETPLACE,
-        "scope": "user" if everywhere else "project",
-        "where": "every project (user scope)" if everywhere else f"the {scope.split(':', 1)[1]} checkout (project scope)",
-        "command": f"claude plugin install {name}@{MARKETPLACE} --scope {'user' if everywhere else 'project'}",
-        "list_command": "claude plugin list",
-    }
+def draft(name: str, scope: str) -> dict:
+    """How a proposal becomes something Claude uses: "Draft as a skill" (`usage.draft_skill`) starts a fixed agent task
+    that writes it as a draft skill on an improvement branch of the project (little-workshop's for all projects)."""
+    project = scope.split(":", 1)[1] if scope.startswith("project:") else rollup.WORKSHOP_PROJECT
+    return {"skill": skill_draft.skill_name(name), "project_id": project, "job": "usage.draft_skill"}
 
 
 def _steps(key: str, requests: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -368,7 +362,7 @@ def propose(conn: sqlite3.Connection, prices: dict[str, Price], *, today: date |
                                   "calls_median": median(p["calls"]), "weekly_cost": sum(p["costs"]) / weeks}
                                  for p in points.values()), key=lambda p: -p["occurrences"]),
             "projects": dict(projects.most_common()),
-            "install": install(name, scope),
+            "draft": draft(name, scope),
             "examples": [{"session_id": request["session_id"], "project": request["project"],
                           "calls": [(call["detail"] or call["signature"])[:200] for call in request["calls"]]}
                          for request in requests[:2]],

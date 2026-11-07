@@ -26,14 +26,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from registry import claude_templates as ct  # noqa: E402
+from common.paths import Paths  # noqa: E402
+from common.registry_client import resolve_project  # noqa: E402
 from registry.claude_sync import (  # noqa: E402,F401 - the functions this command line is made of
     PLATFORM_PROJECT, briefing_note, detect_plugins, detect_project_id, detect_template, generator_owned, is_generated_entry,
     is_guard_entry, merged_settings, options_for, pending, wanted_files, write as write_files,
 )
 
 
-def sync(checkout: Path, project_id: str | None, template: str | None, write: bool) -> list[str]:
-    report = pending(checkout, project_id, template)
+def registered_governance(project_id: str) -> str | None:
+    """The project's governance as the Registry holds it, or None when little-workshop does not answer."""
+    try:
+        return resolve_project(Paths.from_env(), project_id, timeout=3.0).get("governance")
+    except Exception:  # noqa: BLE001 - best effort: unreachable, unregistered or older registry alike
+        return None
+
+
+def sync(checkout: Path, project_id: str | None, template: str | None, write: bool,
+         governance: str | None = None) -> list[str]:
+    report = pending(checkout, project_id, template, governance)
     changed = report["changed"]
     if write:
         write_files(checkout, report["files"])
@@ -53,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-id", default=None, help="Default: read from the checkout (one checkout only)")
     parser.add_argument("--template", choices=tuple(ct.TEST_BASH), default=None, help="Default: detected")
     parser.add_argument("--write", action="store_true", help="Write the files instead of listing them")
+    parser.add_argument("--governance", choices=ct.GOVERNANCE_LEVELS, default=None,
+                        help="Default: the project's setting in the Registry, else full for little-workshop and light otherwise")
     args = parser.parse_args(argv)
     if args.project_id and len(args.checkout) > 1:
         parser.error("--project-id names one project: pass one --checkout with it")
@@ -61,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         if not checkout.is_dir():
             print(f"{checkout}: not a directory", file=sys.stderr)
             return 2
-        pending += len(sync(checkout, args.project_id, args.template, args.write))
+        governance = args.governance or registered_governance(args.project_id or detect_project_id(checkout))
+        pending += len(sync(checkout, args.project_id, args.template, args.write, governance))
     if pending and not args.write:
         print("run with --write to write them")
     return 0

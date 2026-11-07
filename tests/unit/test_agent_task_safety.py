@@ -96,7 +96,7 @@ def test_an_unknown_intent_fails_the_job_at_once_and_creates_no_run(paths, conn,
     client, _repo = make_client(paths, conn, tmp_path, monkeypatch)
     answer = _start(client, "job-1", intent="improvement")
     assert answer["outcome"] == "failed"
-    assert "unknown intent 'improvement'" in answer["error"] and "bug, docs, milestone, task" in answer["error"]
+    assert "unknown intent 'improvement'" in answer["error"] and "bug, docs, interview, milestone, skill, task" in answer["error"]
     assert client.get("/v1/runs/proj").json() == []
 
 

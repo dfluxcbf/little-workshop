@@ -10,14 +10,17 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import threading
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from common import playwright
+from common import playwright, windows
+from common.worktree_client import WorktreeUnavailable, provision_worktree, release_worktree
 from common.job_steps import done, step
 from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
@@ -30,10 +33,25 @@ from agent.requirements_client import RequirementsClientError
 from agent.screenshots import Screenshotter
 from agent.version_client import VersionClientError
 
-BRANCH_TYPE_FOR_INTENT = {"milestone": "feature", "docs": "improvement", "bug": "improvement", "task": "improvement"}
+BRANCH_TYPE_FOR_INTENT = {"milestone": "feature", "docs": "improvement", "bug": "improvement", "task": "improvement",
+                         "skill": "improvement", "interview": "improvement"}
 # The kinds of work a task can be: each has its prompt, `templates/prompts/<intent>.md`.
 INTENTS = tuple(sorted(BRANCH_TYPE_FOR_INTENT))
 STOPPED_BY_USER = "stopped by user"
+# The intents whose work is documentation: the shared standards are given to these (and to a task that
+# names them), not to every task.
+STANDARDS_INTENTS = ("docs",)
+
+
+def touches_standards(intent: str, title: str, description: str) -> bool:
+    """Whether a task is about documentation or standards, so its prompt carries the standards block."""
+    return intent in STANDARDS_INTENTS or "standard" in f"{title}\n{description}".lower()
+
+
+def has_ui(paths: Paths, project_id: str, project_dir: Path) -> bool:
+    """Whether the project has something a user sees: a server manifest (`manifest.deployment.toml`, the
+    Deployment pillar's) or browser tests (`tests/ui/`). Only then does a task get the Playwright block."""
+    return (paths.project_dir(project_id) / "manifest.deployment.toml").is_file() or (project_dir / "tests" / "ui").is_dir()
 
 
 def intent_error(intent: str) -> str | None:
@@ -47,15 +65,15 @@ class AgentFlowError(RuntimeError):
     pass
 
 
-
-# A task runs without permission prompts, so the projects' guard refuses image generation in it unless the
-# user allowed it for this task (docs/pillars/generation.md, "Asking for pictures").
-IMAGE_GENERATION_ENV = "LITTLE_WORKSHOP_IMAGE_GENERATION"
+UNITY_VERSION_FILE = "ProjectSettings/ProjectVersion.txt"
 
 
-def task_env(env: dict[str, str], params: dict) -> dict[str, str]:
-    """The task's environment: the usage tags, and whether the user allowed it to generate images."""
-    return {**env, IMAGE_GENERATION_ENV: "allowed"} if params.get("allow_image_generation") else env
+def runs_in_live_checkout(project_dir: Path) -> bool:
+    """A Windows-hosted Unity project's task works in the live checkout (the editor's `Library/` is there);
+    every other task gets a worktree of its own (REQ-000000518)."""
+    return windows.is_windows_project(project_dir) and (project_dir / UNITY_VERSION_FILE).is_file()
+
+
 
 @dataclass
 class RunTaskResult:
@@ -94,12 +112,96 @@ class AgentFlow:
     playwright_mcp: bool = True
     # Where little-workshop's `shared_project_standards/` is; None asks the Registry.
     standards_root: Path | None = None
+    # A task works in a worktree of its own (REQ-000000518); the Agentic Development app turns this on. Off,
+    # or for a Windows-hosted Unity project, it works in the live checkout, one task per project at a time.
+    worktrees: bool = False
+    _live_locks: dict = field(default_factory=dict)
+    _live_locks_guard: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self) -> None:
         if self.github is None:
             self.github = GitHubAdapter(runner=self.runner)
         if self.screenshotter is None:
             self.screenshotter = Screenshotter(runner=self.runner, sleep=self.sleep)
+
+    # -- the task's worktree (REQ-000000518) -----------------------------
+
+    def isolated(self, project_dir: Path) -> bool:
+        return self.worktrees and not runs_in_live_checkout(project_dir)
+
+    def _live_lock(self, project_id: str) -> threading.Lock:
+        with self._live_locks_guard:
+            return self._live_locks.setdefault(project_id, threading.Lock())
+
+    def _base_ref(self, project_dir: Path, name: str) -> str:
+        """`name`, or `origin/<name>` when that is ahead of it (the live checkout's branch is never pulled)."""
+        remote = f"refs/remotes/origin/{name}"
+        if not gitutil.branch_exists(project_dir, remote):
+            return name
+        if not gitutil.branch_exists(project_dir, f"refs/heads/{name}"):
+            return remote
+        ahead = gitutil.run(["git", "merge-base", "--is-ancestor", name, remote], project_dir).returncode == 0
+        return remote if ahead else name
+
+    def _prepare_worktree(self, project_id: str, project_dir: Path, spec: BranchingSpec, cfg: dict, short_name: str) -> tuple[str, Path, str]:
+        """A worktree on the task's branch, provisioned by Deployment & Servers: (branch, path, worktree id)."""
+        on_windows = windows.is_windows_project(project_dir)
+        try:
+            gitutil.fetch(project_dir)
+        except RuntimeError:
+            pass  # offline: work from what is here
+        pull = False
+        if spec.mode == MODE_NEW:
+            branch = f"{spec.branch_type}/{short_name}"
+            if gitutil.branch_exists(project_dir, f"refs/heads/{branch}"):
+                commitish, new_branch = branch, False
+            else:
+                commitish, new_branch = self._base_ref(project_dir, spec.base or cfg["integration_branch"]), True
+        else:
+            branch = spec.branch
+            location = gitutil.branch_location(project_dir, branch)
+            if location is None:
+                raise AgentFlowError(f"branch {branch!r} does not exist locally or on origin")
+            if location == "local":
+                commitish, new_branch = branch, False
+                pull = gitutil.branch_exists(project_dir, f"refs/remotes/origin/{branch}")
+            else:
+                commitish, new_branch = f"refs/remotes/origin/{branch}", True
+        try:
+            worktree_id, worktree = provision_worktree(
+                self.paths, project_id, commitish, branch=branch, new_branch=new_branch, on_windows=on_windows,
+            )
+        except WorktreeUnavailable as exc:
+            raise AgentFlowError(f"could not provision the task's worktree: {exc}") from exc
+        try:
+            if pull:
+                gitutil.pull_ff_only(worktree, branch)
+            elif spec.mode == MODE_EXISTING and new_branch:
+                gitutil.run(["git", "branch", f"--set-upstream-to=origin/{branch}", branch], worktree)
+        except RuntimeError:
+            self._release_worktree(project_id, project_dir, worktree_id)
+            raise
+        return branch, worktree, worktree_id
+
+    def _release_worktree(self, project_id: str, project_dir: Path, worktree_id: str) -> bool:
+        try:
+            release_worktree(self.paths, project_id, worktree_id, on_windows=windows.is_windows_project(project_dir))
+        except WorktreeUnavailable:
+            return False  # kept: the next task of the project tries again
+        return True
+
+    def _end_worktree(self, conn: sqlite3.Connection, run_id: str, project_id: str, project_dir: Path, worktree_id: str | None) -> None:
+        if worktree_id and self._release_worktree(project_id, project_dir, worktree_id):
+            db.update_run(conn, run_id, worktree_id=None)
+
+    def clean_kept_worktrees(self, conn: sqlite3.Connection, project_id: str, project_dir: Path) -> int:
+        """Remove the worktrees kept for inspection by the project's failed or stopped runs."""
+        removed = 0
+        for run in db.kept_worktrees(conn, project_id):
+            if self._release_worktree(project_id, project_dir, run["worktree_id"]):
+                db.update_run(conn, run["id"], worktree_id=None)
+                removed += 1
+        return removed
 
     # -- branch preparation ------------------------------------------------
 
@@ -165,7 +267,9 @@ class AgentFlow:
 
     # -- Claude --------------------------------------------------------------
 
-    def _render_prompt(self, *, project_id: str, project_dir: Path, title: str, description: str, intent: str, branch: str, specified: bool, integ: str, result_file: Path, playwright_mcp: bool = False, standards_dir: Path | None = None) -> str:
+    def _render_prompt(self, *, project_id: str, project_dir: Path, title: str, description: str, intent: str, branch: str, specified: bool, integ: str, result_file: Path, playwright_mcp: bool = False, standards_dir: Path | None = None, ui: bool = True, governance: str = "light") -> str:
+        """`ui`: the project has a UI, so the prompt carries the UI and UX (Playwright) section; `governance` `full`, the
+        requirement rule (REQ-000000496)."""
         instructions = templates_util.render(
             templates_util.read_prompt("branching_specified.md" if specified else "branching_auto.md"),
             branch=branch, integration_branch=integ,
@@ -180,11 +284,33 @@ class AgentFlow:
             templates_util.read_prompt("common.md"),
             standards_instructions=standards_instructions, project_id=project_id, project_dir=str(project_dir), title=title, description=description or "(no description)",
             intent=intent, branching_instructions=instructions, result_file=str(result_file),
-            intent_instructions=templates_util.read_prompt(f"{intent}.md").strip(),
-            ui_instructions=templates_util.render(
+            requirements_rule=templates_util.read_prompt("requirements.md") if governance == "full" else "",
+            intent_instructions=self._intent_instructions(intent, project_dir, governance),
+            ui_instructions="# UI and UX work\n\n" + templates_util.render(
                 templates_util.read_prompt("ui_playwright_mcp.md" if playwright_mcp else "ui_playwright.md"),
                 mcp_package=playwright.MCP_PACKAGE,
-            ).strip(),
+            ).strip() + "\n\n" if ui else "",
+        )
+
+    @staticmethod
+    def _intent_instructions(intent: str, project_dir: Path, governance: str) -> str:
+        """The intent's prompt; the bootstrap interview's (REQ-000000519) says how to interview and whether
+        requirements are written."""
+        text = templates_util.read_prompt(f"{intent}.md").strip()
+        if intent != "interview":
+            return text
+        grill_me = (project_dir / ".claude" / "skills" / "grill-me" / "SKILL.md").is_file()
+        return templates_util.render(
+            text,
+            interview_method=(
+                "Run the interview with the `grill-me` skill (installed in `.claude/skills/grill-me/`)." if grill_me
+                else "Ask plain, concrete questions, each answerable in a sentence or two."
+            ),
+            requirements_step=(
+                "Then write the requirements the answers imply into `docs/requirements.md`, one EARS statement per row "
+                "(\"When/While ..., the system shall ...\"), following the requirements rule above." if governance == "full"
+                else "Write no requirements: this project's governance is light, so `docs/design.md` is the record."
+            ),
         )
 
     def _playwright_args(self, run_id: str, enabled: bool) -> tuple[str, ...]:
@@ -251,14 +377,20 @@ class AgentFlow:
         if refusal:
             raise AgentFlowError(refusal)
         run_id = run_id or db.new_run_id()
-        standards_dir = self._standards_copy(project_id, params, run_id)
-        try:
-            return self._run_task(conn, project_id, project_dir, repo_url, params, run_id, standards_dir, should_stop)
-        finally:
-            standards.remove_copy(standards_dir)
+        isolated = self.isolated(project_dir)
+        # In the live checkout, one task of a project at a time; each worktree is a task's own.
+        with nullcontext() if isolated else self._live_lock(project_id):
+            standards_dir = self._standards_copy(project_id, params, run_id)
+            try:
+                return self._run_task(conn, project_id, project_dir, repo_url, params, run_id, standards_dir, should_stop, isolated)
+            finally:
+                standards.remove_copy(standards_dir)
 
     def _standards_copy(self, project_id: str, params: dict, run_id: str) -> Path | None:
+        """A copy only for a task about documentation or standards, and never when the run turned it off."""
         if not params.get("include_standards", True):
+            return None
+        if not touches_standards(params.get("intent", "task"), params.get("title", ""), params.get("description", "")):
             return None
         root = self.standards_root or standards.resolve_standards_root(self.paths)
         if root is None or not root.is_dir():
@@ -270,7 +402,7 @@ class AgentFlow:
 
     def _run_task(
         self, conn: sqlite3.Connection, project_id: str, project_dir: Path, repo_url: str | None, params: dict,
-        run_id: str, standards_dir: Path | None, should_stop: Callable[[], bool] = lambda: False,
+        run_id: str, standards_dir: Path | None, should_stop: Callable[[], bool] = lambda: False, isolated: bool = False,
     ) -> RunTaskResult:
         title = params.get("title") or f"task for {project_id}"
         description = params.get("description", "")
@@ -303,10 +435,18 @@ class AgentFlow:
 
         try:
             with step("check_checkout") as handle:
-                self._require_clean(project_dir)
+                if isolated:  # the live checkout may be dirty or on any branch: the task never touches it
+                    if not project_dir.is_dir():
+                        raise AgentFlowError(f"project checkout not found at {project_dir}")
+                    self.clean_kept_worktrees(conn, project_id, project_dir)
+                else:
+                    self._require_clean(project_dir)
                 cfg = version_client.get_config(self.paths, project_id)
                 resolved_spec = resolve_branching(spec, intent, cfg)
-                handle.detail = str(project_dir)
+                if isolated and resolved_spec.mode == MODE_AUTO:
+                    # A worktree is on a branch from its start: the intent's default type, named after the task.
+                    resolved_spec = resolve_branching(BranchingSpec(MODE_NEW, auto_approve=resolved_spec.auto_approve), intent, cfg)
+                handle.detail = f"{project_dir} (the task gets a worktree of its own)" if isolated else str(project_dir)
         except (AgentFlowError, BranchingError, VersionClientError) as exc:
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, None, "failed", None, None, str(exc))
@@ -314,36 +454,43 @@ class AgentFlow:
         short_name = f"agent-{slugify(title)}"
         try:
             with step("prepare_branch") as handle:
-                branch = self._prepare_branch(project_id, project_dir, resolved_spec, cfg, short_name)
-                handle.detail = branch
-        except (AgentFlowError, VersionClientError) as exc:
+                worktree_id = None
+                if isolated:
+                    branch, workdir, worktree_id = self._prepare_worktree(project_id, project_dir, resolved_spec, cfg, short_name)
+                    handle.detail = f"{branch} in {workdir}"
+                else:
+                    branch, workdir = self._prepare_branch(project_id, project_dir, resolved_spec, cfg, short_name), project_dir
+                    handle.detail = branch
+                db.update_run(conn, run_id, workdir=str(workdir), worktree_id=worktree_id)
+        except (AgentFlowError, VersionClientError, RuntimeError) as exc:
             db.update_run(conn, run_id, status=db.FAILED, summary=str(exc))
             return RunTaskResult(run_id, db.FAILED, None, "failed", None, None, str(exc))
 
         if should_stop():
             return stopped(branch)
-        base_sha = gitutil.head_sha(project_dir)
+        base_sha = gitutil.head_sha(workdir)
         session_name = remote_control_session_name(project_id, run_id) if self.remote_control else None
         if session_name:
             db.record_session_start(conn, run_id, project_id, session_name)
 
         integ = cfg["integration_branch"]
         result_file = report.result_path(self.paths.state_home, project_id, run_id)
-        playwright_args = self._playwright_args(run_id, bool(params.get("playwright_mcp", self.playwright_mcp)))
+        ui = has_ui(self.paths, project_id, workdir)
+        playwright_args = self._playwright_args(run_id, ui and bool(params.get("playwright_mcp", self.playwright_mcp)))
 
         try:
             with step("run_claude"):
                 # Inside the step: a prompt that cannot be built fails this step, not an unnamed moment between two.
                 prompt = self._render_prompt(
-                    project_id=project_id, project_dir=project_dir, title=title, description=description, intent=intent,
+                    project_id=project_id, project_dir=workdir, title=title, description=description, intent=intent,
                     branch=branch, specified=resolved_spec.specified, integ=integ, result_file=result_file,
-                    playwright_mcp=bool(playwright_args), standards_dir=standards_dir,
+                    playwright_mcp=bool(playwright_args), standards_dir=standards_dir, ui=ui,
+                    governance=params.get("governance", "light"),
                 )
                 summary_text, _is_error = self._invoke_claude(
-                    project_dir, prompt, session_name, playwright_args,
+                    workdir, prompt, session_name, playwright_args,
                     on_usage=lambda usage: db.record_usage(conn, db.USAGE_RUN, usage, ref_id=run_id, project_id=project_id, job_id=job_id),
-                    env=task_env(usage_client.launch_env(self.paths, project=project_id, job_id=job_id, job_type="agent.run_task", run_id=run_id),
-                                 params),
+                    env=usage_client.launch_env(self.paths, project=project_id, job_id=job_id, job_type="agent.run_task", run_id=run_id),
                     session_id=session_id,
                 )
         except AgentFlowError as exc:
@@ -366,7 +513,7 @@ class AgentFlow:
             with step("detect_branch") as handle:
                 fallback_type = BRANCH_TYPE_FOR_INTENT.get(intent, "improvement")
                 fallback_branch = f"{fallback_type}/{short_name}"
-                branch, rescued = self._detect_auto_branch(project_dir, integ, fallback_branch, base_sha)
+                branch, rescued = self._detect_auto_branch(workdir, integ, fallback_branch, base_sha)
                 handle.detail = branch
         else:
             done("detect_branch", "the branch was fixed by the task")
@@ -384,13 +531,13 @@ class AgentFlow:
         manifest = params.get("_deployment_manifest")
         if manifest is not None:
             with step("screenshots") as handle:
-                screenshots, screenshot_note = self.screenshotter.capture(manifest, project_dir, branch, run_id, github_repo)
+                screenshots, screenshot_note = self.screenshotter.capture(manifest, workdir, branch, run_id, github_repo)
                 handle.detail = f"{len(screenshots)} screenshot(s)"
         else:
             done("screenshots", "the project has no screenshot manifest here")
 
         with step("publish") as handle:
-            pr_url = self._publish(project_dir, branch, integ, title, summary_text, github_repo)
+            pr_url = self._publish(workdir, branch, integ, title, summary_text, github_repo)
             handle.detail = pr_url or "nothing to publish"
 
         report_text = report.render_report(
@@ -412,6 +559,8 @@ class AgentFlow:
                 summary=summary_text, report=report_text, pr_url=pr_url, status=db.AWAITING_FINISH,
             )
             handle.detail = f"run {run_id}: {completion_status}"
+        # The work is on the branch: its worktree goes (a finish checks the branch out in the live checkout).
+        self._end_worktree(conn, run_id, project_id, project_dir, worktree_id)
 
         if resolved_spec.auto_approve and completion_status == "done" and agent_result.test_results:
             try:

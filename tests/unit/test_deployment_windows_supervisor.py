@@ -8,6 +8,7 @@ import threading
 
 import pytest
 
+from common import windows_process
 from common.paths import Paths
 from common.shell import CommandResult
 from deployment import db
@@ -91,7 +92,7 @@ def test_tick_relaunches_a_dead_server_and_updates_the_pid_file(paths, conn):
 
     assert supervisor.tick() == ["little-render"]
 
-    assert pid_path.read_text() == "5555"
+    assert windows_process.read_pid_record(pid_path)["pid"] == 5555
     assert any(c[0] == "powershell.exe" for c in runner.calls)
 
 

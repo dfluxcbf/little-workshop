@@ -53,8 +53,8 @@ def test_newest_release_candidate_tag():
     """Only the newest RC tag of the current (highest base version) release line is judged
     — ranked by the version numbers its own name encodes, never by tag creation time, which
     is too coarse to order tags cut within the same second — so one old mistake elsewhere in
-    a project's tag history never fails this forever (the same "judge the newest transition
-    only" rule this project's own commit-bumps-version policy already established)."""
+    a project's tag history never fails this forever (the "judge the newest transition only"
+    rule the other history policies follow)."""
     check = git("rev-parse", "--git-dir", check=False)
     if check.returncode != 0:
         pytest.fail(f"{PROJECT} is not a readable git repository")

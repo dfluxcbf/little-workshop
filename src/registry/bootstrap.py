@@ -22,6 +22,7 @@ from pathlib import Path
 from common.job_steps import done, step
 from common.paths import Paths
 from common.projectfiles import ProjectFilesClient
+from common.windows import project_host
 from registry import claude_templates, db, gitops, github, scaffold
 from registry.models import BootstrapParams, BootstrapResult, Project
 
@@ -85,7 +86,7 @@ def bootstrap_project(conn: sqlite3.Connection, paths: Paths, params: BootstrapP
         done("labels", "not requested")
 
     with step("register"):
-        project = Project(name=params.name, path=str(dest), repo_url=repo_url)
+        project = Project(name=params.name, path=str(dest), repo_url=repo_url, host=project_host(dest))
         db.insert_project(conn, project)
 
         files = ProjectFilesClient(paths, caller_pillar="registry")

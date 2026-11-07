@@ -35,6 +35,9 @@ class CommandRunner:
                 argv,
                 capture_output=True,
                 text=True,
+                # Windows tools print in the console code page (tasklist.exe's memory column holds a 0xff
+                # thousands separator): an undecodable byte is replaced, never a crash of the caller.
+                errors="replace",
                 timeout=timeout,
                 cwd=cwd,
             )

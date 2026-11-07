@@ -40,6 +40,28 @@
     {{ job_steps(job.id, job.steps) }}
   </section>
 
+  {% if job.type == "agent.query" and job.result and job.result.text %}
+  <section class="dcard">
+    <div class="dcard-head"><span class="dcard-title">Claude's answer</span></div>
+    <div class="job-answer" style="white-space:pre-wrap;overflow-wrap:anywhere">{{ job.result.text }}</div>
+  </section>
+  {% endif %}
+
+  {% if job.type == "requirements.semantic_conflicts" and job.result and job.result.suspected is defined %}
+  <section class="dcard">
+    <div class="dcard-head"><span class="dcard-title">Suspected conflicts</span>
+      <span class="dcard-note">{{ job.result.suspected | length }} among {{ job.result.checked }} requirements</span></div>
+    {% for s in job.result.suspected %}
+    <div class="suspect" style="margin:10px 0">
+      <p><strong>{{ s.older_key }}</strong> / <strong>{{ s.newer_key }}</strong>: {{ s.summary }}</p>
+      {% if s.reason %}<p class="muted">{{ s.reason }}</p>{% endif %}
+      <ul><li>{{ s.older_key }}: {{ s.older_text }}</li><li>{{ s.newer_key }}: {{ s.newer_text }}</li></ul>
+      <form method="post" action="/jobs/{{ job.id }}/record-conflict/{{ loop.index0 }}"><button type="submit">Record as a conflict</button></form>
+    </div>
+    {% else %}<p class="muted">Claude found no conflict in meaning.</p>{% endfor %}
+  </section>
+  {% endif %}
+
   {% if dependencies %}
   <section class="dcard">
     <div class="dcard-head"><span class="dcard-title">Waits on</span><span class="dcard-note">this job starts when these have succeeded</span></div>

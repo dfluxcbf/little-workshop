@@ -18,7 +18,7 @@ def _req(key, description, *, n=0, project="p1", title=None):
                        created_at=T0 + timedelta(days=n), updated_at=T0 + timedelta(days=n))
 
 
-# --- REQ-000000468: Requirement conflicts are found by code and resolved by a Claude task the user directs ---
+# --- REQ-000000473: Requirement conflicts are found by code once a project's requirements have settled, and resolved by a Claude task the user directs ---
 
 def test_statements_read_conditions_system_polarity_and_each_and_the_clause():
     found = conflicts.statements(
@@ -126,3 +126,91 @@ def test_a_decision_marks_the_conflict_resolving_and_needs_guidance_for_another_
 def test_unknown_conflicts_and_statuses_are_refused(client):
     assert client.get("/v1/conflicts/ghost").status_code == 404
     assert client.get("/v1/conflicts", params={"status": "nope"}).status_code == 422
+
+
+class _Clock:
+    def __init__(self, now):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def settled(tmp_path, monkeypatch):
+    """A database whose writes are stamped by a clock the test moves, and the analyses it records."""
+    clock = _Clock(T0)
+    monkeypatch.setattr(db, "_clock", clock)
+    conn = db.connect(tmp_path / "requirements.db")
+    analyzed = []
+    from requirements import app as requirements_app
+    real = requirements_app.analyze_conflicts
+    monkeypatch.setattr(requirements_app, "analyze_conflicts",
+                        lambda c, lock, project_id=None, only=None: analyzed.append(project_id) or real(c, lock, project_id))
+
+    def run():
+        import threading
+        return requirements_app.analyze_settled(conn, threading.Lock(), now=clock.now)
+    return conn, clock, analyzed, run
+
+
+def test_a_burst_of_edits_is_analyzed_once_fifteen_minutes_after_the_last(settled):
+    conn, clock, analyzed, run = settled
+    db.insert_requirement(conn, _req("REQ-1", "The Dashboard shall show a banner."))
+    clock.now = T0 + timedelta(minutes=5)
+    db.insert_requirement(conn, _req("REQ-2", "The Dashboard shall not show a banner.", n=1))
+    for minutes in (15, 19):  # 15 min after the first edit, 14 after the second: not settled yet
+        clock.now = T0 + timedelta(minutes=minutes)
+        assert run() == []
+    clock.now = T0 + timedelta(minutes=20)
+    assert run() == ["p1"] and analyzed == ["p1"]
+    assert len(db.list_conflicts(conn, project_id="p1")) == 1
+    clock.now = T0 + timedelta(hours=2)
+    assert run() == [] and analyzed == ["p1"]
+
+
+def test_no_change_means_no_analysis(settled):
+    conn, clock, analyzed, run = settled
+    clock.now = T0 + timedelta(days=1)
+    assert run() == [] and analyzed == []
+
+
+def test_an_edit_during_the_analysis_keeps_the_project_due(settled):
+    conn, clock, analyzed, run = settled
+    db.insert_requirement(conn, _req("REQ-1", "The Dashboard shall show a banner."))
+    [(project, stamp)] = db.conflict_scans_due(conn, settled_before=T0)
+    clock.now = T0 + timedelta(minutes=1)
+    db.update_requirement(conn, db.get_requirement(conn, "id-REQ-1-0"))
+    assert not db.clear_conflict_scan_due(conn, project, stamp)
+    assert db.conflict_scans_due(conn, settled_before=clock.now) == [("p1", clock.now.isoformat())]
+
+
+def test_deleting_a_requirement_makes_its_project_due_and_the_stamp_survives_a_restart(settled, tmp_path):
+    conn, clock, analyzed, run = settled
+    db.insert_requirement(conn, _req("REQ-1", "The Dashboard shall show a banner."))
+    db.clear_conflict_scan_due(conn, "p1", T0.isoformat())
+    db.delete_requirement(conn, "id-REQ-1-0")
+    conn.close()
+    reopened = db.connect(tmp_path / "requirements.db")
+    assert db.conflict_scans_due(reopened, settled_before=T0) == [("p1", T0.isoformat())]
+
+
+def test_an_import_makes_its_project_due_and_removing_the_project_clears_it(settled):
+    from requirements import transfer
+    conn, clock, analyzed, run = settled
+    db.insert_requirement(conn, _req("REQ-1", "The Dashboard shall show a banner."))
+    backup = transfer.export_project(conn, "p1")
+    transfer.import_project(conn, backup, project_id="p2")
+    assert [p for p, _ in db.conflict_scans_due(conn, settled_before=T0)] == ["p1", "p2"]
+    transfer.delete_project(conn, "p2")
+    assert [p for p, _ in db.conflict_scans_due(conn, settled_before=T0)] == ["p1"]
+
+
+def test_a_project_no_longer_registered_is_cleared_without_an_analysis(settled):
+    import threading
+    from requirements import app as requirements_app
+    conn, clock, analyzed, run = settled
+    db.insert_requirement(conn, _req("REQ-1", "The Dashboard shall show a banner."))
+    clock.now = T0 + timedelta(minutes=15)
+    assert requirements_app.analyze_settled(conn, threading.Lock(), now=clock.now, registered={"other"}) == []
+    assert analyzed == [] and db.conflict_scans_due(conn, settled_before=clock.now) == []

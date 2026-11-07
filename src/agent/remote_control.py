@@ -57,7 +57,8 @@ def resolve(conn: sqlite3.Connection, paths: Paths, job_id: str, *, project_id: 
     project_dir_of = project_dir_of or _project_dir
     run = db.get_run_by_job(conn, job_id)
     if run is not None:
-        cwd = project_dir_of(paths, run["project_id"])
+        # Where the task's Claude ran: its worktree (REQ-000000518), or the live checkout.
+        cwd = Path(run["workdir"]) if run.get("workdir") else project_dir_of(paths, run["project_id"])
         return Target(run["id"], run["project_id"], run["status"] == db.RUNNING, run.get("session_id"), cwd, skip_permissions=True)
     update = db.get_doc_update(conn, job_id)
     if update is not None:

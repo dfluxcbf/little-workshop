@@ -39,13 +39,18 @@ healthy, currently-running process down.
   then `pgrep`/`pkill -TERM` by the configured match string, escalating
   to `pkill -KILL` past a timeout, then confirms the port is actually
   free.
-- **A Windows-hosted project's server** (`is_windows_checkout`, 2026-10-28, REQ-000000467) — runs as a
+- **A Windows-hosted project's server** (`project_host`, REQ-000000467, REQ-000000515) — runs as a
   real Windows process instead (`common/windows_process.py`; docs/architecture.md's "Windows-hosted
-  projects"), since there is no Windows `systemd --user` to launch, stop or query: `install`/`launch`
-  go through PowerShell (the manifest's `command` is written in PowerShell on this side, the
-  counterpart of `bash -c`'s bash), and the launched PID is tracked in a plain file
-  (`Paths.deployment_windows_pid_path`) instead of a unit. `WindowsServerSupervisor` polls every
-  tracked PID and relaunches a dead one — little-workshop's own stand-in for `Restart=on-failure`.
+  projects"), since there is no Windows `systemd --user` to launch, stop or query. The commit is checked
+  out with `git.exe worktree add` into a kept folder, `<root>\<project>\<sha12>` (root
+  `C:\little-workshop\deploy`, or `LWS_WINDOWS_DEPLOY_ROOT`), installed and launched from there through
+  PowerShell (the manifest's `command` is PowerShell, the counterpart of `bash -c`); a folder whose install
+  fails is removed, and after a launch only the newest two folders of the project stay (the other one serves a
+  rollback). The PID file (`Paths.deployment_windows_pid_path`) is JSON: the PID, the process's start time
+  (`Get-Process`) and the folder; a PID whose process started at another time is dead.
+  `WindowsServerSupervisor` polls it and relaunches a dead server from its folder — little-workshop's own
+  stand-in for `Restart=on-failure`. Git for every Windows-hosted project is `git.exe` (`gitutil.py`,
+  REQ-000000510), except a worktree in the WSL filesystem (a test sandbox), which stays WSL git's.
 - **Tailscale exposure** — `tailscale serve` after a successful deploy,
   torn down on stop; a no-op when `[server.tailscale]` isn't configured.
 - **Confirm-gated deploys** (opt-in via `confirm_timeout_seconds`) — an
@@ -56,6 +61,13 @@ healthy, currently-running process down.
   down) rolls back to the last confirmed commit. `deployment.confirm`
   settles it early; `deployment.seed_confirmation` establishes the first
   baseline from whatever's currently deployed.
+- **Health probe** (opt-in via `[server.health]`: `url` or `port`, `timeout_seconds` 60, `interval_seconds` 2;
+  REQ-000000521) — after the launch (and the confirm gate, when armed), the `health_probe` step probes the server
+  (a GET answered below 400, or a port that accepts; from WSL, which also reaches a Windows-hosted server with
+  mirrored networking). Healthy: the pending deploy is confirmed, or without a gate the deploy becomes the
+  confirmed baseline. Unhealthy by the timeout: rolled back at once through `rollback_if_unconfirmed` (the gate's
+  watchdog then finds it settled) and the Job fails saying so; with no confirmed deploy yet, the Job fails and the
+  new version is left running. Without `[server.health]` nothing changes.
 - **Self-redeploy** (`deployment.redeploy_pillar`, M5) — the identical
   build-before-stop sequence, generalized to little-workshop's own
   pillars (including Core and this pillar itself). A real
@@ -83,7 +95,11 @@ healthy, currently-running process down.
   `DELETE /v1/worktrees/{id}`) — built in M4 explicitly for other pillars
   to call rather than each provisioning their own: Requirements &
   Quality's sandboxed test execution (M10) and Policy & Compliance's
-  test-script sandbox (M12) are both meant to use it.
+  test-script sandbox (M12) are both meant to use it. A worktree is detached unless the request names a
+  `branch` (created from `commitish` with `new_branch`), which is how an agent task gets one on its branch;
+  `on_windows` puts a Windows-hosted project's worktree on its drive under `LWS_WINDOWS_WORKTREE_ROOT`
+  (`C:\little-workshop\worktrees`), made with `git.exe` (REQ-000000518). A branch git refuses (checked out
+  elsewhere) answers 409 with git's reason.
 - **A self-redeploy refreshes `lws`** (2026-09-24): the pre-commit version
   hook, the MCP server and the self-redeploy workers all run the
   pipx-installed `lws`, which nothing updated — a fix to any of them sat
@@ -135,12 +151,14 @@ plain Orchestration `depends_on` between `deployment.redeploy_pillar` Jobs (`sub
 pre-assigns the Job ids so all Jobs are created at once; a failed batch fails the later ones).
 Choosing pillars with no rule between them, such as policy and version, is one batch.
 
-The rules reproduce the order proven by hand: **orchestration**; then **build, agent, dashboard**;
-then **policy, registry, requirements, version** (and the MCP server); then **deployment** (it performs the
-redeploys); **core**, if named, last. Orchestration is first because every pillar settles its Jobs through
-it and the redeploy Jobs are dispatched by it. Why Build, Agent and Dashboard precede the four after them
-is not visible in the code: the rule records the observed order, and a change is one line in
-`REDEPLOY_AFTER`. A pillar the table does not know goes with the third group.
+The rules: **build, agent, dashboard**; then **policy, registry, requirements, version** (and the MCP
+server and Usage); then **deployment** (it performs the redeploys); then **orchestration**; **core**, if
+named, last (REQ-000000477). Orchestration goes last because it dispatches every Job, the redeploys
+included, and its restart fails whatever dispatch is in flight: restarted first, it interrupted a gated
+branch finish. Its own redeploy Job also stays queued while any other Job is being dispatched
+(`orchestration/queue.py`). Why Build, Agent and Dashboard precede the four after them is not visible in
+the code: the rule records the order proven by hand, and a change is one line in `REDEPLOY_AFTER`. A
+pillar the table does not know goes with the second group.
 
 Users of the plan: the Dashboard's Pillars page, the Release job's relaunch of little-workshop itself
 (every batch waits for the release Job), `lws deployment redeploy-pillars [--pillar ...] --commit`, and the
@@ -159,7 +177,9 @@ means every live pillar; the CLI, docs, tests and tools redeploy nothing; `commo
 keeps the pillars Core runs, and creates one `deployment.redeploy_pillar` Job per pillar in the order of
 `REDEPLOY_AFTER`, each confirm-gated as any redeploy. With no pillar changed it does nothing. It replaces
 redeploying pillars by hand, one call each, after every finish; a trigger runs it after a branch finishes on
-little-workshop (`docs/pillars/orchestration.md`, "Triggers"). `lws deployment redeploy-changed-pillars`,
+little-workshop (`docs/pillars/orchestration.md`, "Triggers"). The Job stays queued until the workshop is
+idle: no other Job (a redeploy aside) running or queued, a Job waiting behind a held one not counting
+(REQ-000000476). `lws deployment redeploy-changed-pillars`,
 `workshop_deployment_redeploy_changed_pillars`.
 
 ## Redeploying Core (2026-10-04)

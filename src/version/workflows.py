@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from common.job_steps import StepFailed, done, step
 from version.common import CommandResult, ensure_clean_tree, get_integration_branch, require_branch_exists, run_version_hooks
@@ -20,7 +19,6 @@ from version.gitops import (
     get_merge_base,
     merge_squash,
     no_requirement,
-    run,
     squash_to_single_commit,
     write_file_in_repo,
 )
@@ -56,7 +54,6 @@ def create_prefixed_branch(
     if issue is not None:
         with step("link_issue") as handle:
             set_issue_link(repo_root, branch_name, issue)
-            commit_if_dirty(repo_root, no_requirement(f"chore(version): link issue #{issue} to {branch_name}"))
             handle.detail = f"issue #{issue}"
     else:
         done("link_issue", "no issue given")
@@ -100,18 +97,14 @@ class PatchMergePlan:
     work_branch: str
     target_branch: str
     merge_message: str
-    pre_merge_cleanup: Callable[[Path], None] | None = None
-    pre_merge_commit_message: str | None = None
 
 
 def finished_version(merged: GitflowVersion, target_before: GitflowVersion) -> GitflowVersion:
-    """The version a finished working branch lands on. A branch already
-    working toward the next patch (its commits carry `X.Y.Z-dev.N`, per
-    `branch-commit-dev-suffix`) lands on `X.Y.Z` itself; one that never
-    bumped gets the next patch. Either way, strictly above what the target
-    carried before the merge. Always bumping the patch here (little-versions'
-    rule, from before branches bumped on their own) skipped one patch per
-    finish -- 0.2.6 -> 0.2.8 -- and doubled the Release job's patch count."""
+    """The version a finished working branch lands on: the next patch after the
+    target's version. Working branches leave VERSION alone, so the merged
+    VERSION is the target's own; a branch cut while commits still carried
+    `X.Y.Z-dev.N` lands on `X.Y.Z` itself. Either way, strictly above what the
+    target carried before the merge, so the finish writes the version once."""
     candidate = normalize_to_stable(merged) if merged.is_dev() else bump_patch(merged)
     floor = normalize_to_stable(target_before)
     if (candidate.major, candidate.minor, candidate.patch) <= (floor.major, floor.minor, floor.patch):
@@ -121,11 +114,6 @@ def finished_version(merged: GitflowVersion, target_before: GitflowVersion) -> G
 
 def squash_merge_and_bump_patch(repo_root: Path, plan: PatchMergePlan) -> CommandResult:
     with step("squash") as handle:
-        if plan.pre_merge_cleanup is not None:
-            plan.pre_merge_cleanup(repo_root)
-        if plan.pre_merge_commit_message is not None:
-            commit_if_dirty(repo_root, plan.pre_merge_commit_message)
-
         merge_base = get_merge_base(repo_root, "HEAD", plan.target_branch)
         squash_to_single_commit(repo_root, merge_base, plan.merge_message)
         handle.detail = plan.merge_message
@@ -171,15 +159,6 @@ def merge_conflict_result(exc: Exception, continue_cmd: str, abort_cmd: str) -> 
         success=False,
         message=f"{exc}\nResolve conflicts, stage the files, then run:\n  {continue_cmd}\nTo abort, run:\n  {abort_cmd}",
     )
-
-
-def clear_untracked_state_file(repo_root: Path) -> None:
-    state_file = repo_root / ".lvx" / "state.json"
-    if not state_file.exists():
-        return
-    tracked = run(["git", "ls-files", "--error-unmatch", ".lvx/state.json"], repo_root, check=False)
-    if tracked.returncode != 0:
-        state_file.unlink()
 
 
 def checkout_existing_branch(repo_root: Path, branch_name: str) -> None:

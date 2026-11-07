@@ -29,6 +29,7 @@ from pathlib import Path
 from common.job_steps import step
 from common.paths import Paths
 from common.projectfiles import ProjectFilesClient
+from common.windows import project_host
 from registry import db, gitops
 from registry.models import ImportParams, ImportResult, Project
 
@@ -51,8 +52,11 @@ def import_project(conn: sqlite3.Connection, paths: Paths, params: ImportParams)
 
     with step("register"):
         repo_url = gitops.remote_url(path)
+        # A Windows-hosted checkout gets git.exe's line endings pinned; its .gitattributes rule comes with the
+        # next Claude files sync or `lws project normalize-eol`, on a branch (REQ-000000511).
+        gitops.pin_autocrlf(path)
 
-        project = Project(name=params.name, path=str(path), repo_url=repo_url)
+        project = Project(name=params.name, path=str(path), repo_url=repo_url, host=project_host(path))
         db.insert_project(conn, project)
 
         files = ProjectFilesClient(paths, caller_pillar="registry")

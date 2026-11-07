@@ -8,6 +8,9 @@
   <textarea name="text" id="backlog-text" rows="4" placeholder="What should be built or fixed? Write it as it comes: refining comes later." required></textarea>
   <div class="row"><button type="submit" class="primary" data-busy="Adding…">Add to the backlog</button></div>
 </form>
+<nav class="row backlog-filter" aria-label="Status">
+  {% for s in statuses %}<a class="chip{{ ' chip-active' if s == status }}" href="/backlog/{{ project }}?status={{ s }}"{% if s == status %} aria-current="page"{% endif %}>{{ s }}</a>{% endfor %}
+</nav>
 <div class="policy-list" id="backlog-live" data-live-region>
   {% for e in entries %}
   {% set act = activity[e.id] %}
@@ -23,12 +26,14 @@
     <span class="polcard-ears">{{ e.primary_entry | truncate(220) }}</span>
     <span class="polcard-meta">
       <span class="chip">updated {{ e.updated_at | reltime }}</span>
+      {% if e.priority and e.priority != "normal" %}<span class="chip{{ ' chip-fail' if e.priority == 'high' }}">{{ e.priority }} priority</span>{% endif %}
+      {% if e.status and e.status != "open" %}<span class="chip">{{ e.status }}</span>{% endif %}
       {% if e.refinement_notes %}<span class="chip">notes</span>{% endif %}
       {% if act.refine_error or act.prompt_error %}<span class="chip chip-fail">Claude failed: see the entry</span>{% endif %}
     </span>
   </a>
   {% else %}
-  {% if not error %}<p class="muted">Nothing in {{ project }}'s backlog.</p>{% endif %}
+  {% if not error %}<p class="muted">Nothing {{ "" if status == "all" else status ~ " " }}in {{ project }}'s backlog.</p>{% endif %}
   {% endfor %}
 </div>
 {% endblock %}

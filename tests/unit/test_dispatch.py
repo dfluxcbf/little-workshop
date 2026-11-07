@@ -121,7 +121,7 @@ def test_dispatch_ready_jobs_cascades_and_dispatches(monkeypatch, tmp_path, conn
 
 
 # ---------------------------------------------------------------------------
-# Per-Job-type dispatch timeouts -- docs/open_questions.md's OQ-14
+# Per-Job-type dispatch timeouts -- OQ-14 (resolved 2026-09-17)
 # ---------------------------------------------------------------------------
 
 def test_dispatch_timeout_for_returns_the_default_for_an_unlisted_job_type():

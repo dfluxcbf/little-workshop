@@ -24,14 +24,24 @@ class WorktreeUnavailable(Exception):
 
 
 def provision_worktree(
-    paths: Paths, project_id: str, commitish: str, *, timeout: float = 30.0
+    paths: Paths, project_id: str, commitish: str, *, timeout: float = 30.0, branch: str | None = None,
+    new_branch: bool = False, on_windows: bool = False,
 ) -> tuple[str, Path]:
+    """A detached worktree at `commitish`, or one on `branch` (created from `commitish` when `new_branch`);
+    `on_windows` puts a Windows-hosted project's worktree on its own drive (REQ-000000518)."""
     socket_path = resolve_pillar_socket(paths, "deployment", timeout=timeout)
     if socket_path is None:
         raise WorktreeUnavailable("Deployment & Servers pillar is unavailable (unreachable, disabled, or faulted)")
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.post("/v1/worktrees", json={"project_id": project_id, "commitish": commitish})
+            body = {"project_id": project_id, "commitish": commitish}
+            if branch:
+                body.update(branch=branch, new_branch=new_branch)
+            if on_windows:
+                body["on_windows"] = True
+            response = client.post("/v1/worktrees", json=body)
+        if response.status_code == 409:  # git refused (the branch is checked out elsewhere): say why
+            raise WorktreeUnavailable(response.json().get("detail") or response.text)
         response.raise_for_status()
     except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise WorktreeUnavailable(f"Deployment & Servers pillar unreachable: {exc}") from exc
@@ -39,13 +49,13 @@ def provision_worktree(
     return payload["worktree_id"], Path(payload["path"])
 
 
-def release_worktree(paths: Paths, project_id: str, worktree_id: str, *, timeout: float = 30.0) -> None:
+def release_worktree(paths: Paths, project_id: str, worktree_id: str, *, timeout: float = 30.0, on_windows: bool = False) -> None:
     socket_path = resolve_pillar_socket(paths, "deployment", timeout=timeout)
     if socket_path is None:
         raise WorktreeUnavailable("Deployment & Servers pillar is unavailable (unreachable, disabled, or faulted)")
     try:
         with client_for_socket(socket_path, timeout=timeout) as client:
-            response = client.delete("/v1/worktrees/{}".format(worktree_id), params={"project_id": project_id})
+            response = client.delete("/v1/worktrees/{}".format(worktree_id), params={"project_id": project_id, **({"on_windows": "true"} if on_windows else {})})
         response.raise_for_status()
     except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise WorktreeUnavailable(f"Deployment & Servers pillar unreachable: {exc}") from exc

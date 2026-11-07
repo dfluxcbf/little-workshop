@@ -88,6 +88,17 @@ def test_project_configure_assets_builds_registry_job(paths, fake_create_job):
     assert second["params"] == {"assets_dir": "", "mcp": False}
 
 
+# --- REQ-000000495: a project's governance level is a Registry setting ----------------------
+
+def test_project_set_governance_builds_registry_job(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_project_set_governance"].handler(paths, {"project_id": "little-meals", "governance": "full"})
+    call = fake_create_job[0]
+    assert (call["type"], call["target_pillar"], call["project_id"], call["params"]) == (
+        "project.set_governance", "registry", "little-meals", {"governance": "full"})
+    schema = tools_mod.TOOLS_BY_NAME["workshop_project_set_governance"].input_schema
+    assert schema["properties"]["governance"]["enum"] == ["light", "full"]
+
+
 def test_project_connect_github_builds_registry_job(paths, fake_create_job):
     """REQ-000000282."""
     tools_mod.TOOLS_BY_NAME["workshop_project_connect_github"].handler(paths, {"name": "ethereal-lands", "public": True})
@@ -697,10 +708,10 @@ def test_redeploy_pillars_returns_the_plan_and_creates_the_jobs_in_batches(paths
     monkeypatch.setattr(tools_mod.client, "core_status", lambda p: {"pillars": {n: {"status": "healthy"} for n in ("orchestration", "version", "policy")} | {"mcp": {"status": "disabled"}}})
     monkeypatch.setattr(tools_mod.client, "create_job", create_job)
     result = tools_mod.TOOLS_BY_NAME["workshop_deployment_redeploy_pillars"].handler(paths, {"commit": "abc"})
-    assert result["batches"] == [[{"pillar": "orchestration"}], [{"pillar": "policy"}, {"pillar": "version"}]]
+    assert result["batches"] == [[{"pillar": "policy"}, {"pillar": "version"}], [{"pillar": "orchestration"}]]
     assert done.wait(5)
     by_pillar = {f["project_id"]: f for f in created}
-    assert by_pillar["orchestration"]["depends_on"] == [] and by_pillar["policy"]["depends_on"] == [by_pillar["orchestration"]["id"]]
+    assert by_pillar["policy"]["depends_on"] == [] and by_pillar["orchestration"]["depends_on"] == [by_pillar["policy"]["id"], by_pillar["version"]["id"]]
     assert {f["created_by"] for f in created} == {"mcp"}
 
 
@@ -916,7 +927,7 @@ def test_requirements_report_calls_client(paths, monkeypatch):
     assert calls[0] == ((paths, "p1"), {})
 
 
-# --- REQ-000000468: Requirement conflicts are found by code and resolved by a Claude task the user directs ---
+# --- REQ-000000473: Requirement conflicts are found by code once a project's requirements have settled, and resolved by a Claude task the user directs ---
 
 def test_requirements_conflicts_calls_client(paths, monkeypatch):
     calls = _fake_client_call(monkeypatch, "requirements_conflicts", result=[])
@@ -1178,7 +1189,8 @@ def test_backlog_tools_list_get_add_and_delete_within_the_named_project(paths, m
              "updated_at": "2026-10-04T20:00:00+00:00", "primary_entry": "Export"}
     _fake_client_call(monkeypatch, "backlog_list", result=[entry])
     listed = tools_mod.TOOLS_BY_NAME["workshop_project_backlog_list"].handler(paths, {"project_id": "little-meals"})
-    assert listed == [{"id": "e1", "title": "Export", "refined": True, "task_prompt": False, "updated_at": entry["updated_at"]}]
+    assert listed == [{"id": "e1", "title": "Export", "status": "open", "priority": "normal", "refined": True, "task_prompt": False,
+                       "updated_at": entry["updated_at"]}]
 
     _fake_client_call(monkeypatch, "backlog_get", result=entry)
     assert tools_mod.TOOLS_BY_NAME["workshop_project_backlog_get"].handler(paths, {"project_id": "little-meals", "entry_id": "e1"}) == entry
@@ -1209,18 +1221,54 @@ def test_requirements_supersede_builds_job(paths, fake_create_job):
     assert call["params"] == {"requirement_id": "r1", "key": "REQ-2", "description": "The system shall x.", "register_status": "M9"}
 
 
-# --- REQ-000000439: Image Generation is an optional pillar reached through lws, the MCP server and the Dashboard ---
+# --- REQ-000000503: Toolkit installs are recorded in the project's lock and removed exactly ---
 
 
-def test_generation_tools_name_their_project_except_the_queue_wide_ones():
-    """The handlers are exercised in test_generation.py; here, which take a project."""
-    scoped = ["workshop_generation_submit", "workshop_generation_status", "workshop_generation_list",
-              "workshop_generation_cancel", "workshop_generation_delete_files", "workshop_generation_wait",
-              "workshop_generation_download", "workshop_generation_picture_setup"]
-    for name in scoped:
-        assert "project_id" in tools_mod.TOOLS_BY_NAME[name].input_schema["required"]
-    for name in ("workshop_generation_queue", "workshop_generation_resume", "workshop_generation_gpu", "workshop_generation_models",
-                 "workshop_generation_recipes", "workshop_generation_recipe_save"):
-        assert "project_id" not in tools_mod.TOOLS_BY_NAME[name].input_schema["properties"]
-    # A recipe is named `recipe`, never `name`: the guard holds a tool's `name` to the session's project.
-    assert "name" not in tools_mod.TOOLS_BY_NAME["workshop_generation_recipe_save"].input_schema["properties"]
+def test_the_toolkit_tools_read_the_registry_and_start_its_jobs(paths, monkeypatch, fake_create_job):
+    _fake_client_call(monkeypatch, "toolkit_sources", result=[{"repo": "o/r", "sha": "s", "items": [{"id": "skill:a"}]}])
+    assert tools_mod.TOOLS_BY_NAME["workshop_toolkit_sources"].handler(paths, {}) == [{"repo": "o/r", "sha": "s", "items": 1}]
+    _fake_client_call(monkeypatch, "toolkit_items", result=[{"id": "skill:a", "kind": "skill", "name": "a", "description": "d",
+                                                             "runs_code": [], "files": ["x"]}])
+    assert tools_mod.TOOLS_BY_NAME["workshop_toolkit_items"].handler(paths, {"repo": "o/r"})[0] == {
+        "id": "skill:a", "kind": "skill", "name": "a", "description": "d", "runs_code": []}
+    status = _fake_client_call(monkeypatch, "toolkit_status", result={"installed": []})
+    tools_mod.TOOLS_BY_NAME["workshop_toolkit_status"].handler(paths, {"project_id": "p1"})
+    assert status[0] == ((paths, "p1"), {})
+
+    tools_mod.TOOLS_BY_NAME["workshop_toolkit_add_source"].handler(paths, {"seed": True})
+    tools_mod.TOOLS_BY_NAME["workshop_toolkit_install"].handler(paths, {"project_id": "p1", "repo": "o/r", "items": ["a"]})
+    tools_mod.TOOLS_BY_NAME["workshop_toolkit_remove"].handler(paths, {"project_id": "p1", "repo": "o/r"})
+    tools_mod.TOOLS_BY_NAME["workshop_toolkit_update"].handler(paths, {"project_id": "p1", "repo": "o/r", "confirm_code": True})
+    assert [(c["type"], c["project_id"], c["params"]) for c in fake_create_job] == [
+        ("registry.toolkit_add_source", None, {"repo": None, "seed": True}),
+        ("registry.toolkit_install", "p1", {"repo": "o/r", "items": ["a"], "confirm_code": False}),
+        ("registry.toolkit_remove", "p1", {"repo": "o/r", "items": []}),
+        ("registry.toolkit_update", "p1", {"repo": "o/r", "confirm_code": True}),
+    ]
+
+
+# --- REQ-000000508: Draft as a skill starts a fixed agent task ---
+
+
+def test_usage_draft_skill_starts_the_usage_job_for_one_row(paths, fake_create_job):
+    tools_mod.TOOLS_BY_NAME["workshop_usage_draft_skill"].handler(paths, {"project_id": "p1", "proposal_id": "x"})
+    assert (fake_create_job[0]["type"], fake_create_job[0]["project_id"], fake_create_job[0]["params"]) == (
+        "usage.draft_skill", "p1", {"proposal_id": "x"})
+    with pytest.raises(ValueError):
+        tools_mod.TOOLS_BY_NAME["workshop_usage_draft_skill"].handler(paths, {"project_id": "p1"})
+
+
+# --- REQ-000000524: Backlog entries have a status and a priority the owner sets ---
+
+
+def test_backlog_update_sets_status_and_priority_within_the_named_project(paths, monkeypatch):
+    entry = {"id": "e1", "project_name": "little-meals", "title": "Export", "status": "open", "priority": "normal"}
+    _fake_client_call(monkeypatch, "backlog_get", result=entry)
+    updated = _fake_client_call(monkeypatch, "backlog_update", result={**entry, "status": "done"})
+    handler = tools_mod.TOOLS_BY_NAME["workshop_project_backlog_update"].handler
+    assert handler(paths, {"project_id": "little-meals", "entry_id": "e1", "status": "done"})["status"] == "done"
+    assert updated[0] == ((paths, "e1"), {"status": "done"})
+    with pytest.raises(ValueError, match="not in little-home's backlog"):
+        handler(paths, {"project_id": "little-home", "entry_id": "e1", "status": "done"})
+    with pytest.raises(ValueError, match="status and/or priority"):
+        handler(paths, {"project_id": "little-meals", "entry_id": "e1"})

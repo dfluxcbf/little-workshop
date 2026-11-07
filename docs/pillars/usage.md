@@ -2,9 +2,7 @@
 
 The pillar that records what every Claude session on this machine uses, interprets it and helps reduce it.
 Optional and on by default: switched off, nothing is collected and the rest of little-workshop is unaffected.
-The reasons, the baseline measured before it existed and the owner's decisions are in
-[../claude_usage_optimization.md](../claude_usage_optimization.md); this file says what is built
-(`src/usage/`, pillar id `usage`). Milestones M19–M22 of [../milestones.md](../milestones.md).
+This file says what is built (`src/usage/`, pillar id `usage`). Milestones M19–M22 of [../milestones.md](../milestones.md).
 
 Figures are estimates in tokens. "Weighted tokens" are list-price dollars used as one unit; on a subscription
 they stand for plan usage and are never money spent.
@@ -348,15 +346,24 @@ hooks and scripts that does it, calling Claude only where judgment was needed. T
   cost per week *today* (each request replayed as a whole, as a trigger would replace it) and *with the plugin*
   (only its fallback runs, replayed as they happened, plus the plugin's command in every session's starting
   context, 30 tokens a request). The net saving per week ranks the proposals; one under $0.10 is not listed.
-- **Scope**: all projects when the requests came from two or more projects, else the one project. The plugin is
-  installed from little-workshop's local marketplace (`little-workshop`) with Claude Code's own commands: user scope
-  for all projects, project scope in the project's checkout (`claude plugin install <name>@little-workshop
-  --scope user|project`). Everything stays on this machine.
+- **Scope**: all projects when the requests came from two or more projects, else the one project. Its `draft`
+  says where "Draft as a skill" writes it: the one project, or little-workshop for all projects (REQ-000000507).
 - **Absorbs**: the open automation candidates all of whose calls are steps of the plugin.
 - **Listing**: `GET /v1/plugin_proposals?state=` (open by default, `all`), `workshop_usage_plugin_proposals`,
   `lws usage plugin-proposals`. A decision is `POST /v1/plugin_proposals/{id} {"state": "accepted" | "dismissed" |
   "done" | "open"}`; an open proposal mining no longer finds is dropped, a decided one is kept. The plugins
   *installed* are Claude Code's to list: `claude plugin list`, or `/plugin` in a session.
+
+### Draft as a skill (2026-11-07)
+
+An open automation candidate or plugin proposal can be promoted to a **draft skill** (REQ-000000508): the
+`usage.draft_skill` Job (`params.candidate_id` or `proposal_id`; the Job's `project_id`, else the project the
+evidence points to) starts one `agent.run_task` with intent `skill` and review mode `manual`, whose description
+is built from the evidence (`usage/skill_draft.py`) and whose prompt (`agent/templates/prompts/skill.md`) writes
+`.claude/skills/<name>/SKILL.md` on an improvement branch; the row is then accepted. Surfaces: the "Draft as a
+skill" button on the Claude usage page (candidates and plugin proposals, with a project picker),
+`workshop_usage_draft_skill` (ask), `lws usage draft-skill --project-id <p> --candidate|--proposal <id>`. Public
+skills are installed from the Registry's toolkit instead (registry_portfolio.md, "Toolkit").
 
 **Reference plugin, `finish-branch`** (agreed 2026-10-07, built 2026-10-09, REQ-000000422 to REQ-000000425):
 `plugins/finish-branch/`, in the local marketplace `little-workshop` (`plugins/.claude-plugin/marketplace.json`).

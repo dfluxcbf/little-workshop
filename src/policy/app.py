@@ -11,6 +11,7 @@ pillar's Pillar Interface already uses.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sqlite3
 import subprocess
 import functools
@@ -43,6 +44,8 @@ from policy.registry_client import RegistryReadError
 from policy.sandbox import SandboxInterrupted, SandboxUnavailable
 
 PILLAR_ITSELF = "policy"
+# The suite a check's JUnit report is recorded under (Requirements & Quality's Definition-of-Done suite).
+UNIT_TESTS_SUITE = "Unit tests"
 
 
 class JobRequest(BaseModel):
@@ -120,6 +123,49 @@ def _parse_gate_points(raw: object) -> tuple[list[GatePoint], str | None]:
         return [], f"invalid gate_point: {exc}"
 
 
+def _parse_inputs(raw: object) -> tuple[list[str], str | None]:
+    """A policy's `inputs`: repository-relative paths (no absolute path, no `..`)."""
+    if raw is None:
+        return [], None
+    if not isinstance(raw, list) or not all(isinstance(p, str) and p.strip() for p in raw):
+        return [], "'inputs' must be a list of repository paths"
+    cleaned = [p.strip().strip("/") for p in raw]
+    if any(p.startswith("/") or ".." in p.split("/") or not p for p in cleaned):
+        return [], "'inputs' must be relative paths inside the repository"
+    return sorted(set(cleaned)), None
+
+
+def _git_output(repo_root: Path, *args: str) -> str | None:
+    try:
+        proc = subprocess.run(["git", *args], cwd=repo_root, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def check_fingerprint(policy: Policy, repo_root: Path, *, clean_only: bool = False) -> str:
+    """What a verdict of `policy` on the checkout `repo_root` depends on (docs/pillars/policy_compliance.md,
+    "once per change"): the committed git tree of the policy's `inputs` when it declares them (a docs-only
+    commit or a rebase that leaves them alone keeps the verdict), otherwise the HEAD commit; plus the
+    policy's own last edit. "" (never matches) when git cannot answer, and with `clean_only` when those
+    paths (the whole checkout, without `inputs`) have uncommitted changes the check would read."""
+    scope = policy.inputs or ["."]
+    if clean_only:
+        status = _git_output(repo_root, "status", "--porcelain", "--", *scope)
+        if status is None or status.strip():
+            return ""
+    if policy.inputs:
+        listing = _git_output(repo_root, "ls-tree", "HEAD", "--", *policy.inputs)
+        if listing is None:
+            return ""
+        state = "tree:" + hashlib.sha256(listing.encode("utf-8")).hexdigest()
+    else:
+        state = (_git_output(repo_root, "rev-parse", "HEAD") or "").strip()
+        if not state:
+            return ""
+    return f"{state}:{policy.amended_at.isoformat()}"
+
+
 def _parse_project_entries(raw: object) -> tuple[list[PolicyProject], str | None]:
     """[{project_id, gating_enabled?}] (a bare string means gating on) -> selection,
     deduplicated by project. Anything else is rejected outright."""
@@ -139,8 +185,8 @@ def _parse_project_entries(raw: object) -> tuple[list[PolicyProject], str | None
 
 def _validate_gate_points_against_target(gate_points: list[GatePoint], target_pillar: str) -> str | None:
     """`project_registration` can only ever be framework-bound
-    (`target_pillar == "policy"`) — resolved 2026-09-17 (`docs/
-    open_questions.md`'s `OQ-15`): the project it would gate doesn't
+    (`target_pillar == "policy"`) — resolved 2026-09-17
+    (OQ-15): the project it would gate doesn't
     exist in the registry yet at the moment any project-bound check
     could try to mount its checkout, a genuine chicken-and-egg problem
     a project-bound policy can never resolve. `commit` is the reverse: it
@@ -366,6 +412,17 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 # policy.configure changes gate_points on its own.
                 gate_points = existing.gate_points if existing is not None else []
 
+            if "inputs" in params:
+                inputs, inputs_error = _parse_inputs(params.get("inputs"))
+                if inputs_error:
+                    return {"outcome": "failed", "error": inputs_error}
+            else:
+                inputs = existing.inputs if existing is not None else []
+
+            requires = params["requires"] if "requires" in params else (existing.requires if existing is not None else None)
+            if requires not in (None, "full"):
+                return {"outcome": "failed", "error": "'requires' must be 'full' or left out"}
+
             gate_points_target_error = _validate_gate_points_against_target(gate_points, target_pillar)
             if gate_points_target_error:
                 return {"outcome": "failed", "error": gate_points_target_error}
@@ -384,7 +441,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 id=policy_id or db.new_id(), topic=topic, target_pillar=target_pillar,
                 ears_text=params["ears_text"], test_script=params["test_script"],
                 scope_level=scope_level, scope_target=scope_target, created_by=created_by,
-                gate_points=gate_points,
+                gate_points=gate_points, inputs=inputs, requires=requires,
             )
             is_new = policy_id is None
             if policy_id is not None:
@@ -464,7 +521,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     @app.post("/v1/jobs/policy.draft_import")
     @_reported
     def job_draft_import(request: JobRequest) -> dict:
-        """Bring drafts (Gates 1-3 output, e.g. `docs/pending_policy_drafts/*.json`) into
+        """Bring drafts (Gates 1-3 output as JSON files) into
         the app for review. Idempotent: a topic that already has a pending draft is
         refreshed in place; a topic that already has a real policy is skipped."""
         created: list[str] = []
@@ -656,33 +713,50 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             raise ProjectResolutionError(f"{checkout!r} is not a checkout of project {project_id!r}")
         return candidate.resolve()
 
-    def _current_head_sha(repo_root: Path) -> str:
-        """Cheap, host-side (no Docker) HEAD lookup — the state a
-        committed-history-based policy check actually reads. Never raises:
-        a repo that can't be read yet (mid-clone, detached, not a repo at
-        all) just means "no fingerprint", which forces a real check."""
-        try:
-            proc = subprocess.run(
-                ["git", "rev-parse", "HEAD"], cwd=repo_root, capture_output=True, text=True, timeout=5,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return ""
-        return proc.stdout.strip() if proc.returncode == 0 else ""
+    def _judged_root(policy: Policy, project_id: str, checkout: Path | None) -> Path:
+        """The checkout a check of `policy` reads: the framework's own for a framework-bound policy,
+        else `checkout` or the registered one (as `_mounts_for_policy` mounts it)."""
+        if checkout is not None and not (policy.scope_level == ScopeLevel.ALL_PROJECTS and policy.target_pillar == PILLAR_ITSELF):
+            return checkout
+        return _project_root_for_policy(policy, project_id)
 
     def _current_check_state(policy: Policy, project_id: str) -> str:
-        """Fingerprint of what policy.check_project would actually re-verify:
-        the project's committed HEAD plus the policy's own last edit. Either
-        one changing is a real change; neither changing means the previous
-        result is still correct — see "once per change"
-        (docs/pillars/policy_compliance.md)."""
+        """`check_fingerprint` of the project's registered checkout (the framework's for a framework-bound
+        policy): either part changing is a real change; neither changing means the previous result is
+        still correct."""
         try:
             repo_root = _project_root_for_policy(policy, project_id)
         except ProjectResolutionError:
             return ""
-        head_sha = _current_head_sha(repo_root)
-        if not head_sha:
-            return ""
-        return f"{head_sha}:{policy.amended_at.isoformat()}"
+        return check_fingerprint(policy, repo_root)
+
+    def _fresh_verdict(policy_id: str, project_id: str, state: str) -> PolicyCheckResult | None:
+        """The newest recorded verdict, if it was reached on exactly `state` (a check job's or a preflight's)."""
+        if not state:
+            return None
+        with lock:
+            previous = db.latest_check_result(conn, policy_id=policy_id, project_id=project_id)
+        return previous if previous is not None and previous.checked_state == state else None
+
+    def _record_unit_tests(project_id: str, junit: str | None) -> str | None:
+        """A check that ran the project's test suite left its JUnit report: record it as the project's
+        "Unit tests" run (Requirements & Quality's `requirements.import_junit`), so the Definition-of-Done
+        report needs no second run of the same suite. Best-effort: the verdict stands either way."""
+        if not junit:
+            return None
+        socket_path = resolve_pillar_socket(paths, "orchestration", timeout=5.0)
+        if socket_path is None:
+            return None
+        try:
+            with client_for_socket(socket_path, timeout=10.0) as client:
+                response = client.post("/v1/jobs", json={
+                    "type": "requirements.import_junit", "target_pillar": "requirements", "project_id": project_id,
+                    "params": {"suite_name": UNIT_TESTS_SUITE, "xml": junit}, "queue_key": None, "depends_on": [],
+                    "created_by": "policy.check",
+                })
+        except (httpx.TransportError, OSError):
+            return None
+        return response.json().get("id") if response.status_code == 200 else None
 
     def _complete_orchestration_job(job_id: str, *, succeeded: bool, result: dict | None, error: str | None) -> None:
         """Best-effort: a real (non-skipped) sandbox check runs for up to
@@ -720,27 +794,36 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 raise _Refused(f"policy {policy_id!r} not found")
             handle.detail = f"{policy.topic} on {project_id}"
 
+        if not _applies(policy, _governance(project_id) if policy.requires else "full"):
+            result = PolicyCheckResult(
+                id=db.new_id(), policy_id=policy_id, project_id=project_id, outcome=CheckOutcome.NOT_APPLICABLE,
+                detail=f"not applicable: {policy.topic} needs full governance and {project_id} is light",
+                job_id=request.job_id, origin=check_origin,
+            )
+            with lock:
+                db.insert_check_result(conn, result)
+            return {"outcome": "succeeded", "result": result.model_dump(mode="json"), "skipped": "light governance"}
+
         with step("check_changes") as handle:
             current_state = _current_check_state(policy, project_id)
             reused = None
-            if current_state and not force:
+            previous = None if force else _fresh_verdict(policy_id, project_id, current_state)
+            if previous is not None:
+                # Nothing has changed since the last verdict (same inputs or
+                # HEAD commit, same policy edit; reached by a check or a
+                # preflight) — reuse it instead of paying for
+                # another Docker sandbox run. Recorded as a fresh row (its own
+                # id/checked_at/job_id) so history and job linkage stay
+                # accurate, but the sandbox itself never runs. Cheap and
+                # synchronous — no thread needed, nothing here can block.
+                reused = PolicyCheckResult(
+                    id=db.new_id(), policy_id=policy_id, project_id=project_id,
+                    outcome=previous.outcome, detail=previous.detail, job_id=request.job_id,
+                    checked_state=current_state, origin=check_origin,
+                    bypassed=check_bypassed and previous.outcome == CheckOutcome.FAIL,
+                )
                 with lock:
-                    previous = db.latest_check_result(conn, policy_id=policy_id, project_id=project_id)
-                if previous is not None and previous.checked_state == current_state:
-                    # Nothing has changed since the last verdict (same HEAD
-                    # commit, same policy edit) — reuse it instead of paying for
-                    # another Docker sandbox run. Recorded as a fresh row (its own
-                    # id/checked_at/job_id) so history and job linkage stay
-                    # accurate, but the sandbox itself never runs. Cheap and
-                    # synchronous — no thread needed, nothing here can block.
-                    reused = PolicyCheckResult(
-                        id=db.new_id(), policy_id=policy_id, project_id=project_id,
-                        outcome=previous.outcome, detail=previous.detail, job_id=request.job_id,
-                        checked_state=current_state, origin=check_origin,
-                        bypassed=check_bypassed and previous.outcome == CheckOutcome.FAIL,
-                    )
-                    with lock:
-                        db.insert_check_result(conn, reused)
+                    db.insert_check_result(conn, reused)
             handle.detail = "unchanged since the last check: verdict reused" if reused else "changed (or forced): the check must run"
         if reused is not None:
             # The sandbox step never runs; the rest of the checklist is not needed this time.
@@ -784,7 +867,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                     )
                     with lock:
                         db.insert_check_result(conn, result)
-                    handle.detail = f"result {result.id}"
+                    imported = _record_unit_tests(project_id, sandbox_result.junit)
+                    handle.detail = f"result {result.id}" + (f"; test run recorded by job {imported}" if imported else "")
             # Always "succeeded" at the Job level — a determined pass/fail/
             # not_applicable verdict is success for the check itself; only an
             # unreachable dependency or the sandbox's own 30-minute ceiling is
@@ -869,9 +953,21 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             policy = resolve_winning_policy(conn, topic=topic, project_id=project_id)
         return {"topic": topic, "project_id": project_id, "policy": policy.model_dump(mode="json") if policy else None}
 
+    def _governance(project_id: str) -> str:
+        """The project's governance (REQ-000000496); `full` when the Registry does not say, so nothing is skipped
+        on a guess."""
+        try:
+            return resolve_project(paths, project_id).get("governance") or "full"
+        except (ProjectResolutionError, httpx.HTTPError):
+            return "full"
+
+    def _applies(policy: Policy, governance: str) -> bool:
+        return policy.requires is None or governance == "full"
+
     def _gating_winners(project_id: str, requested: set[GatePoint]) -> list[tuple[Policy, bool]]:
         """Every currently-winning policy for this project whose own gate
-        points intersect `requested`, with whether its gating is on here."""
+        points intersect `requested`, with whether its gating is on here. A policy needing `full` governance is
+        left out on a `light` project: not applicable, so it neither runs nor holds (REQ-000000496)."""
         _seed_unseeded()
         with lock:
             topics = {p.topic for p in db.list_policies(conn) if requested & set(p.gate_points)}
@@ -880,6 +976,9 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
                 winner = resolve_winning_policy(conn, topic=topic, project_id=project_id)
                 if winner is not None and requested & set(winner.gate_points):
                     winners.append((winner, gating_enabled_for(winner, project_id)))
+        if any(winner.requires for winner, _ in winners):
+            governance = _governance(project_id)
+            winners = [(winner, gating) for winner, gating in winners if _applies(winner, governance)]
         return winners
 
     @app.get("/v1/policies/gating-for-job")
@@ -926,8 +1025,10 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
     def evaluate(request: EvaluateRequest) -> dict:
         """Run, now and in the sandbox, every policy that would gate
         `gate_point` for this project, and answer with each verdict and its
-        reason. Nothing is recorded and nothing is held: this is the early
-        warning, not the gate — the `commit-msg` hook's check of the commit
+        reason. Nothing is held: this is the early warning, not the gate. A
+        verdict on committed, unchanged state is recorded under the gate's
+        fingerprint (and a fresh one reused, `reused`), so the gate that
+        follows does not run the same check again — the `commit-msg` hook's check of the commit
         being made (`commit`, with `commit` describing it), and a session's
         preflight before it asks for a gated action (`branch_finish`,
         `release`, ...). `blocking` lists the topics that fail with gating on,
@@ -960,11 +1061,28 @@ def build_app(conn: sqlite3.Connection, paths: Paths) -> FastAPI:
             entry = {"policy_id": winner.id, "topic": winner.topic, "ears_text": winner.ears_text, "gating": gating and not bypassing,
                      "bypassed": gating and bypassing}
             try:
+                # A verdict on committed state (not a pending commit, no uncommitted change in what the
+                # policy reads) is recorded under the fingerprint the gate's check computes, so a fresh
+                # one is reused on both sides instead of running the sandbox again.
+                state = "" if request.commit is not None else check_fingerprint(
+                    winner, _judged_root(winner, request.project_id, checkout), clean_only=True,
+                )
+                previous = _fresh_verdict(winner.id, request.project_id, state)
+                if previous is not None:
+                    return {**entry, "outcome": previous.outcome.value, "detail": previous.detail, "reused": True}
                 mounts = _mounts_for_policy(winner, request.project_id, checkout)
                 verdict = sandbox.run_policy_check(winner.test_script, mounts, env=env, inputs=inputs)
             except (ProjectResolutionError, SandboxUnavailable) as exc:
                 return {**entry, "outcome": "error", "detail": str(exc)}
-            return {**entry, "outcome": verdict.outcome.value, "detail": verdict.detail}
+            if state:
+                with lock:
+                    db.insert_check_result(conn, PolicyCheckResult(
+                        id=db.new_id(), policy_id=winner.id, project_id=request.project_id, outcome=verdict.outcome,
+                        detail=verdict.detail, checked_state=state, origin=origin,
+                        bypassed=entry["bypassed"] and verdict.outcome == CheckOutcome.FAIL,
+                    ))
+                _record_unit_tests(request.project_id, verdict.junit)
+            return {**entry, "outcome": verdict.outcome.value, "detail": verdict.detail, "reused": False}
 
         winners = _gating_winners(request.project_id, {gate_point})
         with ThreadPoolExecutor(max_workers=EVALUATE_WORKERS) as pool:

@@ -5,6 +5,7 @@ their reasons."""
 from __future__ import annotations
 
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -71,7 +72,7 @@ def _activate(client, topic, gate_points, *, target_pillar="version", projects=N
     return policy
 
 
-# --- REQ-000000299: the commit gate point ----------------------------------------------------
+# --- REQ-000000483: the commit gate point ----------------------------------------------------
 
 def test_commit_is_a_gate_point_only_a_project_bound_policy_may_use(client):
     assert GatePoint("commit") is GatePoint.COMMIT
@@ -113,9 +114,9 @@ def test_evaluate_at_commit_needs_the_pending_commit(client):
     assert response.status_code == 400
 
 
-# --- REQ-000000300: evaluation records and holds nothing -------------------------------------
+# --- REQ-000000483: a preflight records verdicts the gate reuses, and holds nothing ------------
 
-def test_evaluate_runs_the_winning_policies_and_records_nothing(client, conn, monkeypatch):
+def test_evaluate_runs_the_winning_policies_and_holds_nothing(client, conn, monkeypatch):
     gating = _activate(client, "gating-rule", ["branch_finish"])
     _activate(client, "reported-only", ["branch_finish"],
               projects=[{"project_id": "proj-a", "gating_enabled": False}])
@@ -135,6 +136,54 @@ def test_evaluate_runs_the_winning_policies_and_records_nothing(client, conn, mo
     assert result["blocking"] == ["gating-rule"]
     assert result["errors"] == []
     assert by_topic["gating-rule"]["policy_id"] == gating["id"]
+    # recorded (the checkout is clean), each under the fingerprint the gate's check computes
+    recorded = db.list_check_results(conn)
+    assert {r.outcome for r in recorded} == {CheckOutcome.FAIL, CheckOutcome.PASS} and len(recorded) == 3
+    assert all(r.checked_state and r.job_id is None for r in recorded)
+
+
+def _counting_sandbox(monkeypatch, outcome=CheckOutcome.PASS):
+    calls = []
+    monkeypatch.setattr(app_module.sandbox, "run_policy_check",
+                        lambda *a, **kw: calls.append(1) or SandboxResult(outcome, "detail"))
+    return calls
+
+
+def test_a_second_preflight_on_the_same_commit_reuses_the_verdict(client, monkeypatch):
+    _activate(client, "rule", ["branch_finish"])
+    calls = _counting_sandbox(monkeypatch)
+    body = {"project_id": "proj-a", "gate_point": "branch_finish"}
+    first = client.post("/v1/policies/evaluate", json=body).json()["results"][0]
+    second = client.post("/v1/policies/evaluate", json=body).json()["results"][0]
+    assert len(calls) == 1
+    assert (first["reused"], second["reused"]) == (False, True) and second["outcome"] == "pass"
+
+
+def test_the_gates_check_reuses_the_preflights_verdict(client, conn, monkeypatch):
+    policy = _activate(client, "rule", ["branch_finish"])
+    calls = _counting_sandbox(monkeypatch, CheckOutcome.FAIL)
+    client.post("/v1/policies/evaluate", json={"project_id": "proj-a", "gate_point": "branch_finish"})
+    checked = client.post("/v1/jobs/policy.check_project",
+                          json={"job_id": "gate", "project_id": "proj-a", "params": {"policy_id": policy["id"]}}).json()
+    assert len(calls) == 1
+    assert checked["skipped"] == "unchanged" and checked["result"]["outcome"] == "fail"
+
+
+def test_an_uncommitted_change_is_judged_but_not_recorded(client, conn, checkout, monkeypatch):
+    _activate(client, "rule", ["branch_finish"])
+    calls = _counting_sandbox(monkeypatch)
+    (checkout / "VERSION").write_text("0.1.1\n")
+    body = {"project_id": "proj-a", "gate_point": "branch_finish"}
+    client.post("/v1/policies/evaluate", json=body)
+    client.post("/v1/policies/evaluate", json=body)
+    assert len(calls) == 2 and db.list_check_results(conn) == []
+
+
+def test_a_pending_commit_is_never_recorded(client, conn, monkeypatch):
+    _activate(client, "commit-rule", ["commit"])
+    _counting_sandbox(monkeypatch)
+    body = {"project_id": "proj-a", "gate_point": "commit", "commit": {"message": "feat: x", "files": []}}
+    client.post("/v1/policies/evaluate", json=body)
     assert db.list_check_results(conn) == []
 
 
@@ -280,3 +329,162 @@ def test_the_drafting_prompt_states_the_script_contract():
     assert "POLICY_COMMIT_DIR" not in captured["prompt"]
     gates.generate_test_script(query, "x", project_bound=True, judges_commits=True)
     assert "POLICY_COMMIT_DIR" in captured["prompt"]
+
+
+# --- REQ-000000482: a policy check never re-runs on unchanged inputs ---------------------------
+
+def _activate_with_inputs(client, topic, inputs):
+    params = {
+        "ears_text": f"The project shall satisfy {topic}.", "test_script": f"def test_{topic.replace('-', '_')}(): pass\n",
+        "topic": topic, "target_pillar": "version", "scope_level": "all_projects", "created_by": "framework",
+        "gate_points": ["release"], "inputs": inputs, "approved": True,
+    }
+    response = client.post("/v1/jobs/policy.activate", json={"job_id": "j", "params": params}).json()
+    assert response["outcome"] == "succeeded", response
+    return response["result"]
+
+
+def _check(client, policy):
+    answer = client.post("/v1/jobs/policy.check_project",
+                         json={"job_id": "c", "project_id": "proj-a", "params": {"policy_id": policy["id"]}}).json()
+    # an accepted check runs on a worker thread: let it finish while the fake sandbox is still in place
+    for thread in threading.enumerate():
+        if "(worker)" in thread.name:
+            thread.join(timeout=10)
+    return answer
+
+
+def _commit(repo, name, text):
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text(text)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", f"change {name}")
+
+
+def test_a_policy_keeps_its_inputs(client, conn):
+    policy = _activate_with_inputs(client, "coverage", ["tests/", "src", "src"])
+    assert policy["inputs"] == ["src", "tests"]
+    assert db.get_policy(conn, policy["id"]).inputs == ["src", "tests"]
+    # an edit that does not name inputs keeps them
+    params = {"policy_id": policy["id"], "ears_text": "The project shall be covered.", "test_script": "def test_x(): pass\n",
+              "topic": "coverage", "target_pillar": "version", "scope_level": "all_projects", "created_by": "framework",
+              "approved": True}
+    edited = client.post("/v1/jobs/policy.activate", json={"job_id": "j", "params": params}).json()["result"]
+    assert edited["inputs"] == ["src", "tests"]
+
+
+def test_inputs_must_be_paths_inside_the_repository(client):
+    params = {"ears_text": "The project shall x.", "test_script": "def test_x(): pass\n", "topic": "t",
+              "target_pillar": "version", "scope_level": "all_projects", "created_by": "framework",
+              "inputs": ["../outside"], "approved": True}
+    refused = client.post("/v1/jobs/policy.activate", json={"job_id": "j", "params": params}).json()
+    assert refused["outcome"] == "failed" and "inputs" in refused["error"]
+
+
+def test_a_docs_only_commit_keeps_the_verdict_of_a_policy_with_inputs(client, checkout, monkeypatch):
+    _commit(checkout, "src/a.py", "x = 1\n")
+    policy = _activate_with_inputs(client, "coverage", ["src"])
+    calls = _counting_sandbox(monkeypatch)
+    client.post("/v1/policies/evaluate", json={"project_id": "proj-a", "gate_point": "release"})
+    _commit(checkout, "docs/notes.md", "notes\n")
+    assert _check(client, policy)["skipped"] == "unchanged"
+    assert len(calls) == 1
+    _commit(checkout, "src/a.py", "x = 2\n")
+    assert _check(client, policy)["outcome"] == "accepted"  # src changed: the check runs again
+
+
+def test_without_inputs_any_new_commit_runs_the_check_again(client, checkout, monkeypatch):
+    policy = _activate(client, "rule", ["release"])
+    _counting_sandbox(monkeypatch)
+    client.post("/v1/policies/evaluate", json={"project_id": "proj-a", "gate_point": "release"})
+    assert _check(client, policy)["skipped"] == "unchanged"
+    _commit(checkout, "docs/notes.md", "notes\n")
+    assert _check(client, policy)["outcome"] == "accepted"
+
+
+def test_the_fingerprint_needs_a_clean_checkout_only_when_asked(checkout):
+    from policy.models import Policy
+    policy = Policy(id="p", topic="t", target_pillar="version", ears_text="x", test_script="x",
+                    scope_level="all_projects", created_by="framework", inputs=["src"])
+    _commit(checkout, "src/a.py", "x = 1\n")
+    clean = app_module.check_fingerprint(policy, checkout, clean_only=True)
+    assert clean.startswith("tree:")
+    (checkout / "README.md").write_text("outside the inputs\n")
+    assert app_module.check_fingerprint(policy, checkout, clean_only=True) == clean
+    (checkout / "src" / "b.py").write_text("untracked\n")
+    assert app_module.check_fingerprint(policy, checkout, clean_only=True) == ""
+    assert app_module.check_fingerprint(policy, checkout) == clean
+
+
+def test_an_existing_database_gains_the_inputs_column(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE policies (id TEXT PRIMARY KEY, topic TEXT NOT NULL, target_pillar TEXT NOT NULL, "
+                "ears_text TEXT NOT NULL, test_script TEXT NOT NULL, scope_level TEXT NOT NULL, scope_target TEXT, "
+                "created_by TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, gate_points TEXT NOT NULL DEFAULT '[]', "
+                "created_at TEXT NOT NULL, amended_at TEXT NOT NULL)")
+    old.execute("INSERT INTO policies VALUES ('p', 't', 'version', 'x', 'x', 'all_projects', NULL, 'framework', 1, '[]', "
+                "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')")
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    assert db.get_policy(conn, "p").inputs == []
+    conn.close()
+
+
+# --- REQ-000000484: a check that runs the test suite records the Unit tests run ----------------
+
+class _FakeOrchestration:
+    def __init__(self):
+        self.posted = []
+
+    def __call__(self, socket_path, timeout=None):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def post(self, url, json=None):
+        self.posted.append((url, json))
+        return type("R", (), {"status_code": 200, "json": lambda self: {"id": "import-job"}})()
+
+
+def test_a_junit_report_left_by_a_check_is_recorded_as_the_unit_tests_run(client, monkeypatch, tmp_path):
+    _activate(client, "coverage", ["release"])
+    orchestration = _FakeOrchestration()
+    monkeypatch.setattr(app_module, "resolve_pillar_socket", lambda paths, pillar, **kw: tmp_path / f"{pillar}.sock")
+    monkeypatch.setattr(app_module, "client_for_socket", orchestration)
+    monkeypatch.setattr(app_module.sandbox, "run_policy_check",
+                        lambda *a, **kw: SandboxResult(CheckOutcome.PASS, "ok", junit="<testsuite/>"))
+    client.post("/v1/policies/evaluate", json={"project_id": "proj-a", "gate_point": "release"})
+    [(url, job)] = orchestration.posted
+    assert url == "/v1/jobs" and job["type"] == "requirements.import_junit" and job["project_id"] == "proj-a"
+    assert job["params"] == {"suite_name": "Unit tests", "xml": "<testsuite/>"}
+
+
+def test_a_check_without_a_report_records_no_test_run(client, monkeypatch, tmp_path):
+    _activate(client, "rule", ["release"])
+    orchestration = _FakeOrchestration()
+    monkeypatch.setattr(app_module, "resolve_pillar_socket", lambda paths, pillar, **kw: tmp_path / f"{pillar}.sock")
+    monkeypatch.setattr(app_module, "client_for_socket", orchestration)
+    _counting_sandbox(monkeypatch)
+    client.post("/v1/policies/evaluate", json={"project_id": "proj-a", "gate_point": "release"})
+    assert orchestration.posted == []
+
+
+class _ReportingRunner(_Runner):
+    def run(self, argv, timeout=None, cwd=None):
+        if argv[:2] == ["docker", "run"]:
+            mount = next(a for a in argv if a.endswith(f":{sandbox.OUTPUT_DIR}"))
+            (Path(mount.rsplit(":", 1)[0]) / sandbox.OUTPUT_JUNIT).write_text("<testsuite/>")
+            assert f"POLICY_OUTPUT_DIR={sandbox.OUTPUT_DIR}" in argv
+        return super().run(argv, timeout=timeout, cwd=cwd)
+
+
+def test_the_sandbox_hands_back_the_report_a_check_wrote():
+    assert sandbox.run_policy_check("def test_x(): pass", {}, runner=_ReportingRunner(), timeout=5.0).junit == "<testsuite/>"
+    assert sandbox.run_policy_check("def test_x(): pass", {}, runner=_Runner(), timeout=5.0).junit is None

@@ -40,9 +40,10 @@ def is_windows_path(value: str) -> bool:
     return bool(_DRIVE_PATH.match(value) or _UNC_WSL.match(value))
 
 
-def to_wsl_path(value: str, root: str = DEFAULT_MOUNT_ROOT) -> str:
+def to_wsl_path(value: str, root: str | None = None) -> str:
     """`C:\\Users\\x` -> `/mnt/c/Users/x`; `\\\\wsl.localhost\\Ubuntu\\home\\x` -> `/home/x`. Anything else is
-    returned unchanged."""
+    returned unchanged. `root`: the mount root, /etc/wsl.conf's by default."""
+    root = mount_root() if root is None else root
     unc = _UNC_WSL.match(value)
     if unc:
         rest = unc.group(2).replace("\\", "/")
@@ -54,8 +55,10 @@ def to_wsl_path(value: str, root: str = DEFAULT_MOUNT_ROOT) -> str:
     return str(PurePosixPath(root, drive.group(1).lower(), *parts))
 
 
-def to_windows_path(path: str | Path, distro: str | None = None, root: str = DEFAULT_MOUNT_ROOT) -> str:
-    """`/mnt/c/x` -> `C:\\x`; any other absolute WSL path -> `\\\\wsl.localhost\\<distro>\\...`."""
+def to_windows_path(path: str | Path, distro: str | None = None, root: str | None = None) -> str:
+    """`/mnt/c/x` -> `C:\\x`; any other absolute WSL path -> `\\\\wsl.localhost\\<distro>\\...`. `root`: the
+    mount root, /etc/wsl.conf's by default."""
+    root = mount_root() if root is None else root
     posix = PurePosixPath(str(path))
     root_parts = PurePosixPath(root).parts
     parts = posix.parts
@@ -66,12 +69,66 @@ def to_windows_path(path: str | Path, distro: str | None = None, root: str = DEF
     return str(PureWindowsPath(f"\\\\wsl.localhost\\{distro}\\", *parts[1:]))
 
 
-def is_windows_checkout(path: str | Path, root: str = DEFAULT_MOUNT_ROOT) -> bool:
-    """Whether a checkout lives on a Windows drive (`/mnt/<letter>/...`), so Windows code may run in it."""
+def is_windows_checkout(path: str | Path, root: str | None = None) -> bool:
+    """Whether a checkout lives on a Windows drive (`<mount root>/<letter>/...`, the mount root from
+    /etc/wsl.conf), so Windows code may run in it."""
+    root = mount_root() if root is None else root
     root_parts = PurePosixPath(root).parts
     parts = PurePosixPath(str(path)).parts
     return parts[:len(root_parts)] == root_parts and len(parts) > len(root_parts) + 1 \
         and len(parts[len(root_parts)]) == 1 and parts[len(root_parts)].isalpha()
+
+
+WSL, WINDOWS = "wsl", "windows"
+HOSTS = (WSL, WINDOWS)
+
+
+def _project_path(project) -> str | None:
+    if isinstance(project, dict):
+        return project.get("path")
+    return getattr(project, "path", None)
+
+
+def project_host(project, root: str | None = None) -> str:
+    """Where a project's code and tools run: `windows` for a checkout on a Windows drive, `wsl` otherwise.
+    `project` is a registry row (a dict or a `Project`), whose explicit `host` wins, or a checkout path."""
+    if isinstance(project, (str, Path)):
+        return WINDOWS if is_windows_checkout(project, root) else WSL
+    host = project.get("host") if isinstance(project, dict) else getattr(project, "host", None)
+    if host in HOSTS:
+        return host
+    path = _project_path(project)
+    return WINDOWS if path and is_windows_checkout(path, root) else WSL
+
+
+def is_windows_project(project, root: str | None = None) -> bool:
+    return project_host(project, root) == WINDOWS
+
+
+GIT_EXE = "git.exe"
+
+
+def git_command(project, root: str | None = None) -> list[str]:
+    """The git to run for a project (a registry row or a checkout path), up to its subcommand: Windows' own
+    `git.exe -C <C:\\checkout>` for a Windows-hosted one (one git per checkout: fast on NTFS, and the same
+    line-ending and index view as the user's Windows tools), plain `git` otherwise."""
+    if not is_windows_project(project, root):
+        return ["git"]
+    path = project if isinstance(project, (str, Path)) else _project_path(project)
+    root = mount_root() if root is None else root
+    return [GIT_EXE, "-C", to_windows_path(path, root=root)]
+
+
+def git_path(path: str | Path, project, root: str | None = None) -> str:
+    """A path argument for `git_command(project)`: a Windows path when that git is `git.exe`."""
+    if not is_windows_project(project, root):
+        return str(path)
+    return to_windows_path(path, root=mount_root() if root is None else root)
+
+
+def from_git_path(value: str, root: str | None = None) -> str:
+    """A path git printed (`C:/x` from git.exe) as this side's path; a WSL path is returned unchanged."""
+    return to_wsl_path(value, mount_root() if root is None else root) if is_windows_path(value) else value
 
 
 def translate_argv(argv: list[str], root: str = DEFAULT_MOUNT_ROOT) -> list[str]:
@@ -127,6 +184,19 @@ set "{FROM_WINDOWS_ENV}=1"
 if defined WSLENV (set "WSLENV={SHIM_WSLENV}:%WSLENV%") else (set "WSLENV={SHIM_WSLENV}")
 wsl.exe -d {distro} --cd "%CD%\\." -e {lws_path} %*
 exit /b %ERRORLEVEL%
+"""
+
+
+def lws_sh(distro: str, lws_path: str) -> str:
+    """`lws`, the sh twin of `lws.cmd` installed beside it: what a Git for Windows hook (`.githooks/commit-msg`
+    run by git.exe, in Git Bash) finds on PATH as `lws`. `pwd -W` is Git Bash's Windows form of the folder."""
+    return f"""#!/bin/sh
+# Installed by `lws windows install-shim` (little-workshop, src/common/windows.py). Runs WSL's lws from
+# Git Bash (a Windows git hook): same arguments, the current folder as its working directory, and the
+# hook's GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE carried across. Reinstall to update.
+export {FROM_WINDOWS_ENV}=1
+export WSLENV="{SHIM_WSLENV}${{WSLENV:+:$WSLENV}}"
+exec wsl.exe -d {distro} --cd "$(pwd -W 2>/dev/null || pwd)" -e {lws_path} "$@"
 """
 
 

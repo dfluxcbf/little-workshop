@@ -74,7 +74,11 @@ Deployment & Servers, Agentic Development — needs somewhere to resolve
   `.claude/rules/claude-instructions.md` and the `workshop-lifecycle` skill, and the guard also runs for the
   file-edit tools: it refuses the denied raw commands with the route to take, and hand edits of generated
   files or a `CLAUDE.md` (`docs/pillars/policy_compliance.md`, "the second pass"). `tools/sync_claude_files.py`
-  rewrites the set in a registered project's checkout, keeping the entries the project added to its settings.
+  rewrites the set in a registered project's checkout, keeping the entries the project added to its settings,
+  and removes a file the generator no longer writes (`RETIRED_FILES`: the UserPromptSubmit reminder
+  `newest_request_reminder.py` and its settings entry, REQ-000000478; the rule stays in the briefing). The
+  lifecycle skill's steps before a finish are the preflight and the finish, with no separate DoD run
+  (REQ-000000481).
 - **`project.connect_github`** (`POST /v1/jobs/project.connect_github`,
   REQ-000000279..282, 2026-09-25) — the GitHub half of `project.bootstrap`
   for a project that is *already registered*, so a missing repo, remote,
@@ -131,6 +135,21 @@ against that same lock otherwise).
   and Deployment & Servers both need it resolvable from the moment they
   themselves start.
 
+## After a bootstrap or an import (2026-11-07)
+
+- **Bootstrap interview (REQ-000000519).** `interview: true` (the New project page's checkbox,
+  `lws project bootstrap --interview`, the MCP tool's `interview`) starts, once the project is scaffolded and
+  versioned, an `agent.run_task` Job of intent `interview` with manual review (`interview_task`). Its prompt
+  (`agent/templates/prompts/interview.md`) has Claude ask the owner one question at a time over Remote Control,
+  through the `grill-me` skill when the toolkit installed it, and write `docs/design.md` from the answers;
+  requirements only for `full` governance. The result carries `interview_job_id`, or `interview_error` when it
+  could not start (the bootstrap still succeeds).
+- **Import follow-up (REQ-000000520).** After registering, `project.import` submits a
+  `registry.sync_claude_files` Job with `write: true` (the generated files on an improvement branch when they
+  differ) and runs the `branch_finish` preflight through Policy & Compliance's evaluate (nothing held). Both
+  land in the import Job's result as `sync` and `preflight` (blocking topics and each verdict); an unreachable
+  pillar is an `error` there, never a failed import. The import's own validation stays mechanical.
+
 ## Secrets and token validity (2026-09-22)
 
 `GET /v1/secrets` — System health's own secrets panel (the Dashboard's Pillars page).
@@ -158,6 +177,90 @@ checkout and written by `registry/claude_sync.py`; `tools/sync_claude_files.py` 
 `.claude/settings.json` is merged: the generated permission table, hooks and plugins, plus every entry the
 project added. The Dashboard's catalog job *Apply common Claude configuration* runs it.
 
+Each generated hook command is built by `claude_templates.hook_command`: it runs its script only when the
+checkout holds it, and otherwise prints that the hook did not run and exits 0, so an older branch checked
+out never fails every tool call with a hook error (REQ-000000494). `POST /v1/projects/{name}/claude_files/
+regenerated` (`claude_sync.regenerated`) answers what a checkout's generated files should be, with
+`.claude/settings.json` keeping the project's own entries of every side given: the Version pillar settles a
+finish's rebase that stopped on them with it (REQ-000000487).
+
+The files follow the project's governance (below): the Job and `regenerated` pass the Registry's setting;
+`tools/sync_claude_files.py` reads it from the Registry, or takes `--governance`, and falls back to `full` for
+little-workshop and `light` otherwise. Every generated Markdown file ends with an empty project section,
+`<!-- project -->` … `<!-- /project -->`: what a checkout holds there is carried into the rewritten file, and the
+guard lets Claude edit only that part of a generated file (REQ-000000497). The sync writes only the generated
+paths and removes only `RETIRED_FILES` (files it generated once): a project's own rules, skills and agents are
+never touched. A rule a session learns (a correction, claude-reflect's learned rules) goes in the project's own
+`.claude/rules/learned.md`, which has no `paths` and so loads in every session; the briefing, the instructions
+rule and the guard's refusal of a `CLAUDE.md` say so (REQ-000000498). claude-reflect's `reflect-mod` writes its
+"Learned rules" block to `<repo>/CLAUDE.md` or `~/.claude/CLAUDE.md`, a path fixed in its code
+(`mod/hooks/register.tsx`, `fileFor`) with no setting, and it writes through the file system rather than Claude's
+Edit tool, so the guard cannot stop it: move such a block into `.claude/rules/learned.md` and delete the
+`CLAUDE.md` (the policy `claude-config-present` fails a finish while one exists).
+
+## Governance (2026-11-07)
+
+`projects.governance` (`light` | `full`, added to an existing database as `light`) says how much requirement work
+little-workshop asks of a project (REQ-000000495). `light` runs only the policies every project needs (secrets,
+credentials, version, release and Claude configuration checks); `full` adds those marked `"requires": "full"`
+(the requirement-marker policies, `python-test-coverage`, `merge-commit-message-format`), the requirement
+instructions in the generated Claude files and agent prompts, and the Definition of Done (REQ-000000496). Change
+it with the `project.set_governance` Job: `lws project set-governance --project-id <id> light|full`, the MCP tool
+`workshop_project_set_governance` (always asks), or the Dashboard's Settings page. Every project starts `light`;
+little-workshop itself is `full` (`lws project set-governance --project-id little-workshop full`, once).
+
+## Host (2026-11-07)
+
+`projects.host` (`wsl` | `windows`) says where a project's code and tools run (REQ-000000509): `windows` for a
+checkout on a Windows drive under WSL's mount root. Bootstrap and import set it from the path; an existing
+database gets it from each row's path. Everything that asks reads it through `common.windows.project_host`
+(docs/architecture.md, "Windows-hosted projects"). For a `windows` project the Registry also (REQ-000000511)
+runs its git with `git.exe`, pins `core.autocrlf=false` at bootstrap, import and the Claude files sync, and
+gives a non-Unity project `* text=auto eol=lf` as the first `.gitattributes` rule (scaffolded at bootstrap,
+added on the sync's branch otherwise); the `registry.normalize_eol` Job (`lws project normalize-eol
+--project-id <id>`, always asks) does the same on an improvement branch and renormalizes every tracked file
+once. Its generated hooks run through `.claude/hooks/run_hook.sh` and its `.mcp.json` asset server through
+`cmd.exe /c lws.cmd`, so both work in WSL and in native Windows sessions (REQ-000000513).
+
+## Toolkit (2026-11-07)
+
+Public Claude Code skills, agents, commands and plugins, installed per project (`registry/toolkit.py`,
+REQ-000000502 to REQ-000000506). Suggested sources and their licences: [../toolkit_sources.md](../toolkit_sources.md).
+
+- **Sources**: a GitHub repository registered once (`toolkit_sources` table: repo, pinned commit, licence,
+  default branch, items) by `registry.toolkit_add_source` (`repo`, or `seed: true` for the defaults:
+  mattpocock/skills, DietrichGebert/ponytail, BayramAnnakov/claude-reflect, pbakaus/impeccable). The tree is read
+  through `gh api` at the pinned commit: plugins from `.claude-plugin/marketplace.json` (local sources only),
+  skills from `**/SKILL.md` (other harnesses' copies under hidden folders and test data skipped; a
+  `.claude/skills/` copy wins), agents and commands from `agents/*.md` and `commands/*.md` (root or `.claude/`).
+  Each item lists its description (frontmatter or `plugin.json`) and `runs_code`: its hooks, scripts and
+  executables.
+- **Install** (`registry.toolkit_install`: project, `repo`, `items`, `confirm_code`): a plugin through Claude
+  Code's own `claude plugin marketplace add <repo>` and `claude plugin install <name>@<marketplace> --scope
+  project` in the checkout (which writes `enabledPlugins`); a skill, agent or command copied at the pinned commit
+  to `.claude/skills/<name>/`, `.claude/agents/<name>.md`, `.claude/commands/<name>.md`. A file the lock does not
+  record is never overwritten. An item that runs code is refused, its files listed, without `confirm_code`
+  (before any branch starts). Everything is recorded in `.claude/toolkit.lock.json` (per source: commit,
+  licence, items and the files written) and committed on `improvement/toolkit-<item>` on a clean checkout, left
+  for the owner to finish (the Claude files sync's branch helper, `claude_sync.commit_on_branch`).
+- **Remove** (`registry.toolkit_remove`; no items: all from the source) deletes exactly the recorded files, or
+  uninstalls the plugin, on `improvement/toolkit-remove-<item>`. **Update** (`registry.toolkit_update`) re-pins
+  the source to its newest commit and lists the changed files; with a project, it brings the project's items to
+  the new pin (from the project's own pin; changed code needs `confirm_code`). Plugins themselves are updated by
+  Claude Code.
+- **Settings**: the generated `.claude/settings.json` enables the language plugins plus every `plugin@marketplace`
+  the lock records, and keeps the project's own entries.
+- **Recommendations, never installs** (`GET /v1/toolkit/status/{project}`): the lock, plus the registered items
+  suggested from the project's kind (code projects: grill-me, grill-with-docs, to-spec, implement-spec,
+  diagnosing-bugs, tdd, handoff, writing-for-agents and ponytail's review, audit and debt skills; a project with a
+  UI, a server manifest or `tests/ui/`: impeccable; Unity: none) and its open usage findings (`FINDING_ITEMS`:
+  long sessions → handoff, files re-read in many sessions → writing-for-agents). claude-reflect is a source only:
+  it is installed at user scope already, and writes learned rules to `.claude/rules/learned.md`.
+- **Surfaces**: Dashboard System → Toolkit (`/toolkit`: sources with licence and items, a "runs code" badge, a
+  project picker, its recommendations and installed items with remove and update); `lws toolkit
+  sources|list|status|add-source|seed|install|remove|update`; MCP `workshop_toolkit_sources`, `_items`,
+  `_status` (read-only) and `_add_source`, `_install`, `_remove`, `_update` (ask).
+
 ## Backlog (2026-10-04)
 
 REQ-000000369..371. Each registered project has a backlog: what its owner wants built or fixed, kept
@@ -174,9 +277,15 @@ edit and deletion (the Dashboard's live pages watch it). Two Jobs ask Claude, th
 Development's `agent.query` (this pillar runs no Claude itself), without holding the pillar's lock:
 
 - `registry.backlog_refine` — from the primary entry, the current refined entry and the notes;
-- `registry.backlog_task_prompt` — from the refined entry (not the primary entry or the notes); the
-  instruction to delete the entry once the work is done (`lws project backlog delete --project-id <p>
-  <id>`, or the MCP tool `workshop_project_backlog_delete`) is appended here, word for word.
+- `registry.backlog_task_prompt` — from the refined entry (not the primary entry or the notes); nothing
+  about the backlog is added: the task never closes or deletes its entry (REQ-000000524).
+
+**Status and priority (REQ-000000524).** Each entry has a `status` (`open`, `done`, `dropped`) and a
+`priority` (`high`, `normal`, `low`), both the owner's; entries from before them are `open`/`normal`.
+`PATCH /v1/backlog/{id}` sets them (`lws project backlog update --status --priority`,
+`workshop_project_backlog_update`); `GET /v1/backlog?status=` filters (`lws project backlog list --status`,
+default open) and lists the highest priority first. `POST /v1/backlog/{id}/task` records the Job of the task
+launched from the entry (`task_job`), which the Dashboard uses to offer "Mark done" once that run succeeded.
 
 Since 2026-10-05 both read the project's checkout as Claude writes (REQ-000000370, 371, 397): the query
 asks for `read_checkout`, so the agent runs Claude in the checkout with only the tools that read
@@ -190,7 +299,7 @@ would have answered.
 
 Each is refused for a missing entry (and the prompt for an entry not refined yet), and an entry deleted
 while Claude works keeps nothing of the answer. Deleting an entry — from the Dashboard, `lws project
-backlog delete`, `workshop_project_backlog_delete`, or Claude at the end of a task — removes the row with
+backlog delete` or `workshop_project_backlog_delete` — removes the row with
 all four fields; the database overwrites deleted content (`secure_delete`) and folds its write-ahead log
 back, so no copy outlives it in the pillar's files. Removing a project removes its backlog. The Claude
 sessions that refined or prompted an entry are recorded at the agent under `backlog:<id>`; deleting the

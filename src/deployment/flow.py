@@ -24,8 +24,8 @@ from common.paths import Paths
 from common.shell import CommandRunner, DEFAULT_RUNNER
 from core.health import HealthResult, probe_health
 from deployment import confirm, db, gitutil
-from deployment.manifest import ServerManifest
-from deployment.netutil import port_is_listening, wait_for_port, wait_for_port_free
+from deployment.manifest import HealthManifest, ServerManifest
+from deployment.netutil import http_is_healthy, port_is_listening, wait_for_port, wait_for_port_free
 from deployment.workshop_repo import workshop_repo_dir
 
 # docs/design.md's "Planned upgrade": confirm-gating defaults on for Core
@@ -46,6 +46,11 @@ INSTALLED_CORE_HOW = f"restarted the installed unit {INSTALLED_CORE_UNIT}"
 # out, re-queues it, and the retry restarts it again — a loop. Always dispatch
 # these to a detached worker, which reports completion back by job id.
 ALWAYS_DISPATCHED_PILLARS = ("orchestration",)
+# A Windows-hosted server is installed into a folder of its own on the Windows drive, one per commit, and runs
+# from there (a `.bat` refuses a `\\wsl.localhost` path). `LWS_WINDOWS_DEPLOY_ROOT` moves it; the newest
+# `WINDOWS_DEPLOYS_KEPT` folders of a project stay, for a rollback (REQ-000000515).
+DEFAULT_WINDOWS_DEPLOY_ROOT = "C:\\little-workshop\\deploy"
+WINDOWS_DEPLOYS_KEPT = 2
 
 
 class DeploymentError(Exception):
@@ -157,7 +162,10 @@ class DeploymentFlow:
     clock: Callable[[], float] = time.monotonic
     own_cgroup: Callable[[], str] = _read_own_cgroup
     health_probe: Callable[..., HealthResult] = probe_health
+    # A deployed server's `[server.health]` URL (REQ-000000521); a port is probed with `probe`.
+    http_probe: Callable[[str], bool] = http_is_healthy
     cli_python: Callable[[], Path | None] = _lws_python
+    windows_deploy_root: str = field(default_factory=lambda: os.environ.get("LWS_WINDOWS_DEPLOY_ROOT") or DEFAULT_WINDOWS_DEPLOY_ROOT)
 
     # -- helpers --------------------------------------------------------
 
@@ -165,11 +173,10 @@ class DeploymentFlow:
         if on_windows:
             # A Windows-hosted server has no WSL process for pgrep to find at all -- its tracked PID
             # file (common/windows_process.py) is the only record of it.
-            pid_path = self.paths.deployment_windows_pid_path(project_id)
-            if not pid_path.exists():
+            record = windows_process.read_pid_record(self.paths.deployment_windows_pid_path(project_id))
+            if record is None:
                 return []
-            pid = int(pid_path.read_text().strip())
-            return [pid] if windows_process.is_alive(self.runner, pid) else []
+            return [record["pid"]] if windows_process.is_alive(self.runner, record["pid"], record["started"]) else []
         # -A/--ignore-ancestors: this pillar's own argv could itself contain
         # the configured match string as a substring; without -A a process
         # could find and kill itself.
@@ -205,12 +212,11 @@ class DeploymentFlow:
 
         if on_windows:
             pid_path = self.paths.deployment_windows_pid_path(project_id)
-            if pid_path.exists():
-                pid = int(pid_path.read_text().strip())
-                if windows_process.is_alive(self.runner, pid):
-                    windows_process.stop(self.runner, pid)
-                    report.pids_killed.append(pid)
-                pid_path.unlink(missing_ok=True)
+            record = windows_process.read_pid_record(pid_path)
+            if record is not None and windows_process.is_alive(self.runner, record["pid"], record["started"]):
+                windows_process.stop(self.runner, record["pid"])
+                report.pids_killed.append(record["pid"])
+            pid_path.unlink(missing_ok=True)
         else:
             if systemd.is_active(_unit_key(project_id), runner=self.runner):
                 systemd.stop(_unit_key(project_id), runner=self.runner)
@@ -259,10 +265,9 @@ class DeploymentFlow:
                 pid = windows_process.start_server(self.runner, manifest.command, windows_cwd, manifest.env or None)
             except windows_process.WindowsProcessError as exc:
                 raise DeploymentError(f"could not launch {manifest.name}: {exc}") from exc
-            pid_path = self.paths.deployment_windows_pid_path(project_id)
-            pid_path.parent.mkdir(parents=True, exist_ok=True)
-            pid_path.write_text(str(pid))
-            how = f"a native Windows process (pid {pid})"
+            windows_process.write_pid_record(self.paths.deployment_windows_pid_path(project_id), pid,
+                                             windows_process.start_time(self.runner, pid), windows_cwd)
+            how = f"a native Windows process (pid {pid}) in {windows_cwd}"
         else:
             result = systemd.start(
                 _unit_key(project_id),
@@ -308,27 +313,68 @@ class DeploymentFlow:
         project's own checkout — and only stop the currently running
         version and launch the new one once that succeeds. A bad
         build/install must never take a running server down."""
-        on_windows = windows.is_windows_checkout(project_dir)
+        if windows.is_windows_project(project_dir):
+            return self._deploy_windows(project_id, manifest, project_dir, commitish)
         worktree = self.paths.worktree_path(f"deploy-{project_id}")
         try:
             with step("install") as handle:
                 gitutil.add_worktree(project_dir, commitish, worktree)
                 version = (worktree / "VERSION").read_text(encoding="utf-8").strip() if (worktree / "VERSION").exists() else "?"
                 commit = gitutil.current_commit(worktree)
-                self.install(manifest, cwd=worktree, on_windows=on_windows)
+                self.install(manifest, cwd=worktree)
                 handle.detail = f"version {version} at {commit[:12]}"
             with step("stop_old"):
-                self.down(project_id, manifest, on_windows=on_windows, tailscale_off=False)
+                self.down(project_id, manifest, tailscale_off=False)
             # Not cwd=worktree: the worktree is removed right after this call
             # returns, but the launched process's working directory has to
-            # keep existing for as long as the unit (or, on Windows, the
-            # supervisor's next relaunch) does.
+            # keep existing for as long as the unit does.
             with step("launch") as handle:
-                how = self.launch(project_id, manifest, cwd=self.paths.state_home, on_windows=on_windows)
+                how = self.launch(project_id, manifest, cwd=self.paths.state_home)
                 handle.detail = how
         finally:
             gitutil.remove_worktree(project_dir, worktree)
         return version, commit, how
+
+    def windows_deploy_dir(self, project_id: str) -> Path:
+        """This side's path of the folder holding a Windows-hosted project's deploys."""
+        root = windows.mount_root()
+        return Path(windows.to_wsl_path(self.windows_deploy_root, root)) / project_id.replace("/", "-")
+
+    def _deploy_windows(self, project_id: str, manifest: ServerManifest, project_dir: Path, commitish: str) -> tuple[str, str, str]:
+        """`_deploy` for a Windows-hosted project: the commit is checked out with git.exe into its own folder
+        under `windows_deploy_root` (kept: the server runs from it), installed and launched there; then all but
+        the newest `WINDOWS_DEPLOYS_KEPT` folders are removed."""
+        commit = gitutil.run(["git", "rev-parse", "--verify", f"{commitish}^{{commit}}"], project_dir, check=True).stdout.strip()
+        folder = self.windows_deploy_dir(project_id) / commit[:12]
+        created = not (folder / ".git").exists()
+        with step("install") as handle:
+            if created:
+                gitutil.add_worktree(project_dir, commit, folder)
+            version = (folder / "VERSION").read_text(encoding="utf-8").strip() if (folder / "VERSION").exists() else "?"
+            try:
+                self.install(manifest, cwd=folder, on_windows=True)
+            except DeploymentError:
+                if created:
+                    gitutil.remove_worktree(project_dir, folder)
+                raise
+            handle.detail = f"version {version} at {commit[:12]} in {windows.to_windows_path(folder)}"
+        with step("stop_old"):
+            self.down(project_id, manifest, on_windows=True, tailscale_off=False)
+        with step("launch") as handle:
+            os.utime(folder)  # the newest deploy, for pruning
+            how = self.launch(project_id, manifest, cwd=folder, on_windows=True)
+            removed = self.prune_windows_deploys(project_id, project_dir, keep=folder)
+            handle.detail = how + (f"; removed {len(removed)} older deploy(s)" if removed else "")
+        return version, commit, how
+
+    def prune_windows_deploys(self, project_id: str, project_dir: Path, *, keep: Path) -> list[Path]:
+        """Remove a project's deploy folders but `keep` and the newest others, `WINDOWS_DEPLOYS_KEPT` in all."""
+        base = self.windows_deploy_dir(project_id)
+        others = sorted((p for p in base.iterdir() if p.is_dir() and p != keep), key=lambda p: p.stat().st_mtime, reverse=True)
+        removed = others[WINDOWS_DEPLOYS_KEPT - 1:]
+        for folder in removed:
+            gitutil.remove_worktree(project_dir, folder)
+        return removed
 
     def up(self, conn: sqlite3.Connection, project_id: str, manifest: ServerManifest, project_dir: Path, branch: str) -> UpResult:
         with step("check_managed") as handle:
@@ -357,6 +403,13 @@ class DeploymentFlow:
         else:
             done("confirm_gate", "not confirm-gated")
 
+        if manifest.health is not None:
+            with step("health_probe") as handle:
+                confirm_message = self.settle_by_health(conn, project_id, manifest, project_dir, branch, commit, version)
+                handle.detail = confirm_message
+        else:
+            done("health_probe", "no [server.health] in the manifest")
+
         return UpResult(branch=branch, version=version, commit=commit, how=how, exposure=exposure, confirm_message=confirm_message)
 
     # -- confirm-gated deploys (opt-in via manifest.confirm_timeout_seconds) -
@@ -379,6 +432,43 @@ class DeploymentFlow:
                 f"({(result.stderr or result.stdout).strip()}); confirm or roll back manually"
             )
         return f"awaiting confirmation (auto-rollback in {timeout_seconds}s unless confirmed)"
+
+    # -- the health probe (REQ-000000521) ---------------------------------
+
+    def wait_healthy(self, manifest: ServerManifest) -> tuple[bool, str]:
+        """Probe `[server.health]` until it answers or its timeout passes: (healthy, what was probed). A
+        Windows-hosted server is probed the same way: with mirrored networking its ports are WSL's localhost."""
+        health: HealthManifest = manifest.health
+        target = health.url or f"port {health.port or manifest.port}"
+        deadline = self.clock() + health.timeout_seconds
+        while True:
+            ok = self.http_probe(health.url) if health.url else self.probe(health.port or manifest.port)
+            if ok:
+                return True, target
+            if self.clock() >= deadline:
+                return False, target
+            self.sleep(health.interval_seconds)
+
+    def settle_by_health(
+        self, conn: sqlite3.Connection, project_id: str, manifest: ServerManifest, project_dir: Path, branch: str, commit: str, version: str,
+    ) -> str:
+        """Healthy: the deploy is confirmed (or, without a confirm gate, becomes the baseline a later rollback
+        returns to). Unhealthy by the timeout: rolled back now through the confirm gate's own rollback, and
+        DeploymentError says so; with no confirmed deploy to return to, it only says so."""
+        healthy, target = self.wait_healthy(manifest)
+        if healthy:
+            if not db.confirm(conn, project_id):
+                db.seed_confirmation(conn, project_id, branch, commit, version)
+            return f"healthy ({target}): confirmed automatically"
+        state = db.get_confirmation(conn, project_id)
+        if state is None or not state.get("confirmed_commit"):
+            raise DeploymentError(
+                f"{project_id}: not healthy within {manifest.health.timeout_seconds}s ({target}) and there is no "
+                "confirmed deploy to roll back to; the new version is left running")
+        if state["status"] != db.PENDING:
+            state = db.mark_pending(conn, project_id, branch, commit, version, manifest.health.timeout_seconds)
+        summary = self.rollback_if_unconfirmed(conn, project_id, manifest, project_dir, state["deploy_id"])
+        raise DeploymentError(f"{project_id}: not healthy within {manifest.health.timeout_seconds}s ({target}); {summary}")
 
     def seed_confirmation(self, conn: sqlite3.Connection, project_id: str) -> None:
         """Establishes the confirmed baseline from whatever's currently

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import socket
 import time
+import urllib.error
+import urllib.request
 from typing import Callable
 
 
@@ -42,3 +44,14 @@ def wait_for_port_free(
         if clock() >= deadline:
             return False
         sleep(interval)
+
+
+def http_is_healthy(url: str, timeout: float = 2.0) -> bool:
+    """A GET of `url` answered with a status below 400 (a redirect is not followed further)."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310 - a configured local URL
+            return response.status < 400
+    except urllib.error.HTTPError as exc:
+        return exc.code < 400
+    except (urllib.error.URLError, OSError, ValueError):
+        return False

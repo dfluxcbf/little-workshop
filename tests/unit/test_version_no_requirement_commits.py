@@ -38,10 +38,11 @@ def test_a_finish_bump_commit_cites_req_none_and_the_merge_does_not(tmp_path):
     assert "REQ-NONE" not in merge
 
 
+# --- REQ-000000501: agent commits cite requirements in full-governance projects ---------------
+
 def test_the_agent_is_told_to_cite_requirements_or_req_none():
-    """REQ-000000267: every agent run's prompt carries the common ground rules."""
     from agent import templates_util
 
-    common = templates_util.read_prompt("common.md")
-    assert "`REQ-nnnnnnnnn`" in common
-    assert "`REQ-NONE` when it affects no requirement — never both" in common
+    rule = templates_util.read_prompt("requirements.md")
+    assert "`REQ-nnnnnnnnn`" in rule and "`REQ-NONE` when a commit affects none" in rule
+    assert "REQ-" not in templates_util.read_prompt("common.md")

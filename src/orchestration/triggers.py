@@ -240,7 +240,7 @@ def fire_pending(conn: sqlite3.Connection, insert_job) -> list[Job]:
 
 
 # The triggers little-workshop sets up for itself (`lws trigger install-defaults`): each replaces
-# work Claude was doing by hand (docs/claude_usage_optimization.md §11.3).
+# work Claude was doing by hand.
 WORKSHOP = "little-workshop"
 DEFAULTS = (
     {"name": "Redeploy the pillars a finished branch changed",
