@@ -24,6 +24,7 @@ PILLARS = (
     "dashboard",
     "mcp",
     "usage",
+    "generation",
 )
 
 OWNER_TAGS = {
@@ -38,6 +39,7 @@ OWNER_TAGS = {
     "dashboard": "dashboard",
     "mcp": "mcp",
     "usage": "usage",
+    "generation": "generation",
 }
 
 
@@ -146,6 +148,12 @@ class Paths:
 
     def package_blob_path(self, kind: str, filename: str) -> Path:
         return self.packages_dir / kind / filename
+
+    @property
+    def generated_dir(self) -> Path:
+        """Image Generation's copies of the pictures ComfyUI rendered, one folder per request, kept until the
+        caller has downloaded them and asks for their deletion (docs/pillars/generation.md)."""
+        return self.state_home / "generated"
 
     def ensure_layout(self) -> None:
         """Create every directory this system needs before anything writes to it."""

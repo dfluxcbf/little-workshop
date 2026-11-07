@@ -1679,6 +1679,22 @@ def test_bottom_toolbar_groups_related_pages_under_one_button(test_client, monke
     assert "/projects/new" not in bar
 
 
+
+# --- REQ-000000462: Image generation has its own Generation group in the navigation ---
+
+
+def test_image_generation_pages_have_their_own_generation_group(test_client, monkeypatch):
+    monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [])
+    monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])
+    text = test_client.get("/policies").text
+    bar = text[text.index('<nav class="tabbar"'):]
+    assert bar.count('data-open="generation"') == 1 and "<span>Generation</span>" in bar
+    generation_row = re.search(r'data-view="generation">(.*?)</div>', bar, re.S).group(1)
+    for href, label in (("/generation", "Images"), ("/generation/new", "New images"), ("/generation/recipes", "Recipes")):
+        assert f'href="{href}"' in generation_row and f"<span>{label}</span>" in generation_row
+    actions_row = re.search(r'data-view="actions">(.*?)</div>', bar, re.S).group(1)
+    assert "/generation" not in actions_row
+
 def test_the_group_of_the_current_page_is_open_and_highlighted(test_client, monkeypatch):
     monkeypatch.setattr(client, "policy_list", lambda paths, topic=None, **kw: [])
     monkeypatch.setattr(client, "policy_drafts", lambda paths, status=None: [])

@@ -1863,6 +1863,112 @@ def _trigger(method: str, path: str = "", body: dict | None = None) -> int:
     return 0
 
 
+def _generation(method: str, path: str, *, body: dict | None = None, params: dict | None = None) -> int:
+    try:
+        _print(client.generation_request(Paths.from_env(), method, path, json=body, params=params))
+    except client.GenerationPillarUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_generation_submit(args: argparse.Namespace) -> int:
+    body: dict = {"prompts": []}
+    if args.file:
+        try:
+            loaded = json.loads(Path(args.file).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"error: --file takes a JSON file: {exc}", file=sys.stderr)
+            return 2
+        body = loaded if isinstance(loaded, dict) else {"prompts": loaded}
+    body["prompts"] = list(body.get("prompts") or []) + list(args.prompt or [])
+    for source in args.sources or []:
+        parts = source.split("/")
+        if len(parts) not in (2, 3) or not parts[1].isdigit():
+            print(f"error: --from takes REQUEST/IDX or REQUEST/IDX/ROLE, not {source!r}", file=sys.stderr)
+            return 2
+        ref = {"request_id": parts[0], "idx": int(parts[1]), **({"role": parts[2]} if len(parts) == 3 else {})}
+        body["prompts"].append({"source": ref})
+    defaults = {key: value for key, value in (("model", args.model), ("width", args.width), ("height", args.height), ("seed", args.seed),
+                                              ("steps", args.steps), ("lora", args.lora), ("recipe", args.recipe)) if value is not None}
+    if args.count is not None:
+        body["prompts"] = [{**({"prompt": entry} if isinstance(entry, str) else entry), "count": args.count} for entry in body["prompts"]]
+    if defaults:
+        body["defaults"] = {**(body.get("defaults") or {}), **defaults, "prompt": ""}
+    body["project_id"] = args.project_id
+    if args.name:
+        body["name"] = args.name
+    return _generation("POST", "/v1/requests", body=body)
+
+
+def cmd_generation_recipes(args: argparse.Namespace) -> int:
+    return _generation("GET", "/v1/recipes")
+
+
+def cmd_generation_recipe_show(args: argparse.Namespace) -> int:
+    return _generation("GET", f"/v1/recipes/{args.name}")
+
+
+def cmd_generation_setup(args: argparse.Namespace) -> int:
+    return _generation("GET", f"/v1/requests/{args.request_id}/images/{args.idx}/graph", params={"project_id": args.project_id})
+
+
+def cmd_generation_recipe_save(args: argparse.Namespace) -> int:
+    body = {"name": args.name, "from_image": {"request_id": args.request_id, "idx": args.idx}, "replace": args.replace}
+    if args.description:
+        body["description"] = args.description
+    return _generation("POST", "/v1/recipes", body=body)
+
+
+def cmd_generation_recipe_import(args: argparse.Namespace) -> int:
+    try:
+        graph = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"error: --file takes ComfyUI's Export (API) JSON: {exc}", file=sys.stderr)
+        return 2
+    body = {"name": args.name, "graph": graph, "replace": args.replace}
+    if args.description:
+        body["description"] = args.description
+    return _generation("POST", "/v1/recipes", body=body)
+
+
+def cmd_generation_recipe_delete(args: argparse.Namespace) -> int:
+    return _generation("DELETE", f"/v1/recipes/{args.name}")
+
+
+def cmd_generation_status(args: argparse.Namespace) -> int:
+    return _generation("GET", f"/v1/requests/{args.request_id}", params={"project_id": args.project_id, "images": str(args.images).lower()})
+
+
+def cmd_generation_list(args: argparse.Namespace) -> int:
+    params = {"project_id": args.project_id, "limit": args.limit, **({"status": args.status} if args.status else {})}
+    return _generation("GET", "/v1/requests", params=params)
+
+
+def cmd_generation_queue(args: argparse.Namespace) -> int:
+    return _generation("GET", "/v1/queue")
+
+
+def cmd_generation_models(args: argparse.Namespace) -> int:
+    return _generation("GET", "/v1/models", params={"purpose": args.purpose} if args.purpose else None)
+
+
+def cmd_generation_gpu(args: argparse.Namespace) -> int:
+    return _generation("GET", "/v1/gpu", params={"max_age": args.max_age} if args.max_age is not None else None)
+
+
+def cmd_generation_resume(args: argparse.Namespace) -> int:
+    return _generation("POST", "/v1/queue/resume", body={"retry_failed": args.retry_failed})
+
+
+def cmd_generation_cancel(args: argparse.Namespace) -> int:
+    return _generation("POST", f"/v1/requests/{args.request_id}/cancel", params={"project_id": args.project_id})
+
+
+def cmd_generation_delete_files(args: argparse.Namespace) -> int:
+    return _generation("DELETE", f"/v1/requests/{args.request_id}/files", params={"project_id": args.project_id})
+
+
 def cmd_trigger_list(args: argparse.Namespace) -> int:
     return _trigger("GET")
 
@@ -2242,6 +2348,84 @@ def build_parser() -> argparse.ArgumentParser:
     bypass_policies.add_argument("--time", type=int, default=None, metavar="MINUTES",
                                  help="How long the bypass lasts (default 2, at most 30); with `true` only")
     bypass_policies.set_defaults(func=cmd_bypass_policies)
+
+    generation = subparsers.add_parser("generation", help="Image Generation: queue pictures for ComfyUI, probe them, download them")
+    generation_sub = generation.add_subparsers(dest="generation_command", required=True)
+    g_submit = generation_sub.add_parser("submit", help="Queue a set of prompts; prints the request's id and how to probe it")
+    g_submit.add_argument("--project-id", required=True)
+    g_submit.add_argument("--prompt", action="append", help="A prompt (repeat for several)")
+    g_submit.add_argument("--file", default=None, help='A JSON file: {"prompts": [...], "defaults": {...}, "name": ...} or a list of prompts')
+    g_submit.add_argument("--name", default=None)
+    g_submit.add_argument("--model", default=None, help="A configured model (default: the configured default_model)")
+    g_submit.add_argument("--width", type=int, default=None)
+    g_submit.add_argument("--height", type=int, default=None)
+    g_submit.add_argument("--seed", type=int, default=None)
+    g_submit.add_argument("--steps", type=int, default=None)
+    g_submit.add_argument("--lora", default=None, help="A LoRA of the model, by its configured name")
+    g_submit.add_argument("--count", type=int, default=None, help="Pictures of every prompt (seeds counting up)")
+    g_submit.add_argument("--recipe", default=None, help="Render this recipe instead of a model (lws generation recipes), e.g. seamless-texture")
+    g_submit.add_argument("--from", dest="sources", action="append", metavar="REQUEST/IDX[/ROLE]",
+                          help="A done picture as the input of a recipe that takes one, e.g. --recipe pbr-maps (repeat for several)")
+    g_submit.set_defaults(func=cmd_generation_submit)
+    g_recipes = generation_sub.add_parser("recipes", help="The recipes: saved ComfyUI node setups a prompt can render, with their slots and outputs")
+    g_recipes.set_defaults(func=cmd_generation_recipes)
+    g_recipe_show = generation_sub.add_parser("recipe-show", help="One recipe with its graph and nodes")
+    g_recipe_show.add_argument("name")
+    g_recipe_show.set_defaults(func=cmd_generation_recipe_show)
+    g_setup = generation_sub.add_parser("setup", help="The ComfyUI node setup a picture was rendered with")
+    g_setup.add_argument("--project-id", required=True)
+    g_setup.add_argument("request_id")
+    g_setup.add_argument("idx", type=int)
+    g_setup.set_defaults(func=cmd_generation_setup)
+    g_recipe_save = generation_sub.add_parser("recipe-save", help="Save a rendered picture's node setup as a recipe")
+    g_recipe_save.add_argument("name")
+    g_recipe_save.add_argument("--request-id", required=True)
+    g_recipe_save.add_argument("--idx", type=int, default=0)
+    g_recipe_save.add_argument("--description", default=None)
+    g_recipe_save.add_argument("--replace", action="store_true")
+    g_recipe_save.set_defaults(func=cmd_generation_recipe_save)
+    g_recipe_import = generation_sub.add_parser("recipe-import", help="Save a graph exported from ComfyUI (Export (API)) as a recipe, "
+                                                "its slots and outputs suggested")
+    g_recipe_import.add_argument("name")
+    g_recipe_import.add_argument("--file", required=True, help="The Export (API) JSON file")
+    g_recipe_import.add_argument("--description", default=None)
+    g_recipe_import.add_argument("--replace", action="store_true")
+    g_recipe_import.set_defaults(func=cmd_generation_recipe_import)
+    g_recipe_delete = generation_sub.add_parser("recipe-delete", help="Delete a saved or imported recipe")
+    g_recipe_delete.add_argument("name")
+    g_recipe_delete.set_defaults(func=cmd_generation_recipe_delete)
+    g_status = generation_sub.add_parser("status", help="A request's status, estimate, downloads and cleanup")
+    g_status.add_argument("--project-id", required=True)
+    g_status.add_argument("request_id")
+    g_status.add_argument("--images", action="store_true", help="List every picture of the request")
+    g_status.set_defaults(func=cmd_generation_status)
+    g_list = generation_sub.add_parser("list", help="A project's requests, newest first")
+    g_list.add_argument("--project-id", required=True)
+    g_list.add_argument("--status", default=None, help="queued,running,failed,success,cancelled (comma-separated)")
+    g_list.add_argument("--limit", type=int, default=20)
+    g_list.set_defaults(func=cmd_generation_list)
+    g_queue = generation_sub.add_parser("queue", help="The queue: paused or not, the batch rendering, the next batches")
+    g_queue.set_defaults(func=cmd_generation_queue)
+    g_models = generation_sub.add_parser("models", help="The image models to choose from: purpose, limits, licence, prompting, LoRAs, "
+                                                     "speed, installed; ranked for --purpose with a recommendation")
+    g_models.add_argument("--purpose", choices=["icon", "ui", "concept-art", "texture", "material-reference", "scene", "character",
+                                                "sprite", "background"], help="The kind of picture")
+    g_models.set_defaults(func=cmd_generation_models)
+    g_gpu = generation_sub.add_parser("gpu", help="How busy the GPU is and by whom, and what the queue will do to it (information, not a lock)")
+    g_gpu.add_argument("--max-age", type=float, help="Accept a sample this many seconds old (default: the configured cache, 15 s)")
+    g_gpu.set_defaults(func=cmd_generation_gpu)
+    g_resume = generation_sub.add_parser("resume", help="Resume a queue a failure paused (the user's decision)")
+    g_resume.add_argument("--retry-failed", action="store_true", help="Queue the failed requests' pictures again, attempts reset")
+    g_resume.set_defaults(func=cmd_generation_resume)
+    g_cancel = generation_sub.add_parser("cancel", help="Cancel a queued or running request")
+    g_cancel.add_argument("--project-id", required=True)
+    g_cancel.add_argument("request_id")
+    g_cancel.set_defaults(func=cmd_generation_cancel)
+    g_delete = generation_sub.add_parser("delete-files", help="Delete little-workshop's copies of a finished request's pictures "
+                                         "(after checking the download with sha256sum -c SHA256SUMS)")
+    g_delete.add_argument("--project-id", required=True)
+    g_delete.add_argument("request_id")
+    g_delete.set_defaults(func=cmd_generation_delete_files)
 
     trigger = subparsers.add_parser("trigger", help="Workshop triggers: an event starts a Job")
     trigger_sub = trigger.add_subparsers(dest="trigger_command", required=True)

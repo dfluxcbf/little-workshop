@@ -23,7 +23,9 @@ other pillars to call, not for a human or agent session.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 from common import redeploy_plan
@@ -784,6 +786,8 @@ def _agent_run_task(paths: Paths, args: JSONDict) -> Any:
         params["playwright_mcp"] = False
     if args.get("include_standards") is False:
         params["include_standards"] = False
+    if args.get("allow_image_generation"):
+        params["allow_image_generation"] = True
     return client.create_job(
         paths, type="agent.run_task", target_pillar="agent", project_id=args["project_id"],
         params=params, queue_key=args["project_id"], depends_on=[], created_by="mcp",
@@ -892,6 +896,156 @@ def _usage_configure_claude(paths: Paths, args: JSONDict) -> Any:
 
 def _agent_runs(paths: Paths, args: JSONDict) -> Any:
     return client.agent_runs(paths, args["project_id"], status=args.get("status"))
+
+
+def _generation_submit(paths: Paths, args: JSONDict) -> Any:
+    body = {"project_id": args["project_id"], "prompts": args["prompts"]}
+    body.update({key: args[key] for key in ("defaults", "name") if args.get(key) is not None})
+    if body.get("defaults") is not None:
+        body["defaults"] = {"prompt": "", **body["defaults"]}
+    return client.generation_send(paths, "POST", "/v1/requests", json=body)
+
+
+def _generation_status(paths: Paths, args: JSONDict) -> Any:
+    return client.generation_get(paths, f"/v1/requests/{args['request_id']}",
+                                 params={"project_id": args["project_id"], "images": str(bool(args.get("images", False))).lower()})
+
+
+def _generation_list(paths: Paths, args: JSONDict) -> Any:
+    return client.generation_get(paths, "/v1/requests", params={"project_id": args["project_id"], "status": args.get("status"),
+                                                                 "limit": args.get("limit") or 20})
+
+
+def _generation_queue(paths: Paths, args: JSONDict) -> Any:
+    return client.generation_get(paths, "/v1/queue")
+
+
+def _generation_models(paths: Paths, args: JSONDict) -> Any:
+    return client.generation_get(paths, "/v1/models", params={"purpose": args.get("purpose")})
+
+
+def _generation_gpu(paths: Paths, args: JSONDict) -> Any:
+    return client.generation_get(paths, "/v1/gpu", params={"max_age": args.get("max_age_seconds")}, timeout=60.0)
+
+
+def _generation_resume(paths: Paths, args: JSONDict) -> Any:
+    return client.generation_send(paths, "POST", "/v1/queue/resume", json={"retry_failed": bool(args.get("retry_failed", False))})
+
+
+def _generation_cancel(paths: Paths, args: JSONDict) -> Any:
+    return client.generation_send(paths, "POST", f"/v1/requests/{args['request_id']}/cancel?project_id={args['project_id']}")
+
+
+def _generation_delete_files(paths: Paths, args: JSONDict) -> Any:
+    return client.generation_send(paths, "DELETE", f"/v1/requests/{args['request_id']}/files?project_id={args['project_id']}")
+
+
+def _generation_recipes(paths: Paths, args: JSONDict) -> Any:
+    if args.get("recipe"):
+        return client.generation_get(paths, f"/v1/recipes/{args['recipe']}")
+    return client.generation_get(paths, "/v1/recipes")
+
+
+def _generation_recipe_save(paths: Paths, args: JSONDict) -> Any:
+    body = {key: args[key] for key in ("title", "description", "graph", "slots", "outputs", "replace") if args.get(key) is not None}
+    body = {"name": args["recipe"], **body}
+    if args.get("request_id") is not None:
+        body["from_image"] = {"request_id": args["request_id"], "idx": int(args.get("idx") or 0)}
+    return client.generation_send(paths, "POST", "/v1/recipes", json=body)
+
+
+def _generation_picture_setup(paths: Paths, args: JSONDict) -> Any:
+    return client.generation_get(paths, f"/v1/requests/{args['request_id']}/images/{int(args['idx'])}/graph",
+                                 params={"project_id": args["project_id"]})
+
+
+def _generation_wait(paths: Paths, args: JSONDict) -> Any:
+    timeout = float(args["timeout_seconds"]) if args.get("timeout_seconds") is not None else GENERATION_WAIT_SECONDS
+    return client.generation_wait(paths, args["request_id"], args["project_id"], max(0.0, min(timeout, GENERATION_WAIT_MAX_SECONDS)))
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _generation_download(paths: Paths, args: JSONDict) -> Any:
+    """A finished request's pictures written into a folder of the project's checkout, each one checked against
+    its SHA-256 as fetched and again as written. A file already there with the same checksum is kept; one with
+    another checksum is refused unless `overwrite`."""
+    project_id, request_id = args["project_id"], args["request_id"]
+    status = client.generation_get(paths, f"/v1/requests/{request_id}", params={"project_id": project_id})
+    if status.get("status") != "success":
+        return {"outcome": "failed", "error": f"request {request_id} is {status.get('status')}; only a successful request is downloaded",
+                "status": status.get("status")}
+    files = (status.get("download") or {}).get("files")
+    if files is None:
+        return {"outcome": "failed", "error": f"little-workshop's copies of request {request_id} were deleted; nothing is left to download"}
+    root = Path(client.get_project(paths, project_id)["path"]).resolve()
+    folder = (root / args["folder"]).resolve()
+    if folder != root and root not in folder.parents:
+        return {"outcome": "failed", "error": f"{args['folder']!r} is outside the project's checkout {root}"}
+    overwrite = bool(args.get("overwrite"))
+    conflicts = [entry["name"] for entry in files if (folder / entry["name"]).is_file()
+                 and _sha256((folder / entry["name"]).read_bytes()) != entry["sha256"]]
+    if conflicts and not overwrite:
+        return {"outcome": "failed", "error": "these files exist with other contents (pass overwrite to replace them): " + ", ".join(conflicts)}
+    folder.mkdir(parents=True, exist_ok=True)
+    written = []
+    for entry in files:
+        target = folder / entry["name"]
+        kept = target.is_file() and entry["name"] not in conflicts
+        if not kept:
+            data = client.generation_file(paths, request_id, entry["name"])
+            if _sha256(data) != entry["sha256"]:
+                return {"outcome": "failed", "error": f"{entry['name']} arrived with another SHA-256 than recorded; nothing more was written",
+                        "files": written}
+            partial = target.with_name(target.name + ".part")
+            partial.write_bytes(data)
+            partial.replace(target)
+        verified = _sha256(target.read_bytes()) == entry["sha256"]
+        written.append({"name": entry["name"], "path": str(target.relative_to(root)), "bytes": target.stat().st_size,
+                        "sha256": entry["sha256"], "verified": verified, "already_there": kept})
+        if not verified:
+            return {"outcome": "failed", "error": f"{target} does not match its SHA-256 after writing", "files": written}
+    return {
+        "outcome": "succeeded", "request_id": request_id, "folder": str(folder.relative_to(root)), "files": written,
+        "all_verified": True,
+        "cleanup": {"tool": "workshop_generation_delete_files", "arguments": {"project_id": project_id, "request_id": request_id},
+                    "note": "every file matched its SHA-256; little-workshop's copies can now be deleted (the user confirms it)"},
+    }
+
+
+_GENERATION_IMAGE = {
+    "type": "object", "additionalProperties": False, "required": [],
+    "properties": {
+        "prompt": _prop("string", "What to draw. Needed unless source is given (then it only describes the picture)."),
+        "negative": _prop("string", "What to avoid (ignored by Flux at cfg 1)."),
+        "model": _prop("string", "A configured model, chosen with workshop_generation_models (flux is the default)."),
+        "width": _prop("integer", "Pixels, a multiple of 8 (default: the model's)."),
+        "height": _prop("integer", "Pixels, a multiple of 8 (default: the model's)."),
+        "seed": _prop("integer", "Default: random, recorded."),
+        "steps": _prop("integer", "Default: the model's (Flux schnell 4)."),
+        "cfg": _prop("number", "Default: the model's."),
+        "sampler": _prop("string", "Default: the model's."),
+        "scheduler": _prop("string", "Default: the model's."),
+        "lora": _prop("string", "A LoRA of the model by its name; workshop_generation_models gives each LoRA's purpose and trigger words."),
+        "lora_strength": _prop("number", "Default: the model's (0.9)."),
+        "count": _prop("integer", "Pictures of this prompt, seeds counting up from its seed. Default 1."),
+        "recipe": _prop("string", "Render this recipe (workshop_generation_recipes) instead of a model's text-to-image graph. "
+                                  "PBR textures take two steps: seamless-texture renders tileable textures from the prompt; "
+                                  "look at them, then pbr-maps with a source gives the chosen one's albedo, normal, height, "
+                                  "occlusion, roughness and metallic maps (pbr-texture does both in one go). A recipe fills "
+                                  "only its slots; leave model and lora out."),
+        "source": {"type": "object", "additionalProperties": False, "required": ["request_id", "idx"],
+                   "description": "The done picture a recipe with an image slot (pbr-maps) takes as its input.",
+                   "properties": {"request_id": _prop("string", "The picture's generation request."),
+                                  "idx": _prop("integer", "The picture's index in that request."),
+                                  "role": _prop("string", "One output of a picture that has several (e.g. texture); default its first.")}},
+    },
+}
+_REQUEST_ID = _prop("string", "The generation request's id (from workshop_generation_submit).")
+GENERATION_WAIT_SECONDS = 600.0
+GENERATION_WAIT_MAX_SECONDS = 1800.0
 
 
 def _agent_run_status(paths: Paths, args: JSONDict) -> Any:
@@ -1428,6 +1582,8 @@ TOOLS: tuple[ToolSpec, ...] = (
                  "branch": _prop("string", "Explicit branch name (branch_mode 'existing') or override (branch_mode 'new')."),
                  "playwright_mcp": _prop("boolean", "Attach the Playwright MCP server so the agent can drive the app in a browser (default true)."),
                  "include_standards": _prop("boolean", "Give the agent a temporary read-only copy of little-workshop's shared_project_standards (default true)."),
+                 "allow_image_generation": _prop("boolean", "Let the agent queue pictures for ComfyUI (workshop_generation_submit). "
+                                                 "Only when the user asked for images in this task; default false, and the guard refuses it then."),
              }, ["project_id", "title"]), _agent_run_task),
     ToolSpec("workshop_agent_finish_task", "Explicitly finish a run awaiting review: publish its branch/PR and report.",
              _schema({"project_id": _PROJECT_ID, "run_id": _prop("string", "The run's id.")}, ["project_id", "run_id"]), _agent_finish_task),
@@ -1535,6 +1691,85 @@ TOOLS: tuple[ToolSpec, ...] = (
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _agent_session_stop),
     ToolSpec("workshop_agent_session_status", "Whether an ad-hoc session is currently running for a project.",
              _schema({"project_id": _PROJECT_ID}, ["project_id"]), _agent_session_status),
+    ToolSpec("workshop_generation_submit", "Queue pictures for the local ComfyUI: a set of prompts in one request. little-workshop "
+             "batches them (one graph per model, in a fresh ComfyUI process), detects grey or empty outputs and renders them again "
+             "after restarting ComfyUI. Choose the model (and LoRA) first with workshop_generation_models. Answers at once with "
+             "the request's id, how to probe it and an estimated completion; probe with workshop_generation_status.",
+             _schema({"project_id": _PROJECT_ID,
+                      "prompts": _prop("array", "The prompts: each a string, or an object with its own settings.",
+                                       items={"anyOf": [{"type": "string"}, _GENERATION_IMAGE]}),
+                      "defaults": {**_GENERATION_IMAGE, "properties": {k: v for k, v in _GENERATION_IMAGE["properties"].items() if k != "source"},
+                                   "description": "Settings for every prompt that does not set its own (a source is each prompt's own)."},
+                      "name": _prop("string", "A label for the request.")}, ["project_id", "prompts"]), _generation_submit),
+    ToolSpec("workshop_generation_status", "A generation request's status: queued or running (with the estimated completion), "
+             "failed (retries and restarts used up; the queue is paused for the user), success (with a `download.wget` command "
+             "fetching every picture and checking it against SHA256SUMS, and how to delete little-workshop's copies after) or cancelled.",
+             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID,
+                      "images": _prop("boolean", "Also list every picture (prompt, seed, state, attempts, file).")},
+                     ["project_id", "request_id"]), _generation_status),
+    ToolSpec("workshop_generation_wait", "Wait for a generation request to finish: answers once it succeeded, failed or was "
+             "cancelled, when the queue pauses, or after timeout_seconds, with the same status as workshop_generation_status plus "
+             "`finished` and `waited_seconds`. Not finished: call it again (the status carries the estimated completion).",
+             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID,
+                      "timeout_seconds": _prop("number", f"Default {GENERATION_WAIT_SECONDS:.0f}, at most {GENERATION_WAIT_MAX_SECONDS:.0f}.")},
+                     ["project_id", "request_id"]), _generation_wait),
+    ToolSpec("workshop_generation_download", "Write a successful request's pictures into a folder of the project's checkout and "
+             "check every file against its SHA-256 (as fetched and as written). Files already there with the same checksum are "
+             "kept; different ones are refused unless overwrite. The answer lists each file and, once all are verified, how to "
+             "delete little-workshop's copies.",
+             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID,
+                      "folder": _prop("string", "The destination, relative to the project's checkout (created if missing)."),
+                      "overwrite": _prop("boolean", "Replace files that exist with other contents. Default false.")},
+                     ["project_id", "request_id", "folder"]), _generation_download),
+    ToolSpec("workshop_generation_list", "A project's generation requests, newest first, each with its status and estimate.",
+             _schema({"project_id": _PROJECT_ID, "status": _prop("string", "queued,running,failed,success,cancelled (comma-separated)."),
+                      "limit": _prop("integer", "Default 20.")}, ["project_id"]), _generation_list),
+    ToolSpec("workshop_generation_queue", "The generation queue across projects: whether a failure paused it (and why), the batch "
+             "rendering now, the open requests with their estimates and the next batches.", _schema(), _generation_queue),
+    ToolSpec("workshop_generation_models", "The image models available for workshop_generation_submit, to choose one for the "
+             "picture and the task: each model's purpose (use_for), what it is bad at (avoid_for), licence and commercial use, "
+             "prompting advice, LoRAs with their trigger words, default settings, speed and whether it is installed. Given a "
+             "purpose (icon, ui, concept-art, texture, material-reference, scene, character, sprite, background), the models are "
+             "ranked and one is recommended. Also lists what the service cannot do yet (ControlNet, upscaling, image-to-image), "
+             "so do not promise those; seamless textures and their PBR maps are the pbr-texture recipe (workshop_generation_recipes).",
+             _schema({"purpose": _prop("string", "The kind of picture.", enum=["icon", "ui", "concept-art", "texture", "material-reference",
+                                                                               "scene", "character", "sprite", "background"])}),
+             _generation_models),
+    ToolSpec("workshop_generation_gpu", "How busy the shared GPU is, before GPU work (Unity tests or the Editor, Blender, renders, "
+             "ComfyUI, games): a level (idle, light, busy, saturated) with its reasons, the busiest engine's utilization, the "
+             "memory in use, the processes using it (ComfyUI tagged), what the generation queue will do (rendering, pictures "
+             "waiting, idle in about N s) and advice. Information, not a lock: decide whether to go ahead, wait, or do other "
+             "work first. Takes a few seconds unless a recent sample is reused.",
+             _schema({"max_age_seconds": _prop("number", "Accept a sample this many seconds old (default 15).")}), _generation_gpu),
+    ToolSpec("workshop_generation_recipes", "The recipes workshop_generation_submit can render (pass recipe=<name>): saved ComfyUI "
+             "node setups, each with the slots a prompt fills (prompt, and maybe negative, seed, size, steps, cfg), the files it "
+             "gives (output roles), whether its model files are installed, and its source (builtin, saved from a picture, "
+             "imported from ComfyUI). Built in: pbr-texture, a seamless texture and all its PBR maps. With a recipe name: that "
+             "recipe with its graph and its nodes.",
+             _schema({"recipe": _prop("string", "One recipe to show with its nodes.")}), _generation_recipes),
+    ToolSpec("workshop_generation_picture_setup", "The ComfyUI node setup a picture was rendered with: its graph in ComfyUI's "
+             "API format (what ComfyUI loads), its outputs and its nodes as rows (class, title, values, links).",
+             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID, "idx": _prop("integer", "The picture's index in the request.")},
+                     ["project_id", "request_id", "idx"]), _generation_picture_setup),
+    ToolSpec("workshop_generation_recipe_save", "Save a recipe for later prompts: from a rendered picture (request_id and idx: its "
+             "graph, slots suggested) or from a graph in ComfyUI's API format (Export (API)), with its slots and outputs, or "
+             "suggested when left out. Refused for a built-in name, or an existing one unless replace.",
+             _schema({"recipe": _prop("string", "The recipe's name: lower-case letters, digits and dashes."),
+                      "title": _prop("string", "Optional."), "description": _prop("string", "What it is for."),
+                      "request_id": _REQUEST_ID, "idx": _prop("integer", "The picture's index (with request_id)."),
+                      "graph": _prop("object", "A graph in ComfyUI's API format (instead of request_id)."),
+                      "slots": _prop("object", "{slot: [node id, input name]}; slots are prompt, negative, seed, width, height, steps, cfg."),
+                      "outputs": _prop("array", "[{role, node}] of SaveImage nodes; the first is the primary output.", items={"type": "object"}),
+                      "replace": _prop("boolean", "Overwrite a saved recipe of the same name.")}, ["recipe"]), _generation_recipe_save),
+    ToolSpec("workshop_generation_resume", "Resume a generation queue a failed request paused. A decision for the USER: call it "
+             "only when the user says to, after ComfyUI was checked. `retry_failed` queues the failed requests' pictures again.",
+             _schema({"retry_failed": _prop("boolean", "Render the failed requests' pictures again, attempts reset. Default false.")}),
+             _generation_resume),
+    ToolSpec("workshop_generation_cancel", "Cancel a queued or running generation request; pictures already rendered are kept.",
+             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID}, ["project_id", "request_id"]), _generation_cancel),
+    ToolSpec("workshop_generation_delete_files", "Delete little-workshop's copies of a finished request's pictures. Only after the "
+             "download was checked: wget exited 0 and `sha256sum -c SHA256SUMS` printed OK for every file. Cannot be undone.",
+             _schema({"project_id": _PROJECT_ID, "request_id": _REQUEST_ID}, ["project_id", "request_id"]), _generation_delete_files),
 )
 
 TOOLS_BY_NAME: dict[str, ToolSpec] = {tool.name: tool for tool in TOOLS}

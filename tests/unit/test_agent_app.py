@@ -1094,3 +1094,16 @@ def test_resolving_a_conflict_is_refused_without_guidance_or_for_a_resolved_or_u
     assert "already resolved" in post({"conflict_id": "c1", "decision": "older_wins"})["error"]
     assert "no such conflict" in post({"conflict_id": "ghost", "decision": "older_wins"})["error"]
     assert client.get("/v1/runs/little-meals").json() == []
+
+
+# --- REQ-000000446: Reads and side writes never use the shared connection outside its lock ---
+
+
+def test_reads_and_side_writes_never_touch_the_shared_connection(paths, tmp_path):
+    """A run's worker writes apart (`write_apart`) while the shared connection may be in use or closing;
+    touching it from another thread without the lock crashed the interpreter (sqlite, 2026-10-24)."""
+    shared = db.connect(tmp_path / "apart.db")
+    client = TestClient(build_app(paths, shared))
+    shared.close()  # whatever the shared connection is doing, a read apart must not need it
+    response = client.get("/v1/runs/little-shop")
+    assert response.status_code == 200 and response.json() == []

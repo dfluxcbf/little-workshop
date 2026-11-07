@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ recipe.title if recipe else 'Recipe' }} — little-workshop{% endblock %}
+{% block content %}
+{% if recipe %}
+<nav class="gen-picnav"><a class="btn" href="/generation/recipes">&larr; Recipes</a>
+  <span class="gen-picnav-step"><a class="btn primary" href="/generation/new?recipe={{ recipe.name }}" data-testid="generation-recipe-use">Use with new prompts</a></span></nav>
+<h1>{{ recipe.title }}</h1>
+{% if recipe.description %}<p class="lede">{{ recipe.description }}</p>{% endif %}
+<div class="gen-picture">
+  <section class="dcard">
+    <div class="dcard-head"><span class="dcard-title">What a prompt fills</span><span class="pill {{ 'fail' if recipe.installed is false else 'ok' }}">{{ 'missing files' if recipe.installed is false else recipe.source }}</span></div>
+    <dl class="kv">
+      {% for slot, target in recipe.slots.items() %}<dt>{{ slot }}</dt><dd>{{ recipe['values'][slot] if recipe['values'][slot] != '' else '(empty)' }} <span class="gen-meta">node #{{ target[0] }} {{ target[1] }}</span></dd>{% endfor %}
+    </dl>
+    {% if recipe.missing_files %}<p class="gen-error">ComfyUI lacks {{ recipe.missing_files | join(', ') }}; requests are refused until they are installed.</p>{% endif %}
+  </section>
+  <section class="dcard">
+    <div class="dcard-head"><span class="dcard-title">Outputs</span><span class="dcard-note">{{ recipe.outputs | length }} file{{ 's' if recipe.outputs | length != 1 }} a prompt</span></div>
+    <div class="gen-recipe-outs">{% for o in recipe.outputs %}<span class="chip">{{ o.role }}</span>{% endfor %}</div>
+    <p class="dcard-ears muted">The first, {{ recipe.outputs[0].role }}, is checked for bad output and shown first.</p>
+    <div class="decision-actions">
+      <a class="btn" href="/generation/recipes/{{ recipe.name }}/workflow.json" download>Download workflow (API JSON)</a>
+      {% if recipe.source != 'builtin' %}
+      <form method="post" action="/generation/recipes/{{ recipe.name }}/delete" onsubmit="return confirm('Delete recipe {{ recipe.name }}?')"><button type="submit" class="danger">Delete</button></form>
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% set setup = recipe %}
+<section class="dcard gen-nodes" data-testid="generation-nodes">
+  <div class="dcard-head"><span class="dcard-title">Nodes</span><span class="dcard-note">{{ recipe.node_count }}</span></div>
+  {% include "_generation_nodes.html" %}
+</section>
+{% else %}
+<p class="muted">Recipe not found. <a href="/generation/recipes">All recipes</a></p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,17 @@
+{# A ComfyUI graph as rows: `setup.nodes` from the pillar (generation/recipes.py nodes_view), and `outputs` by node id. #}
+{% set roles = {} %}{% for o in setup.outputs or [] %}{% set _ = roles.update({o.node: o.role}) %}{% endfor %}
+<ol class="gen-node-list">
+  {% for node in setup.nodes %}
+  <li class="gen-node{{ ' gen-node-out' if node.id in roles }}">
+    <div class="gen-node-head"><span class="gen-node-title">{{ node.title }}</span>{% if node.title != node.class_type %}<code>{{ node.class_type }}</code>{% endif %}
+      <span class="gen-meta">#{{ node.id }}</span>{% if node.id in roles %}<span class="chip">output: {{ roles[node.id] }}</span>{% endif %}
+      {% for slot, target in (setup.slots or {}).items() if target[0] == node.id %}<span class="chip">slot: {{ slot }}</span>{% endfor %}</div>
+    {% if node['values'] or node['links'] %}
+    <dl class="gen-node-inputs">
+      {% for name, link in node['links'] | dictsort %}<dt>{{ name }}</dt><dd class="gen-meta">&larr; #{{ link }}</dd>{% endfor %}
+      {% for name, value in node['values'] | dictsort %}<dt>{{ name }}</dt><dd>{{ value }}</dd>{% endfor %}
+    </dl>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ol>

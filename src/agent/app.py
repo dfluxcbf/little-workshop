@@ -151,6 +151,12 @@ def build_app(
         """Report the Job's steps while the code inside runs (a worker thread installs its own)."""
         return reporting(StepReporter(paths, job_id))
 
+    # The database file, read once here: `read` and `write_apart` run on other threads, and asking the shared
+    # connection for its file there, without `lock`, raced its other users and crashed the interpreter when it
+    # was being closed (2026-10-24). Empty for an in-memory database, whose only connection is the shared one.
+    row = conn.execute("PRAGMA database_list").fetchone()
+    db_file = row[2] if row else ""
+
     def read(fn, *args, **kwargs):
         """Reads must never queue behind `lock`: `agent.run_task`'s worker
         holds it for the whole of a run (up to an hour), and the Dashboard's
@@ -158,8 +164,6 @@ def build_app(
         unreachable for exactly as long as it is busiest. A short-lived
         read-only connection (WAL) sidesteps it; an in-memory database
         (tests) has no file to reopen, so it falls back to the shared one."""
-        row = conn.execute("PRAGMA database_list").fetchone()
-        db_file = row[2] if row else ""
         if not db_file:
             with lock:
                 return fn(conn, *args, **kwargs)
@@ -173,8 +177,6 @@ def build_app(
     def write_apart(fn, *args, **kwargs):
         """A short write on a connection of its own, for the same reason as `read`: a query must not
         wait for `lock` while a task run holds it."""
-        row = conn.execute("PRAGMA database_list").fetchone()
-        db_file = row[2] if row else ""
         if not db_file:
             with lock:
                 return fn(conn, *args, **kwargs)

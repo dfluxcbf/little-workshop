@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Images — little-workshop{% endblock %}
+{% block content %}
+<div id="generation-live" data-live-region>
+{% if queue %}
+{% set paused = queue.paused %}
+{% set running = queue.running_batch %}
+<div class="stat-grid gen-stats">
+  <div class="stat-tile{{ ' stat-fail' if paused }}"><span class="stat-value">{{ 'Paused' if paused else ('Rendering' if running else ('Waiting for you' if queue.comfy_lent else 'Idle')) }}</span><span class="stat-label">Queue</span></div>
+  <div class="stat-tile"><span class="stat-value">{{ queue.open_requests | length }}</span><span class="stat-label">Open requests</span></div>
+  <div class="stat-tile"><span class="stat-value">{{ queue.pending_images }}</span><span class="stat-label">Pictures waiting</span></div>
+  <div class="stat-tile"><span class="stat-value">{{ running.size if running else 0 }}</span><span class="stat-label">In this batch</span></div>
+  <div class="stat-tile"><span class="stat-value">{{ queue.next_batches | length }}</span><span class="stat-label">Batches ahead</span></div>
+</div>
+
+<section class="dcard gen-gpu" data-testid="generation-gpu">
+  <div class="dcard-head"><span class="dcard-title">GPU</span>
+    {% if gpu and gpu.measured %}<span class="pill {{ {'idle': 'idle', 'light': 'ok', 'busy': 'warn', 'saturated': 'fail'}[gpu.level] }}">{{ gpu.level }}</span><span class="dcard-note">{{ gpu.measured_at | reltime }}</span>{% endif %}
+    <a class="btn" href="/generation?gpu=1{{ '&status=' ~ status if status }}" data-busy="Measuring…">Measure now</a>
+  </div>
+  {% if gpu and gpu.measured %}
+  <p class="dcard-ears">{{ gpu.adapter }}: the busiest engine at {{ gpu.utilization_percent }}%, {{ '%.1f' % ((gpu.memory.dedicated_used_bytes + gpu.memory.shared_used_bytes) / 1073741824) }} GiB of GPU memory in use.</p>
+  <ul class="gen-gpu-procs">
+    {% for p in gpu.processes[:5] %}<li><span>{{ p.name }}{% if p.comfyui %} <span class="chip">ComfyUI</span>{% endif %}</span><span class="gen-meta">{{ p.utilization_percent }}% · {{ '%.1f' % ((p.dedicated_bytes + p.shared_bytes) / 1073741824) }} GiB</span></li>{% endfor %}
+  </ul>
+  <p class="dcard-ears muted">{{ gpu.advice }}</p>
+  {% elif gpu and gpu.reason and gpu.reason != 'not measured recently' %}
+  <p class="dcard-ears muted">GPU usage is unknown: {{ gpu.reason }}</p>
+  {% else %}
+  <p class="dcard-ears muted">Not measured recently. Agents read it with <code>workshop_generation_gpu</code> before GPU work; it informs, nothing is locked.</p>
+  {% endif %}
+</section>
+
+{% if comfy %}
+{% set lend = comfy.lend %}
+<section class="dcard gen-comfy{{ ' gen-comfy-lent' if lend }}" data-testid="generation-comfy">
+  <div class="dcard-head"><span class="dcard-title">ComfyUI</span>
+    <span class="pill {{ {'queue': 'idle', 'lent': 'ok', 'starting': 'run', 'waiting for the batch': 'warn', 'error': 'fail'}[comfy.state] }}">{{ {'queue': 'with the queue', 'lent': 'yours'}.get(comfy.state, comfy.state) }}</span>
+    {% if lend and lend.since %}<span class="dcard-note">since {{ lend.since | reltime }}</span>{% endif %}
+  </div>
+  {% if not lend %}
+  <p class="dcard-ears">Open ComfyUI's web app to see and change the nodes yourself. While you hold it, the queue renders nothing and leaves ComfyUI alone; it comes back when you give it back, or after {{ comfy.lend_idle_minutes }} minutes without a graph running.</p>
+  <form method="post" action="/generation/comfy/lend" class="decision-actions"><button type="submit" class="primary" data-busy="Lending…">Open ComfyUI</button></form>
+  {% if comfy.last_lend %}<p class="dcard-ears muted">Last given back {{ comfy.last_lend.returned_at | reltime }}{{ ' after ' ~ comfy.lend_idle_minutes ~ ' idle minutes' if comfy.last_lend.returned_by == 'idle' }}.</p>{% endif %}
+  {% else %}
+  {% if comfy.state == 'waiting for the batch' %}
+  <p class="dcard-ears">The batch rendering now finishes first; then a fresh ComfyUI starts for you. This page follows it.</p>
+  {% elif comfy.state == 'starting' %}
+  <p class="dcard-ears">A fresh ComfyUI is starting for you; it takes about a minute.</p>
+  {% elif comfy.state == 'error' %}
+  <p class="gen-error">ComfyUI did not start: {{ lend.error }}</p>
+  {% else %}
+  <p class="dcard-ears">ComfyUI is yours. Drop a picture's <em>workflow.json</em> on it to load its nodes. It comes back to the queue by itself {{ lend.returns_at | reltime }} unless a graph runs before then.</p>
+  <p class="dcard-ears muted">A ComfyUI process renders its first graph cleanly and later ones may come out grey: restart it between runs.</p>
+  {% endif %}
+  <div class="decision-actions">
+    {% if comfy.state == 'lent' %}<a class="btn primary" href="{{ comfy.url }}" target="_blank" rel="noopener" data-testid="generation-comfy-open">Open ComfyUI ↗</a>{% endif %}
+    <form method="post" action="/generation/comfy/restart"><button type="submit" data-busy="Restarting…" {{ 'disabled' if comfy.state in ('waiting for the batch', 'starting') }}>Restart</button></form>
+    <form method="post" action="/generation/comfy/return"><button type="submit" data-busy="Giving back…">Give back</button></form>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if paused %}
+<section class="dcard attention" data-testid="generation-paused">
+  <div class="dcard-head"><span class="dcard-title">The queue is paused</span><span class="dcard-note warn">{{ paused.since | reltime }}</span></div>
+  <p class="dcard-ears">{{ paused.reason }}</p>
+  <p class="dcard-ears muted">Nothing renders until you resume. Check that ComfyUI and its supervisor are up first.
+    Failed: {% for r in paused.failed_requests %}<a href="/generation/{{ r }}">{{ r }}</a>{{ ', ' if not loop.last }}{% endfor %}.</p>
+  <form method="post" action="/generation/resume">
+    <label class="chip-check"><input type="checkbox" name="retry_failed" value="1" checked><span>Render the failed requests again, attempts reset</span></label>
+    <div class="decision-actions"><button type="submit" class="primary" data-busy="Resuming…">Resume the queue</button></div>
+  </form>
+</section>
+{% endif %}
+
+{% if running %}
+<section class="dcard">
+  <div class="dcard-head"><span class="dcard-title">Rendering now</span><span class="dcard-note">{{ running.elapsed | secs }} so far</span></div>
+  <p class="dcard-ears">{{ running.size }} picture{{ 's' if running.size != 1 }} of <code>{{ running.model }}</code> in one fresh ComfyUI process, for
+    {% for r in running.request_ids %}<a href="/generation/{{ r }}">{{ r }}</a>{{ ', ' if not loop.last }}{% endfor %}.</p>
+</section>
+{% endif %}
+
+{% if queue.next_batches %}
+<details class="dcard collapsible">
+  <summary class="dcard-head"><span class="dcard-title">Batches ahead</span><span class="dcard-note">{{ queue.next_batches | length }}</span></summary>
+  <ol class="gen-batches">
+    {% for b in queue.next_batches %}<li><code>{{ b.model }}</code> &times; {{ b.size }} — {% for r in b.requests %}<a href="/generation/{{ r }}">{{ r }}</a>{{ ', ' if not loop.last }}{% endfor %}</li>{% endfor %}
+  </ol>
+</details>
+{% endif %}
+{% endif %}
+
+<form class="report-filter" method="get" action="/generation">
+  <select name="status" aria-label="Status" onchange="this.form.submit()">
+    <option value="" {{ 'selected' if not status }}>All</option>
+    {% for s in ['queued,running', 'success', 'failed', 'cancelled'] %}
+    <option value="{{ s }}" {{ 'selected' if status == s }}>{{ {'queued,running': 'Open'}.get(s, s | capitalize) }}</option>
+    {% endfor %}
+  </select>
+  <select name="project" aria-label="Project" onchange="this.form.submit()">
+    <option value="" {{ 'selected' if not project }}>Every project</option>
+    {% for p in projects %}<option value="{{ p }}" {{ 'selected' if p == project }}>{{ p }}</option>{% endfor %}
+    {% if project and project not in projects %}<option value="{{ project }}" selected>{{ project }}</option>{% endif %}
+  </select>
+  <a class="btn primary" href="/generation/new{{ '?project=' ~ project if project }}" data-testid="generation-new">New images</a>
+</form>
+
+<div class="policy-list">
+  {% for r in requests %}
+  {% set n = r.images %}
+  <a class="polcard" href="/generation/{{ r.id }}">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ r.name or r.id }}</span>
+      <span class="pill {{ {'success': 'ok', 'failed': 'fail', 'running': 'run', 'queued': 'warn'}.get(r.status, 'idle') }}">{{ r.status }}</span>
+    </span>
+    <span class="polcard-ears">{{ n.done }} of {{ n.total }} picture{{ 's' if n.total != 1 }} done{% if n.failed %}, {{ n.failed }} failed{% endif %}{% if r.estimate %} · done in about {{ r.estimate.seconds_remaining | secs }}{% endif %}{% if r.files_deleted_at %} · copies deleted{% endif %}</span>
+    <span class="polcard-meta">
+      <span class="chip">{{ r.project_id }}</span>
+      <span class="chip">{{ r.id }}</span>
+      <span class="chip">{{ r.created_at | reltime }}</span>
+    </span>
+  </a>
+  {% else %}
+  <p class="muted">{% if page > 1 %}No older requests.{% else %}No {{ {'queued,running': 'open'}.get(status, status) }} requests. Ask for pictures with <a href="/generation/new">New images</a>; projects submit them with <code>lws generation submit</code> or the <code>workshop_generation_submit</code> tool.{% endif %}</p>
+  {% endfor %}
+</div>
+{% if page > 1 or more %}
+{% set filters = ('&status=' ~ status if status else '') ~ ('&project=' ~ project if project else '') %}
+<nav class="gen-pager" aria-label="Pages of requests">
+  {% if page > 1 %}<a class="btn" href="/generation?page={{ page - 1 }}{{ filters }}">Newer</a>{% endif %}
+  <span class="muted">Page {{ page }}</span>
+  {% if more %}<a class="btn" href="/generation?page={{ page + 1 }}{{ filters }}">Older</a>{% endif %}
+</nav>
+{% endif %}
+</div>
+{% endblock %}

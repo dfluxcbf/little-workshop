@@ -65,7 +65,7 @@ still running after 60 seconds instead of waiting until systemd kills
 the process at 90, and tells the policy sandbox that the pillar is
 stopping (`serving.stopping`).
 
-Ten pillars, each its own process, its own SQLite file, and its own Pillar
+Ten pillars (twelve since 2026-10-23: Usage & Efficiency, then Image Generation), each its own process, its own SQLite file, and its own Pillar
 Interface (a small FastAPI app bound to a Unix domain socket):
 
 | Pillar | Goal | Absorbs | Enabled by default |
@@ -81,6 +81,7 @@ Interface (a small FastAPI app bound to a Unix domain socket):
 | **Dashboard** | A human can see and act on everything above, without a terminal. | little-runner's `web/`, extended with panels for every other pillar | Optional — a headless/automation-only setup can disable it. Visual identity decided: see `presentations/06-visual-identity.md`. |
 | **MCP Server** | An agent (Claude, or another tool) can see and act on everything above, without a terminal. | little-requirements' and little-versions' MCP tool surfaces, unified and namespaced | Optional — but the common case, since Claude is this ecosystem's primary caller |
 | **Usage & Efficiency** | Claude is used knowingly: what every session on this machine costs is recorded, interpreted and reduced. | Nothing absorbed: new with `docs/claude_usage_optimization.md` (accepted 2026-10-04) | Optional, on by default — switched off, nothing is collected and nothing else changes. Specified: `docs/pillars/usage.md`. |
+| **Image Generation** | A picture asked for is a picture delivered, whatever ComfyUI does in between. | little-shop-of-things' `ls_runner.py` (fresh ComfyUI per graph, grey check), generalized into a queue | Optional, off by default — only a machine with ComfyUI starts it. Specified: `docs/pillars/generation.md`. |
 
 Dashboard and MCP Server hold no domain data of their own — both are thin,
 stateless proxies translating their caller's request (an HTTP request, an
@@ -193,6 +194,7 @@ number of distinctly-named files per project.
 | `.dashboard` | Dashboard |
 | `.mcp` | MCP Server |
 | `.usage` | Usage & Efficiency |
+| `.generation` | Image Generation |
 
 Examples: `retention.policy.json` (Policy & Compliance's, for one project),
 `manifest.deployment.toml` (Deployment & Servers', for one project's server

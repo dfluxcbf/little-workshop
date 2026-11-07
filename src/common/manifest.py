@@ -31,6 +31,9 @@ DEFAULT_ENABLED = {
     # Optional like Build & Packages (switched off, nothing is collected and nothing else changes),
     # but on by default: the owner decided it is essential (docs/claude_usage_optimization.md §16).
     "usage": True,
+    # Optional and off by default: it drives a local ComfyUI, which a fresh install may not have
+    # (docs/pillars/generation.md).
+    "generation": False,
 }
 
 

@@ -29,6 +29,10 @@ MCP_READ_ONLY = (
     "workshop_schedule_list", "workshop_schedule_status", "workshop_schedule_queue_get",
     "workshop_usage_summary", "workshop_usage_findings", "workshop_usage_candidates", "workshop_usage_plugin_proposals",
     "workshop_trigger_list",
+    "workshop_generation_status", "workshop_generation_list", "workshop_generation_queue", "workshop_generation_wait",
+    "workshop_generation_gpu",
+    "workshop_generation_models",
+    "workshop_generation_recipes", "workshop_generation_picture_setup",
 )
 
 # Routine, reversible day-to-day work on the project (each takes the project's `project_id`).
@@ -43,6 +47,7 @@ MCP_ROUTINE = (
     "workshop_requirements_unlink_suite", "workshop_requirements_result_record",
     "workshop_requirements_import_junit", "workshop_requirements_run_tests", "workshop_requirements_sync_markers",
     "workshop_build_run", "workshop_project_backlog_add",
+   "workshop_generation_cancel", "workshop_generation_download",
 )
 
 # Policy-gated lifecycle actions on the project. A failing policy holds them in
@@ -70,6 +75,9 @@ MCP_ASK = (
     "workshop_job_stop", "workshop_job_answer", "workshop_schedule_add", "workshop_schedule_remove", "workshop_schedule_trigger",
     "workshop_schedule_cancel", "workshop_schedule_postpone", "workshop_schedule_queue_set",
     "workshop_usage_configure_claude", "workshop_trigger_add", "workshop_trigger_remove",
+    "workshop_generation_resume", "workshop_generation_delete_files",
+    "workshop_generation_submit",
+    "workshop_generation_recipe_save",
 )
 
 # Administration of little-workshop itself (policies, its own pillars): they name no project, so

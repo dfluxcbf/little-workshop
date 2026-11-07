@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}{{ ('Picture ' ~ image.idx ~ ' of ' ~ (item.name or item.id)) if image else "Picture" }} — little-workshop{% endblock %}
+{% block content %}
+{% if image %}
+{% set s = image.settings or {} %}
+{% set file_url = '/generation/' ~ item.id ~ '/files/' ~ image.file_name %}
+{% set shown = image.status == 'done' and image.file_name and not item.files_deleted_at %}
+<nav class="gen-picnav" aria-label="Pictures of this request">
+  <a class="btn" href="/generation/{{ item.id }}">&larr; {{ item.name or item.id }}</a>
+  <span class="gen-picnav-step">
+    {% if neighbours.previous is not none %}<a class="btn" href="/generation/{{ item.id }}/pictures/{{ neighbours.previous }}" rel="prev">Previous</a>{% endif %}
+    <span class="muted">{{ image.idx + 1 }} of {{ item.images.total }}</span>
+    {% if neighbours.next is not none %}<a class="btn" href="/generation/{{ item.id }}/pictures/{{ neighbours.next }}" rel="next">Next</a>{% endif %}
+  </span>
+</nav>
+
+<div class="gen-picture">
+  <figure class="gen-stage">
+    {% if shown %}
+    <img src="{{ file_url }}" alt="{{ image.prompt }}" width="{{ image.width or '' }}" height="{{ image.height or '' }}">
+    {% else %}
+    <div class="gen-placeholder" style="aspect-ratio: {{ image.width or 1 }} / {{ image.height or 1 }}"><span class="pill {{ {'failed': 'fail', 'running': 'run', 'pending': 'warn'}.get(image.status, 'idle') }}">{{ image.status }}</span></div>
+    {% endif %}
+  </figure>
+
+  <div class="gen-facts">
+    <section class="dcard">
+      <div class="dcard-head"><span class="dcard-title">Prompt</span>
+        <button type="button" class="copy-btn" data-copy="gen-prompt"><span class="copy-label">Copy</span></button></div>
+      <p class="gen-fulltext" id="gen-prompt">{{ image.prompt }}</p>
+      {% if s.source and not s.negative %}<p class="dcard-ears muted">The prompt of the picture these maps were made from.</p>
+      {% else %}<h3 class="gen-sub">Negative prompt</h3>
+      {% if s.negative %}<p class="gen-fulltext" id="gen-negative">{{ s.negative }}</p>{% else %}<p class="muted gen-fulltext">None</p>{% endif %}{% endif %}
+    </section>
+
+    <section class="dcard">
+      <div class="dcard-head"><span class="dcard-title">Settings</span>
+        <span class="pill {{ {'done': 'ok', 'failed': 'fail', 'running': 'run', 'pending': 'warn'}.get(image.status, 'idle') }}">{{ image.status }}</span></div>
+      <dl class="kv">
+        {% if s.source %}{% set src = s.source %}
+        <dt>Made from</dt><dd class="gen-source"><a href="/generation/{{ src.request_id }}/pictures/{{ src.idx }}" data-testid="generation-source">
+          <img src="/generation/{{ src.request_id }}/files/{{ src.file_name }}" alt="" loading="lazy" width="48" height="48">
+          <span>picture #{{ src.idx }}{{ ' (' ~ src.role ~ ')' if src.role }} of <code>{{ src.request_id }}</code></span></a></dd>{% endif %}
+        {% if s.recipe %}<dt>Recipe</dt><dd><a href="/generation/recipes/{{ s.recipe }}"><code>{{ s.recipe }}</code></a></dd>
+        {% else %}<dt>Model</dt><dd><code>{{ s.model or image.model }}</code></dd>
+        <dt>LoRA</dt><dd>{% if s.lora %}<code>{{ s.lora }}</code> at {{ s.lora_strength }}{% else %}none{% endif %}</dd>{% endif %}
+        {% if image.width %}<dt>Size</dt><dd>{{ image.width }} × {{ image.height }}</dd>{% endif %}
+        {% if s.steps is defined %}<dt>Steps</dt><dd>{{ s.steps }}</dd>{% endif %}
+        {% if s.cfg is defined %}<dt>CFG</dt><dd>{{ s.cfg }}</dd>{% endif %}
+        {% if s.sampler %}<dt>Sampler</dt><dd>{{ s.sampler }}</dd>{% endif %}
+        {% if s.scheduler %}<dt>Scheduler</dt><dd>{{ s.scheduler }}</dd>{% endif %}
+        {% if image.seed is not none %}<dt>Seed</dt><dd><code>{{ image.seed }}</code></dd>{% endif %}
+        {% for key, value in s | dictsort if key not in ('model', 'prompt', 'negative', 'lora', 'lora_strength', 'width', 'height', 'steps', 'cfg', 'sampler', 'scheduler', 'seed', 'recipe', 'output_nodes', 'source', 'image') %}
+        <dt>{{ {'label': 'file label'}.get(key, key | replace('_', ' ')) }}</dt><dd>{{ value }}</dd>
+        {% endfor %}
+        <dt>Attempts</dt><dd>{{ image.attempts }}</dd>
+        {% if image.finished_at %}<dt>Finished</dt><dd>{{ image.finished_at | reltime }}</dd>{% endif %}
+      </dl>
+      {% if image.error and image.status != 'done' %}<p class="gen-error">{{ image.error }}</p>{% endif %}
+    </section>
+
+    {% if image.file_name %}
+    <section class="dcard">
+      <div class="dcard-head"><span class="dcard-title">File</span></div>
+      <dl class="kv">
+        <dt>Name</dt><dd><code>{{ image.file_name }}</code></dd>
+        {% if image.bytes %}<dt>Size</dt><dd>{{ '%.1f' % (image.bytes / 1024) }} KiB</dd>{% endif %}
+        {% if image.sha256 %}<dt>SHA-256</dt><dd class="gen-meta">{{ image.sha256 }}</dd>{% endif %}
+      </dl>
+      {% if shown %}<a class="btn" href="{{ file_url }}" target="_blank" rel="noopener">Open the file</a>
+      {% elif item.files_deleted_at %}<p class="muted">little-workshop's copies were deleted {{ item.files_deleted_at | reltime }}.</p>{% endif %}
+    </section>
+    {% endif %}
+
+    {% if maps_recipe and shown and s.recipe != maps_recipe.name %}
+    <section class="dcard gen-make-maps" data-testid="generation-make-maps">
+      <div class="dcard-head"><span class="dcard-title">Make PBR maps</span></div>
+      <p class="dcard-ears">{{ maps_recipe.title }}: {{ maps_recipe.outputs | map(attribute='role') | join(', ') }} of this picture, in a new request of {{ item.project_id }}.</p>
+      <form method="post" action="/generation/{{ item.id }}/maps" class="decision-actions">
+        <input type="hidden" name="idx" value="{{ image.idx }}">
+        <button type="submit" class="primary" data-busy="Queueing…">Make PBR maps</button>
+      </form>
+    </section>
+    {% endif %}
+
+    <section class="dcard" data-testid="generation-save-recipe">
+      <div class="dcard-head"><span class="dcard-title">Reuse this setup</span></div>
+      <p class="dcard-ears muted">Save the nodes this picture was rendered with as a recipe; new prompts then render the same setup from New images.</p>
+      <form method="post" action="/generation/{{ item.id }}/pictures/{{ image.idx }}/recipe" class="gen-save-recipe">
+        <input type="text" name="name" required pattern="[a-z0-9][a-z0-9-]*" placeholder="recipe name, e.g. mossy-stone" aria-label="Recipe name">
+        <button type="submit" data-busy="Saving…">Save as recipe</button>
+      </form>
+    </section>
+  </div>
+</div>
+
+{% if material %}
+<section class="dcard gen-material" data-testid="generation-material">
+  <div class="dcard-head"><span class="dcard-title">Material</span><span class="dcard-note">drag to turn, pinch or scroll to zoom</span></div>
+  <div class="as-stage gen-material-stage">
+    <model-viewer src="/generation/material-sphere.glb" alt="A sphere with this picture's PBR maps" data-material='{{ material | tojson }}' loading="eager"
+      camera-controls touch-action="pan-y" auto-rotate rotation-per-second="12deg" shadow-intensity="0.8" exposure="1.05" interaction-prompt="none"></model-viewer>
+  </div>
+  <p class="dcard-ears muted" id="gen-material-note">Albedo, normal, occlusion, roughness and metallic on a sphere, lit by a neutral studio light. The height map has no place in a glTF material, so the surface stays smooth.</p>
+</section>
+{% endif %}
+
+{% if (image.outputs or []) | length > 1 %}
+<section class="dcard gen-maps" data-testid="generation-maps">
+  <div class="dcard-head"><span class="dcard-title">Maps</span><span class="dcard-note">{{ image.outputs | length }}</span></div>
+  <div class="gen-grid">
+    {% for out in image.outputs %}
+    <figure class="gen-pic">
+      {% if not item.files_deleted_at %}<a href="/generation/{{ item.id }}/files/{{ out.file_name }}" target="_blank" rel="noopener"><img src="/generation/{{ item.id }}/files/{{ out.file_name }}" alt="{{ out.role }} map" loading="lazy"></a>{% endif %}
+      <figcaption><span class="chip">{{ out.role }}</span><span class="gen-meta">{{ out.file_name }}</span></figcaption>
+    </figure>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if setup %}
+<details class="dcard collapsible gen-nodes" data-testid="generation-nodes" open>
+  <summary class="dcard-head"><span class="dcard-title">Nodes</span><span class="dcard-note">{{ setup.nodes | length }} in the graph it renders</span></summary>
+  <p class="dcard-ears muted">The ComfyUI graph exactly as rendered, with this picture's prompt and seed. Download it and drop the file on ComfyUI to open it there.</p>
+  <div class="decision-actions"><a class="btn" href="/generation/{{ item.id }}/pictures/{{ image.idx }}/workflow.json" download>Download workflow (API JSON)</a></div>
+  {% include "_generation_nodes.html" %}
+</details>
+{% endif %}
+{% if material %}
+<script type="module" src="/static/vendor/model-viewer.min.js"></script>
+<script src="/static/material.js?v={{ static_v }}"></script>
+{% endif %}
+{% elif item %}
+<p class="muted">Request <a href="/generation/{{ item.id }}">{{ item.name or item.id }}</a> has no such picture.</p>
+{% else %}
+<p class="muted">Request not found.</p>
+{% endif %}
+{% endblock %}

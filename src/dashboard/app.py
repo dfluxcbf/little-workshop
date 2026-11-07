@@ -53,7 +53,7 @@ from common.paths import Paths
 from common.incident import install_incident_reporting
 from common.workspace import WORKSPACE_ID, workspace_dir
 from dashboard import docs_tree
-from dashboard import calendar, client, deletions, job_catalog, live, markdown, prefs, statistics
+from dashboard import calendar, client, deletions, job_catalog, live, markdown, prefs, sphere, statistics
 
 GATE_POINT_VALUES = [
     "commit", "build_install", "server_launch", "deploy_redeploy", "self_redeploy", "server_stop",
@@ -337,6 +337,14 @@ def _back(to: str, message: str) -> RedirectResponse:
     return RedirectResponse(f"{to}{'&' if '?' in to else '?'}message={quote(message)}", status_code=303)
 
 
+# The recipe "Make PBR maps" renders on chosen pictures (generation's built-in pbr-maps).
+MAPS_RECIPE = "pbr-maps"
+# The maps the material sphere puts on its glTF material; a picture with all of them gets one (height has no glTF slot).
+MATERIAL_ROLES = ("albedo", "normal", "occlusion", "roughness", "metallic")
+
+# The Images page lists every generation request, this many to a page, newest first.
+GENERATION_PAGE = 50
+
 # The Job types whose Claude session the agent can show as it works (the peek): a task, an update of
 # docs, and the Jobs that ask Claude for an answer (agent.query records the session against them).
 PEEK_JOB_TYPES = ("agent.run_task", "agent.update_docs", "agent.query", "registry.backlog_refine", "registry.backlog_task_prompt",
@@ -566,6 +574,15 @@ def collect_attention(paths: Paths) -> list[dict]:
             "title": f"{count} requirement conflict{'' if count == 1 else 's'} to resolve",
             "detail": "", "href": f"/requirements/conflicts?project={project}", "since": None,
         })
+    try:
+        pause = client.generation_queue(paths).get("paused")
+    except (client.PillarUnavailable, client.Refused):  # off (the default) or older: nothing to say
+        pause = None
+    if pause:
+        items.append({
+            "kind": "generation", "tag": "Generation", "project": "", "title": "The image generation queue is paused",
+            "detail": (pause.get("reason") or "")[:240], "href": f"/generation/{pause.get('request_id')}", "since": pause.get("since"),
+        })
     for incident in _try(lambda: client.list_incidents(paths, status="open"), default=[]):
         items.append({
             "kind": "incident", "tag": "Incidents", "project": incident["project_id"],
@@ -788,13 +805,18 @@ def _parse_time(value: str | None) -> datetime | None:
 
 
 def relative_time(value: str | None, *, now: datetime | None = None) -> str:
-    """'just now', '5m ago', '3h ago', '2d ago' — for a job's timestamp."""
+    """'just now', '5m ago', '3h ago', '2d ago' — for a job's timestamp; 'in 25m' for one still ahead (when a lent
+    ComfyUI comes back)."""
     moment = _parse_time(value)
     if moment is None:
         return ""
     if moment.tzinfo is None:  # a pillar's own timestamps are UTC; a bare one must not 500 the page
         moment = moment.replace(tzinfo=timezone.utc)
     seconds = int(((now or datetime.now(timezone.utc)) - moment).total_seconds())
+    if seconds <= -45:
+        ahead = -seconds
+        unit, size = next(((u, n) for u, n in (("d", 86400), ("h", 3600), ("m", 60)) if ahead >= n), ("m", 60))
+        return f"in {max(1, round(ahead / size))}{unit}"
     if seconds < 45:
         return "just now"
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
@@ -1708,6 +1730,340 @@ def build_app(paths: Paths) -> FastAPI:
             return Response("agent pillar unreachable", status_code=503)
         return Response(body, media_type=media_type, headers={"Content-Security-Policy": "script-src 'none'"})
 
+    # ---- Image Generation: the downloads `wget` fetches (docs/pillars/generation.md, "Downloads") ----
+
+    def _generation(method: str, path: str) -> Response:
+        try:
+            response = client.generation_call(paths, method, path)
+        except client.Refused as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status)
+        except client.PillarUnavailable:
+            return JSONResponse({"detail": "generation pillar unreachable"}, status_code=503)
+        return Response(response.content, media_type=response.headers.get("content-type", "application/octet-stream"),
+                        headers={"Content-Security-Policy": "script-src 'none'", "Cache-Control": "no-cache"})
+
+    @app.get("/generation/material-sphere.glb")
+    def generation_material_sphere():
+        """The sphere a picture's PBR maps are shown on (`dashboard.sphere`)."""
+        return Response(sphere.glb(), media_type="model/gltf-binary", headers={"Cache-Control": "max-age=86400"})
+
+    @app.get("/generation/{request_id}.json")
+    def generation_status(request_id: str, images: bool = False):
+        return _generation("GET", f"/v1/requests/{quote(request_id)}?images={str(images).lower()}")
+
+    @app.get("/generation/{request_id}/files/{name}")
+    def generation_file(request_id: str, name: str):
+        return _generation("GET", f"/v1/requests/{quote(request_id)}/files/{quote(name)}")
+
+    @app.get("/generation/{request_id}/urls.txt")
+    def generation_urls(request_id: str):
+        return _generation("GET", f"/v1/requests/{quote(request_id)}/urls.txt")
+
+    @app.get("/generation/{request_id}/SHA256SUMS")
+    def generation_sums(request_id: str):
+        return _generation("GET", f"/v1/requests/{quote(request_id)}/SHA256SUMS")
+
+    @app.delete("/generation/{request_id}/files")
+    def generation_delete_files(request_id: str):
+        return _generation("DELETE", f"/v1/requests/{quote(request_id)}/files")
+
+    # The pages: the queue and its requests, one request's pictures, and the user's decisions (resume, cancel, delete).
+
+    @app.get("/generation", response_class=HTMLResponse)
+    def generation_index(request: Request, status: str = "", project: str = "", gpu: int = 0, page: int = 1):
+        error, queue, rows, usage, more, comfy = None, None, [], None, False, None
+        page = max(1, page)
+        try:
+            queue = client.generation_queue(paths)
+            comfy = _try(lambda: client.generation_comfy(paths))
+            usage = _try(lambda: client.generation_gpu(paths, measure=bool(gpu)))
+            # One more than a page tells whether older requests follow.
+            rows = client.generation_requests(paths, status=status or None, project_id=project or None,
+                                              limit=GENERATION_PAGE + 1, offset=(page - 1) * GENERATION_PAGE)
+            more, rows = len(rows) > GENERATION_PAGE, rows[:GENERATION_PAGE]
+        except client.Refused as exc:
+            error = exc.detail
+        except client.PillarUnavailable as exc:
+            error = f"{exc}: the pillar is off until the Core manifest enables it (docs/pillars/generation.md, \"Deployment\")"
+        projects = _try(_project_names, default=[]) or []
+        return _render(request, "generation.html", queue=queue, requests=rows, status=status, project=project, error=error, gpu=usage,
+                       page=page, more=more, projects=projects, comfy=comfy, nav_active="generation", live_topics="generation")
+
+    def _generation_form(request: Request, form: dict, refusal: str | None = None) -> HTMLResponse:
+        error, models, usage, listed = None, None, None, None
+        try:
+            models = client.generation_models(paths)
+            listed = _try(lambda: client.generation_recipes(paths))
+            usage = _try(lambda: client.generation_gpu(paths, measure=False))
+        except client.Refused as exc:
+            error = exc.detail
+        except client.PillarUnavailable as exc:
+            error = f"{exc}: the pillar is off until the Core manifest enables it (docs/pillars/generation.md, \"Deployment\")"
+        try:
+            projects = _project_names()
+        except client.PillarUnavailable as exc:
+            projects, error = [], error or str(exc)
+        return _render(request, "generation_new.html", form=form, models=models, gpu=usage, projects=projects, error=error,
+                       refusal=refusal, nav_active="new-image",
+                       # A recipe taking a picture (pbr-maps) is asked for from the pictures, not from prompts.
+                       recipes=[r for r in (listed or {}).get("recipes") or [] if "image" not in r["slots"]])
+
+    # ComfyUI lent to the user, and recipes (docs/pillars/generation.md, "Hand-over" and "Recipes").
+
+    @app.post("/generation/comfy/{action}")
+    def generation_comfy_action(action: str):
+        """Open (lend), Restart or Give back ComfyUI; each answers on the Images page."""
+        if action not in ("lend", "restart", "return"):
+            return _back("/generation", f"Unknown ComfyUI action {action!r}.")
+        try:
+            client.generation_comfy(paths, action)
+        except (client.Refused, client.PillarUnavailable) as exc:
+            return _back("/generation", f"Could not {action} ComfyUI: {getattr(exc, 'detail', exc)}")
+        return _back("/generation", {"lend": "ComfyUI is yours: it starts fresh once nothing renders, and the queue waits until you give it back.",
+                                     "restart": "ComfyUI restarts: a fresh process renders its first graph cleanly.",
+                                     "return": "ComfyUI is back with the queue."}[action])
+
+    @app.get("/generation/recipes", response_class=HTMLResponse)
+    def generation_recipes(request: Request):
+        error, listed = None, None
+        try:
+            listed = client.generation_recipes(paths)
+        except client.Refused as exc:
+            error = exc.detail
+        except client.PillarUnavailable as exc:
+            error = f"{exc}: the pillar is off until the Core manifest enables it (docs/pillars/generation.md, \"Deployment\")"
+        return _render(request, "generation_recipes.html", listed=listed, error=error, nav_active="recipes")
+
+    def _recipe_import_form(request: Request, form: dict, *, suggestion: dict | None = None, refusal: str | None = None) -> HTMLResponse:
+        return _render(request, "generation_recipe_import.html", form=form, suggestion=suggestion, refusal=refusal,
+                       slots=["prompt", "negative", "seed", "width", "height", "steps", "cfg"], nav_active="recipes")
+
+    @app.get("/generation/recipes/import", response_class=HTMLResponse)
+    def generation_recipe_import(request: Request):
+        return _recipe_import_form(request, {})
+
+    @app.post("/generation/recipes/import", response_class=HTMLResponse)
+    async def generation_recipe_import_post(request: Request):
+        """Two steps: a pasted or uploaded Export (API) graph gets its suggested slots and outputs shown; confirmed,
+        it is saved as a recipe. A refusal shows the form again as typed, with the pillar's reason."""
+        data = await request.form()
+        upload = data.get("file")
+        text = str(data.get("graph") or "")
+        if upload is not None and hasattr(upload, "read") and getattr(upload, "filename", ""):
+            text = (await upload.read()).decode("utf-8", errors="replace")
+        form = {"name": str(data.get("name") or "").strip(), "description": str(data.get("description") or "").strip(), "graph": text}
+        try:
+            graph = json.loads(text)
+        except ValueError:
+            return _recipe_import_form(request, form, refusal="That is not JSON. In ComfyUI, use Workflow > Export (API) and paste or upload the file.")
+        try:
+            suggestion = client.generation_recipe_suggest(paths, graph)
+        except (client.Refused, client.PillarUnavailable) as exc:
+            return _recipe_import_form(request, form, refusal=str(getattr(exc, "detail", exc)))
+        if data.get("step") != "save":
+            return _recipe_import_form(request, form, suggestion=suggestion)
+        slots = {}
+        for slot in ("prompt", "negative", "seed", "width", "height", "steps", "cfg"):
+            target = str(data.get(f"slot_{slot}") or "")
+            if target:
+                node, _, name = target.partition(":")
+                slots[slot] = [node, name]
+        outputs = [{"role": str(data.get(f"role_{o['node']}") or "").strip(), "node": o["node"]}
+                   for o in suggestion["outputs"] if data.get(f"keep_{o['node']}")]
+        body = {"name": form["name"], "description": form["description"] or None, "graph": graph, "slots": slots, "outputs": outputs,
+                "replace": bool(data.get("replace"))}
+        try:
+            saved = client.generation_recipe_save(paths, body)
+        except (client.Refused, client.PillarUnavailable) as exc:
+            return _recipe_import_form(request, form, suggestion=suggestion, refusal=f"Not saved: {getattr(exc, 'detail', exc)}")
+        return _back(f"/generation/recipes/{quote(saved['name'])}", f"Saved recipe {saved['name']}.")
+
+    @app.get("/generation/recipes/{name}", response_class=HTMLResponse)
+    def generation_recipe_page(request: Request, name: str):
+        error, recipe = None, None
+        try:
+            recipe = client.generation_recipe(paths, name)
+        except client.Refused as exc:
+            error = exc.detail
+        except client.PillarUnavailable as exc:
+            error = str(exc)
+        return _render(request, "generation_recipe.html", recipe=recipe, error=error, nav_active="recipes")
+
+    @app.get("/generation/recipes/{name}/workflow.json")
+    def generation_recipe_workflow(name: str):
+        try:
+            recipe = client.generation_recipe(paths, name)
+        except client.Refused as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status)
+        except client.PillarUnavailable:
+            return JSONResponse({"detail": "generation pillar unreachable"}, status_code=503)
+        return JSONResponse(recipe["graph"], headers={"Content-Disposition": f'attachment; filename="{name}-api.json"'})
+
+    @app.post("/generation/recipes/{name}/delete")
+    def generation_recipe_delete(name: str):
+        try:
+            client.generation_recipe_delete(paths, name)
+        except (client.Refused, client.PillarUnavailable) as exc:
+            return _back(f"/generation/recipes/{quote(name)}", f"Could not delete: {getattr(exc, 'detail', exc)}")
+        return _back("/generation/recipes", f"Deleted recipe {name}.")
+
+    @app.get("/generation/new", response_class=HTMLResponse)
+    def generation_new(request: Request, project: str = "", recipe: str = ""):
+        return _generation_form(request, {"project": project, "count": "1", "recipe": recipe})
+
+    @app.post("/generation/new", response_class=HTMLResponse)
+    def generation_create(
+        request: Request, project: str = Form(...), name: str = Form(""), prompts: str = Form(""), model: str = Form(""),
+        lora: str = Form(""), width: str = Form(""), height: str = Form(""), count: str = Form("1"), negative: str = Form(""),
+        steps: str = Form(""), seed: str = Form(""), recipe: str = Form(""),
+    ):
+        """The user's own request for pictures (docs/pillars/dashboard.md, "New images"): one prompt per line, the
+        settings shared by every line. A refusal shows the form again as typed, with the pillar's reason."""
+        form = {"project": project, "name": name, "prompts": prompts, "model": model, "lora": lora, "width": width, "height": height,
+                "count": count, "negative": negative, "steps": steps, "seed": seed, "recipe": recipe}
+        lines = [line.strip() for line in prompts.splitlines() if line.strip()]
+        if not lines:
+            return _generation_form(request, form, "Write at least one prompt, one per line.")
+        try:
+            numbers = {key: int(form[key]) for key in ("width", "height", "steps", "seed") if form[key].strip()}
+            per_prompt = int(count or 1)
+        except ValueError:
+            return _generation_form(request, form, "Width, height, pictures per prompt, steps and seed are whole numbers.")
+        # A recipe renders its own graph: the model and LoRA are its own.
+        chosen = {"recipe": recipe} if recipe else {**({"model": model} if model else {}), **({"lora": lora} if lora else {})}
+        defaults = {**chosen, **({"negative": negative.strip()} if negative.strip() else {}), **numbers}
+        body = {"project_id": project, "name": name.strip() or None, "defaults": {"prompt": "", **defaults},
+                "prompts": [{"prompt": line, "count": per_prompt} for line in lines]}
+        try:
+            result = client.generation_submit(paths, body)
+        except client.Refused as exc:
+            return _generation_form(request, form, f"Not queued: {exc.detail}")
+        except client.PillarUnavailable as exc:
+            return _generation_form(request, form, f"Not queued: {exc}")
+        total = result.get("images", {}).get("total", len(lines) * per_prompt)
+        return _back(f"/generation/{quote(result['id'])}", f"Queued {total} picture{'s' if total != 1 else ''}.")
+
+    def _material(item: dict | None, image: dict | None) -> dict | None:
+        """A done picture's map files by role when it has every map the material sphere needs, or None."""
+        if not image or image["status"] != "done" or item.get("files_deleted_at"):
+            return None
+        files = {out["role"]: f"/generation/{quote(item['id'])}/files/{quote(out['file_name'])}" for out in image.get("outputs") or []}
+        return {role: files[role] for role in MATERIAL_ROLES} if all(role in files for role in MATERIAL_ROLES) else None
+
+    def _maps_recipe() -> dict | None:
+        """The pbr-maps recipe when ComfyUI may have its files: what "Make PBR maps" renders."""
+        try:
+            recipe = client.generation_recipe(paths, MAPS_RECIPE)
+        except (client.Refused, client.PillarUnavailable):
+            return None
+        return recipe if recipe.get("installed") is not False else None
+
+    @app.get("/generation/{request_id}", response_class=HTMLResponse)
+    def generation_detail(request: Request, request_id: str):
+        error, item, queue = None, None, None
+        try:
+            item = client.generation_request(paths, request_id)
+            queue = client.generation_queue(paths)
+        except client.Refused as exc:
+            error = exc.detail
+        except client.PillarUnavailable as exc:
+            error = str(exc)
+        maps = _maps_recipe() if item and (item.get("images") or {}).get("done") else None
+        return _render(request, "generation_detail.html", item=item, queue=queue, error=error, maps_recipe=maps, nav_active="generation",
+                       live_topics="generation")
+
+    @app.get("/generation/{request_id}/pictures/{idx}", response_class=HTMLResponse)
+    def generation_picture(request: Request, request_id: str, idx: int):
+        """One picture large, with its full prompt and every setting it was rendered with."""
+        error, item, image = None, None, None
+        try:
+            item = client.generation_request(paths, request_id)
+        except client.Refused as exc:
+            error = exc.detail
+        except client.PillarUnavailable as exc:
+            error = str(exc)
+        pictures = (item or {}).get("image_list") or []
+        position = next((n for n, picture in enumerate(pictures) if picture["idx"] == idx), None)
+        if position is not None:
+            image = pictures[position]
+        neighbours = {"previous": pictures[position - 1]["idx"] if position else None,
+                      "next": pictures[position + 1]["idx"] if position is not None and position + 1 < len(pictures) else None}
+        setup = _try(lambda: client.generation_image_graph(paths, request_id, idx)) if image else None
+        maps = _maps_recipe() if image and image["status"] == "done" else None
+        return _render(request, "generation_picture.html", item=item, image=image, neighbours=neighbours, error=error, setup=setup,
+                       maps_recipe=maps, material=_material(item, image), nav_active="generation")
+
+    @app.get("/generation/{request_id}/pictures/{idx}/workflow.json")
+    def generation_picture_workflow(request_id: str, idx: int):
+        """The picture's graph in ComfyUI's API format, as a file to drop on ComfyUI."""
+        try:
+            setup = client.generation_image_graph(paths, request_id, idx)
+        except client.Refused as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status)
+        except client.PillarUnavailable:
+            return JSONResponse({"detail": "generation pillar unreachable"}, status_code=503)
+        return JSONResponse(setup["graph"], headers={"Content-Disposition": f'attachment; filename="{request_id}-{idx:04d}-api.json"'})
+
+    @app.post("/generation/{request_id}/pictures/{idx}/recipe")
+    def generation_picture_save_recipe(request_id: str, idx: int, name: str = Form(""), description: str = Form("")):
+        back = f"/generation/{quote(request_id)}/pictures/{idx}"
+        body = {"name": name.strip(), "description": description.strip() or None, "from_image": {"request_id": request_id, "idx": idx}}
+        try:
+            saved = client.generation_recipe_save(paths, body)
+        except (client.Refused, client.PillarUnavailable) as exc:
+            return _back(back, f"Not saved: {getattr(exc, 'detail', exc)}")
+        return _back(f"/generation/recipes/{quote(saved['name'])}", f"Saved recipe {saved['name']}; use it from New images.")
+
+    @app.post("/generation/{request_id}/maps")
+    def generation_make_maps(request_id: str, idx: list[int] = Form([])):
+        """The PBR maps of the chosen pictures (docs/pillars/dashboard.md, "Make PBR maps"): one pbr-maps request in
+        the pictures' project, one material per picture."""
+        back = f"/generation/{quote(request_id)}"
+        chosen = sorted(set(idx))
+        if not chosen:
+            return _back(back, "Tick the pictures to make PBR maps of first.")
+        try:
+            item = client.generation_request(paths, request_id)
+            title = item.get("name") or request_id
+            numbers = ", ".join(f"#{n}" for n in chosen)
+            body = {"project_id": item["project_id"], "name": f"{title}: maps of {numbers}",
+                    "prompts": [{"recipe": MAPS_RECIPE, "source": {"request_id": request_id, "idx": n}} for n in chosen]}
+            result = client.generation_submit(paths, body)
+        except (client.Refused, client.PillarUnavailable) as exc:
+            return _back(back if len(chosen) > 1 else f"{back}/pictures/{chosen[0]}", f"Not queued: {getattr(exc, 'detail', exc)}")
+        return _back(f"/generation/{quote(result['id'])}", f"Making the PBR maps of {len(chosen)} picture{'s' if len(chosen) != 1 else ''}.")
+
+    @app.post("/generation/resume")
+    def generation_resume(retry_failed: str = Form(""), next: str = Form("/generation")):
+        back = next if next.startswith("/generation") else "/generation"
+        try:
+            result = client.generation_resume(paths, retry_failed=bool(retry_failed))
+        except (client.Refused, client.PillarUnavailable) as exc:
+            return _back(back, f"Could not resume the queue: {getattr(exc, 'detail', exc)}")
+        retried = len(result.get("retried") or [])
+        return _back(back, "The queue is rendering again" + (f"; {retried} failed request{'s' if retried != 1 else ''} queued again." if retried else "."))
+
+    @app.post("/generation/{request_id}/cancel")
+    def generation_cancel(request_id: str):
+        back = f"/generation/{quote(request_id)}"
+        try:
+            client.generation_cancel(paths, request_id)
+        except (client.Refused, client.PillarUnavailable) as exc:
+            return _back(back, f"Could not cancel: {getattr(exc, 'detail', exc)}")
+        return _back(back, "Cancelled. Pictures already rendered are kept.")
+
+    @app.post("/generation/{request_id}/delete-files")
+    def generation_delete_files_form(request_id: str, confirm: str = Form("")):
+        back = f"/generation/{quote(request_id)}"
+        if not confirm:
+            return _back(back, "Tick the box confirming the download was checked before deleting.")
+        try:
+            result = client.generation_delete_files(paths, request_id)
+        except (client.Refused, client.PillarUnavailable) as exc:
+            return _back(back, f"Could not delete: {getattr(exc, 'detail', exc)}")
+        count = len(result.get("deleted") or [])
+        return _back(back, f"Deleted little-workshop's {count} cop{'y' if count == 1 else 'ies'}.")
+
     # ---- Assets: the project's visible asset folder (3D models, previews, textures) ----
 
     def _exporting_paths(project: str) -> list[str]:
@@ -2006,11 +2362,14 @@ def build_app(paths: Paths) -> FastAPI:
         intent: str = Form("task"), review_mode: str = Form("manual"), when: str = Form("immediate"),
         kind: str = Form("once"), at: str = Form(""), time_of_day: str = Form(""), day: list[str] = Form(default=[]),
         include_standards: list[str] = Form(default=["1"]), candidate_id: str = Form(""),
+        allow_image_generation: str = Form(""),
     ):
         params = {
             "title": title, "description": description, "intent": intent, "review_mode": review_mode,
             "include_standards": "1" in include_standards,
         }
+        if allow_image_generation:
+            params["allow_image_generation"] = True
         if when == "immediate":
             result = _try(lambda: client.create_job(
                 paths, type="agent.run_task", target_pillar="agent", project_id=project,

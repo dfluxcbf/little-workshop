@@ -47,6 +47,16 @@ class AgentFlowError(RuntimeError):
     pass
 
 
+
+# A task runs without permission prompts, so the projects' guard refuses image generation in it unless the
+# user allowed it for this task (docs/pillars/generation.md, "Asking for pictures").
+IMAGE_GENERATION_ENV = "LITTLE_WORKSHOP_IMAGE_GENERATION"
+
+
+def task_env(env: dict[str, str], params: dict) -> dict[str, str]:
+    """The task's environment: the usage tags, and whether the user allowed it to generate images."""
+    return {**env, IMAGE_GENERATION_ENV: "allowed"} if params.get("allow_image_generation") else env
+
 @dataclass
 class RunTaskResult:
     run_id: str
@@ -332,7 +342,8 @@ class AgentFlow:
                 summary_text, _is_error = self._invoke_claude(
                     project_dir, prompt, session_name, playwright_args,
                     on_usage=lambda usage: db.record_usage(conn, db.USAGE_RUN, usage, ref_id=run_id, project_id=project_id, job_id=job_id),
-                    env=usage_client.launch_env(self.paths, project=project_id, job_id=job_id, job_type="agent.run_task", run_id=run_id),
+                    env=task_env(usage_client.launch_env(self.paths, project=project_id, job_id=job_id, job_type="agent.run_task", run_id=run_id),
+                                 params),
                     session_id=session_id,
                 )
         except AgentFlowError as exc:

@@ -940,3 +940,21 @@ def deployment_rollback_timeout(paths: Paths, project_id: str, deploy_id: str, *
         return response.json()
     except (httpx.TransportError, OSError, httpx.HTTPStatusError) as exc:
         raise DeploymentPillarUnavailable("Deployment & Servers daemon unreachable") from exc
+
+
+class GenerationPillarUnavailable(Exception):
+    pass
+
+
+def generation_request(paths: Paths, method: str, path: str, *, json: dict | None = None, params: dict | None = None,
+                       timeout: float = 30.0):
+    """One call to Image Generation's Pillar Interface; a refusal's reason is in the error."""
+    try:
+        with client_for_socket(paths.socket_path("generation"), timeout=timeout) as client:
+            response = client.request(method, path, json=json, params=params)
+        if response.status_code in (404, 409, 422):
+            raise GenerationPillarUnavailable(f"refused: {response.json().get('detail', response.text)}")
+        response.raise_for_status()
+        return response.json()
+    except (httpx.ConnectError, httpx.TimeoutException, OSError, httpx.HTTPStatusError) as exc:
+        raise GenerationPillarUnavailable(f"the Image Generation daemon is unreachable (is the generation pillar enabled?): {exc}") from exc

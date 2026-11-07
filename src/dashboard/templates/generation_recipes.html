@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Recipes — little-workshop{% endblock %}
+{% block content %}
+<h1>Recipes</h1>
+<p class="lede">Saved ComfyUI node setups. New images renders one for every prompt you write and gives one file per output: a texture and all its PBR maps, or whatever the setup saves. Save one from any picture's page, or import a graph you built in ComfyUI.</p>
+<div class="decision-actions" style="margin:12px 0 16px"><a class="btn primary" href="/generation/recipes/import" data-testid="generation-recipe-import">Import from ComfyUI</a></div>
+{% if listed %}
+<div class="policy-list" data-testid="generation-recipes">
+  {% for r in listed.recipes %}
+  <a class="polcard" href="/generation/recipes/{{ r.name }}">
+    <span class="polcard-head">
+      <span class="polcard-topic">{{ r.title }}</span>
+      <span class="pill {{ 'fail' if r.installed is false else 'ok' }}">{{ 'missing files' if r.installed is false else r.source }}</span>
+    </span>
+    {% if r.description %}<span class="polcard-ears">{{ r.description }}</span>{% endif %}
+    <span class="polcard-meta">
+      <span class="chip">{{ r.name }}</span>
+      <span class="chip">{{ r.node_count }} nodes</span>
+      {% for o in r.outputs %}<span class="chip">{{ o.role }}</span>{% endfor %}
+    </span>
+  </a>
+  {% else %}
+  <p class="muted">No recipes yet.</p>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
