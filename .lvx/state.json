@@ -4,7 +4,7 @@
     "stable_version": "0.3.7",
     "production_branch": "master",
     "integration_branch": "dev",
-    "merge_message": "rel (0.3.7): merge release/0.3.7",
-    "phase": "prod_merge"
+    "merge_message": "Back-merge release 0.3.7 into dev",
+    "phase": "dev_backmerge"
   }
 }
