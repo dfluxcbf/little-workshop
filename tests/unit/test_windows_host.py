@@ -347,6 +347,22 @@ def test_the_doctor_reports_each_check_with_a_hint(monkeypatch, tmp_path):
     assert "install-shim" in failed["windows_sh_shim"] and "normalize-eol --project-id lsot" in failed["autocrlf:lsot"]
 
 
+def test_the_doctor_python_probe_carries_no_quotes():
+    """WSL hands cmd.exe's command line to Windows re-quoted: `py -3 -c "import sys"` reached Python as `"import`
+    (a SyntaxError), so a working Python was reported missing. The probe is quote-free, and `-V` still tells the
+    Microsoft Store stub (exit 9009/49) from a real Python."""
+    lines = []
+
+    class Recording:
+        def run(self, argv, timeout=None, cwd=None):
+            lines.append(argv[-1])
+            return CommandResult(1, "", "")
+
+    assert not windows_doctor.python_check(Recording())["ok"]
+    assert lines == ["py -3 -V", "python3 -V", "python -V"]
+    assert not any('"' in line for line in lines)
+
+
 # --- REQ-000000515: A Windows-hosted server runs from a kept deploy folder, tracked by PID and start time ---
 
 class PsRunner:

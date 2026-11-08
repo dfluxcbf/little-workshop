@@ -57,8 +57,9 @@ def shim_checks(runner: CommandRunner) -> list[dict]:
 
 
 def python_check(runner: CommandRunner) -> dict:
-    for label, line in (("py -3", "py -3 -c \"import sys\""), ("python3", "python3 -c \"import sys\""),
-                        ("python", "python -c \"import sys\"")):
+    # Quote-free: WSL re-quotes cmd.exe's command line, and `-c "import sys"` reached Python as `"import`, a
+    # SyntaxError that reported a working Python missing. `-V` still fails on the Microsoft Store stub.
+    for label, line in (("py -3", "py -3 -V"), ("python3", "python3 -V"), ("python", "python -V")):
         if _cmd(runner, line).ok:
             return _check("windows_python", True, f"`{label}` runs")
     return _check("windows_python", False, "no Windows Python runs (python3 may be the Microsoft Store stub)",
