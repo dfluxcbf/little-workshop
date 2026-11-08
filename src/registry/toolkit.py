@@ -2,9 +2,12 @@
 project (docs/pillars/registry_portfolio.md, "Toolkit").
 
 A **source** is a GitHub repository registered once and pinned to a commit; its **items** are found in its tree
-(`.claude-plugin/marketplace.json` plugins, `**/SKILL.md` skills, `agents/*.md` and `commands/*.md`, at the root or
-under `.claude/`). A plugin is installed with Claude Code's own `claude plugin` commands at project scope; a skill,
-agent or command is copied at the pinned commit into the project's `.claude/`. Every install is recorded in the
+(`.claude-plugin/marketplace.json` plugins, `**/SKILL.md` skills (a `SKILL.md` at the root is the repository's one
+skill), `agents/*.md` and `commands/*.md`, at the root or under `.claude/`, and the MCP servers of every `.mcp.json`).
+A repository hosted elsewhere (`host/owner/repo`) is registered with the MCP servers it declares and a version label;
+nothing is fetched from it. A plugin is installed with Claude Code's own `claude plugin` commands at project scope; a
+skill, agent or command is copied at the pinned commit into the project's `.claude/`; an MCP server is an entry of
+the project's `.mcp.json` (Claude Code asks each user to approve a project's servers before starting one). Every install is recorded in the
 project's `.claude/toolkit.lock.json`, and removal deletes exactly what it records. An item that runs code (hooks,
 scripts) is installed only with `confirm_code`. Nothing here installs on its own: the defaults are recommendations.
 """
@@ -21,7 +24,12 @@ from common.shell import DEFAULT_RUNNER, CommandRunner
 
 LOCK_PATH = ".claude/toolkit.lock.json"
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-KINDS = ("plugin", "skill", "agent", "command")
+# A repository on another forge: its host first (projects.blender.org/lab/blender_mcp). Never fetched.
+OTHER_REPO = re.compile(r"(?=[A-Za-z0-9-]+\.)[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+KINDS = ("plugin", "skill", "agent", "command", "mcp")
+MCP_PATH = ".mcp.json"
+MCP_NAME = re.compile(r"[A-Za-z0-9_-]+")
+MCP_KEYS = ("type", "command", "args", "env", "url", "headers")  # Claude Code's .mcp.json keys; others are dropped
 CODE_DIRS = {"hooks", "scripts", "bin"}
 CODE_SUFFIXES = {".sh", ".bash", ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".cmd", ".ps1", ".bat", ".rb", ".exe"}
 NOT_ITEMS = {"tests", "test", "fixtures", "examples", "benchmarks"}  # a repository's own test data is not its items
@@ -81,9 +89,41 @@ class GhFetcher:
 
 
 def check_repo(repo: str) -> str:
-    if not REPO.fullmatch(repo or ""):
-        raise ToolkitError(f"not a GitHub repository: {repo!r} (expected owner/repo)")
+    if not (REPO.fullmatch(repo or "") or OTHER_REPO.fullmatch(repo or "")):
+        raise ToolkitError(f"not a repository: {repo!r} (expected owner/repo on GitHub, or host/owner/repo elsewhere)")
     return repo
+
+
+def on_github(repo: str) -> bool:
+    return bool(REPO.fullmatch(repo or ""))
+
+
+def mcp_server(name: str, entry: dict) -> dict:
+    """One MCP server as a project's `.mcp.json` holds it: Claude Code's keys only (a command and its arguments and
+    environment, or a URL), refused when it names neither."""
+    if not MCP_NAME.fullmatch(name or ""):
+        raise ToolkitError(f"not an MCP server name: {name!r} (letters, digits, - and _)")
+    if not isinstance(entry, dict) or not (entry.get("command") or entry.get("url")):
+        raise ToolkitError(f"MCP server {name!r} names neither a command nor a url")
+    server = {k: entry[k] for k in MCP_KEYS if entry.get(k) not in (None, "", [], {})}
+    if not all(isinstance(a, str) for a in server.get("args", [])) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in server.get("env", {}).items()):
+        raise ToolkitError(f"MCP server {name!r}: args must be strings and env a map of strings")
+    return server
+
+
+def mcp_runs(server: dict) -> list[str]:
+    """What an MCP server runs, for the confirmation an install asks: every MCP server runs code."""
+    if server.get("command"):
+        return [" ".join(["MCP server runs:", server["command"], *server.get("args", [])])]
+    return [f"MCP server at {server['url']}"]
+
+
+def mcp_item(name: str, entry: dict, description: str = "", path: str = "", declared: bool = False) -> dict:
+    server = mcp_server(name, entry)
+    item = {"id": f"mcp:{name}", "kind": "mcp", "name": name, "path": path, "description": description,
+            "files": [], "runs_code": mcp_runs(server), "server": server}
+    return {**item, "declared": True} if declared else item
 
 
 def frontmatter(text: str) -> dict:
@@ -136,14 +176,29 @@ def discover(fetcher: Fetcher, repo: str, sha: str) -> list[dict]:
             description = plugin.get("description") or (json.loads(text(manifest)).get("description", "") if manifest in files else "")
             add("plugin", plugin["name"], prefix, _under(files, prefix), description, marketplace=market["name"])
     # Skills: other harnesses' copies (.agents/, .openclaw/, ...) and test data are skipped; `.claude/skills/` wins over a duplicate.
-    skills = [p for p in files if PurePosixPath(p).name == "SKILL.md" and "/" in p
-              and not any(part.startswith(".") and part != ".claude" or part in NOT_ITEMS for part in PurePosixPath(p).parts)]
+    skipped = lambda p: any(part.startswith(".") and part != ".claude" or part in NOT_ITEMS for part in PurePosixPath(p).parts[:-1])
+    skills = [p for p in files if PurePosixPath(p).name == "SKILL.md" and "/" in p and not skipped(p)]
     for path in sorted(skills, key=lambda p: (not p.startswith(".claude/"), p.count("/"), p)):
         folder = str(PurePosixPath(path).parent)
         name = PurePosixPath(folder).name
         if f"skill:{name}" not in items:
             meta = frontmatter(text(path))
             add("skill", name, folder, _under(files, folder), meta.get("description", ""))
+    if "SKILL.md" in files and not skills:  # the repository is one skill: its files, minus the repository's own
+        meta = frontmatter(text("SKILL.md"))
+        own = [p for p in files if not (p.startswith(".") or PurePosixPath(p).parts[0] in NOT_ITEMS | {"LICENSE", "README.md"})]
+        add("skill", meta.get("name") or repo.split("/")[-1], "", sorted(own), meta.get("description", ""))
+    for path in sorted(p for p in files if PurePosixPath(p).name == MCP_PATH and not any(part in NOT_ITEMS for part in PurePosixPath(p).parts)):
+        try:
+            servers = json.loads(text(path)).get("mcpServers") or {}
+        except (ValueError, AttributeError):
+            continue
+        for name, entry in sorted(servers.items()):
+            if f"mcp:{name}" not in items:
+                try:
+                    items[f"mcp:{name}"] = mcp_item(name, entry, f"MCP server declared in {path}", path)
+                except ToolkitError:
+                    continue
     for kind, folder in (("agent", "agents"), ("command", "commands")):
         for path in sorted(files):
             p = PurePosixPath(path)
@@ -177,6 +232,27 @@ def write_lock(checkout: Path, lock: dict) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def read_mcp(checkout: Path) -> dict:
+    try:
+        data = json.loads((checkout / MCP_PATH).read_text(encoding="utf-8"))
+    except OSError:
+        return {"mcpServers": {}}
+    except ValueError as exc:
+        raise ToolkitError(f"{MCP_PATH} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.setdefault("mcpServers", {}), dict):
+        raise ToolkitError(f"{MCP_PATH} has no mcpServers map")
+    return data
+
+
+def write_mcp(checkout: Path, data: dict) -> None:
+    """The project's `.mcp.json`, removed when the toolkit took out its last server and nothing else is in it."""
+    path = checkout / MCP_PATH
+    if not data["mcpServers"] and set(data) == {"mcpServers"}:
+        path.unlink(missing_ok=True)
+        return
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def lock_plugins(checkout: Path) -> tuple[str, ...]:
@@ -219,9 +295,22 @@ def install(checkout: Path, fetcher: Fetcher, source: dict, items: list[dict], *
         raise ToolkitError("these items run code; install them with confirm_code after reading: " + "; ".join(code))
     lock = read_lock(checkout)
     entry = lock["sources"].setdefault(source["repo"], {"items": {}})
-    owned = {f for s in lock["sources"].values() for i in s.get("items", {}).values() for f in i.get("files", [])}
+    owner = {f: repo for repo, s in lock["sources"].items() for i in s.get("items", {}).values() for f in i.get("files", [])}
+    owned = set(owner)
+    servers_owner = {i["mcp"]: repo for repo, s in lock["sources"].items() for i in s.get("items", {}).values() if i.get("mcp")}
     written: list[str] = []
     for item in items:
+        if item["kind"] == "mcp":
+            data = read_mcp(checkout)
+            name = item["name"]
+            if name in data["mcpServers"] and servers_owner.get(name) != source["repo"]:
+                whose = f"{servers_owner[name]}'s" if name in servers_owner else "the project's own"
+                raise ToolkitError(f"{item['id']} would replace {whose} MCP server {name!r} in {MCP_PATH}")
+            data["mcpServers"][name] = item["server"]
+            write_mcp(checkout, data)
+            entry["items"][item["id"]] = {"kind": "mcp", "mcp": name, "server": item["server"], "files": []}
+            written.append(MCP_PATH)
+            continue
         if item["kind"] == "plugin":
             key = f"{item['name']}@{item['marketplace']}"
             _claude(runner, checkout, "marketplace", "add", source["repo"])
@@ -230,10 +319,14 @@ def install(checkout: Path, fetcher: Fetcher, source: dict, items: list[dict], *
             written.append(".claude/settings.json")
             continue
         dest = DEST[item["kind"]].format(name=item["name"])
-        targets = {path: (f"{dest}/{path[len(item['path']) + 1:]}" if item["kind"] == "skill" else dest) for path in item["files"]}
+        inside = lambda path: path[len(item["path"]) + 1:] if item["path"] else path
+        targets = {path: (f"{dest}/{inside(path)}" if item["kind"] == "skill" else dest) for path in item["files"]}
         clash = [t for t in targets.values() if (checkout / t).exists() and t not in owned]
         if clash:
             raise ToolkitError(f"{item['id']} would overwrite the project's own {', '.join(clash)}")
+        taken = sorted({owner[t] for t in targets.values() if owner.get(t) not in (None, source["repo"])})
+        if taken:
+            raise ToolkitError(f"{item['id']} from {source['repo']} would overwrite files {', '.join(taken)} installed")
         for path, target in targets.items():
             out = checkout / target
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -260,6 +353,11 @@ def remove(checkout: Path, repo: str, names: list[str] | None = None, *, runner:
     changed: list[str] = []
     for item_id in ids:
         item = entry["items"].pop(item_id)
+        if item.get("mcp"):
+            data = read_mcp(checkout)
+            data["mcpServers"].pop(item["mcp"], None)
+            write_mcp(checkout, data)
+            changed.append(MCP_PATH)
         if item.get("plugin"):
             _claude(runner, checkout, "uninstall", item["plugin"], "--scope", "project")
             changed.append(".claude/settings.json")
@@ -290,9 +388,12 @@ def update_plan(checkout: Path, fetcher: Fetcher, source: dict) -> dict:
         return {"ids": [], "items": [], "changed": [], "code": []}
     ids = [i for i in entry["items"] if entry["items"][i]["kind"] != "plugin"]
     items = pick(source, ids)
-    diff = set(fetcher.changed(source["repo"], entry["sha"], source["sha"]))
-    return {"ids": ids, "items": items, "changed": sorted(f for item in items for f in item["files"] if f in diff),
-            "code": [f for item in items for f in item["runs_code"] if f in diff]}
+    diff = set(fetcher.changed(source["repo"], entry["sha"], source["sha"])) if on_github(source["repo"]) else set()
+    # An MCP server whose definition changed runs something else: asked again like changed code.
+    servers = [item for item in items if item["kind"] == "mcp" and item.get("server") != entry["items"][item["id"]].get("server")]
+    return {"ids": ids, "items": items,
+            "changed": sorted({*(f for item in items for f in item["files"] if f in diff), *(i["path"] for i in servers if i["path"])}),
+            "code": [f for item in items for f in item["runs_code"] if f in diff] + [line for i in servers for line in i["runs_code"]]}
 
 
 def refresh(checkout: Path, fetcher: Fetcher, source: dict, *, confirm_code: bool = False,

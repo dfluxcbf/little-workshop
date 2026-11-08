@@ -230,7 +230,9 @@ def _toolkit_job(paths: Paths, kind: str, project_id: str | None, params: JSONDi
 
 
 def _toolkit_add_source(paths: Paths, args: JSONDict) -> Any:
-    return _toolkit_job(paths, "add_source", None, {"repo": args.get("repo"), "seed": args.get("seed") is True})
+    params = {"repo": args.get("repo"), "seed": args.get("seed") is True}
+    params.update({k: args[k] for k in ("mcp_servers", "licence", "version") if args.get(k)})
+    return _toolkit_job(paths, "add_source", None, params)
 
 
 def _toolkit_install(paths: Paths, args: JSONDict) -> Any:
@@ -1631,14 +1633,21 @@ TOOLS = TOOLS + (
     ToolSpec("workshop_toolkit_status", "A project's toolkit: what its .claude/toolkit.lock.json records (source, pinned "
              "commit, licence, items and their files) and the registered items recommended for it. Nothing is installed "
              "on its own.", _schema({"project_id": _PROJECT_ID}, ["project_id"]), _toolkit_status),
-    ToolSpec("workshop_toolkit_add_source", "Register a GitHub repository as a toolkit source, pinned to its newest commit "
-             "(`seed: true`: the default sources). Installs nothing. Add one only when the USER asked for it.",
-             _schema({"repo": _prop("string", "owner/repo."), "seed": _prop("boolean", "Register the default sources instead.")}),
+    ToolSpec("workshop_toolkit_add_source", "Register a repository as a toolkit source: on GitHub (owner/repo) it is pinned to "
+             "its newest commit and its skills, agents, commands, plugins and .mcp.json servers are listed; elsewhere "
+             "(host/owner/repo) it is registered with the MCP servers it provides (`mcp_servers`, `version`, `licence`) and "
+             "nothing is fetched (`seed: true`: the default sources). Installs nothing. Add one only when the USER asked for it.",
+             _schema({"repo": _prop("string", "owner/repo on GitHub, or host/owner/repo elsewhere."),
+                      "seed": _prop("boolean", "Register the default sources instead."),
+                      "mcp_servers": {"type": "object", "description": "MCP servers the repository provides: {name: {command, "
+                                      "args, env, description} or {url}}, as a project's .mcp.json holds them."},
+                      "licence": _prop("string", "The licence you read (SPDX id), for a repository outside GitHub."),
+                      "version": _prop("string", "What the servers are pinned at (a tag), for a repository outside GitHub.")}),
              _toolkit_add_source),
     ToolSpec("workshop_toolkit_install", "Install toolkit items into a project, from one source (`repo`, `items`) or several "
              "(`selections`), all in one commit straight on the project's integration branch (no branch to start or "
              "finish), recorded in .claude/toolkit.lock.json: a plugin with `claude plugin install --scope project`, a "
-             "skill, agent or command copied at the pinned commit. An item that runs code needs `confirm_code` after the "
+             "skill, agent or command copied at the pinned commit, an MCP server added to the project's .mcp.json. An item that runs code needs `confirm_code` after the "
              "USER read its files (workshop_toolkit_items lists them).",
              _schema({"project_id": _PROJECT_ID, "repo": _TOOLKIT_REPO,
                       "items": {"type": "array", "items": {"type": "string"}, "description": "Item ids (skill:tdd) or names."},

@@ -125,3 +125,41 @@ def test_an_install_with_nothing_selected_starts_no_job(test_client, monkeypatch
     monkeypatch.setattr(client, "create_job", lambda paths, timeout=30.0, **fields: jobs.append(fields))
     answer = test_client.post("/toolkit/install", data={"project": "little-meals"}, follow_redirects=False)
     assert answer.status_code == 303 and "Select at least one item" in unquote(answer.headers["location"]) and jobs == []
+
+
+# --- REQ-000000535: The toolkit installs MCP servers into a project's .mcp.json ---
+
+
+def test_the_page_lists_mcp_servers_and_offers_the_add_form(test_client, monkeypatch):
+    lab = {"repo": "projects.blender.org/lab/blender_mcp", "sha": "v1.0.3", "licence": "GPL-3.0", "default_branch": "",
+           "updated_at": "2026-11-08T10:00:00+00:00",
+           "items": [{"id": "mcp:blender-lab", "kind": "mcp", "name": "blender-lab", "description": "Blender Lab",
+                      "runs_code": ["MCP server runs: uvx blender-mcp"]}]}
+    monkeypatch.setattr(client, "toolkit_sources", lambda paths: [lab])
+    monkeypatch.setattr(client, "toolkit_status", lambda paths, project: {"project_id": "little-meals", "kinds": ["code"],
+                                                                          "branch": "dev", "installed": [], "recommended": []})
+    page = test_client.get("/toolkit", params={"project": "little-meals"}).text
+    assert 'value="projects.blender.org/lab/blender_mcp mcp:blender-lab"' in page and 'class="chip kind-mcp"' in page
+    assert 'data-code="MCP server runs: uvx blender-mcp"' in page
+    assert "pinned at v1.0.3" in page and "Re-pin to newest" not in page
+    assert 'action="/toolkit/add_mcp"' in page and "Add an MCP server" in page
+
+
+def test_adding_an_mcp_server_starts_one_add_source_job(test_client, monkeypatch):
+    submitted, jobs = threading.Event(), []
+
+    def fake_create_job(paths, timeout=30.0, **fields):
+        jobs.append(fields)
+        submitted.set()
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(client, "create_job", fake_create_job)
+    answer = test_client.post("/toolkit/add_mcp", data={
+        "repo": "ahujasid/blender-mcp", "mcp_name": "blender", "mcp_command": "uvx mcp-for-blender --flag 'a b'",
+        "mcp_env": "DISABLE_TELEMETRY=true\n", "licence": "", "version": ""}, follow_redirects=False)
+    assert answer.status_code == 303 and "register MCP server blender" in unquote(answer.headers["location"])
+    assert submitted.wait(timeout=5)
+    assert (jobs[0]["type"], jobs[0]["params"]) == ("registry.toolkit_add_source", {"repo": "ahujasid/blender-mcp", "mcp_servers": {
+        "blender": {"command": "uvx", "args": ["mcp-for-blender", "--flag", "a b"], "env": {"DISABLE_TELEMETRY": "true"}}}})
+    refused = test_client.post("/toolkit/add_mcp", data={"repo": "o/r", "mcp_name": "x", "mcp_command": ""}, follow_redirects=False)
+    assert "Give the repository" in unquote(refused.headers["location"]) and len(jobs) == 1

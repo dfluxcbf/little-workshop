@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 
 from cli import client
@@ -119,7 +120,17 @@ def cmd_toolkit_status(args: argparse.Namespace) -> int:
 
 
 def cmd_toolkit_add_source(args: argparse.Namespace) -> int:
-    return _toolkit_job("add_source", None, {"repo": args.repo})
+    params: dict = {"repo": args.repo}
+    servers = {}
+    for spec in args.mcp or []:
+        name, _, command = spec.partition("=")
+        words = shlex.split(command)
+        if not name or not words:
+            print(f"--mcp takes NAME='COMMAND ARGS...', not {spec!r}", file=sys.stderr)
+            return 2
+        servers[name.strip()] = {"command": words[0], "args": words[1:]}
+    params.update({k: v for k, v in (("mcp_servers", servers), ("licence", args.licence), ("version", args.version)) if v})
+    return _toolkit_job("add_source", None, params)
 
 
 def cmd_toolkit_seed(args: argparse.Namespace) -> int:
@@ -197,8 +208,12 @@ def register(subparsers) -> None:
     tk_status = toolkit_sub.add_parser("status", help="A project's installed items (its lock) and recommendations")
     tk_status.add_argument("--project-id", required=True)
     tk_status.set_defaults(func=cmd_toolkit_status)
-    tk_add = toolkit_sub.add_parser("add-source", help="Register a GitHub repository, pinned to its newest commit")
-    tk_add.add_argument("repo", help="owner/repo")
+    tk_add = toolkit_sub.add_parser("add-source", help="Register a repository (GitHub: pinned to its newest commit; elsewhere: "
+                                                       "with the MCP servers it provides)")
+    tk_add.add_argument("repo", help="owner/repo on GitHub, or host/owner/repo elsewhere")
+    tk_add.add_argument("--mcp", action="append", metavar="NAME='COMMAND ARGS'", help="An MCP server it provides (repeatable)")
+    tk_add.add_argument("--licence", help="The licence you read (SPDX id); needed outside GitHub")
+    tk_add.add_argument("--version", help="What the servers are pinned at (a tag); needed outside GitHub")
     tk_add.set_defaults(func=cmd_toolkit_add_source)
     toolkit_sub.add_parser("seed", help="Register the default sources not registered yet").set_defaults(func=cmd_toolkit_seed)
     for name, func, text in (("install", cmd_toolkit_install, "Install items into the project, in one commit on its integration branch"),

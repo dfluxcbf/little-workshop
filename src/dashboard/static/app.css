@@ -1809,5 +1809,10 @@ label.polcard-topic { display: inline-flex; align-items: center; gap: 8px; curso
 #tk-pick-recommended { margin-left: 6px; }
 @media (max-width: 680px) { .toolkit-selection { top: 62px; } }
 .toolkit-add { margin-top: 12px; }
+.toolkit-mcp-form { display: grid; gap: 10px; grid-template-columns: 1fr; align-items: end; }
+@media (min-width: 681px) { .toolkit-mcp-form { grid-template-columns: 1fr 1fr; } .toolkit-mcp-form .wide { grid-column: 1 / -1; } }
+.toolkit-mcp-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-soft); }
+.toolkit-mcp-form button { justify-self: start; }
+.chip.kind-mcp { color: var(--cyan); border-color: var(--cyan-soft); }
 .toolkit-add .row { gap: 8px; flex-wrap: wrap; }
 .toolkit-add input[type=text] { flex: 1; min-width: 200px; }

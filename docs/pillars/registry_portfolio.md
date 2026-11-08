@@ -253,6 +253,20 @@ REQ-000000502 to REQ-000000506). Suggested sources and their licences: [../toolk
   branch under the git directory (`lws-worktrees/`), removed afterwards: the checkout is not switched or touched
   and gets the change when it takes the integration branch in. A failure leaves `.claude/` as it was and
   commits nothing. The status (`/v1/toolkit/status/{project}`) reads the integration branch's lock.
+- **MCP servers (REQ-000000535)**: an item of kind `mcp` is one server of a GitHub source's `.mcp.json` files
+  (any depth; Claude Code's keys kept: `type`, `command`, `args`, `env`, `url`, `headers`) or one the source is
+  registered with (`mcp_servers` on `registry.toolkit_add_source`, kept across re-pins). A repository outside GitHub
+  (`host/owner/repo`, e.g. `projects.blender.org/lab/blender_mcp`) is registered with its declared servers, a
+  `version` (the tag its command pins) and the `licence` read; nothing is fetched from it, and moving it means
+  registering it again with a new version. Every server counts as code (`runs_code` says what it runs), so an
+  install needs `confirm_code`. Installing adds the entry to the project's `.mcp.json` (created if missing) beside
+  the project's own servers, never replacing one it does not own; removal takes out exactly that entry (and the
+  file when the toolkit made it and it is empty). Claude Code asks each user to approve a project's servers; the
+  toolkit does not pre-approve them. A Blender-side add-on a server needs is the user's to install.
+- **A repository that is one skill (REQ-000000536)**: a `SKILL.md` at the root (and no other skill) makes the
+  repository one skill, named by its frontmatter, with its files minus the repository's own (README, LICENSE,
+  hidden folders, tests); it installs under `.claude/skills/<name>/`. An install that would overwrite files
+  another source installed is refused.
 - **Remove** (`registry.toolkit_remove`; no items: all from the source) deletes exactly the recorded files, or
   uninstalls the plugin. **Update** (`registry.toolkit_update`) re-pins the source to its newest commit and lists
   the changed files; with a project, it brings the project's items to the new pin (from the project's own pin;
@@ -265,11 +279,13 @@ REQ-000000502 to REQ-000000506). Suggested sources and their licences: [../toolk
   UI, a server manifest or `tests/ui/`: impeccable; Unity: none) and its open usage findings (`FINDING_ITEMS`:
   long sessions → handoff, files re-read in many sessions → writing-for-agents). claude-reflect is a source only:
   it is installed at user scope already, and writes learned rules to `.claude/rules/learned.md`.
-- **Surfaces**: Dashboard System → Toolkit (`/toolkit`: sources with licence and items, a "runs code" badge, a
+- **Surfaces**: Dashboard System → Toolkit (`/toolkit`: sources with licence and items (MCP servers with an `mcp`
+  chip), an "Add an MCP server" form (repository, name, command, environment, version, licence), a "runs code" badge, a
   project picker, a checkbox per item (recommended ones and every source's, "Select all recommended") and one
   "Install selected" for the whole selection, which asks once about the code the selection runs, and the
   installed items with remove and update); `lws toolkit install --also <repo> <item>...` adds another source's
-  items to the same install; `lws toolkit
+  items to the same install; `lws toolkit add-source <repo> --mcp NAME='COMMAND ARGS' --version --licence` registers
+  MCP servers; `lws toolkit
   sources|list|status|add-source|seed|install|remove|update`; MCP `workshop_toolkit_sources`, `_items`,
   `_status` (read-only) and `_add_source`, `_install`, `_remove`, `_update` (ask).
 

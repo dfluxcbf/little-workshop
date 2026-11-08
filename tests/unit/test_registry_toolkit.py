@@ -24,9 +24,10 @@ class FixtureFetcher:
     """GitHub stand-in: {repo: {sha: {path: text or (text, mode)}}}; the newest sha is the last one."""
 
     def __init__(self, repos: dict, licences: dict | None = None):
-        self.repos, self.licences, self.reads = repos, licences or {}, []
+        self.repos, self.licences, self.reads, self.calls = repos, licences or {}, [], []
 
     def repo(self, repo):
+        self.calls.append(repo)
         if repo not in self.repos:
             raise toolkit.ToolkitError(f"gh api repos/{repo}: Not Found")
         return {"licence": self.licences.get(repo, "MIT"), "default_branch": "main"}
@@ -427,7 +428,7 @@ def test_uncommitted_claude_files_on_dev_refuse_the_install(registry, checkout):
     (checkout / ".claude").mkdir()
     (checkout / ".claude/notes.md").write_text("mine")
     refused = job(registry, "install", "little-widget", repo="o/skills", items=["tdd"])
-    assert refused["outcome"] == "failed" and "uncommitted changes under .claude/" in refused["error"]
+    assert refused["outcome"] == "failed" and "uncommitted changes in .claude/" in refused["error"]
     assert (checkout / ".claude/notes.md").read_text() == "mine" and not (checkout / ".claude/skills").exists()
 
 
@@ -480,3 +481,125 @@ def test_a_commit_that_fails_fails_the_job_and_keeps_nothing(registry, checkout)
     answer = job(registry, "install", "little-widget", repo="o/skills", items=["tdd"])
     assert answer["outcome"] == "failed" and "refused by a hook" in answer["error"]
     assert not (checkout / ".claude").exists() and _git(["status", "--porcelain"], checkout) == ""
+
+
+# --- REQ-000000535: The toolkit installs MCP servers into a project's .mcp.json ---
+
+MCP_REPO = {
+    "integrations/codex/plugins/blender/.mcp.json": json.dumps({"mcpServers": {"mcp-for-blender": {
+        "command": "uvx", "args": ["mcp-for-blender"], "env_vars": ["PATH"], "tool_timeout_sec": 600,
+        "env": {"BLENDER_MCP_APPS": "1"}}}}),
+    "tests/fixtures/.mcp.json": json.dumps({"mcpServers": {"test-only": {"command": "x"}}}),
+    "README.md": "blender",
+}
+
+
+def test_a_repositorys_mcp_json_servers_are_items_that_run_code():
+    fetcher = FixtureFetcher({"o/blender": {"s1": MCP_REPO}})
+    (item,) = toolkit.discover(fetcher, "o/blender", "s1")
+    assert (item["id"], item["kind"], item["path"]) == ("mcp:mcp-for-blender", "mcp", "integrations/codex/plugins/blender/.mcp.json")
+    assert item["server"] == {"command": "uvx", "args": ["mcp-for-blender"], "env": {"BLENDER_MCP_APPS": "1"}}  # Claude Code's keys only
+    assert item["runs_code"] == ["MCP server runs: uvx mcp-for-blender"]
+
+
+def test_an_mcp_server_is_installed_into_mcp_json_beside_the_projects_own_and_removed_exactly(registry, checkout):
+    registry.fetcher.repos["o/blender"] = {"s1": MCP_REPO}
+    (checkout / ".mcp.json").write_text(json.dumps({"mcpServers": {"asset-review": {"command": "ours"}}}))
+    _git(["add", ".mcp.json"], checkout)
+    _git(["commit", "-qm", "own server"], checkout)
+    job(registry, "add_source", repo="o/blender")
+    refused = job(registry, "install", "little-widget", repo="o/blender", items=["mcp-for-blender"])
+    assert refused["outcome"] == "failed" and "MCP server runs: uvx mcp-for-blender" in refused["error"]
+
+    answer = job(registry, "install", "little-widget", repo="o/blender", items=["mcp-for-blender"], confirm_code=True)
+    assert answer["outcome"] == "succeeded", answer
+    servers = json.loads((checkout / ".mcp.json").read_text())["mcpServers"]
+    assert servers == {"asset-review": {"command": "ours"},
+                       "mcp-for-blender": {"command": "uvx", "args": ["mcp-for-blender"], "env": {"BLENDER_MCP_APPS": "1"}}}
+    assert {".mcp.json", toolkit.LOCK_PATH} <= set(_git(["show", "--name-only", "--format=", "HEAD"], checkout).splitlines())
+    (installed,) = registry.get("/v1/toolkit/status/little-widget").json()["installed"]
+    assert installed["items"][0]["mcp"] == "mcp-for-blender"
+
+    assert job(registry, "remove", "little-widget", repo="o/blender")["outcome"] == "succeeded"
+    assert json.loads((checkout / ".mcp.json").read_text()) == {"mcpServers": {"asset-review": {"command": "ours"}}}
+    assert _git(["status", "--porcelain"], checkout) == ""
+
+
+def test_an_mcp_server_never_replaces_one_the_project_or_another_source_has(checkout):
+    (checkout / ".mcp.json").write_text(json.dumps({"mcpServers": {"blender": {"command": "ours"}}}))
+    source = {"repo": "o/a", "sha": "s1", "licence": "MIT", "items": [toolkit.mcp_item("blender", {"command": "uvx", "args": ["a"]})]}
+    with pytest.raises(toolkit.ToolkitError, match="the project's own MCP server 'blender'"):
+        toolkit.install(checkout, None, source, source["items"], confirm_code=True)
+    (checkout / ".mcp.json").unlink()
+    toolkit.install(checkout, None, source, source["items"], confirm_code=True)
+    other = {**source, "repo": "o/b"}
+    with pytest.raises(toolkit.ToolkitError, match="o/a's MCP server 'blender'"):
+        toolkit.install(checkout, None, other, other["items"], confirm_code=True)
+    toolkit.remove(checkout, "o/a")
+    assert not (checkout / ".mcp.json").exists()  # the toolkit made it and took its last server out
+
+
+def test_a_repository_outside_github_is_registered_with_its_declared_servers_and_never_fetched(registry, checkout):
+    servers = {"blender-lab": {"command": "uvx", "args": ["--from", "git+https://projects.blender.org/lab/blender_mcp.git@v1.0.3#subdirectory=mcp", "blender-mcp"],
+                               "description": "Blender Lab's MCP server"}}
+    refused = job(registry, "add_source", repo="projects.blender.org/lab/blender_mcp")
+    assert refused["outcome"] == "failed" and "mcp_servers" in refused["error"]
+    assert job(registry, "add_source", repo="projects.blender.org/lab/blender_mcp", mcp_servers=servers)["outcome"] == "failed"  # no version
+    answer = job(registry, "add_source", repo="projects.blender.org/lab/blender_mcp", mcp_servers=servers, version="v1.0.3", licence="GPL-3.0")
+    assert answer["outcome"] == "succeeded", answer
+    source = registry.get("/v1/toolkit/sources").json()[0]
+    assert (source["repo"], source["sha"], source["licence"], source["default_branch"]) == ("projects.blender.org/lab/blender_mcp", "v1.0.3", "GPL-3.0", "")
+    (item,) = source["items"]
+    assert (item["id"], item["description"], item["declared"]) == ("mcp:blender-lab", "Blender Lab's MCP server", True)
+    assert "projects.blender.org/lab/blender_mcp" not in registry.fetcher.calls
+
+    answer = job(registry, "install", "little-widget", repo="projects.blender.org/lab/blender_mcp", items=["blender-lab"], confirm_code=True)
+    assert answer["outcome"] == "succeeded", answer
+    assert json.loads((checkout / ".mcp.json").read_text())["mcpServers"]["blender-lab"]["args"][-1] == "blender-mcp"
+
+
+def test_declared_servers_of_a_github_repository_survive_a_re_pin(registry):
+    job(registry, "add_source", repo="o/skills", mcp_servers={"helper": {"command": "uvx", "args": ["helper"]}})
+    job(registry, "update", repo="o/skills")
+    items = {i["id"] for i in registry.get("/v1/toolkit/items", params={"repo": "o/skills"}).json()}
+    assert {"mcp:helper", "skill:tdd"} <= items
+
+
+def test_bad_mcp_definitions_and_repositories_are_refused():
+    for name, entry in (("bad name", {"command": "x"}), ("ok", {}), ("ok", {"command": "x", "args": [1]})):
+        with pytest.raises(toolkit.ToolkitError):
+            toolkit.mcp_item(name, entry)
+    assert toolkit.check_repo("projects.blender.org/lab/blender_mcp") and toolkit.check_repo("o/r")
+    for repo in ("o", "a/b/c", "https://x.org/a/b"):
+        with pytest.raises(toolkit.ToolkitError):
+            toolkit.check_repo(repo)
+
+
+# --- REQ-000000536: A repository that is one skill installs, and sources never overwrite each other's files ---
+
+
+def test_a_root_skill_md_makes_the_repository_one_skill_with_its_references():
+    fetcher = FixtureFetcher({"o/dream-loop": {"s1": {
+        "SKILL.md": "---\nname: dream-loop\ndescription: Build to a dream image.\n---\n",
+        "references/plus-mode/workflow.md": "plus", "README.md": "readme", "LICENSE": "MIT", ".github/workflows/ci.yml": "ci",
+        "tests/test_x.py": "t"}}})
+    (item,) = toolkit.discover(fetcher, "o/dream-loop", "s1")
+    assert (item["id"], item["path"], item["description"]) == ("skill:dream-loop", "", "Build to a dream image.")
+    assert item["files"] == ["SKILL.md", "references/plus-mode/workflow.md"]
+
+
+def test_a_root_skill_installs_under_its_own_folder(checkout):
+    fetcher = FixtureFetcher({"o/dream-loop": {"s1": {"SKILL.md": "---\nname: dream-loop\n---\n", "references/a.md": "a"}}})
+    source = {"repo": "o/dream-loop", "sha": "s1", "licence": "MIT", "items": toolkit.discover(fetcher, "o/dream-loop", "s1")}
+    written = toolkit.install(checkout, fetcher, source, source["items"])
+    assert written == [".claude/skills/dream-loop/SKILL.md", ".claude/skills/dream-loop/references/a.md", toolkit.LOCK_PATH]
+
+
+def test_a_source_never_overwrites_files_another_source_installed(checkout):
+    fetcher = FixtureFetcher({"o/skills": {"s1": SKILL_REPO}, "o/other": {"s1": SKILL_REPO}})
+    first = {"repo": "o/skills", "sha": "s1", "licence": "MIT", "items": toolkit.discover(fetcher, "o/skills", "s1")}
+    second = {**first, "repo": "o/other"}
+    toolkit.install(checkout, fetcher, first, toolkit.pick(first, ["tdd"]))
+    with pytest.raises(toolkit.ToolkitError, match="would overwrite files o/skills installed"):
+        toolkit.install(checkout, fetcher, second, toolkit.pick(second, ["tdd"]))
+    assert list(json.loads((checkout / toolkit.LOCK_PATH).read_text())["sources"]) == ["o/skills"]

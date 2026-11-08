@@ -309,7 +309,7 @@ def read_on_branch(checkout: Path, branch: str, rel: str) -> str | None:
 
 
 def commit_on_integration(checkout: Path, message: str, write_files: Callable[[Path], list[str]], *,
-                          area: str = ".claude") -> dict:
+                          area: str | tuple[str, ...] = ".claude") -> dict:
     """Commit straight onto the project's integration branch, without a branch start or finish (REQ-000000533):
     `write_files(where)` changes the files of a checkout of that branch and returns the paths it changed, and only
     those paths are committed, in one commit. Where the branch is checked out (the project's checkout or one of its
@@ -317,6 +317,8 @@ def commit_on_integration(checkout: Path, message: str, write_files: Callable[[P
     a checkout on another branch is never switched or touched. Refused while `area` has uncommitted changes in that
     checkout; when `write_files` raises, `area` is put back as it was and the error is the caller's.
     Returns {"written", "branch", "commit", "detail"}."""
+    areas = (area,) if isinstance(area, str) else tuple(area)
+    shown = ", ".join(a + ("/" if "." not in a.lstrip(".") else "") for a in areas)
     branch = integration_branch(checkout)
     if _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], checkout).returncode != 0:
         return {"written": False, "detail": f"skipped: the project has no {branch} branch"}
@@ -331,13 +333,17 @@ def commit_on_integration(checkout: Path, message: str, write_files: Callable[[P
             return {"written": False, "detail": f"skipped: could not check out {branch}: {(added.stderr or added.stdout).strip()[-300:]}"}
         where = temporary
     try:
-        if _git(["status", "--porcelain", "--", area], where).stdout.strip():
-            return {"written": False, "detail": f"skipped: {branch} has uncommitted changes under {area}/ in {where}"}
+        if _git(["status", "--porcelain", "--", *areas], where).stdout.strip():
+            return {"written": False, "detail": f"skipped: {branch} has uncommitted changes in {shown} in {where}"}
+
+        def put_back() -> None:
+            for one in areas:  # one by one: a path HEAD lacks would fail the others too
+                _git(["checkout", "HEAD", "--", one], where)
+            _git(["clean", "-fdq", "--", *areas], where)
         try:
             paths = write_files(where)
         except BaseException:
-            _git(["checkout", "HEAD", "--", area], where)
-            _git(["clean", "-fdq", "--", area], where)
+            put_back()
             raise
         if not paths:
             return {"written": False, "branch": branch, "detail": "nothing to commit"}
@@ -347,8 +353,7 @@ def commit_on_integration(checkout: Path, message: str, write_files: Callable[[P
         commit = _git(["commit", "-m", message, "--", *paths], where)
         if commit.returncode != 0:
             _git(["reset", "-q", "--", *paths], where)
-            _git(["checkout", "HEAD", "--", area], where)
-            _git(["clean", "-fdq", "--", area], where)
+            put_back()
             return {"written": False, "branch": branch,
                     "detail": f"not committed on {branch}, nothing kept: {(commit.stderr or commit.stdout).strip()[-400:]}"}
         sha = _git(["rev-parse", "HEAD"], where).stdout.strip()

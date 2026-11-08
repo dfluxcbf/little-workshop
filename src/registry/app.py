@@ -626,13 +626,38 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None, fetc
 
     # -- toolkit: public skills, agents, commands and plugins per project (registry/toolkit.py) ------------
 
-    def _pin(repo: str) -> dict:
-        """Register `repo` (or re-pin it) at its default branch's newest commit, with the items found there."""
-        meta = fetcher.repo(toolkit.check_repo(repo))
-        sha = fetcher.head(repo, meta["default_branch"])
-        items = toolkit.discover(fetcher, repo, sha)
+    def _declared(servers) -> list[dict]:
+        """The MCP servers a source is registered with ({name: {command, args, env, description} or {url}})."""
+        if not servers:
+            return []
+        if not isinstance(servers, dict):
+            raise toolkit.ToolkitError("mcp_servers must be a map of name to {command, args, env} or {url}")
+        return [toolkit.mcp_item(name, entry, str((entry or {}).get("description") or ""), declared=True)
+                for name, entry in sorted(servers.items())]
+
+    def _pin(repo: str, *, servers=None, licence: str | None = None, version: str | None = None) -> dict:
+        """Register `repo` (or re-pin it) at its default branch's newest commit, with the items found there plus the
+        MCP servers it is registered with (kept on a re-pin). A repository outside GitHub is not fetched: its items
+        are its declared servers, pinned at the `version` given (REQ-000000535)."""
+        toolkit.check_repo(repo)
         with lock:
-            return db.save_toolkit_source(conn, repo, sha=sha, licence=meta["licence"], default_branch=meta["default_branch"], items=items)
+            old = db.get_toolkit_source(conn, repo)
+        declared = _declared(servers) or [i for i in (old or {}).get("items", []) if i.get("declared")]
+        if not toolkit.on_github(repo):
+            if not declared:
+                raise toolkit.ToolkitError(f"{repo} is not on GitHub: register it with the MCP servers it provides (mcp_servers)")
+            if not (version or old):
+                raise toolkit.ToolkitError(f"{repo} is not on GitHub: name the version its servers are pinned at (version)")
+            with lock:
+                return db.save_toolkit_source(conn, repo, sha=version or old["sha"], licence=licence or (old or {}).get("licence") or "unknown",
+                                              default_branch="", items=declared)
+        meta = fetcher.repo(repo)
+        sha = fetcher.head(repo, meta["default_branch"])
+        found = toolkit.discover(fetcher, repo, sha)
+        items = [i for i in found if i["id"] not in {d["id"] for d in declared}] + declared
+        items.sort(key=lambda i: (toolkit.KINDS.index(i["kind"]), i["name"]))
+        with lock:
+            return db.save_toolkit_source(conn, repo, sha=sha, licence=licence or meta["licence"], default_branch=meta["default_branch"], items=items)
 
     def _source(repo: str) -> dict:
         with lock:
@@ -696,8 +721,10 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None, fetc
 
     @app.post("/v1/jobs/registry.toolkit_add_source")
     def job_toolkit_add_source(request: JobRequest) -> dict:
-        """Params: `repo` (owner/repo), or `seed: true` for the default sources not registered yet. Each is pinned
-        to its newest commit; nothing is installed anywhere."""
+        """Params: `repo` (owner/repo on GitHub, or host/owner/repo elsewhere), or `seed: true` for the default sources
+        not registered yet; `mcp_servers` ({name: {command, args, env, description}}), `licence` and `version` for
+        the MCP servers a repository provides (required outside GitHub, where nothing is fetched). Each GitHub source
+        is pinned to its newest commit; nothing is installed anywhere."""
         def work() -> dict:
             if request.params.get("seed") is True:
                 with lock:
@@ -705,10 +732,12 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None, fetc
                 repos = [repo for repo in toolkit.DEFAULT_SOURCES if repo not in have]
             else:
                 repos = [request.params.get("repo") or ""]
+            extra = {"servers": request.params.get("mcp_servers"), "licence": request.params.get("licence") or None,
+                     "version": request.params.get("version") or None}
             added = []
             with step("pin") as handle:
                 for repo in repos:
-                    source = _pin(repo)
+                    source = _pin(repo, **extra)
                     added.append({"repo": repo, "sha": source["sha"], "licence": source["licence"], "items": len(source["items"])})
                 handle.detail = ", ".join(f"{a['repo']} at {a['sha'][:12]} ({a['items']} items)" for a in added) or "nothing to add"
             return {"added": added}
@@ -719,7 +748,7 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None, fetc
         checkout = _checkout(request.project_id)
         message = f"impr (-1): {label}\n\n{what}, by little-workshop's toolkit. REQ-NONE."
         with step("write") as handle:
-            result = claude_sync.commit_on_integration(checkout, message, write_files)
+            result = claude_sync.commit_on_integration(checkout, message, write_files, area=(".claude", toolkit.MCP_PATH))
             if not result["written"]:
                 raise toolkit.ToolkitError(result["detail"])
             handle.detail = result["detail"]
@@ -793,8 +822,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None, fetc
         def work() -> dict:
             old = _source(request.params.get("repo") or "")
             with step("pin") as handle:
-                source = _pin(old["repo"])
-                diff = fetcher.changed(source["repo"], old["sha"], source["sha"]) if old["sha"] != source["sha"] else []
+                source = _pin(old["repo"], version=request.params.get("version") or None)
+                diff = fetcher.changed(source["repo"], old["sha"], source["sha"]) if old["sha"] != source["sha"] and toolkit.on_github(source["repo"]) else []
                 handle.detail = f"{old['sha'][:12]} -> {source['sha'][:12]}, {len(diff)} files changed"
             result = {"repo": source["repo"], "from": old["sha"], "to": source["sha"], "changed": diff}
             if request.project_id:
@@ -803,7 +832,8 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None, fetc
                 entry = toolkit.parse_lock(lock_text)["sources"].get(source["repo"])
                 if entry is None or entry.get("sha") == source["sha"]:
                     return {**result, "project": "up to date"}
-                result.update({"from": entry["sha"], "changed": fetcher.changed(source["repo"], entry["sha"], source["sha"])})
+                result.update({"from": entry["sha"], "changed": fetcher.changed(source["repo"], entry["sha"], source["sha"])
+                               if toolkit.on_github(source["repo"]) else []})
                 summary: dict = {}
 
                 def write_files(where: Path) -> list[str]:

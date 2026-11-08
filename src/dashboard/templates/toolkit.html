@@ -102,16 +102,18 @@
       {% for i in s['items'] %}
       <div class="toolkit-row">
         {% if project %}{{ pick(s.repo, i) }}{% endif %}
-        <span class="chip">{{ i.kind }}</span>
+        <span class="chip{{ ' kind-mcp' if i.kind == 'mcp' }}">{{ i.kind }}</span>
         <span class="toolkit-name"><strong>{{ i.name }}</strong>{% if i.description %}<span class="muted"> — {{ i.description | truncate(160) }}</span>{% endif %}</span>
         {% if i.runs_code %}<span class="pill warn" title="{{ i.runs_code | join('\n') }}">runs code ({{ i.runs_code | length }})</span>{% endif %}
       </div>
       {% else %}<p class="muted">No item found at this commit.</p>{% endfor %}
     </details>
+    {% if s.default_branch %}
     <form method="post" action="/toolkit/update" class="gate-actions">
       <input type="hidden" name="repo" value="{{ s.repo }}">
       <button type="submit" class="btn" data-busy="Re-pinning…">Re-pin to newest</button>
     </form>
+    {% else %}<p class="muted">Not on GitHub: its MCP servers are pinned at {{ s.sha }}. Register it again with a new version to move it.</p>{% endif %}
   </div>
   {% else %}
   <div class="card">
@@ -128,7 +130,25 @@
     <input type="text" name="repo" placeholder="owner/repo" pattern="[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+" required>
     <button type="submit" class="btn" data-busy="Adding…">Add</button>
   </form>
-  <p class="muted">Suggested sources, with their licences and the projects they fit: <code>docs/toolkit_sources.md</code>.</p>
+  <p class="muted">Suggested sources, with their licences and the projects they fit: <code>docs/toolkit_sources.md</code>.
+    A GitHub repository's <code>.mcp.json</code> servers are listed with its other items.</p>
+</section>
+
+<section class="card toolkit-add">
+  <h2>Add an MCP server</h2>
+  <p class="muted">An MCP server a repository provides, as it would sit in a project's <code>.mcp.json</code>. A repository outside
+    GitHub (<code>host/owner/repo</code>) is not fetched: give the version the command is pinned at and the licence you read.
+    Installing it adds the entry to the project's <code>.mcp.json</code>; Claude Code asks each user to approve it.</p>
+  <form method="post" action="/toolkit/add_mcp" class="toolkit-mcp-form">
+    {% if project %}<input type="hidden" name="project" value="{{ project }}">{% endif %}
+    <label>Repository <input type="text" name="repo" placeholder="owner/repo or host/owner/repo" required></label>
+    <label>Server name <input type="text" name="mcp_name" placeholder="blender" pattern="[A-Za-z0-9_\-]+" required></label>
+    <label class="wide">Command <input type="text" name="mcp_command" placeholder="uvx mcp-for-blender" required></label>
+    <label class="wide">Environment <textarea name="mcp_env" rows="2" placeholder="KEY=value, one per line (optional)"></textarea></label>
+    <label>Version <input type="text" name="version" placeholder="v1.0.3 (outside GitHub)"></label>
+    <label>Licence <input type="text" name="licence" placeholder="MIT, GPL-3.0…"></label>
+    <button type="submit" class="btn" data-busy="Adding…">Add</button>
+  </form>
 </section>
 {% if project %}
 <script>

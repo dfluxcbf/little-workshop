@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
+
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -67,13 +69,27 @@ def build_router(ctx) -> APIRouter:
 
     @router.post("/toolkit/{action}")
     def toolkit_action(action: str, repo: str = Form(""), project: str = Form(""), items: list[str] = Form([]),
-                       pick: list[str] = Form([]), confirm_code: str = Form("")):
+                       pick: list[str] = Form([]), confirm_code: str = Form(""), mcp_name: str = Form(""),
+                       mcp_command: str = Form(""), mcp_env: str = Form(""), licence: str = Form(""), version: str = Form("")):
         """Add a source (or the defaults), install, remove or update: each a Registry Job that outlasts the tap, so it
         runs in the background and its progress is on the Jobs page. An install takes every ticked item (`pick`,
         "<repo> <item id>", from any source) as one Job and one commit on the integration branch (REQ-000000533)."""
-        if action not in ("add_source", "seed", "install", "remove", "update"):
+        if action not in ("add_source", "add_mcp", "seed", "install", "remove", "update"):
             return _back("/toolkit", "Unknown action.")
         back = f"/toolkit?project={project}" if project else "/toolkit"
+        if action == "add_mcp":  # an MCP server a repository provides (REQ-000000535): registered, never installed here
+            try:
+                words = shlex.split(mcp_command)
+            except ValueError as exc:
+                return _back(back, f"The command could not be read: {exc}.")
+            env = dict(line.split("=", 1) for line in mcp_env.splitlines() if "=" in line)
+            if not (repo.strip() and mcp_name.strip() and words):
+                return _back(back, "Give the repository, a server name and its command.")
+            params = {"repo": repo.strip(), "licence": licence.strip(), "version": version.strip(), "mcp_servers": {
+                mcp_name.strip(): {"command": words[0], "args": words[1:], **({"env": {k.strip(): v.strip() for k, v in env.items()}} if env else {})}}}
+            _fire_and_forget(paths, type="registry.toolkit_add_source", target_pillar="registry", project_id=None,
+                             params={k: v for k, v in params.items() if v}, queue_key="toolkit", depends_on=[], created_by="dashboard")
+            return _back(back, f"Started: register MCP server {mcp_name.strip()} of {repo.strip()}. Nothing is installed.")
         params: dict = {"seed": True} if action == "seed" else {"repo": repo.strip()}
         if action == "install" and pick:
             selections: dict[str, list[str]] = {}
