@@ -714,45 +714,82 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None, fetc
             return {"added": added}
         return _toolkit_job(request, work)
 
+    def _on_dev(request: JobRequest, label: str, what: str, write_files) -> dict:
+        """One commit straight on the project's integration branch (REQ-000000533): no branch to start or finish."""
+        checkout = _checkout(request.project_id)
+        message = f"impr (-1): {label}\n\n{what}, by little-workshop's toolkit. REQ-NONE."
+        with step("write") as handle:
+            result = claude_sync.commit_on_integration(checkout, message, write_files)
+            if not result["written"]:
+                raise toolkit.ToolkitError(result["detail"])
+            handle.detail = result["detail"]
+        return result
+
+    def _selections(params: dict) -> list[tuple[dict, list[dict]]]:
+        """The items to install, per source: `selections` ([{repo, items}], any number of sources) or the single
+        `repo` and `items`; a repository named twice is merged and an item named twice installed once."""
+        raw = params.get("selections")
+        if raw is None:
+            raw = [{"repo": params.get("repo") or "", "items": params.get("items") or []}]
+        if not isinstance(raw, list):
+            raise toolkit.ToolkitError("selections must be a list of {repo, items}")
+        wanted: dict[str, list[str]] = {}
+        for selection in raw:
+            names = (selection or {}).get("items") or []
+            wanted.setdefault(str((selection or {}).get("repo") or ""), []).extend(n for n in names if isinstance(n, str))
+        picked = []
+        for repo, names in wanted.items():
+            if names:
+                source = _source(repo)
+                picked.append((source, toolkit.pick(source, list(dict.fromkeys(names)))))
+        if not picked:
+            raise toolkit.ToolkitError("name the items to install")
+        return picked
+
     @app.post("/v1/jobs/registry.toolkit_install")
     def job_toolkit_install(request: JobRequest) -> dict:
-        """Params: `repo`, `items` (ids or names), `confirm_code` (required when an item runs code). Committed on
-        `improvement/toolkit-<item>` in the project's checkout, left for the owner to finish."""
+        """Params: `selections` ([{repo, items}], several sources at once) or `repo` and `items` (ids or names), and
+        `confirm_code` (required when an item runs code). Everything selected is installed in one commit straight on
+        the project's integration branch (REQ-000000533)."""
         def work() -> dict:
             with step("check") as handle:
-                source = _source(request.params.get("repo") or "")
-                items = toolkit.pick(source, list(request.params.get("items") or []))
-                if not items:
-                    raise toolkit.ToolkitError("name the items to install")
-                code = toolkit.code_files(items)
-                if code and request.params.get("confirm_code") is not True:  # refused before any branch is started
+                picked = _selections(request.params)
+                code = [line for _, items in picked for line in toolkit.code_files(items)]
+                if code and request.params.get("confirm_code") is not True:  # refused before anything is written
                     raise toolkit.ToolkitError("these items run code; install them with confirm_code after reading: " + "; ".join(code))
-                checkout = _checkout(request.project_id)
-                names = [i["id"] for i in items]
-                handle.detail = f"{', '.join(names)} at {source['sha'][:12]} ({source['licence']})"
-            return {**_on_branch(request, toolkit.branch_name(source["repo"], names), f"Install {', '.join(names)} from {source['repo']}",
-                                 lambda: toolkit.install(checkout, fetcher, source, items, confirm_code=True, runner=runner)),
-                    "installed": names, "sha": source["sha"], "licence": source["licence"]}
+                names = [i["id"] for _, items in picked for i in items]
+                repos = [source["repo"] for source, _ in picked]
+                handle.detail = "; ".join(f"{', '.join(i['id'] for i in items)} from {source['repo']} at {source['sha'][:12]} ({source['licence']})"
+                                          for source, items in picked)
+
+            def write_files(where: Path) -> list[str]:
+                written: list[str] = []
+                for source, items in picked:
+                    written += toolkit.install(where, fetcher, source, items, confirm_code=True, runner=runner)
+                return sorted(set(written))
+
+            what = "Install " + "; ".join(f"{', '.join(i['id'] for i in items)} from {source['repo']}" for source, items in picked)
+            return {**_on_dev(request, toolkit.commit_label("install", names, repos), what, write_files),
+                    "installed": names, "sources": [{"repo": s["repo"], "sha": s["sha"], "licence": s["licence"]} for s, _ in picked]}
         return _toolkit_job(request, work)
 
     @app.post("/v1/jobs/registry.toolkit_remove")
     def job_toolkit_remove(request: JobRequest) -> dict:
-        """Params: `repo`, `items` (none: everything from it). Deletes exactly the files the lock records."""
+        """Params: `repo`, `items` (none: everything from it). Deletes exactly the files the integration branch's
+        lock records, in one commit on that branch."""
         def work() -> dict:
             repo = request.params.get("repo") or ""
             names = list(request.params.get("items") or []) or None
-            checkout = _checkout(request.project_id)
-            if repo not in toolkit.read_lock(checkout)["sources"]:
-                raise toolkit.ToolkitError(f"nothing from {repo} is installed in {request.project_id}")
-            label = "toolkit-remove-" + toolkit.branch_name(repo, names or []).removeprefix("toolkit-")
-            return {**_on_branch(request, label, f"Remove {', '.join(names or ['everything'])} of {repo}",
-                                 lambda: toolkit.remove(checkout, repo, names, runner=runner)), "removed": names or "all"}
+            label = toolkit.commit_label("remove", names or [], [repo])
+            return {**_on_dev(request, label, f"Remove {', '.join(names or ['everything'])} of {repo}",
+                              lambda where: toolkit.remove(where, repo, names, runner=runner)), "removed": names or "all"}
         return _toolkit_job(request, work)
 
     @app.post("/v1/jobs/registry.toolkit_update")
     def job_toolkit_update(request: JobRequest) -> dict:
         """Params: `repo`, `confirm_code`. Re-pins the source to its newest commit and lists the files that changed;
-        with a project, brings that project's items to the new pin on a branch (the diff then from the project's pin)."""
+        with a project, brings the items its integration branch has to the new pin in one commit there (the diff
+        then from the project's pin)."""
         def work() -> dict:
             old = _source(request.params.get("repo") or "")
             with step("pin") as handle:
@@ -762,20 +799,21 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None, fetc
             result = {"repo": source["repo"], "from": old["sha"], "to": source["sha"], "changed": diff}
             if request.project_id:
                 checkout = _checkout(request.project_id)
-                entry = toolkit.read_lock(checkout)["sources"].get(source["repo"])
+                lock_text = claude_sync.read_on_branch(checkout, claude_sync.integration_branch(checkout), toolkit.LOCK_PATH)
+                entry = toolkit.parse_lock(lock_text)["sources"].get(source["repo"])
                 if entry is None or entry.get("sha") == source["sha"]:
                     return {**result, "project": "up to date"}
                 result.update({"from": entry["sha"], "changed": fetcher.changed(source["repo"], entry["sha"], source["sha"])})
-                code = toolkit.update_plan(checkout, fetcher, source)["code"]
-                if code and request.params.get("confirm_code") is not True:  # refused before any branch is started
-                    raise toolkit.ToolkitError("the update changes code; run it with confirm_code after reading: " + "; ".join(code))
                 summary: dict = {}
 
-                def write_files() -> list[str]:
-                    summary.update(toolkit.refresh(checkout, fetcher, source, confirm_code=True, runner=runner))
+                def write_files(where: Path) -> list[str]:
+                    code = toolkit.update_plan(where, fetcher, source)["code"]
+                    if code and request.params.get("confirm_code") is not True:  # refused before anything is written
+                        raise toolkit.ToolkitError("the update changes code; run it with confirm_code after reading: " + "; ".join(code))
+                    summary.update(toolkit.refresh(where, fetcher, source, confirm_code=True, runner=runner))
                     return summary["paths"]
-                label = "toolkit-update-" + source["repo"].split("/", 1)[1].lower()
-                result.update(_on_branch(request, label, f"Update {source['repo']} to {source['sha'][:12]}", write_files),
+                result.update(_on_dev(request, toolkit.commit_label("update", [], [source["repo"]]),
+                                      f"Update {source['repo']} to {source['sha'][:12]}", write_files),
                               project_changed=summary.get("changed", []))
             return result
         return _toolkit_job(request, work)
@@ -801,12 +839,16 @@ def build_app(conn: sqlite3.Connection, paths: Paths, *, start_branch=None, fetc
             checkout = _checkout(name)
         except toolkit.ToolkitError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
-        installed = toolkit.status(checkout)
+        branch = claude_sync.integration_branch(checkout)
+        on_branch = claude_sync.current_branch(checkout) == branch
+        # The integration branch is where installs land (REQ-000000533): a checkout on another branch shows its lock.
+        installed = toolkit.status(checkout) if on_branch else toolkit.status(
+            checkout, toolkit.parse_lock(claude_sync.read_on_branch(checkout, branch, toolkit.LOCK_PATH)))
         has_ui = (paths.project_dir(name) / "manifest.deployment.toml").is_file() or (checkout / "tests" / "ui").is_dir()
         with lock:
             sources = db.list_toolkit_sources(conn)
         kinds = toolkit.project_kind(checkout, has_ui)
-        return {"project_id": name, "kinds": sorted(kinds), "installed": installed,
+        return {"project_id": name, "kinds": sorted(kinds), "installed": installed, "branch": branch,
                 "recommended": toolkit.recommend(kinds, usage_findings(name), installed, sources)}
 
     secrets_cache: dict[str, Any] = {"value": None, "at": 0.0}

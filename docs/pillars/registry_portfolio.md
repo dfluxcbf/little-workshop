@@ -236,19 +236,27 @@ REQ-000000502 to REQ-000000506). Suggested sources and their licences: [../toolk
   `.claude/skills/` copy wins), agents and commands from `agents/*.md` and `commands/*.md` (root or `.claude/`).
   Each item lists its description (frontmatter or `plugin.json`) and `runs_code`: its hooks, scripts and
   executables.
-- **Install** (`registry.toolkit_install`: project, `repo`, `items`, `confirm_code`): a plugin through Claude
-  Code's own `claude plugin marketplace add <repo>` and `claude plugin install <name>@<marketplace> --scope
-  project` in the checkout (which writes `enabledPlugins`); a skill, agent or command copied at the pinned commit
-  to `.claude/skills/<name>/`, `.claude/agents/<name>.md`, `.claude/commands/<name>.md`. A file the lock does not
-  record is never overwritten. An item that runs code is refused, its files listed, without `confirm_code`
-  (before any branch starts). Everything is recorded in `.claude/toolkit.lock.json` (per source: commit,
-  licence, items and the files written) and committed on `improvement/toolkit-<item>` on a clean checkout, left
-  for the owner to finish (the Claude files sync's branch helper, `claude_sync.commit_on_branch`).
+- **Install** (`registry.toolkit_install`: project, `selections` — `[{repo, items}]`, any number of sources — or
+  the single `repo` and `items`, and `confirm_code`): a plugin through Claude Code's own `claude plugin
+  marketplace add <repo>` and `claude plugin install <name>@<marketplace> --scope project` in the checkout (which
+  writes `enabledPlugins`); a skill, agent or command copied at the pinned commit to `.claude/skills/<name>/`,
+  `.claude/agents/<name>.md`, `.claude/commands/<name>.md`. A file the lock does not record is never overwritten.
+  An item that runs code is refused, its files listed, without `confirm_code` (a selection is refused whole,
+  before anything is written). Everything is recorded in `.claude/toolkit.lock.json` (per source: commit,
+  licence, items and the files written).
+- **One commit on the integration branch, no branch (REQ-000000533)**: every toolkit change (install, remove,
+  update) is one commit straight on the project's integration branch (`.lvx/config.json`, `dev` by default),
+  with subject `impr (-1): toolkit-<item|repo|n-items>` (`claude_sync.commit_on_integration`). Where that branch
+  is checked out (the project's checkout or a worktree) the files are written there and only the paths written
+  are committed, so other uncommitted work stays out of it; refused while `.claude/` has uncommitted changes
+  there. When the checkout is on another branch, the commit is made in a temporary worktree of the integration
+  branch under the git directory (`lws-worktrees/`), removed afterwards: the checkout is not switched or touched
+  and gets the change when it takes the integration branch in. A failure leaves `.claude/` as it was and
+  commits nothing. The status (`/v1/toolkit/status/{project}`) reads the integration branch's lock.
 - **Remove** (`registry.toolkit_remove`; no items: all from the source) deletes exactly the recorded files, or
-  uninstalls the plugin, on `improvement/toolkit-remove-<item>`. **Update** (`registry.toolkit_update`) re-pins
-  the source to its newest commit and lists the changed files; with a project, it brings the project's items to
-  the new pin (from the project's own pin; changed code needs `confirm_code`). Plugins themselves are updated by
-  Claude Code.
+  uninstalls the plugin. **Update** (`registry.toolkit_update`) re-pins the source to its newest commit and lists
+  the changed files; with a project, it brings the project's items to the new pin (from the project's own pin;
+  changed code needs `confirm_code`). Plugins themselves are updated by Claude Code.
 - **Settings**: the generated `.claude/settings.json` enables the language plugins plus every `plugin@marketplace`
   the lock records, and keeps the project's own entries.
 - **Recommendations, never installs** (`GET /v1/toolkit/status/{project}`): the lock, plus the registered items
@@ -258,7 +266,10 @@ REQ-000000502 to REQ-000000506). Suggested sources and their licences: [../toolk
   long sessions → handoff, files re-read in many sessions → writing-for-agents). claude-reflect is a source only:
   it is installed at user scope already, and writes learned rules to `.claude/rules/learned.md`.
 - **Surfaces**: Dashboard System → Toolkit (`/toolkit`: sources with licence and items, a "runs code" badge, a
-  project picker, its recommendations and installed items with remove and update); `lws toolkit
+  project picker, a checkbox per item (recommended ones and every source's, "Select all recommended") and one
+  "Install selected" for the whole selection, which asks once about the code the selection runs, and the
+  installed items with remove and update); `lws toolkit install --also <repo> <item>...` adds another source's
+  items to the same install; `lws toolkit
   sources|list|status|add-source|seed|install|remove|update`; MCP `workshop_toolkit_sources`, `_items`,
   `_status` (read-only) and `_add_source`, `_install`, `_remove`, `_update` (ask).
 

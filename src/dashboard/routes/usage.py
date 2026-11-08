@@ -67,22 +67,34 @@ def build_router(ctx) -> APIRouter:
 
     @router.post("/toolkit/{action}")
     def toolkit_action(action: str, repo: str = Form(""), project: str = Form(""), items: list[str] = Form([]),
-                       confirm_code: str = Form("")):
+                       pick: list[str] = Form([]), confirm_code: str = Form("")):
         """Add a source (or the defaults), install, remove or update: each a Registry Job that outlasts the tap, so it
-        runs in the background and its progress is on the Jobs page."""
+        runs in the background and its progress is on the Jobs page. An install takes every ticked item (`pick`,
+        "<repo> <item id>", from any source) as one Job and one commit on the integration branch (REQ-000000533)."""
         if action not in ("add_source", "seed", "install", "remove", "update"):
             return _back("/toolkit", "Unknown action.")
-        params = {"seed": True} if action == "seed" else {"repo": repo.strip()}
-        if action in ("install", "remove"):
+        back = f"/toolkit?project={project}" if project else "/toolkit"
+        params: dict = {"seed": True} if action == "seed" else {"repo": repo.strip()}
+        if action == "install" and pick:
+            selections: dict[str, list[str]] = {}
+            for value in pick:
+                source, _, item = value.strip().partition(" ")
+                if source and item and item not in selections.setdefault(source, []):
+                    selections[source].append(item)
+            params = {"selections": [{"repo": r, "items": i} for r, i in selections.items()]}
+        elif action in ("install", "remove"):
             params["items"] = items
+        if action == "install" and not (pick or items):
+            return _back(back, "Select at least one item to install.")
         if action in ("install", "update"):
             params["confirm_code"] = confirm_code == "1"
         kind = "add_source" if action == "seed" else action
         _fire_and_forget(paths, type=f"registry.toolkit_{kind}", target_pillar="registry", project_id=project or None, params=params,
                          queue_key=project or "toolkit", depends_on=[], created_by="dashboard")
-        back = f"/toolkit?project={project}" if project else "/toolkit"
-        return _back(back, f"Started: {action.replace('_', ' ')} {repo or 'the default sources'}. Its progress is on the Jobs page; "
-                           + ("a change lands on an improvement/toolkit-… branch of the project." if project else "nothing is installed."))
+        count = sum(len(s["items"]) for s in params.get("selections", [])) or len(items)
+        what = f"install {count} item{'s' if count != 1 else ''}" if action == "install" else f"{action.replace('_', ' ')} {repo or 'the default sources'}"
+        return _back(back, f"Started: {what}. Its progress is on the Jobs page; "
+                           + ("the change is one commit on the project's integration branch." if project else "nothing is installed."))
 
     # -- Triggers: an event starts a Job (Orchestration) -------------------------------
 

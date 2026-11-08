@@ -1796,6 +1796,18 @@ body.page-wide main.content, body.page-wide nav.subnav { max-width: 1480px; }
 .toolkit-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border-soft); min-width: 0; }
 .toolkit-row:first-of-type { border-top: 0; }
 .toolkit-name { flex: 1; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+/* Multi-select install (REQ-000000533): a checkbox per item, one sticky bar for the selection. */
+input.tk-pick { width: 18px; height: 18px; flex: none; padding: 0; margin: 0; accent-color: var(--cyan); cursor: pointer; box-shadow: none; }
+label.polcard-topic { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.toolkit-item:has(.tk-pick:checked), .toolkit-row:has(.tk-pick:checked) { background: var(--cyan-soft); }
+.toolkit-row:has(.tk-pick:checked) { border-radius: var(--radius-sm); }
+.toolkit-row { padding-left: 6px; padding-right: 6px; cursor: default; }
+.toolkit-selection { position: sticky; top: 74px; z-index: 5; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; border-color: var(--cyan); background: linear-gradient(180deg, var(--surface-alt), var(--surface));
+  box-shadow: 0 10px 28px -14px rgb(0 0 0 / 70%), 0 0 0 1px var(--cyan-soft); }
+.toolkit-selection[hidden] { display: none; }
+#tk-pick-recommended { margin-left: 6px; }
+@media (max-width: 680px) { .toolkit-selection { top: 62px; } }
 .toolkit-add { margin-top: 12px; }
 .toolkit-add .row { gap: 8px; flex-wrap: wrap; }
 .toolkit-add input[type=text] { flex: 1; min-width: 200px; }

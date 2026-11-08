@@ -59,7 +59,7 @@ def test_toolkit_actions_start_registry_jobs_in_the_background(test_client, monk
     monkeypatch.setattr(client, "create_job", fake_create_job)
     answer = test_client.post("/toolkit/install", data={"repo": "mattpocock/skills", "project": "little-meals",
                                                         "items": "skill:diagnosing-bugs", "confirm_code": "1"}, follow_redirects=False)
-    assert answer.status_code == 303 and "improvement/toolkit" in unquote(answer.headers["location"])
+    assert answer.status_code == 303 and "integration branch" in unquote(answer.headers["location"])
     assert submitted.wait(timeout=5)
     assert (jobs[0]["type"], jobs[0]["project_id"], jobs[0]["params"]) == (
         "registry.toolkit_install", "little-meals", {"repo": "mattpocock/skills", "items": ["skill:diagnosing-bugs"], "confirm_code": True})
@@ -77,3 +77,51 @@ def test_draft_as_a_skill_starts_the_usage_job_for_the_chosen_project(test_clien
     assert (jobs[0]["type"], jobs[0]["target_pillar"], jobs[0]["project_id"], jobs[0]["params"]) == (
         "usage.draft_skill", "usage", "little-meals", {"candidate_id": "c1"})
     assert "Drafting skill deployment-redeploy-pillar in little-meals" in unquote(answer.headers["location"])
+
+
+# --- REQ-000000533: Toolkit items install together in one commit straight on the integration branch ---
+
+
+def test_the_page_offers_a_checkbox_per_item_and_one_install_for_the_selection(test_client, monkeypatch):
+    status = {"project_id": "little-meals", "kinds": ["code"], "branch": "dev", "installed": [],
+              "recommended": [{"repo": "mattpocock/skills", "item": SOURCE["items"][1], "why": "default for code projects"}]}
+    monkeypatch.setattr(client, "toolkit_sources", lambda paths: [SOURCE])
+    monkeypatch.setattr(client, "toolkit_status", lambda paths, project: status)
+    page = test_client.get("/toolkit", params={"project": "little-meals"}).text
+    assert page.count('name="pick" value="mattpocock/skills skill:tdd"') == 1
+    assert page.count('name="pick" value="mattpocock/skills skill:diagnosing-bugs"') == 2  # recommended and in its source
+    assert 'data-code="skills/engineering/diagnosing-bugs/scripts/hitl.sh"' in page
+    assert 'id="tk-install"' in page and "Install selected into little-meals" in page and "Select all recommended" in page
+    assert "improvement/toolkit" not in page
+    # The selection's script sits once in the page body (not in <title>) and keeps its own sent-flag: base.html's
+    # handler cancels a form whose dataset.sent is already set, which stopped every "Install selected" from posting.
+    assert "<title>Toolkit — little-workshop</title>" in page and page.count("getElementById('tk-install')") == 1
+    script = page[page.index("getElementById('tk-install')"):]
+    assert "dataset.sent" not in script[:script.index("</script>")]
+
+
+def test_the_selected_items_of_every_source_go_in_one_install_job(test_client, monkeypatch):
+    submitted, jobs = threading.Event(), []
+
+    def fake_create_job(paths, timeout=30.0, **fields):
+        jobs.append(fields)
+        submitted.set()
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(client, "create_job", fake_create_job)
+    answer = test_client.post("/toolkit/install", data={"project": "little-meals", "confirm_code": "1", "pick": [
+        "mattpocock/skills skill:tdd", "pbakaus/impeccable skill:impeccable", "mattpocock/skills skill:handoff",
+        "mattpocock/skills skill:tdd"]}, follow_redirects=False)
+    assert answer.status_code == 303 and "install 3 items" in unquote(answer.headers["location"])
+    assert submitted.wait(timeout=5) and len(jobs) == 1
+    assert (jobs[0]["type"], jobs[0]["project_id"], jobs[0]["params"]) == ("registry.toolkit_install", "little-meals", {
+        "selections": [{"repo": "mattpocock/skills", "items": ["skill:tdd", "skill:handoff"]},
+                       {"repo": "pbakaus/impeccable", "items": ["skill:impeccable"]}],
+        "confirm_code": True})
+
+
+def test_an_install_with_nothing_selected_starts_no_job(test_client, monkeypatch):
+    jobs = []
+    monkeypatch.setattr(client, "create_job", lambda paths, timeout=30.0, **fields: jobs.append(fields))
+    answer = test_client.post("/toolkit/install", data={"project": "little-meals"}, follow_redirects=False)
+    assert answer.status_code == 303 and "Select at least one item" in unquote(answer.headers["location"]) and jobs == []

@@ -191,20 +191,19 @@ def test_an_install_never_overwrites_a_skill_of_the_projects_own(checkout):
     assert (checkout / ".claude/skills/tdd/SKILL.md").read_text() == "ours"
 
 
-def test_the_install_job_commits_on_a_toolkit_branch_and_the_status_reads_the_lock(registry, checkout):
+def test_the_install_job_commits_on_dev_and_the_status_reads_the_lock(registry, checkout):
     job(registry, "add_source", repo="o/skills")
     answer = job(registry, "install", "little-widget", repo="o/skills", items=["handoff"])
     assert answer["outcome"] == "succeeded", answer
-    assert registry.started == ["toolkit-handoff"] and _git(["branch", "--show-current"], checkout) == "improvement/toolkit-handoff"
+    assert registry.started == [] and _git(["branch", "--show-current"], checkout) == "dev"
     assert _git(["log", "-1", "--format=%s"], checkout) == "impr (-1): toolkit-handoff" and _git(["status", "--porcelain"], checkout) == ""
     (installed,) = registry.get("/v1/toolkit/status/little-widget").json()["installed"]
     assert installed["repo"] == "o/skills" and [i["id"] for i in installed["items"]] == ["skill:handoff"]
     assert installed["items"][0]["missing"] == []
 
-    _git(["checkout", "dev"], checkout)
-    _git(["merge", "-q", "improvement/toolkit-handoff"], checkout)
     assert job(registry, "remove", "little-widget", repo="o/skills")["outcome"] == "succeeded"
-    assert not (checkout / ".claude").exists() and registry.started[-1] == "toolkit-remove-skills"
+    assert not (checkout / ".claude").exists() and registry.started == []
+    assert _git(["log", "-1", "--format=%s"], checkout) == "impr (-1): toolkit-remove-skills"
 
 
 def test_a_plugin_is_installed_and_removed_with_claude_codes_own_commands(tmp_path, checkout, monkeypatch):
@@ -239,6 +238,7 @@ def test_an_item_that_runs_code_needs_confirm_code_and_nothing_is_started_withou
     assert registry.started == [] and not (checkout / ".claude").exists()
 
     assert job(registry, "install", "little-widget", repo="o/skills", items=["diagnosing-bugs"], confirm_code=True)["outcome"] == "succeeded"
+    assert registry.started == []
     script = checkout / ".claude/skills/diagnosing-bugs/scripts/hitl.sh"
     assert script.read_text().startswith("#!/bin/sh") and os.access(script, os.X_OK)
 
@@ -246,8 +246,6 @@ def test_an_item_that_runs_code_needs_confirm_code_and_nothing_is_started_withou
 def test_an_update_lists_the_changed_files_and_asks_again_for_changed_code(registry, checkout):
     job(registry, "add_source", repo="o/skills")
     job(registry, "install", "little-widget", repo="o/skills", items=["diagnosing-bugs"], confirm_code=True)
-    _git(["checkout", "dev"], checkout)
-    _git(["merge", "-q", "improvement/toolkit-diagnosing-bugs"], checkout)
     registry.fetcher.repos["o/skills"]["s2"] = {**SKILL_REPO, "skills/engineering/diagnosing-bugs/scripts/hitl.sh": ("#!/bin/sh\nrm -rf x\n", "100755")}
 
     refused = job(registry, "update", "little-widget", repo="o/skills")
@@ -321,7 +319,7 @@ def test_the_toolkit_tools_are_classified_reads_free_and_writes_asked():
             "workshop_usage_draft_skill"} <= set(tool_access.MCP_ASK)
 
 
-# --- REQ-000000532: A Job's own branch start runs and is waited for ---
+# --- REQ-000000534: A Job's own branch start runs and is waited for ---
 
 def test_branch_start_skips_the_project_queue_and_waits_until_it_settles(monkeypatch, tmp_path):
     """The Job asking for the branch holds the project's queue key: the start submitted under the same key queued
@@ -376,3 +374,109 @@ def test_branch_start_that_asks_a_question_is_not_waited_out(monkeypatch, tmp_pa
     assert app_module.start_improvement_branch(Paths(config_home=tmp_path / "config", state_home=tmp_path / "state"),
                                                "little-meals", "toolkit-x") is asking
     assert calls == ["start-1"]
+
+
+# --- REQ-000000533: Toolkit items install together in one commit straight on the integration branch ---
+
+
+def test_items_of_several_sources_install_in_one_commit_on_dev_without_a_branch(registry, checkout):
+    job(registry, "add_source", repo="o/skills")
+    job(registry, "add_source", repo="pbakaus/impeccable")
+    before = int(_git(["rev-list", "--count", "HEAD"], checkout))
+    answer = job(registry, "install", "little-widget", confirm_code=True, selections=[
+        {"repo": "o/skills", "items": ["tdd", "handoff"]},
+        {"repo": "pbakaus/impeccable", "items": ["skill:diagnosing-bugs"]},
+        {"repo": "o/skills", "items": ["tdd"]},  # named twice: installed once
+    ])
+    assert answer["outcome"] == "succeeded", answer
+    assert answer["result"]["installed"] == ["skill:tdd", "skill:handoff", "skill:diagnosing-bugs"]
+    assert registry.started == [] and _git(["branch", "--show-current"], checkout) == "dev"
+    assert int(_git(["rev-list", "--count", "HEAD"], checkout)) == before + 1
+    assert _git(["log", "-1", "--format=%s"], checkout) == "impr (-1): toolkit-3-items"
+    committed = _git(["show", "--name-only", "--format=", "HEAD"], checkout).splitlines()
+    assert {".claude/skills/tdd/SKILL.md", ".claude/skills/handoff/SKILL.md", toolkit.LOCK_PATH} <= set(committed)
+    assert any(path.startswith(".claude/skills/diagnosing-bugs/") for path in committed)
+    assert set(json.loads((checkout / toolkit.LOCK_PATH).read_text())["sources"]) == {"o/skills", "pbakaus/impeccable"}
+    assert _git(["status", "--porcelain"], checkout) == ""
+
+
+def test_a_selection_with_code_is_refused_whole_without_confirm_code(registry, checkout):
+    job(registry, "add_source", repo="o/skills")
+    refused = job(registry, "install", "little-widget", selections=[{"repo": "o/skills", "items": ["tdd", "diagnosing-bugs"]}])
+    assert refused["outcome"] == "failed" and "hitl.sh" in refused["error"]
+    assert not (checkout / ".claude").exists() and _git(["log", "-1", "--format=%s"], checkout) == "first"
+
+
+def test_a_checkout_on_another_branch_is_left_alone_and_dev_gets_the_commit(registry, checkout):
+    job(registry, "add_source", repo="o/skills")
+    _git(["checkout", "-q", "-b", "feature/work"], checkout)
+    (checkout / "work.txt").write_text("unsaved work")
+    answer = job(registry, "install", "little-widget", selections=[{"repo": "o/skills", "items": ["tdd", "handoff"]}])
+    assert answer["outcome"] == "succeeded", answer
+    assert _git(["branch", "--show-current"], checkout) == "feature/work" and (checkout / "work.txt").read_text() == "unsaved work"
+    assert not (checkout / ".claude").exists()  # the feature branch gets it when it takes dev in
+    assert "skills/tdd/SKILL.md" in _git(["ls-tree", "-r", "--name-only", "dev", ".claude"], checkout)
+    assert _git(["log", "-1", "--format=%s", "dev"], checkout) == "impr (-1): toolkit-skills"
+    assert len(_git(["worktree", "list"], checkout).splitlines()) == 1  # the temporary worktree is gone
+    (installed,) = registry.get("/v1/toolkit/status/little-widget").json()["installed"]  # dev's lock, not the checkout's
+    assert [i["id"] for i in installed["items"]] == ["skill:handoff", "skill:tdd"]
+
+
+def test_uncommitted_claude_files_on_dev_refuse_the_install(registry, checkout):
+    job(registry, "add_source", repo="o/skills")
+    (checkout / ".claude").mkdir()
+    (checkout / ".claude/notes.md").write_text("mine")
+    refused = job(registry, "install", "little-widget", repo="o/skills", items=["tdd"])
+    assert refused["outcome"] == "failed" and "uncommitted changes under .claude/" in refused["error"]
+    assert (checkout / ".claude/notes.md").read_text() == "mine" and not (checkout / ".claude/skills").exists()
+
+
+def test_other_uncommitted_work_on_dev_is_kept_out_of_the_commit(registry, checkout):
+    job(registry, "add_source", repo="o/skills")
+    (checkout / "pyproject.toml").write_text("[project]\nname = 'changed'\n")
+    assert job(registry, "install", "little-widget", repo="o/skills", items=["tdd"])["outcome"] == "succeeded"
+    assert "pyproject.toml" not in _git(["show", "--name-only", "--format=", "HEAD"], checkout)
+    assert _git(["status", "--porcelain"], checkout) == "M pyproject.toml"
+
+
+def test_a_failing_install_writes_nothing_and_commits_nothing(registry, checkout, monkeypatch):
+    job(registry, "add_source", repo="o/skills")
+    real = toolkit.install
+
+    def second_fails(where, fetcher, source, items, **kw):
+        written = real(where, fetcher, source, items[:1], **kw)
+        raise toolkit.ToolkitError(f"broke after {written}")
+    monkeypatch.setattr(toolkit, "install", second_fails)
+    answer = job(registry, "install", "little-widget", repo="o/skills", items=["tdd", "handoff"])
+    assert answer["outcome"] == "failed" and "broke after" in answer["error"]
+    assert not (checkout / ".claude").exists() and _git(["status", "--porcelain"], checkout) == ""
+    assert _git(["log", "-1", "--format=%s"], checkout) == "first"
+
+
+def test_commit_labels_name_one_item_one_source_or_a_count():
+    assert toolkit.commit_label("install", ["skill:tdd"], ["o/skills"]) == "toolkit-tdd"
+    assert toolkit.commit_label("install", ["skill:tdd", "skill:handoff"], ["o/skills"]) == "toolkit-skills"
+    assert toolkit.commit_label("install", ["skill:tdd", "skill:x"], ["o/skills", "o/other"]) == "toolkit-2-items"
+    assert toolkit.commit_label("remove", [], ["o/Skills"]) == "toolkit-remove-skills"
+
+
+def test_toolkit_files_under_a_folder_the_project_ignores_are_committed(registry, checkout):
+    (checkout / ".gitignore").write_text("data/\n")
+    _git(["add", ".gitignore"], checkout)
+    _git(["commit", "-qm", "ignore data"], checkout)
+    registry.fetcher.repos["o/skills"]["s1"] = {**SKILL_REPO, "skills/engineering/tdd/scripts/data/index.json": "{}"}
+    job(registry, "add_source", repo="o/skills")
+    answer = job(registry, "install", "little-widget", repo="o/skills", items=["tdd"], confirm_code=True)
+    assert answer["outcome"] == "succeeded", answer
+    assert ".claude/skills/tdd/scripts/data/index.json" in _git(["ls-files"], checkout).splitlines()
+    assert _git(["status", "--porcelain"], checkout) == ""
+
+
+def test_a_commit_that_fails_fails_the_job_and_keeps_nothing(registry, checkout):
+    hook = checkout / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho refused by a hook >&2\nexit 1\n")
+    hook.chmod(0o755)
+    job(registry, "add_source", repo="o/skills")
+    answer = job(registry, "install", "little-widget", repo="o/skills", items=["tdd"])
+    assert answer["outcome"] == "failed" and "refused by a hook" in answer["error"]
+    assert not (checkout / ".claude").exists() and _git(["status", "--porcelain"], checkout) == ""

@@ -12,10 +12,11 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Callable
 
-from common.windows import git_command, is_windows_project
+from common.windows import from_git_path, git_command, git_path, is_windows_project
 from registry import assets_config, claude_templates as ct, gitops, toolkit
 
 PLATFORM_PROJECT = "little-workshop"
@@ -275,6 +276,87 @@ def commit_on_branch(checkout: Path, project_id: str, start_branch: Callable[[st
         return {"written": True, "branch": branch,
                 "detail": f"written on {branch}, not committed: {(commit.stderr or commit.stdout).strip()[-400:]}"}
     return {"written": True, "branch": branch, "detail": f"committed on {branch}; finish it with workshop_version_improvement_finish"}
+
+
+def integration_branch(checkout: Path) -> str:
+    """The project's integration branch as its `.lvx/config.json` names it (`dev` when it names none)."""
+    try:
+        return json.loads((checkout / ".lvx" / "config.json").read_text(encoding="utf-8")).get("integration_branch") or "dev"
+    except (OSError, ValueError, AttributeError):
+        return "dev"
+
+
+def branch_checkouts(checkout: Path) -> dict[str, Path]:
+    """Each local branch checked out somewhere (the checkout itself or one of its worktrees), and where."""
+    out: dict[str, Path] = {}
+    where: Path | None = None
+    for line in _git(["worktree", "list", "--porcelain"], checkout).stdout.splitlines():
+        if line.startswith("worktree "):
+            where = Path(from_git_path(line[len("worktree "):].strip()))
+        elif line.startswith("branch refs/heads/") and where is not None:
+            out[line[len("branch refs/heads/"):].strip()] = where
+    return out
+
+
+def current_branch(checkout: Path) -> str:
+    return _git(["branch", "--show-current"], checkout).stdout.strip()
+
+
+def read_on_branch(checkout: Path, branch: str, rel: str) -> str | None:
+    """A file's text as `branch` has it committed, or None."""
+    shown = _git(["show", f"{branch}:{rel}"], checkout)
+    return shown.stdout if shown.returncode == 0 else None
+
+
+def commit_on_integration(checkout: Path, message: str, write_files: Callable[[Path], list[str]], *,
+                          area: str = ".claude") -> dict:
+    """Commit straight onto the project's integration branch, without a branch start or finish (REQ-000000533):
+    `write_files(where)` changes the files of a checkout of that branch and returns the paths it changed, and only
+    those paths are committed, in one commit. Where the branch is checked out (the project's checkout or one of its
+    worktrees) the files are written there; otherwise in a temporary worktree of the branch, removed afterwards, so
+    a checkout on another branch is never switched or touched. Refused while `area` has uncommitted changes in that
+    checkout; when `write_files` raises, `area` is put back as it was and the error is the caller's.
+    Returns {"written", "branch", "commit", "detail"}."""
+    branch = integration_branch(checkout)
+    if _git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], checkout).returncode != 0:
+        return {"written": False, "detail": f"skipped: the project has no {branch} branch"}
+    where = branch_checkouts(checkout).get(branch)
+    temporary: Path | None = None
+    if where is None:
+        common = _git(["rev-parse", "--path-format=absolute", "--git-common-dir"], checkout).stdout.strip()
+        temporary = Path(from_git_path(common)) / "lws-worktrees" / f"{branch}-{uuid.uuid4().hex[:8]}"
+        temporary.parent.mkdir(parents=True, exist_ok=True)
+        added = _git(["worktree", "add", git_path(temporary, checkout), branch], checkout)
+        if added.returncode != 0:
+            return {"written": False, "detail": f"skipped: could not check out {branch}: {(added.stderr or added.stdout).strip()[-300:]}"}
+        where = temporary
+    try:
+        if _git(["status", "--porcelain", "--", area], where).stdout.strip():
+            return {"written": False, "detail": f"skipped: {branch} has uncommitted changes under {area}/ in {where}"}
+        try:
+            paths = write_files(where)
+        except BaseException:
+            _git(["checkout", "HEAD", "--", area], where)
+            _git(["clean", "-fdq", "--", area], where)
+            raise
+        if not paths:
+            return {"written": False, "branch": branch, "detail": "nothing to commit"}
+        # Forced: these are exactly the files the change wrote (the toolkit's lock records them), committed even
+        # where the project's .gitignore matches their folder (a skill's `scripts/data/` under a `data/` rule).
+        _git(["add", "-A", "-f", "--", *paths], where)
+        commit = _git(["commit", "-m", message, "--", *paths], where)
+        if commit.returncode != 0:
+            _git(["reset", "-q", "--", *paths], where)
+            _git(["checkout", "HEAD", "--", area], where)
+            _git(["clean", "-fdq", "--", area], where)
+            return {"written": False, "branch": branch,
+                    "detail": f"not committed on {branch}, nothing kept: {(commit.stderr or commit.stdout).strip()[-400:]}"}
+        sha = _git(["rev-parse", "HEAD"], where).stdout.strip()
+        note = "" if temporary is None else f" (the checkout is on another branch: {branch} has it, the checkout gets it when it takes {branch} in)"
+        return {"written": True, "branch": branch, "commit": sha, "detail": f"committed on {branch} as {sha[:12]}{note}"}
+    finally:
+        if temporary is not None:
+            _git(["worktree", "remove", "--force", git_path(temporary, checkout)], checkout)
 
 
 def sync_on_branch(checkout: Path, project_id: str, start_branch: Callable[[str, str], dict],

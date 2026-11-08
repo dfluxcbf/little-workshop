@@ -47,14 +47,14 @@ STEPS: dict[str, tuple[StepSpec, ...]] = {
     ),
     "registry.toolkit_install": (
         StepSpec("check", "Check the items, and that code they run was confirmed"),
-        StepSpec("write", "Install them on an improvement branch and commit"),
+        StepSpec("write", "Install them all in one commit on the integration branch"),
     ),
     "registry.toolkit_remove": (
-        StepSpec("write", "Remove the recorded files on an improvement branch and commit"),
+        StepSpec("write", "Remove the recorded files in one commit on the integration branch"),
     ),
     "registry.toolkit_update": (
         StepSpec("pin", "Re-pin the source at its newest commit and list the files changed"),
-        StepSpec("write", "Bring the project's items to the new pin on an improvement branch (with a project)"),
+        StepSpec("write", "Bring the project's items to the new pin in one commit on the integration branch (with a project)"),
     ),
     "registry.normalize_eol": (
         StepSpec("write", "Pin core.autocrlf=false, add the LF rule to .gitattributes and renormalize, on an improvement branch"),

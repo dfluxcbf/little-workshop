@@ -234,7 +234,10 @@ def _toolkit_add_source(paths: Paths, args: JSONDict) -> Any:
 
 
 def _toolkit_install(paths: Paths, args: JSONDict) -> Any:
-    return _toolkit_job(paths, "install", args["project_id"], {"repo": args["repo"], "items": args["items"],
+    selections = list(args.get("selections") or [])
+    if args.get("repo") and args.get("items"):
+        selections.insert(0, {"repo": args["repo"], "items": args["items"]})
+    return _toolkit_job(paths, "install", args["project_id"], {"selections": selections,
                                                               "confirm_code": args.get("confirm_code") is True})
 
 
@@ -1632,16 +1635,21 @@ TOOLS = TOOLS + (
              "(`seed: true`: the default sources). Installs nothing. Add one only when the USER asked for it.",
              _schema({"repo": _prop("string", "owner/repo."), "seed": _prop("boolean", "Register the default sources instead.")}),
              _toolkit_add_source),
-    ToolSpec("workshop_toolkit_install", "Install toolkit items into a project, committed on an improvement/toolkit-<item> "
-             "branch and recorded in .claude/toolkit.lock.json: a plugin with `claude plugin install --scope project`, a "
+    ToolSpec("workshop_toolkit_install", "Install toolkit items into a project, from one source (`repo`, `items`) or several "
+             "(`selections`), all in one commit straight on the project's integration branch (no branch to start or "
+             "finish), recorded in .claude/toolkit.lock.json: a plugin with `claude plugin install --scope project`, a "
              "skill, agent or command copied at the pinned commit. An item that runs code needs `confirm_code` after the "
              "USER read its files (workshop_toolkit_items lists them).",
              _schema({"project_id": _PROJECT_ID, "repo": _TOOLKIT_REPO,
                       "items": {"type": "array", "items": {"type": "string"}, "description": "Item ids (skill:tdd) or names."},
+                      "selections": {"type": "array", "description": "Items from several sources at once.",
+                                     "items": {"type": "object", "properties": {"repo": _TOOLKIT_REPO,
+                                               "items": {"type": "array", "items": {"type": "string"}}},
+                                               "required": ["repo", "items"]}},
                       "confirm_code": _prop("boolean", "The user confirmed the code the items run. Default false.")},
-                     ["project_id", "repo", "items"]), _toolkit_install),
+                     ["project_id"]), _toolkit_install),
     ToolSpec("workshop_toolkit_remove", "Remove a project's toolkit items exactly as its lock records them (no items: "
-             "everything from the source), committed on an improvement branch.",
+             "everything from the source), in one commit on its integration branch.",
              _schema({"project_id": _PROJECT_ID, "repo": _TOOLKIT_REPO,
                       "items": {"type": "array", "items": {"type": "string"}, "description": "Item ids or names. Default: all."}},
                      ["project_id", "repo"]), _toolkit_remove),

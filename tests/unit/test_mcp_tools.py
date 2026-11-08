@@ -1241,7 +1241,7 @@ def test_the_toolkit_tools_read_the_registry_and_start_its_jobs(paths, monkeypat
     tools_mod.TOOLS_BY_NAME["workshop_toolkit_update"].handler(paths, {"project_id": "p1", "repo": "o/r", "confirm_code": True})
     assert [(c["type"], c["project_id"], c["params"]) for c in fake_create_job] == [
         ("registry.toolkit_add_source", None, {"repo": None, "seed": True}),
-        ("registry.toolkit_install", "p1", {"repo": "o/r", "items": ["a"], "confirm_code": False}),
+        ("registry.toolkit_install", "p1", {"selections": [{"repo": "o/r", "items": ["a"]}], "confirm_code": False}),
         ("registry.toolkit_remove", "p1", {"repo": "o/r", "items": []}),
         ("registry.toolkit_update", "p1", {"repo": "o/r", "confirm_code": True}),
     ]

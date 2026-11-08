@@ -3,9 +3,9 @@
 {% block content %}
 <h1>Toolkit</h1>
 <p class="lede">Public Claude Code skills, agents, commands and plugins, from GitHub repositories pinned to a commit. Pick a
-  project to install into: each install or removal is committed on an <code>improvement/toolkit-…</code> branch of the
-  project and recorded in its <code>.claude/toolkit.lock.json</code>. Nothing is installed on its own; an item that runs code
-  shows its files and asks first.</p>
+  project, tick the items you want (from any source) and install them together: one commit straight on the project's
+  integration branch, recorded in its <code>.claude/toolkit.lock.json</code>, with no branch to finish. Nothing is installed
+  on its own; an item that runs code shows its files and asks first.</p>
 {% if error %}<div class="card fail">{{ error }}</div>{% endif %}
 
 <section class="card toolkit-picker">
@@ -19,24 +19,33 @@
   </form>
 </section>
 
+{% if project %}
+<form method="post" action="/toolkit/install" id="tk-install">
+  <input type="hidden" name="project" value="{{ project }}"><input type="hidden" name="confirm_code" value="" id="tk-confirm-code">
+</form>
+<div class="card toolkit-selection" id="tk-selection" hidden>
+  <span id="tk-count">0 items selected</span>
+  <button type="submit" form="tk-install" class="btn primary" id="tk-install-button">Install selected into {{ project }}</button>
+</div>
+{% endif %}
+{% macro pick(repo, item, checked=False) -%}
+<input type="checkbox" class="tk-pick" form="tk-install" name="pick" value="{{ repo }} {{ item.id }}" aria-label="Select {{ item.name }}"
+  data-name="{{ item.name }}"{% if item.runs_code %} data-code="{{ item.runs_code | join(', ') }}"{% endif %}{{ ' checked' if checked }}>
+{%- endmacro %}
+
 {% if project and status %}
 <div class="toolkit-columns">
   <section class="card toolkit-panel">
     <h2>Recommended for {{ project }}</h2>
-    <p class="muted">From the project's kind ({{ status.kinds | join(', ') or 'none' }}) and its Claude usage findings.</p>
+    <p class="muted">From the project's kind ({{ status.kinds | join(', ') or 'none' }}) and its Claude usage findings.
+      {% if status.recommended %}<button type="button" class="btn" id="tk-pick-recommended">Select all recommended</button>{% endif %}</p>
     <div class="toolkit-stack">
     {% for r in status.recommended %}
       <div class="polcard toolkit-item">
-        <span class="polcard-head"><span class="polcard-topic">{{ r.item.name }}</span>
+        <span class="polcard-head"><label class="polcard-topic">{{ pick(r.repo, r.item) }} {{ r.item.name }}</label>
           {% if r.item.runs_code %}<span class="pill warn" title="{{ r.item.runs_code | join('\n') }}">runs code</span>{% endif %}</span>
         {% if r.item.description %}<span class="polcard-ears">{{ r.item.description }}</span>{% endif %}
         <span class="polcard-meta"><span class="chip">{{ r.repo }}</span><span class="chip gate">{{ r.why }}</span></span>
-        <form method="post" action="/toolkit/install" class="gate-actions">
-          <input type="hidden" name="repo" value="{{ r.repo }}"><input type="hidden" name="project" value="{{ project }}">
-          <input type="hidden" name="items" value="{{ r.item.id }}">
-          {% if r.item.runs_code %}<input type="hidden" name="confirm_code" value="1">{% endif %}
-          <button type="submit" class="btn primary" data-busy="Installing…"{% if r.item.runs_code %} data-confirm="{{ r.item.name }} runs code: {{ r.item.runs_code | join(', ') }}. Install it into {{ project }}?"{% endif %}>Install</button>
-        </form>
       </div>
     {% else %}
       <p class="muted">Nothing to recommend{% if not sources %}: add the default sources below first{% endif %}.</p>
@@ -46,6 +55,7 @@
 
   <section class="card toolkit-panel">
     <h2>Installed in {{ project }}</h2>
+    <p class="muted">As its <code>{{ status.branch or 'dev' }}</code> branch has them.</p>
     <div class="toolkit-stack">
     {% for s in status.installed %}
       <div class="polcard toolkit-item">
@@ -58,14 +68,14 @@
             <form method="post" action="/toolkit/remove" class="inline">
               <input type="hidden" name="repo" value="{{ s.repo }}"><input type="hidden" name="project" value="{{ project }}">
               <input type="hidden" name="items" value="{{ i.id }}">
-              <button type="submit" class="danger" data-busy="Removing…" data-confirm="Remove {{ i.id }} from {{ project }}? Exactly the files its lock records are deleted, on a branch.">Remove</button>
+              <button type="submit" class="danger" data-busy="Removing…" data-confirm="Remove {{ i.id }} from {{ project }}? Exactly the files its lock records are deleted, in one commit on {{ status.branch or 'dev' }}.">Remove</button>
             </form></li>
           {% endfor %}
         </ul>
         <form method="post" action="/toolkit/update" class="gate-actions">
           <input type="hidden" name="repo" value="{{ s.repo }}"><input type="hidden" name="project" value="{{ project }}">
           <input type="hidden" name="confirm_code" value="1">
-          <button type="submit" class="btn" data-busy="Updating…" data-confirm="Re-pin {{ s.repo }} to its newest commit and update {{ project }}'s items from it? Changed scripts and hooks are installed too: read the diff the Job lists before finishing the branch.">Update</button>
+          <button type="submit" class="btn" data-busy="Updating…" data-confirm="Re-pin {{ s.repo }} to its newest commit and update {{ project }}'s items from it, in one commit on {{ status.branch or 'dev' }}? Changed scripts and hooks are installed too.">Update</button>
         </form>
       </div>
     {% else %}
@@ -91,17 +101,10 @@
       <summary>Items</summary>
       {% for i in s['items'] %}
       <div class="toolkit-row">
+        {% if project %}{{ pick(s.repo, i) }}{% endif %}
         <span class="chip">{{ i.kind }}</span>
         <span class="toolkit-name"><strong>{{ i.name }}</strong>{% if i.description %}<span class="muted"> — {{ i.description | truncate(160) }}</span>{% endif %}</span>
         {% if i.runs_code %}<span class="pill warn" title="{{ i.runs_code | join('\n') }}">runs code ({{ i.runs_code | length }})</span>{% endif %}
-        {% if project %}
-        <form method="post" action="/toolkit/install" class="inline">
-          <input type="hidden" name="repo" value="{{ s.repo }}"><input type="hidden" name="project" value="{{ project }}">
-          <input type="hidden" name="items" value="{{ i.id }}">
-          {% if i.runs_code %}<input type="hidden" name="confirm_code" value="1">{% endif %}
-          <button type="submit" data-busy="Installing…"{% if i.runs_code %} data-confirm="{{ i.name }} runs code: {{ i.runs_code | join(', ') | truncate(600) }}. Install it into {{ project }}?"{% endif %}>Install</button>
-        </form>
-        {% endif %}
       </div>
       {% else %}<p class="muted">No item found at this commit.</p>{% endfor %}
     </details>
@@ -127,4 +130,44 @@
   </form>
   <p class="muted">Suggested sources, with their licences and the projects they fit: <code>docs/toolkit_sources.md</code>.</p>
 </section>
+{% if project %}
+<script>
+(function () {
+  // Multi-select: every ticked item, from any source, goes in one install (one commit on the integration branch).
+  var form = document.getElementById('tk-install'), bar = document.getElementById('tk-selection');
+  var count = document.getElementById('tk-count'), confirmCode = document.getElementById('tk-confirm-code');
+  var picks = function () { return Array.prototype.slice.call(document.querySelectorAll('.tk-pick')); };
+  var sync = function (changed) {
+    if (changed) picks().forEach(function (b) { if (b.value === changed.value) b.checked = changed.checked; });  // one item, shown twice
+    var chosen = {}; picks().forEach(function (b) { if (b.checked) chosen[b.value] = b; });
+    var n = Object.keys(chosen).length;
+    count.textContent = n + (n === 1 ? ' item selected' : ' items selected');
+    bar.hidden = n === 0;
+    return chosen;
+  };
+  document.addEventListener('change', function (e) { if (e.target.classList && e.target.classList.contains('tk-pick')) sync(e.target); });
+  var all = document.getElementById('tk-pick-recommended');
+  if (all) all.addEventListener('click', function () {
+    document.querySelectorAll('.toolkit-panel .tk-pick').forEach(function (b) { b.checked = true; sync(b); });
+  });
+  form.addEventListener('submit', function (e) {
+    var chosen = sync(), code = Object.keys(chosen).filter(function (k) { return chosen[k].dataset.code; });
+    // A box shown twice would be sent twice: keep only the first of each.
+    var seen = {}; picks().forEach(function (b) { b.disabled = b.checked && seen[b.value]; if (b.checked) seen[b.value] = true; });
+    confirmCode.value = '';
+    if (code.length) {
+      var lines = code.map(function (k) { return chosen[k].dataset.name + ': ' + chosen[k].dataset.code; }).join('\n');
+      if (!window.confirm('These items run code:\n' + lines + '\n\nInstall them into {{ project }}?')) { e.preventDefault(); picks().forEach(function (b) { b.disabled = false; }); return; }
+      confirmCode.value = '1';
+    }
+    var button = document.getElementById('tk-install-button');
+    // Its own flag, not base.html's sent-flag: that handler runs after this one and cancels a form already flagged.
+    if (form.dataset.installing) { e.preventDefault(); return; }
+    form.dataset.installing = '1'; button.disabled = true; button.classList.add('is-busy'); button.textContent = 'Installing…';
+  });
+  window.addEventListener('pageshow', function (e) { if (e.persisted) location.reload(); });
+  sync();
+})();
+</script>
+{% endif %}
 {% endblock %}

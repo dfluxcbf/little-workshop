@@ -155,12 +155,19 @@ def discover(fetcher: Fetcher, repo: str, sha: str) -> list[dict]:
 # -- the lock file ---------------------------------------------------------------------------------
 
 
+def parse_lock(text: str | None) -> dict:
+    try:
+        lock = json.loads(text or "")
+    except ValueError:
+        return {"sources": {}}
+    return lock if isinstance(lock, dict) and isinstance(lock.get("sources"), dict) else {"sources": {}}
+
+
 def read_lock(checkout: Path) -> dict:
     try:
-        lock = json.loads((checkout / LOCK_PATH).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return parse_lock((checkout / LOCK_PATH).read_text(encoding="utf-8"))
+    except OSError:
         return {"sources": {}}
-    return lock if isinstance(lock.get("sources"), dict) else {"sources": {}}
 
 
 def write_lock(checkout: Path, lock: dict) -> None:
@@ -307,12 +314,14 @@ def refresh(checkout: Path, fetcher: Fetcher, source: dict, *, confirm_code: boo
     return {"changed": plan["changed"], "paths": sorted(set(paths))}
 
 
-def status(checkout: Path) -> list[dict]:
-    """What the lock records, each item with the recorded files missing from the checkout."""
+def status(checkout: Path, lock: dict | None = None) -> list[dict]:
+    """What the lock records (the checkout's own, or `lock`: the integration branch's when the checkout is on
+    another branch), each item with the recorded files missing from the checkout (none checked for `lock`)."""
+    missing = (lambda item: []) if lock is not None else (lambda item: [f for f in item.get("files", []) if not (checkout / f).exists()])
     return [{"repo": repo, "sha": entry.get("sha"), "licence": entry.get("licence"),
-             "items": [{"id": item_id, **item, "missing": [f for f in item.get("files", []) if not (checkout / f).exists()]}
+             "items": [{"id": item_id, **item, "missing": missing(item)}
                        for item_id, item in sorted(entry.get("items", {}).items())]}
-            for repo, entry in sorted(read_lock(checkout)["sources"].items())]
+            for repo, entry in sorted((lock if lock is not None else read_lock(checkout))["sources"].items())]
 
 
 # -- recommendations --------------------------------------------------------------------------------
@@ -346,8 +355,14 @@ def recommend(kinds: set[str], findings: list[dict], installed: list[dict], sour
     return out
 
 
-def branch_name(repo: str, names: list[str]) -> str:
-    """The improvement branch an install or removal is committed on: `toolkit-<item>` or `toolkit-<repo>`."""
-    label = names[0].split(":", 1)[-1] if len(names) == 1 else repo.split("/", 1)[1]
-    return "toolkit-" + re.sub(r"[^a-z0-9-]+", "-", label.lower()).strip("-")
-
+def commit_label(action: str, names: list[str], repos: list[str]) -> str:
+    """The commit subject's label: `toolkit-<item>` for one item, `toolkit-<repo>` for one source, else
+    `toolkit-<n>-items`, with `-remove`/`-update` after `toolkit` for those actions."""
+    if len(names) == 1:
+        label = names[0].split(":", 1)[-1]
+    elif len(repos) == 1:
+        label = repos[0].split("/", 1)[1]
+    else:
+        label = f"{len(names)}-items"
+    prefix = "toolkit-" if action == "install" else f"toolkit-{action}-"
+    return prefix + re.sub(r"[^a-z0-9-]+", "-", label.lower()).strip("-")

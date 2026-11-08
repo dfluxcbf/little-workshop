@@ -127,7 +127,10 @@ def cmd_toolkit_seed(args: argparse.Namespace) -> int:
 
 
 def cmd_toolkit_install(args: argparse.Namespace) -> int:
-    return _toolkit_job("install", args.project_id, {"repo": args.repo, "items": args.items, "confirm_code": args.confirm_code})
+    selections = [{"repo": args.repo, "items": args.items}]
+    for repo, *items in args.also or []:
+        selections.append({"repo": repo, "items": items})
+    return _toolkit_job("install", args.project_id, {"selections": selections, "confirm_code": args.confirm_code})
 
 
 def cmd_toolkit_remove(args: argparse.Namespace) -> int:
@@ -198,7 +201,7 @@ def register(subparsers) -> None:
     tk_add.add_argument("repo", help="owner/repo")
     tk_add.set_defaults(func=cmd_toolkit_add_source)
     toolkit_sub.add_parser("seed", help="Register the default sources not registered yet").set_defaults(func=cmd_toolkit_seed)
-    for name, func, text in (("install", cmd_toolkit_install, "Install items into the project, on an improvement branch"),
+    for name, func, text in (("install", cmd_toolkit_install, "Install items into the project, in one commit on its integration branch"),
                              ("remove", cmd_toolkit_remove, "Remove items (none named: all from the source) as the lock records them"),
                              ("update", cmd_toolkit_update, "Re-pin the source and bring the project's items to it")):
         tk = toolkit_sub.add_parser(name, help=text)
@@ -206,6 +209,9 @@ def register(subparsers) -> None:
         tk.add_argument("repo", help="owner/repo")
         if name != "update":
             tk.add_argument("items", nargs="*" if name == "remove" else "+", help="Item ids (skill:tdd) or names")
+        if name == "install":
+            tk.add_argument("--also", nargs="+", action="append", metavar="REPO_THEN_ITEMS",
+                            help="Items of another source in the same commit: owner/repo item [item ...] (repeatable)")
         if name != "remove":
             tk.add_argument("--confirm-code", action="store_true", help="You read the code the items run (hooks, scripts)")
         tk.set_defaults(func=func)
