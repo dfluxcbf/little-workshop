@@ -364,7 +364,8 @@ project it uses Windows' own tools where they matter:
   `lws` as `cmd.exe /c lws.cmd`.
 - **Shims** (REQ-000000463, REQ-000000517): `lws windows install-shim` writes `lws.cmd` and its sh twin `lws`
   (what a Git for Windows hook finds), both forwarding `GIT_INDEX_FILE`, `GIT_DIR` and `GIT_WORK_TREE` through
-  `WSLENV`. Without `lws`, the commit-msg hook refuses a commit under Git for Windows. `lws windows doctor`
+  `WSLENV`; WSLENV passes one unset on Windows as empty, and `lws` drops the empty ones (REQ-000000531).
+  Without `lws`, the commit-msg hook refuses a commit under Git for Windows. `lws windows doctor`
   checks the shims, a Windows Python, each project's `core.autocrlf` and mirrored networking (REQ-000000514).
 
 (2026-10-28.) A Windows-hosted project's two long-lived processes — its Claude Remote Control session and its

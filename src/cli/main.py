@@ -71,6 +71,9 @@ def _windows_argv(parser: argparse.ArgumentParser, argv: list[str], cwd: str, pr
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     if os.environ.get("LWS_FROM_WINDOWS"):
+        from common import windows
+
+        windows.drop_empty_git_env(os.environ)
         argv = _windows_argv(parser, sys.argv[1:] if argv is None else argv, os.getcwd(),
                              lambda: client.list_projects(Paths.from_env())["projects"])
     args = parser.parse_args(argv)

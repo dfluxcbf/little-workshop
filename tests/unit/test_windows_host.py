@@ -565,3 +565,20 @@ def test_process_calls_resolve_their_windows_programs(monkeypatch):
     windows_process.stop(runner, 7)
     windows_process.command_lines(runner, "Unity.exe")
     assert [c[0] for c in runner.calls] == ["/abs/tasklist.exe", "/abs/taskkill.exe", "/abs/powershell.exe"]
+
+
+# --- REQ-000000531: lws from the Windows shim ignores empty git variables ---
+def test_empty_git_variables_from_the_shim_are_dropped_and_set_ones_kept():
+    environ = {"GIT_DIR": "", "GIT_WORK_TREE": "", "GIT_INDEX_FILE": "/mnt/c/p/.git/index", "OTHER": ""}
+    windows.drop_empty_git_env(environ)
+    assert environ == {"GIT_INDEX_FILE": "/mnt/c/p/.git/index", "OTHER": ""}
+
+
+def test_lws_started_from_windows_finds_the_checkout_despite_empty_git_variables(tmp_path, monkeypatch, capsys):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        monkeypatch.setenv(name, "")
+    monkeypatch.setenv("LWS_FROM_WINDOWS", "1")
+    assert cli_main.main(["policy", "scan-secrets"]) == 0
+    assert "not inside a git checkout" not in capsys.readouterr().err

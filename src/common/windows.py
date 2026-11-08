@@ -197,6 +197,16 @@ def project_for_cwd(cwd: str | Path, projects: list[dict]) -> str | None:
 # The environment `lws` reads from the Windows side. WSLENV carries a variable across `wsl.exe` (`/p`
 # translates a path list); GIT_* let `lws` run inside a Windows Git hook against the same repository.
 SHIM_WSLENV = f"{FROM_WINDOWS_ENV}:GIT_DIR/p:GIT_WORK_TREE/p:GIT_INDEX_FILE/p"
+SHIM_GIT_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+def drop_empty_git_env(environ: dict) -> None:
+    """WSLENV passes every variable it lists, so one unset on Windows reaches WSL empty; git takes an empty
+    GIT_DIR as a path ("not a git repository: ''"). `lws` started by the shim drops the empty ones
+    (REQ-000000531)."""
+    for name in SHIM_GIT_ENV:
+        if name in environ and not environ[name]:
+            del environ[name]
 
 
 def lws_cmd(distro: str, lws_path: str) -> str:
