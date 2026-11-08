@@ -279,11 +279,15 @@ REQ-000000502 to REQ-000000506). Suggested sources and their licences: [../toolk
   UI, a server manifest or `tests/ui/`: impeccable; Unity: none) and its open usage findings (`FINDING_ITEMS`:
   long sessions → handoff, files re-read in many sessions → writing-for-agents). claude-reflect is a source only:
   it is installed at user scope already, and writes learned rules to `.claude/rules/learned.md`.
-- **Surfaces**: Dashboard System → Toolkit (`/toolkit`: sources with licence and items (MCP servers with an `mcp`
-  chip), an "Add an MCP server" form (repository, name, command, environment, version, licence), a "runs code" badge, a
-  project picker, a checkbox per item (recommended ones and every source's, "Select all recommended") and one
-  "Install selected" for the whole selection, which asks once about the code the selection runs, and the
-  installed items with remove and update); `lws toolkit install --also <repo> <item>...` adds another source's
+- **Surfaces**: Dashboard System → Toolkit (`/toolkit`, REQ-000000537): a project picker, the project's installed,
+  available and source counts, a text and kind filter over both lists, and three tabs. **Available** lists only
+  what the project has not installed, one folded group per source with a box that selects everything the source
+  still offers (a plugin bundling the source's own skills is left out; tick it by hand), recommendations only while
+  some are not installed, and one sticky "Install selected" for the whole selection, which asks once about the
+  items that run code (REQ-000000533). **Installed** lists the project's items per source (folded), each with ×
+  (remove), and per source Update and Remove all; a source whose pin moved past the project's says "update
+  available". **Sources** holds the registered sources (licence, pin, re-pin) and the "Add a source" and "Add an
+  MCP server" forms (repository, name, command, environment, version, licence). `lws toolkit install --also <repo> <item>...` adds another source's
   items to the same install; `lws toolkit add-source <repo> --mcp NAME='COMMAND ARGS' --version --licence` registers
   MCP servers; `lws toolkit
   sources|list|status|add-source|seed|install|remove|update`; MCP `workshop_toolkit_sources`, `_items`,

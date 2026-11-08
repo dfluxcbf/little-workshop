@@ -36,10 +36,10 @@ def test_the_toolkit_page_shows_sources_items_code_and_a_projects_toolkit(test_c
     monkeypatch.setattr(client, "toolkit_sources", lambda paths: [SOURCE])
     monkeypatch.setattr(client, "toolkit_status", lambda paths, project: status)
     page = test_client.get("/toolkit", params={"project": "little-meals"}).text
-    assert "mattpocock/skills" in page and "MIT" in page and "at 4ae2317ddb22" in page and "Test first." in page
-    assert "runs code (1)" in page and "hitl.sh" in page and 'name="confirm_code" value="1"' in page
+    assert "mattpocock/skills" in page and "MIT" in page and "4ae2317ddb22" in page and "Bugs." in page
+    assert 'class="tk-code"' in page and "hitl.sh" in page and 'name="confirm_code" value="1"' in page
     assert "Recommended for little-meals" in page and "default for code projects" in page
-    assert "Installed in little-meals" in page and "/toolkit/remove" in page and "/toolkit/update" in page
+    assert 'data-panel="installed"' in page and "/toolkit/remove" in page and "/toolkit/update" in page
 
 
 def test_without_sources_the_page_offers_the_defaults(test_client, monkeypatch):
@@ -89,7 +89,8 @@ def test_the_page_offers_a_checkbox_per_item_and_one_install_for_the_selection(t
     monkeypatch.setattr(client, "toolkit_status", lambda paths, project: status)
     page = test_client.get("/toolkit", params={"project": "little-meals"}).text
     assert page.count('name="pick" value="mattpocock/skills skill:tdd"') == 1
-    assert page.count('name="pick" value="mattpocock/skills skill:diagnosing-bugs"') == 2  # recommended and in its source
+    assert page.count('name="pick" value="mattpocock/skills skill:diagnosing-bugs"') == 1  # once, in its source
+    assert 'data-value="mattpocock/skills skill:diagnosing-bugs"' in page  # the recommendation selects that box
     assert 'data-code="skills/engineering/diagnosing-bugs/scripts/hitl.sh"' in page
     assert 'id="tk-install"' in page and "Install selected into little-meals" in page and "Select all recommended" in page
     assert "improvement/toolkit" not in page
@@ -139,7 +140,7 @@ def test_the_page_lists_mcp_servers_and_offers_the_add_form(test_client, monkeyp
     monkeypatch.setattr(client, "toolkit_status", lambda paths, project: {"project_id": "little-meals", "kinds": ["code"],
                                                                           "branch": "dev", "installed": [], "recommended": []})
     page = test_client.get("/toolkit", params={"project": "little-meals"}).text
-    assert 'value="projects.blender.org/lab/blender_mcp mcp:blender-lab"' in page and 'class="chip kind-mcp"' in page
+    assert 'value="projects.blender.org/lab/blender_mcp mcp:blender-lab"' in page and 'class="tk-kind tk-kind-mcp"' in page
     assert 'data-code="MCP server runs: uvx blender-mcp"' in page
     assert "pinned at v1.0.3" in page and "Re-pin to newest" not in page
     assert 'action="/toolkit/add_mcp"' in page and "Add an MCP server" in page
@@ -163,3 +164,47 @@ def test_adding_an_mcp_server_starts_one_add_source_job(test_client, monkeypatch
         "blender": {"command": "uvx", "args": ["mcp-for-blender", "--flag", "a b"], "env": {"DISABLE_TELEMETRY": "true"}}}})
     refused = test_client.post("/toolkit/add_mcp", data={"repo": "o/r", "mcp_name": "x", "mcp_command": ""}, follow_redirects=False)
     assert "Give the repository" in unquote(refused.headers["location"]) and len(jobs) == 1
+
+
+# --- REQ-000000537: The Toolkit page lists only what is left to install, folds each source and selects whole sources ---
+
+TWO = {"repo": "o/two", "sha": "b" * 40, "licence": "MIT", "updated_at": "2026-11-07T10:00:00+00:00", "default_branch": "main",
+       "items": [{"id": "skill:a", "kind": "skill", "name": "a", "description": "A.", "runs_code": []},
+                 {"id": "plugin:two", "kind": "plugin", "name": "two", "description": "Bundles a.", "runs_code": []}]}
+
+
+def _page(test_client, monkeypatch, installed, recommended=()):
+    status = {"project_id": "little-meals", "kinds": ["code"], "branch": "dev", "installed": installed, "recommended": list(recommended)}
+    monkeypatch.setattr(client, "toolkit_sources", lambda paths: [SOURCE, TWO])
+    monkeypatch.setattr(client, "toolkit_status", lambda paths, project: status)
+    return test_client.get("/toolkit", params={"project": "little-meals"}).text
+
+
+def test_installed_items_leave_the_available_list_and_fully_installed_sources_fold_away(test_client, monkeypatch):
+    installed = [{"repo": "mattpocock/skills", "sha": SOURCE["sha"], "licence": "MIT",
+                  "items": [{"id": "skill:tdd", "kind": "skill", "files": [], "missing": []},
+                            {"id": "skill:diagnosing-bugs", "kind": "skill", "files": [], "missing": []}]}]
+    page = _page(test_client, monkeypatch, installed)
+    assert 'name="pick" value="mattpocock/skills skill:tdd"' not in page and 'value="o/two skill:a"' in page
+    assert "Everything installed from:" in page and "<strong>2</strong> installed" in page and "<strong>2</strong> available" in page
+    assert "Recommended for" not in page  # nothing left to recommend: no panel
+    available = page[page.index('data-panel="available"'):page.index('data-panel="installed"')]
+    assert 'data-repo="mattpocock/skills"' not in available and 'data-repo="o/two"' in available
+    installed_panel = page[page.index('data-panel="installed"'):page.index('data-panel="sources"')]
+    assert installed_panel.count('class="tk-item tk-item-installed"') == 2 and "Test first." in installed_panel  # the registered description
+    assert "Remove all" in installed_panel
+
+
+def test_each_source_can_be_selected_whole_and_the_page_filters_by_text_and_kind(test_client, monkeypatch):
+    page = _page(test_client, monkeypatch, [])
+    assert page.count('class="tk-group-pick"') == 2 and 'id="tk-search"' in page
+    assert all(f'data-kind="{k}"' in page for k in ("all", "skill", "agent", "command", "plugin", "mcp"))
+    assert 'data-tab="available"' in page and 'data-tab="installed"' in page and 'data-tab="sources"' in page
+    script = page[page.index("tk-group-pick')"):]
+    assert "bundles" in script  # a source's own plugin is left out of a whole-source selection
+
+
+def test_a_source_behind_its_pin_says_an_update_is_available(test_client, monkeypatch):
+    installed = [{"repo": "o/two", "sha": "a" * 40, "licence": "MIT", "items": [{"id": "skill:a", "kind": "skill", "files": [], "missing": []}]}]
+    page = _page(test_client, monkeypatch, installed)
+    assert "update available" in page and "with updates" in page

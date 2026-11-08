@@ -1,187 +1,311 @@
 {% extends "base.html" %}
 {% block title %}Toolkit — little-workshop{% endblock %}
 {% block content %}
-<h1>Toolkit</h1>
-<p class="lede">Public Claude Code skills, agents, commands and plugins, from GitHub repositories pinned to a commit. Pick a
-  project, tick the items you want (from any source) and install them together: one commit straight on the project's
-  integration branch, recorded in its <code>.claude/toolkit.lock.json</code>, with no branch to finish. Nothing is installed
-  on its own; an item that runs code shows its files and asks first.</p>
-{% if error %}<div class="card fail">{{ error }}</div>{% endif %}
-
-<section class="card toolkit-picker">
-  <form method="get" action="/toolkit" class="row">
-    <label for="tk-project">Project</label>
-    <select name="project" id="tk-project">
+{# REQ-000000537: one project at a time; Available (only what is not installed), Installed (per source, folded),
+   Sources (registering and re-pinning). One selection, from any source, installs as one commit on the integration
+   branch (REQ-000000533). #}
+<header class="tk-head">
+  <h1>Toolkit</h1>
+  <form method="get" action="/toolkit" class="tk-project">
+    <label for="tk-project" class="tk-project-label">Project</label>
+    <select name="project" id="tk-project" onchange="this.form.submit()">
       <option value="">— choose a project —</option>
       {% for name in projects %}<option value="{{ name }}"{{ ' selected' if name == project }}>{{ name }}</option>{% endfor %}
     </select>
-    <button type="submit" class="btn">Show</button>
+    <noscript><button type="submit" class="btn">Show</button></noscript>
   </form>
-</section>
+</header>
+<p class="lede tk-lede">Public Claude Code skills, agents, commands, plugins and MCP servers from repositories pinned to a commit.
+  Tick what you want from any source and install it together: one commit on the project's integration branch, recorded in
+  its <code>.claude/toolkit.lock.json</code>. Items that run code ask first.</p>
+{% if error %}<div class="card fail">{{ error }}</div>{% endif %}
 
-{% if project %}
-<form method="post" action="/toolkit/install" id="tk-install">
-  <input type="hidden" name="project" value="{{ project }}"><input type="hidden" name="confirm_code" value="" id="tk-confirm-code">
-</form>
-<div class="card toolkit-selection" id="tk-selection" hidden>
-  <span id="tk-count">0 items selected</span>
-  <button type="submit" form="tk-install" class="btn primary" id="tk-install-button">Install selected into {{ project }}</button>
-</div>
-{% endif %}
-{% macro pick(repo, item, checked=False) -%}
-<input type="checkbox" class="tk-pick" form="tk-install" name="pick" value="{{ repo }} {{ item.id }}" aria-label="Select {{ item.name }}"
-  data-name="{{ item.name }}"{% if item.runs_code %} data-code="{{ item.runs_code | join(', ') }}"{% endif %}{{ ' checked' if checked }}>
-{%- endmacro %}
+{% macro kind_chip(kind) -%}<span class="tk-kind tk-kind-{{ kind }}">{{ kind }}</span>{%- endmacro %}
 
-{% if project and status %}
-<div class="toolkit-columns">
-  <section class="card toolkit-panel">
-    <h2>Recommended for {{ project }}</h2>
-    <p class="muted">From the project's kind ({{ status.kinds | join(', ') or 'none' }}) and its Claude usage findings.
-      {% if status.recommended %}<button type="button" class="btn" id="tk-pick-recommended">Select all recommended</button>{% endif %}</p>
-    <div class="toolkit-stack">
-    {% for r in status.recommended %}
-      <div class="polcard toolkit-item">
-        <span class="polcard-head"><label class="polcard-topic">{{ pick(r.repo, r.item) }} {{ r.item.name }}</label>
-          {% if r.item.runs_code %}<span class="pill warn" title="{{ r.item.runs_code | join('\n') }}">runs code</span>{% endif %}</span>
-        {% if r.item.description %}<span class="polcard-ears">{{ r.item.description }}</span>{% endif %}
-        <span class="polcard-meta"><span class="chip">{{ r.repo }}</span><span class="chip gate">{{ r.why }}</span></span>
-      </div>
-    {% else %}
-      <p class="muted">Nothing to recommend{% if not sources %}: add the default sources below first{% endif %}.</p>
-    {% endfor %}
-    </div>
-  </section>
-
-  <section class="card toolkit-panel">
-    <h2>Installed in {{ project }}</h2>
-    <p class="muted">As its <code>{{ status.branch or 'dev' }}</code> branch has them.</p>
-    <div class="toolkit-stack">
-    {% for s in status.installed %}
-      <div class="polcard toolkit-item">
-        <span class="polcard-head"><span class="polcard-topic">{{ s.repo }}</span><span class="chip">{{ s.licence }}</span></span>
-        <span class="polcard-meta"><span class="chip">at {{ (s.sha or '')[:12] }}</span></span>
-        <ul class="toolkit-installed">
-          {% for i in s['items'] %}
-          <li><code>{{ i.id }}</code>{% if i.plugin %} <span class="chip">plugin {{ i.plugin }}</span>{% endif %}
-            {% if i.missing %}<span class="pill fail" title="{{ i.missing | join('\n') }}">{{ i.missing | length }} file(s) missing</span>{% endif %}
-            <form method="post" action="/toolkit/remove" class="inline">
-              <input type="hidden" name="repo" value="{{ s.repo }}"><input type="hidden" name="project" value="{{ project }}">
-              <input type="hidden" name="items" value="{{ i.id }}">
-              <button type="submit" class="danger" data-busy="Removing…" data-confirm="Remove {{ i.id }} from {{ project }}? Exactly the files its lock records are deleted, in one commit on {{ status.branch or 'dev' }}.">Remove</button>
-            </form></li>
-          {% endfor %}
-        </ul>
-        <form method="post" action="/toolkit/update" class="gate-actions">
-          <input type="hidden" name="repo" value="{{ s.repo }}"><input type="hidden" name="project" value="{{ project }}">
-          <input type="hidden" name="confirm_code" value="1">
-          <button type="submit" class="btn" data-busy="Updating…" data-confirm="Re-pin {{ s.repo }} to its newest commit and update {{ project }}'s items from it, in one commit on {{ status.branch or 'dev' }}? Changed scripts and hooks are installed too.">Update</button>
-        </form>
-      </div>
-    {% else %}
-      <p class="muted">Nothing from the toolkit is installed in {{ project }}.</p>
-    {% endfor %}
-    </div>
-  </section>
-</div>
-{% elif project %}
+{% if project and not view %}
 <div class="card fail">The toolkit of {{ project }} could not be read (is its checkout there?).</div>
 {% endif %}
 
-<h2 class="section-label">Sources</h2>
-<div class="policy-list">
-  {% for s in sources or [] %}
-  <div class="polcard toolkit-source">
-    <span class="polcard-head"><span class="polcard-topic">{{ s.repo }}</span><span class="chip gate">{{ s.licence }}</span></span>
-    <span class="polcard-meta">
-      <span class="chip">at {{ s.sha[:12] }}</span><span class="chip">{{ s['items'] | length }} items</span>
-      <span class="chip">pinned {{ s.updated_at[:10] }}</span>
-    </span>
-    <details class="toolkit-items">
-      <summary>Items</summary>
-      {% for i in s['items'] %}
-      <div class="toolkit-row">
-        {% if project %}{{ pick(s.repo, i) }}{% endif %}
-        <span class="chip{{ ' kind-mcp' if i.kind == 'mcp' }}">{{ i.kind }}</span>
-        <span class="toolkit-name"><strong>{{ i.name }}</strong>{% if i.description %}<span class="muted"> — {{ i.description | truncate(160) }}</span>{% endif %}</span>
-        {% if i.runs_code %}<span class="pill warn" title="{{ i.runs_code | join('\n') }}">runs code ({{ i.runs_code | length }})</span>{% endif %}
-      </div>
-      {% else %}<p class="muted">No item found at this commit.</p>{% endfor %}
-    </details>
-    {% if s.default_branch %}
-    <form method="post" action="/toolkit/update" class="gate-actions">
-      <input type="hidden" name="repo" value="{{ s.repo }}">
-      <button type="submit" class="btn" data-busy="Re-pinning…">Re-pin to newest</button>
-    </form>
-    {% else %}<p class="muted">Not on GitHub: its MCP servers are pinned at {{ s.sha }}. Register it again with a new version to move it.</p>{% endif %}
-  </div>
-  {% else %}
-  <div class="card">
-    <p>No source yet. The defaults are mattpocock/skills, DietrichGebert/ponytail (its skills), BayramAnnakov/claude-reflect
-      and pbakaus/impeccable; adding them pins each to its newest commit and installs nothing.</p>
-    <form method="post" action="/toolkit/seed"><button type="submit" class="btn primary" data-busy="Adding…">Add the default sources</button></form>
-  </div>
-  {% endfor %}
+{% if view %}
+<form method="post" action="/toolkit/install" id="tk-install">
+  <input type="hidden" name="project" value="{{ project }}"><input type="hidden" name="confirm_code" value="" id="tk-confirm-code">
+</form>
+
+<div class="tk-stats">
+  <span class="tk-stat"><strong>{{ view.counts.installed }}</strong> installed</span>
+  <span class="tk-stat"><strong>{{ view.counts.available }}</strong> available</span>
+  <span class="tk-stat"><strong>{{ view.counts.sources }}</strong> sources</span>
+  {% set behind = view.installed | selectattr('behind') | list %}
+  {% if behind %}<span class="tk-stat warn"><strong>{{ behind | length }}</strong> with updates</span>{% endif %}
+  <span class="tk-stat muted">on <code>{{ status.branch or 'dev' }}</code></span>
 </div>
 
-<section class="card toolkit-add">
-  <h2>Add a source</h2>
-  <form method="post" action="/toolkit/add_source" class="row">
-    <input type="text" name="repo" placeholder="owner/repo" pattern="[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+" required>
-    <button type="submit" class="btn" data-busy="Adding…">Add</button>
-  </form>
-  <p class="muted">Suggested sources, with their licences and the projects they fit: <code>docs/toolkit_sources.md</code>.
-    A GitHub repository's <code>.mcp.json</code> servers are listed with its other items.</p>
+<div class="tk-toolbar">
+  <input type="search" id="tk-search" placeholder="Filter by name or description…" aria-label="Filter items" autocomplete="off">
+  <div class="tk-kinds" role="group" aria-label="Kind">
+    {% for k in ('all', 'skill', 'agent', 'command', 'plugin', 'mcp') %}
+    <button type="button" class="tk-kind-filter{{ ' is-active' if k == 'all' }}" data-kind="{{ k }}">{{ k }}</button>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="report-tabs tk-tabs" role="tablist">
+  <button type="button" class="report-tab" data-tab="available" role="tab">Available <span class="dim">{{ view.counts.available }}</span></button>
+  <button type="button" class="report-tab" data-tab="installed" role="tab">Installed <span class="dim">{{ view.counts.installed }}</span></button>
+  <button type="button" class="report-tab" data-tab="sources" role="tab">Sources <span class="dim">{{ view.counts.sources }}</span></button>
+</div>
+
+<div class="card toolkit-selection" id="tk-selection" hidden>
+  <span id="tk-count">0 items selected</span>
+  <span class="tk-selection-actions">
+    <button type="button" class="btn" id="tk-clear">Clear</button>
+    <button type="submit" form="tk-install" class="btn primary" id="tk-install-button">Install selected into {{ project }}</button>
+  </span>
+</div>
+
+<section class="report-panel tk-panel" data-panel="available">
+  {% if view.recommended %}
+  <div class="card tk-recommended">
+    <div class="tk-recommended-head">
+      <h2>Recommended for {{ project }} <span class="dim">{{ view.recommended | length }}</span></h2>
+      <button type="button" class="btn" id="tk-pick-recommended">Select all recommended</button>
+    </div>
+    <div class="tk-chips">
+      {% for r in view.recommended %}<span class="tk-chip-pick" title="{{ r.why }}: {{ r.item.description }}" data-value="{{ r.repo }} {{ r.item.id }}">{{ r.item.name }}</span>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% for g in view.available %}
+  {% if g['items'] %}
+  <details class="tk-group" data-repo="{{ g.repo }}"{{ ' open' if loop.length <= 2 }}>
+    <summary>
+      <input type="checkbox" class="tk-group-pick" aria-label="Select every available item of {{ g.repo }}" title="Select every available item (a plugin that bundles the same skills is left out; tick it by hand)">
+      <span class="tk-group-name">{{ g.repo }}</span>
+      <span class="chip">{{ g.licence }}</span>
+      <span class="tk-group-meta"><strong>{{ g['items'] | length }}</strong> available{% if g.installed %} · {{ g.installed }} installed{% endif %}{% if g.code %} · <span class="tk-code-note">{{ g.code }} run code</span>{% endif %}</span>
+      <span class="tk-group-picked" hidden></span>
+    </summary>
+    <div class="tk-grid">
+      {% for i in g['items'] %}
+      <label class="tk-item" data-kind="{{ i.kind }}" data-text="{{ (i.name ~ ' ' ~ (i.description or '')) | lower }}" title="{{ i.description }}">
+        <input type="checkbox" class="tk-pick" form="tk-install" name="pick" value="{{ g.repo }} {{ i.id }}" data-name="{{ i.name }}"
+          {% if i.runs_code %} data-code="{{ i.runs_code | join(', ') | truncate(400) }}"{% endif %}>
+        <span class="tk-item-body">
+          <span class="tk-item-name">{{ i.name }}{{ kind_chip(i.kind) }}{% if i.runs_code %}<span class="tk-code" title="{{ i.runs_code | join('\n') }}">code</span>{% endif %}</span>
+          {% if i.description %}<span class="tk-item-desc">{{ i.description }}</span>{% endif %}
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+  {% endfor %}
+  {% set done = view.available | rejectattr('items') | list %}
+  {% if done %}
+  <p class="tk-done muted">Everything installed from: {% for g in done %}<span class="chip">{{ g.repo }}</span>{% endfor %}</p>
+  {% endif %}
+  {% if not view.counts.available %}<p class="muted">Every item of every source is installed in {{ project }}.</p>{% endif %}
+  <p class="tk-nomatch muted" hidden>No item matches the filter.</p>
 </section>
 
-<section class="card toolkit-add">
-  <h2>Add an MCP server</h2>
-  <p class="muted">An MCP server a repository provides, as it would sit in a project's <code>.mcp.json</code>. A repository outside
-    GitHub (<code>host/owner/repo</code>) is not fetched: give the version the command is pinned at and the licence you read.
-    Installing it adds the entry to the project's <code>.mcp.json</code>; Claude Code asks each user to approve it.</p>
-  <form method="post" action="/toolkit/add_mcp" class="toolkit-mcp-form">
-    {% if project %}<input type="hidden" name="project" value="{{ project }}">{% endif %}
-    <label>Repository <input type="text" name="repo" placeholder="owner/repo or host/owner/repo" required></label>
-    <label>Server name <input type="text" name="mcp_name" placeholder="blender" pattern="[A-Za-z0-9_\-]+" required></label>
-    <label class="wide">Command <input type="text" name="mcp_command" placeholder="uvx mcp-for-blender" required></label>
-    <label class="wide">Environment <textarea name="mcp_env" rows="2" placeholder="KEY=value, one per line (optional)"></textarea></label>
-    <label>Version <input type="text" name="version" placeholder="v1.0.3 (outside GitHub)"></label>
-    <label>Licence <input type="text" name="licence" placeholder="MIT, GPL-3.0…"></label>
-    <button type="submit" class="btn" data-busy="Adding…">Add</button>
-  </form>
+<section class="report-panel tk-panel" data-panel="installed" hidden>
+  {% for g in view.installed %}
+  <details class="tk-group tk-installed-group" data-repo="{{ g.repo }}">
+    <summary>
+      <span class="tk-group-name">{{ g.repo }}</span>
+      <span class="chip">{{ g.licence }}</span>
+      <span class="tk-group-meta"><strong>{{ g['items'] | length }}</strong> installed · at <code>{{ g.sha[:12] }}</code>
+        {% if g.behind %} · <span class="tk-code-note">update available</span>{% endif %}
+        {% if g.missing %} · <span class="tk-missing">{{ g.missing }} with missing files</span>{% endif %}</span>
+    </summary>
+    <div class="tk-group-actions">
+      <form method="post" action="/toolkit/update" class="inline">
+        <input type="hidden" name="repo" value="{{ g.repo }}"><input type="hidden" name="project" value="{{ project }}">
+        <input type="hidden" name="confirm_code" value="1">
+        <button type="submit" class="btn" data-busy="Updating…" data-confirm="Re-pin {{ g.repo }} to its newest commit and update {{ project }}'s items from it, in one commit on {{ status.branch or 'dev' }}? Changed scripts and hooks are installed too.">Update</button>
+      </form>
+      <form method="post" action="/toolkit/remove" class="inline">
+        <input type="hidden" name="repo" value="{{ g.repo }}"><input type="hidden" name="project" value="{{ project }}">
+        <button type="submit" class="danger" data-busy="Removing…" data-confirm="Remove all {{ g['items'] | length }} items of {{ g.repo }} from {{ project }}? Exactly the files its lock records are deleted, in one commit on {{ status.branch or 'dev' }}.">Remove all</button>
+      </form>
+    </div>
+    <div class="tk-grid tk-grid-installed">
+      {% for i in g['items'] %}
+      <div class="tk-item tk-item-installed" data-kind="{{ i.kind }}" data-text="{{ (i.name ~ ' ' ~ (i.description or '')) | lower }}" title="{{ i.description }}">
+        <span class="tk-item-body">
+          <span class="tk-item-name">{{ i.name }}{{ kind_chip(i.kind) }}{% if i.plugin %}<span class="chip">{{ i.plugin }}</span>{% endif %}
+            {% if i.missing %}<span class="pill fail" title="{{ i.missing | join('\n') }}">{{ i.missing | length }} missing</span>{% endif %}</span>
+        </span>
+        <form method="post" action="/toolkit/remove" class="inline tk-remove">
+          <input type="hidden" name="repo" value="{{ g.repo }}"><input type="hidden" name="project" value="{{ project }}">
+          <input type="hidden" name="items" value="{{ i.id }}">
+          <button type="submit" class="tk-x" aria-label="Remove {{ i.id }}" title="Remove {{ i.id }}" data-busy="…" data-confirm="Remove {{ i.id }} from {{ project }}? Exactly the files its lock records are deleted, in one commit on {{ status.branch or 'dev' }}.">×</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </details>
+  {% else %}
+  <p class="muted">Nothing from the toolkit is installed in {{ project }}.</p>
+  {% endfor %}
+  <p class="tk-nomatch muted" hidden>No item matches the filter.</p>
 </section>
-{% if project %}
+{% endif %}
+
+<section class="report-panel tk-panel" data-panel="sources"{{ ' hidden' if view }}>
+  {% if not project %}<p class="muted">Choose a project above to see what it has and install into it.</p>{% endif %}
+  <div class="card tk-sources">
+    <table class="tk-source-table">
+      <thead><tr><th>Source</th><th>Licence</th><th>Pinned at</th><th>Items</th><th></th></tr></thead>
+      <tbody>
+      {% for s in sources or [] %}
+      <tr>
+        <td><span class="tk-group-name">{{ s.repo }}</span></td>
+        <td><span class="chip">{{ s.licence }}</span></td>
+        <td><code>{{ s.sha[:12] }}</code> <span class="muted">{{ s.updated_at[:10] }}</span></td>
+        <td>{{ s['items'] | length }}</td>
+        <td class="tk-source-act">
+          {% if s.default_branch %}
+          <form method="post" action="/toolkit/update" class="inline">
+            <input type="hidden" name="repo" value="{{ s.repo }}">
+            <button type="submit" class="btn" data-busy="Re-pinning…">Re-pin to newest</button>
+          </form>
+          {% else %}<span class="muted" title="Not on GitHub: register it again with a new version to move it">pinned at {{ s.sha }}</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5">
+        <p>No source yet. The defaults are mattpocock/skills, DietrichGebert/ponytail (its skills), BayramAnnakov/claude-reflect
+          and pbakaus/impeccable; adding them pins each to its newest commit and installs nothing.</p>
+        <form method="post" action="/toolkit/seed"><button type="submit" class="btn primary" data-busy="Adding…">Add the default sources</button></form>
+      </td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tk-forms">
+    <section class="card toolkit-add">
+      <h2>Add a source</h2>
+      <form method="post" action="/toolkit/add_source" class="row">
+        {% if project %}<input type="hidden" name="project" value="{{ project }}">{% endif %}
+        <input type="text" name="repo" placeholder="owner/repo" pattern="[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+" required>
+        <button type="submit" class="btn" data-busy="Adding…">Add</button>
+      </form>
+      <p class="muted">Pinned to its newest commit; its skills, agents, commands, plugins and <code>.mcp.json</code> servers are listed.
+        Suggestions: <code>docs/toolkit_sources.md</code>.</p>
+    </section>
+    <section class="card toolkit-add">
+      <h2>Add an MCP server</h2>
+      <p class="muted">As it would sit in a project's <code>.mcp.json</code>. Outside GitHub (<code>host/owner/repo</code>) nothing is
+        fetched: give the version its command pins and the licence you read. Claude Code asks each user to approve it.</p>
+      <form method="post" action="/toolkit/add_mcp" class="toolkit-mcp-form">
+        {% if project %}<input type="hidden" name="project" value="{{ project }}">{% endif %}
+        <label>Repository <input type="text" name="repo" placeholder="owner/repo or host/owner/repo" required></label>
+        <label>Server name <input type="text" name="mcp_name" placeholder="blender" pattern="[A-Za-z0-9_\-]+" required></label>
+        <label class="wide">Command <input type="text" name="mcp_command" placeholder="uvx mcp-for-blender" required></label>
+        <label class="wide">Environment <textarea name="mcp_env" rows="2" placeholder="KEY=value, one per line (optional)"></textarea></label>
+        <label>Version <input type="text" name="version" placeholder="v1.0.3 (outside GitHub)"></label>
+        <label>Licence <input type="text" name="licence" placeholder="MIT, GPL-3.0…"></label>
+        <button type="submit" class="btn" data-busy="Adding…">Add</button>
+      </form>
+    </section>
+  </div>
+</section>
+
+{% if view %}
 <script>
 (function () {
-  // Multi-select: every ticked item, from any source, goes in one install (one commit on the integration branch).
   var form = document.getElementById('tk-install'), bar = document.getElementById('tk-selection');
   var count = document.getElementById('tk-count'), confirmCode = document.getElementById('tk-confirm-code');
   var picks = function () { return Array.prototype.slice.call(document.querySelectorAll('.tk-pick')); };
-  var sync = function (changed) {
-    if (changed) picks().forEach(function (b) { if (b.value === changed.value) b.checked = changed.checked; });  // one item, shown twice
-    var chosen = {}; picks().forEach(function (b) { if (b.checked) chosen[b.value] = b; });
-    var n = Object.keys(chosen).length;
+
+  // Tabs: the hash keeps the choice across a reload; the default is Available while something is left to install.
+  var tabs = document.querySelectorAll('.tk-tabs .report-tab'), panels = document.querySelectorAll('.tk-panel');
+  var show = function (name) {
+    tabs.forEach(function (t) { var on = t.dataset.tab === name; t.classList.toggle('is-active', on); t.setAttribute('aria-selected', on); });
+    panels.forEach(function (p) { p.hidden = p.dataset.panel !== name; });
+  };
+  tabs.forEach(function (t) { t.addEventListener('click', function () { show(t.dataset.tab); history.replaceState(null, '', '#' + t.dataset.tab); }); });
+  var start = (location.hash || '').slice(1);
+  show(['available', 'installed', 'sources'].indexOf(start) >= 0 ? start : ({{ 'true' if view.counts.available else 'false' }} ? 'available' : 'installed'));
+
+  // Selection: the count, each source's select-all box (checked, partly checked, empty) and the sticky bar.
+  var sync = function () {
+    var n = picks().filter(function (b) { return b.checked; }).length;
     count.textContent = n + (n === 1 ? ' item selected' : ' items selected');
     bar.hidden = n === 0;
-    return chosen;
+    document.querySelectorAll('.tk-group').forEach(function (g) {
+      var all = g.querySelector('.tk-group-pick'); if (!all) return;
+      var boxes = g.querySelectorAll('.tk-pick'), on = g.querySelectorAll('.tk-pick:checked').length;
+      var whole = Array.prototype.filter.call(boxes, function (b) { return b.closest('.tk-item').dataset.kind !== 'plugin'; }).length || boxes.length;
+      all.checked = on > 0 && on >= whole; all.indeterminate = on > 0 && on < whole;
+      var label = g.querySelector('.tk-group-picked'); label.hidden = on === 0; label.textContent = on + ' selected';
+    });
   };
-  document.addEventListener('change', function (e) { if (e.target.classList && e.target.classList.contains('tk-pick')) sync(e.target); });
-  var all = document.getElementById('tk-pick-recommended');
-  if (all) all.addEventListener('click', function () {
-    document.querySelectorAll('.toolkit-panel .tk-pick').forEach(function (b) { b.checked = true; sync(b); });
+  document.addEventListener('change', function (e) {
+    var t = e.target;
+    if (t.classList.contains('tk-group-pick')) {
+      // A whole source: every item it still has to install (those the filter shows when one is set). A plugin
+      // bundles the source's own skills again, so it is left out while the source offers anything else.
+      var rows = Array.prototype.slice.call(t.closest('.tk-group').querySelectorAll('.tk-item')).filter(function (r) { return !r.hidden; });
+      var bundles = rows.some(function (r) { return r.dataset.kind !== 'plugin'; });
+      rows.forEach(function (row) {
+        row.querySelector('.tk-pick').checked = t.checked && !(bundles && row.dataset.kind === 'plugin');
+      });
+    }
+    if (t.classList.contains('tk-pick') || t.classList.contains('tk-group-pick')) sync();
   });
+  // The box sits in the summary: ticking it must not fold or unfold the source.
+  document.querySelectorAll('.tk-group-pick').forEach(function (b) { b.addEventListener('click', function (e) { e.stopPropagation(); }); });
+  document.getElementById('tk-clear').addEventListener('click', function () { picks().forEach(function (b) { b.checked = false; }); sync(); });
+  var rec = document.getElementById('tk-pick-recommended');
+  if (rec) rec.addEventListener('click', function () {
+    document.querySelectorAll('.tk-chip-pick').forEach(function (c) {
+      var box = document.querySelector('.tk-pick[value="' + c.dataset.value.replace(/"/g, '\\"') + '"]');
+      if (box) { box.checked = true; var g = box.closest('details'); if (g) g.open = true; }
+    });
+    sync();
+  });
+
+  // Filter: by text and kind, in both lists; a source with matches opens, one without hides.
+  var search = document.getElementById('tk-search'), kind = 'all';
+  var filter = function () {
+    var q = search.value.trim().toLowerCase();
+    document.querySelectorAll('.tk-panel').forEach(function (panel) {
+      var shown = 0;
+      panel.querySelectorAll('.tk-group').forEach(function (g) {
+        var n = 0;
+        g.querySelectorAll('.tk-item').forEach(function (row) {
+          var ok = (kind === 'all' || row.dataset.kind === kind) && (!q || row.dataset.text.indexOf(q) >= 0);
+          row.hidden = !ok; if (ok) n++;
+        });
+        g.hidden = n === 0; shown += n;
+        if (q || kind !== 'all') g.open = n > 0;
+      });
+      var none = panel.querySelector('.tk-nomatch'); if (none) none.hidden = shown > 0 || !(q || kind !== 'all');
+    });
+  };
+  search.addEventListener('input', filter);
+  document.querySelectorAll('.tk-kind-filter').forEach(function (b) {
+    b.addEventListener('click', function () {
+      kind = b.dataset.kind;
+      document.querySelectorAll('.tk-kind-filter').forEach(function (o) { o.classList.toggle('is-active', o === b); });
+      filter();
+    });
+  });
+
   form.addEventListener('submit', function (e) {
-    var chosen = sync(), code = Object.keys(chosen).filter(function (k) { return chosen[k].dataset.code; });
-    // A box shown twice would be sent twice: keep only the first of each.
-    var seen = {}; picks().forEach(function (b) { b.disabled = b.checked && seen[b.value]; if (b.checked) seen[b.value] = true; });
+    var chosen = picks().filter(function (b) { return b.checked; });
+    var code = chosen.filter(function (b) { return b.dataset.code; });
     confirmCode.value = '';
     if (code.length) {
-      var lines = code.map(function (k) { return chosen[k].dataset.name + ': ' + chosen[k].dataset.code; }).join('\n');
-      if (!window.confirm('These items run code:\n' + lines + '\n\nInstall them into {{ project }}?')) { e.preventDefault(); picks().forEach(function (b) { b.disabled = false; }); return; }
+      var lines = code.slice(0, 15).map(function (b) { return '• ' + b.dataset.name; }).join('\n') + (code.length > 15 ? '\n… and ' + (code.length - 15) + ' more' : '');
+      if (!window.confirm(code.length + ' of the ' + chosen.length + ' selected items run code (scripts, hooks or MCP servers):\n' + lines + '\n\nInstall them into {{ project }}?')) { e.preventDefault(); return; }
       confirmCode.value = '1';
     }
-    var button = document.getElementById('tk-install-button');
     // Its own flag, not base.html's sent-flag: that handler runs after this one and cancels a form already flagged.
+    var button = document.getElementById('tk-install-button');
     if (form.dataset.installing) { e.preventDefault(); return; }
     form.dataset.installing = '1'; button.disabled = true; button.classList.add('is-busy'); button.textContent = 'Installing…';
   });

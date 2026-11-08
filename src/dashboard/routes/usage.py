@@ -64,8 +64,9 @@ def build_router(ctx) -> APIRouter:
         sources = _try(client.toolkit_sources, paths)
         projects = sorted(p["name"] for p in _try(client.list_projects, paths, default=[]) or [] if p.get("status", "active") == "active")
         status = _try(lambda: client.toolkit_status(paths, project)) if project else None
+        view = toolkit_view(sources or [], status) if status else None
         return _render(request, "toolkit.html", nav_active="toolkit", sources=sources, projects=projects, project=project, status=status,
-                       error=None if sources is not None else "The Registry pillar is not reachable.")
+                       view=view, error=None if sources is not None else "The Registry pillar is not reachable.")
 
     @router.post("/toolkit/{action}")
     def toolkit_action(action: str, repo: str = Form(""), project: str = Form(""), items: list[str] = Form([]),
@@ -144,3 +145,28 @@ def build_router(ctx) -> APIRouter:
         return RedirectResponse("/usage#findings", status_code=303)
 
     return router
+
+
+def toolkit_view(sources: list[dict], status: dict) -> dict:
+    """The Toolkit page's project view (REQ-000000537): per source, what is still available to install (installed
+    items left out) and what the project's lock records, with the registered descriptions; recommended items only
+    while some are not installed."""
+    installed = {s["repo"]: s for s in status.get("installed") or []}
+    known = {s["repo"]: {i["id"]: i for i in s.get("items") or []} for s in sources}
+    available, have = [], []
+    for source in sources:
+        owned = {i["id"] for i in (installed.get(source["repo"]) or {}).get("items", [])}
+        items = [i for i in source.get("items") or [] if i["id"] not in owned]
+        available.append({"repo": source["repo"], "licence": source.get("licence"), "sha": source.get("sha") or "",
+                          "items": items, "installed": len(owned), "code": sum(1 for i in items if i.get("runs_code"))})
+    for repo, entry in sorted(installed.items()):
+        items = [{**item, "name": item["id"].split(":", 1)[-1], "description": (known.get(repo, {}).get(item["id"]) or {}).get("description", "")}
+                 for item in entry.get("items", [])]
+        current = next((s.get("sha") for s in sources if s["repo"] == repo), None)
+        have.append({"repo": repo, "licence": entry.get("licence"), "sha": entry.get("sha") or "", "items": items,
+                     "behind": bool(current and entry.get("sha") and current != entry.get("sha")),
+                     "missing": sum(1 for i in items if i.get("missing"))})
+    available.sort(key=lambda g: (not g["items"], g["repo"].lower()))
+    return {"available": available, "installed": have, "recommended": status.get("recommended") or [],
+            "counts": {"available": sum(len(g["items"]) for g in available), "installed": sum(len(g["items"]) for g in have),
+                       "sources": len(sources)}}
