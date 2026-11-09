@@ -164,7 +164,7 @@ def test_agents_md_says_what_enforces_the_rules(agents):
     assert agents.rstrip().endswith(claude_templates.SHARED_BRIEFING_IMPORT)
     assert "<!-- A briefing" in agents
     shared = claude_templates.shared_briefing_md("little-widget")
-    for needle in (".githooks/commit-msg", "a secret", "written by the finish", "refuses raw git",
+    for needle in (".githooks/commit-msg", "a secret", "written by the finish", "git and gh run without prompts",
                    "policy-preflight", "pending_confirmation", "lws_scope_guard"):
         assert needle in shared, needle
 

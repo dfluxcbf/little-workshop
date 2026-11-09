@@ -7,9 +7,11 @@ JSON on stdin. It refuses, and says what to do instead:
 - an `lws` command or a little-workshop MCP call that names another project
   (--project-id, project_id, a project name), or that leaves the project id out
   where leaving it out acts on every project;
-- a raw command that would bypass the policy gates little-workshop runs (git
-  merge, tag, push, cherry-pick, branch deletion, --no-verify, a core.hooksPath
-  override, systemd, twine, gh...), in any spelling it can parse;
+- a raw command that would bypass the policy gates little-workshop runs or rewrite
+  the long-lived branches (a merge or cherry-pick onto dev/master/main, a tag, a
+  force push or deletion of those branches, --no-verify, a core.hooksPath
+  override, systemd, twine, gh pr merge / release / repo create...), in any
+  spelling it can parse. Every other git and gh command passes;
 - an edit of a file little-workshop generates (VERSION, .githooks, its .claude/
   files) or of a CLAUDE.md, which would stop Claude Code reading AGENTS.md.
 Input it cannot read passes: the permission rules in settings.json and the
@@ -20,6 +22,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 
 PREFIX = "mcp__little-workshop__"
@@ -48,16 +51,17 @@ FOREIGN_PROJECT_COMMANDS = ("bootstrap", "import")
 NAMED_PROJECT_COMMANDS = ("connect-github", "remove")
 # Why a raw command is refused, and the route to take instead.
 ROUTES = {
-    "branch-delete": "workshop_version_<type>_finish deletes a finished branch",
-    "cherry-pick": "a fix reaches the integration branch through workshop_version_hotfix_start / _finish (hotfix-propagates-by-merge)",
+    "branch-delete": "dev, master and main are the project's long-lived branches; delete any other branch with `git branch -d` / `-D`",
+    "cherry-pick": "this picks onto an integration or production branch (dev, master, main); a fix reaches them through workshop_version_hotfix_start / _finish (hotfix-propagates-by-merge)",
     "destructive": "it discards work that may not be yours: ask the user what to remove",
-    "github": "workshop_project_connect_github creates the repository, little-workshop's agent flow opens and merges pull requests, and a release comes from workshop_version_release_finish",
+    "github": "workshop_project_connect_github creates the repository (no prompt), a branch reaches dev through workshop_version_<type>_finish rather than a pull-request merge, and a release comes from workshop_version_release_finish; every other gh command (pr create/view, run, workflow, issue, api) is fine",
     "hooks-path": "core.hooksPath stays .githooks, where the commit-msg secret scan runs",
     "install": "the project installs with `bazel run //:install`; a server is deployed with workshop_deployment_deploy",
-    "merge": "a branch is finished with workshop_version_<type>_finish, which runs the branch_finish policies and squash-merges a feature or improvement (a hotfix or a release merges with --no-ff)",
+    "merge": "this merges into an integration or production branch (dev, master, main); a branch reaches them through workshop_version_<type>_finish, which runs the branch_finish policies and writes VERSION. Merging into any other branch, --ff-only updates and --abort/--continue are fine",
     "no-verify": "the commit-msg hook refuses a commit that adds a secret: take the secret out and commit again",
     "publish": "packages are published with workshop_build_publish_pypi / _vsix (wheel-filename-has-version runs there)",
-    "push": "little-workshop pushes when it finishes or releases, and workshop_project_connect_github creates the remote; a push the user asks for is theirs to run",
+    "push": "a force push or a deletion of dev, master or main rewrites shared history; push without --force, and delete only other branches",
+    "repo-delete": "deleting a GitHub repository cannot be undone: the user does it",
     "systemd": "servers run through workshop_deployment_deploy / _stop / _status",
     "tag": "tags are written by workshop_version_release_* (annotated v<M>.<m>.<p>); read the release state with workshop_version_status"
 }
@@ -91,6 +95,10 @@ COMMIT_VALUE_OPTIONS = ("-m", "-F", "-C", "-c", "-t", "--message", "--file", "--
                         "--reuse-message", "--reedit-message", "--fixup", "--squash", "--trailer", "--cleanup",
                         "--pathspec-from-file")
 COMMIT_VALUE_LETTERS = "mFCct"
+# The long-lived branches: only a little-workshop finish or release merges into them.
+PROTECTED = ("dev", "master", "main", "production")
+# `git merge` / `git cherry-pick` options that settle an operation already under way.
+SETTLING = ("--abort", "--continue", "--quit", "--skip")
 
 
 def without_heredoc_bodies(command):
@@ -173,14 +181,72 @@ def commit_skips_hooks(args):
     return False
 
 
-def git_route(args):
+class Checkout:
+    """What the guard knows of the checkout a command runs in: its directory and, read lazily, the branch
+    checked out there; a `git checkout` / `git switch` earlier in the same command line moves it."""
+
+    def __init__(self, cwd):
+        self.cwd = cwd or os.getcwd()
+        self._branch = None
+        self._read = False
+
+    def branch(self, where=None):
+        if where:
+            try:
+                out = subprocess.run(["git", "-C", os.path.join(self.cwd, where), "rev-parse", "--abbrev-ref", "HEAD"],
+                                     capture_output=True, text=True, timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                return None
+            return out.stdout.strip() if out.returncode == 0 else None
+        if not self._read:
+            self._read = True
+            try:
+                out = subprocess.run(["git", "-C", self.cwd, "rev-parse", "--abbrev-ref", "HEAD"],
+                                     capture_output=True, text=True, timeout=5)
+                self._branch = out.stdout.strip() if out.returncode == 0 else None
+            except (OSError, subprocess.SubprocessError):
+                self._branch = None
+        return self._branch
+
+    def switched(self, branch):
+        self._read, self._branch = True, branch
+
+
+def push_route(rest, checkout, where):
+    """'push' when the push forces or deletes a long-lived branch, else None."""
+    forcing = any(w in ("-f", "--force", "--mirror") or w.startswith("--force-with-lease") or w.startswith("--force-if-includes")
+                  or ("f" in short_flags(w) and not w.startswith("--")) for w in rest)
+    deleting = any(w in ("-d", "--delete") for w in rest)
+    words = [w for w in rest if not w.startswith("-")]
+    refspecs = words[1:]  # the first word is the remote
+    targets = set()
+    for spec in refspecs:
+        if spec.startswith("+"):
+            forcing = True
+            spec = spec[1:]
+        if spec.startswith(":"):
+            deleting = True
+        targets.add(spec.rsplit(":", 1)[-1].removeprefix("refs/heads/"))
+    if not refspecs and (forcing or deleting):
+        targets.add(checkout.branch(where) or "")
+    if "--mirror" in rest or "--all" in rest and forcing:
+        return "push"
+    if (forcing or deleting) and targets & set(PROTECTED):
+        return "push"
+    return None
+
+
+def git_route(args, checkout=None):
     """The ROUTES key for `git ARGS` when it bypasses little-workshop, or None."""
-    i, overrides = 0, []
+    checkout = checkout or Checkout(None)
+    i, overrides, where = 0, [], None
     while i < len(args) and args[i].startswith("-"):
         option = args[i].split("=", 1)[0]
         if option in GIT_VALUE_OPTIONS and "=" not in args[i]:
             if option == "-c" and i + 1 < len(args):
                 overrides.append(args[i + 1])
+            if option == "-C" and i + 1 < len(args):
+                where = args[i + 1]
             i += 2
             continue
         i += 1
@@ -189,13 +255,26 @@ def git_route(args):
     if i >= len(args):
         return None
     sub, rest = args[i], args[i + 1:]
-    if sub in ("merge", "cherry-pick", "tag", "push"):
-        return sub
+    if sub in ("checkout", "switch") and not where:
+        names = [w for w in rest if not w.startswith("-")]
+        creating = any(w in ("-b", "-B", "-c", "-C", "--orphan") for w in rest)
+        if names and "--" not in rest and (creating or len(names) == 1):
+            checkout.switched(names[0])
+        return None
+    if sub in ("merge", "cherry-pick"):
+        if any(w in SETTLING for w in rest):
+            return None
+        return sub if checkout.branch(where) in PROTECTED else None
+    if sub == "tag":
+        return "tag"
+    if sub == "push":
+        return push_route(rest, checkout, where)
     if sub == "commit":
         return "no-verify" if commit_skips_hooks(rest) else None
     if sub == "branch":
         deleting = any(w in ("--delete", "-d", "-D") or set(short_flags(w)) & {"d", "D"} for w in rest)
-        return "branch-delete" if deleting else None
+        named = {w for w in rest if not w.startswith("-")}
+        return "branch-delete" if deleting and named & set(PROTECTED) else None
     if sub == "reset":
         return "destructive" if "--hard" in rest else None
     if sub == "clean":
@@ -207,12 +286,12 @@ def git_route(args):
     return None
 
 
-def command_route(words):
+def command_route(words, checkout=None):
     """The ROUTES key for one simple command, or None."""
     base = words[0].rsplit("/", 1)[-1]
     args = words[1:]
-    if base == "git":
-        return git_route(args)
+    if base in ("git", "git.exe"):
+        return git_route(args, checkout)
     if base == "systemd-run":
         return "systemd"
     if base == "systemctl" and "--user" in args and set(args) & {"start", "stop", "restart", "kill"}:
@@ -221,7 +300,9 @@ def command_route(words):
         return "publish"
     if base == "pipx" and args[:1] == ["install"]:
         return "install"
-    if base == "gh" and (args[:2] in (["repo", "create"], ["pr", "create"], ["pr", "merge"]) or args[:1] == ["release"]):
+    if base in ("gh", "gh.exe") and args[:2] == ["repo", "delete"]:
+        return "repo-delete"
+    if base in ("gh", "gh.exe") and (args[:2] in (["repo", "create"], ["pr", "merge"]) or args[:1] == ["release"]):
         return "github"
     return None
 
@@ -234,12 +315,16 @@ def without_env_assignments(words):
     return words[i:]
 
 
-def bash_violation(command, own):
+def bash_violation(command, own, checkout=None):
+    checkout = checkout or Checkout(None)
     for words in simple_commands(command):
         words = without_env_assignments(words)
         if not words:
             continue
-        route = command_route(words)
+        if words[0] == "cd" and len(words) > 1:
+            checkout = Checkout(os.path.join(checkout.cwd, words[1]))
+            continue
+        route = command_route(words, checkout)
         if route:
             shown = " ".join(words[:3])
             return f"`{shown}` is refused here: {ROUTES[route]}."
@@ -255,7 +340,7 @@ def bash_violation(command, own):
                 for j, option in enumerate(words[i + 1:], i + 1):
                     if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
                         if j + 1 < len(words):
-                            problem = bash_violation(words[j + 1], own)
+                            problem = bash_violation(words[j + 1], own, checkout)
                             if problem:
                                 return problem
                         break
@@ -347,7 +432,7 @@ def main():
             problem = (f"this checkout is project {own!r} but {problem}. Work on other projects belongs in a "
                        "session started from the little-projects root.")
     elif tool == "Bash":
-        problem = bash_violation(str(args.get("command", "")), own)
+        problem = bash_violation(str(args.get("command", "")), own, Checkout(event.get("cwd")))
     elif tool in EDIT_TOOLS:
         problem = edit_violation(args, os.environ.get("CLAUDE_PROJECT_DIR") or event.get("cwd"), own)
     else:

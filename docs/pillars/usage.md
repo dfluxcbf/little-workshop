@@ -378,7 +378,7 @@ the branch and a rebase in progress; the pending changes committed with the subj
 changed; never little-workshop's generated files: it stops there); `requirements sync-markers`; the
 Definition-of-Done run, only where the project's `.claude/finish-branch.json` names a `test_command`; the policy
 preflight; `lws version <type>-finish` and its wait (rebase, squash merge or, for a hotfix, merge, tag and
-back-merge, `VERSION`, branch deleted); a held finish reported, never confirmed; for little-workshop, the changed
+back-merge, `VERSION`, branch deleted); a held finish reported (Claude confirms one the branch did not cause); for little-workshop, the changed
 pillars redeployed unless a trigger already does; with `--push`, the integration branch (a hotfix also the
 production branch) pushed after checking the no-reply e-mail. Claude is called only (the hook then gives it the
 facts as context instead of answering) for a commit with source changes and no `REQ-` to cite (the diff stat),

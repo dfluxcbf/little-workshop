@@ -102,7 +102,8 @@ def test_a_retired_rule_is_dropped_not_kept_as_the_projects_own(tmp_path):
     _tool().main(["--checkout", str(root), "--write"])
     deny = json.loads((root / ".claude" / "settings.json").read_text())["permissions"]["deny"]
     assert "Bash(git merge*)" not in deny and "Bash(git tag*)" not in deny
-    assert "Bash(git merge *)" in deny and deny[-1] == "Read(./secrets/**)"
+    assert "Bash(git tag *)" in deny and deny[-1] == "Read(./secrets/**)"
+    assert "Bash(git merge *)" not in deny  # REQ-000000540: no longer denied, so a stale copy is dropped too
 
 
 # --- REQ-000000478: the retired reminder hook is removed, the project's own prompt hooks are kept ----

@@ -37,8 +37,10 @@ DEST = {"skill": ".claude/skills/{name}", "agent": ".claude/agents/{name}.md", "
 
 # Registered by `seed` and offered first (docs/toolkit_sources.md); `recommend` reads the items per project kind.
 # ponytail: its skills only, never its hooks, statusline or band. claude-reflect: already installed at user scope.
+# mattpocock's implement-spec is left out: it runs its own integration branch, worktree branches, merger subagents
+# and pull requests, which compete with the branches little-workshop finishes (2026-11-09).
 DEFAULT_SOURCES = {
-    "mattpocock/skills": {"code": ("grill-me", "grill-with-docs", "to-spec", "implement-spec", "diagnosing-bugs", "tdd",
+    "mattpocock/skills": {"code": ("grill-me", "grill-with-docs", "to-spec", "diagnosing-bugs", "tdd",
                                    "handoff", "writing-for-agents")},
     "DietrichGebert/ponytail": {"code": ("ponytail-review", "ponytail-audit", "ponytail-debt")},
     "BayramAnnakov/claude-reflect": {},

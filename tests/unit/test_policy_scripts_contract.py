@@ -555,6 +555,26 @@ def test_requirement_marker_id_format_ignores_git_ignored_folders(tmp_path):
     assert verdict("requirement-marker-id-format", repo)[0] == "fail"
 
 
+# --- REQ-000000541: toolkit skills and cross-skill script references never hold a finish ---
+
+def test_claude_instructions_valid_accepts_another_skills_script_and_skips_toolkit_skills(tmp_path):
+    repo = make_repo(tmp_path)
+    _scaffold_claude(repo)
+    skills = repo / ".claude" / "skills"
+    (skills / "qa" / "scripts").mkdir(parents=True)
+    (skills / "qa" / "SKILL.md").write_text("---\nname: qa\ndescription: QA.\n---\nRun `scripts/qa_check.py`.\n")
+    (skills / "qa" / "scripts" / "qa_check.py").write_text("print(1)\n")
+    (skills / "core").mkdir()
+    (skills / "core" / "SKILL.md").write_text("---\nname: core\ndescription: Core.\n---\n"
+                                              "Then run `qa/scripts/qa_check.py` from the qa skill.\n")
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+    (skills / "core" / "SKILL.md").write_text("---\nname: core\ndescription: Core.\n---\nRun `scripts/gone.py`.\n")
+    assert verdict("claude-instructions-valid", repo)[0] == "fail"
+    lock = {"sources": {"someone/skills": {"items": {"skill:core": {"files": [".claude/skills/core/SKILL.md"]}}}}}
+    (repo / ".claude" / "toolkit.lock.json").write_text(json.dumps(lock))
+    assert verdict("claude-instructions-valid", repo)[0] == "pass"
+
+
 def test_claude_instructions_valid_ignores_tracked_files_deleted_in_the_checkout(tmp_path):
     repo = make_repo(tmp_path)
     _scaffold_claude(repo)

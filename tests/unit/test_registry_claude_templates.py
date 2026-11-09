@@ -65,10 +65,9 @@ def test_bootstrap_writes_settings_routing_lifecycle_through_little_workshop(tmp
     mcp = claude_templates.MCP
     assert f"{mcp}workshop_version_status" in perms["allow"]
     assert f"{mcp}workshop_version_release_finish" in perms["allow"]
-    assert f"{mcp}workshop_policy_confirm" in perms["ask"]
-    assert f"{mcp}workshop_policy_confirm" not in perms["allow"]
+    assert f"{mcp}workshop_project_bootstrap" in perms["ask"]
     assert set(perms["allow"]).isdisjoint(perms["ask"])
-    for raw in ("git merge *", "git tag *", "git push *", "git cherry-pick *", "systemd-run *", "twine *"):
+    for raw in ("git tag *", "gh pr merge *", "systemd-run *", "twine *"):
         assert f"Bash({raw})" in perms["deny"], raw
     assert set(perms["allow"]).isdisjoint(perms["deny"])
 
@@ -165,7 +164,8 @@ def test_every_mcp_tool_is_classified_exactly_once():
 
     names = {t.name for t in tools.TOOLS}
     classified = [*claude_templates.MCP_READ_ONLY, *claude_templates.MCP_ROUTINE,
-                  *claude_templates.MCP_GATED, *claude_templates.MCP_ASK, *claude_templates.MCP_PLATFORM]
+                  *claude_templates.MCP_GATED, *claude_templates.MCP_SESSION, *claude_templates.MCP_ASK,
+                  *claude_templates.MCP_PLATFORM]
     assert len(classified) == len(set(classified)), "a tool is classified twice"
     assert set(classified) == names, sorted(set(classified) ^ names)
 
@@ -194,7 +194,8 @@ def test_the_guards_mcp_tables_match_the_live_catalog():
 
 def test_every_lws_command_is_classified_exactly_once():
     c = claude_templates
-    classified = [*c.LWS_READ_ONLY_ANY, *c.LWS_READ_ONLY, *c.LWS_ROUTINE, *c.LWS_GATED, *c.LWS_ASK,
+    classified = [*c.LWS_READ_ONLY_ANY, *c.LWS_READ_ONLY, *c.LWS_ROUTINE, *c.LWS_GATED, *c.LWS_SESSION_ANY,
+                  *c.LWS_SESSION_NAMED, *c.LWS_ASK,
                   *c.LWS_PLATFORM, *c.LWS_UNLISTED]
     assert len(classified) == len(set(classified)), "a command is classified twice"
     assert set(classified) == set(_lws_leaves()), sorted(set(classified) ^ set(_lws_leaves()))
@@ -453,14 +454,14 @@ def test_every_denied_command_names_a_route():
 
 
 @pytest.mark.parametrize("command, denied", [
-    ("git merge feature/x", True), ("git merge", True), ("git tag v1.0.0", True), ("git tag", True),
-    ("git push origin dev", True), ("git branch -D old", True), ("git reset --hard HEAD", True),
+    ("git tag v1.0.0", True), ("git tag", True), ("git reset --hard HEAD", True),
     ("git commit -m wip --no-verify", True), ("systemctl --user restart x", True), ("twine upload dist/*", True),
-    ("gh pr create --fill", True), ("gh release create v1", True),
-    ("git merge-base dev HEAD", False), ("git merge-base --is-ancestor a b", False), ("git tags-of-mine", False),
-    ("git pushd", False), ("git branch --show-current", False), ("git reset HEAD~1", False),
-    ("git commit -m wip", False), ("git commit-tree abc", False), ("systemctl --user status x", False),
-    ("gh pr view 3", False), ("gh pr list", False), ("pipx list", False),
+    ("gh pr merge 3", True), ("gh release create v1", True), ("gh repo delete x", True),
+    ("git merge feature/x", False), ("git push origin dev", False), ("git branch -D old", False),
+    ("git merge-base dev HEAD", False), ("git tags-of-mine", False), ("gh pr create --fill", False),
+    ("git branch --show-current", False), ("git reset HEAD~1", False),
+    ("git commit -m wip", False), ("systemctl --user status x", False),
+    ("gh pr view 3", False), ("gh run list", False), ("pipx list", False),
 ])
 def test_deny_rules_stop_at_a_word(command, denied):
     """`git merge*` denied `git merge-base` too; each rule now ends at a word."""
@@ -471,18 +472,58 @@ def test_deny_rules_stop_at_a_word(command, denied):
 def test_the_retired_deny_rules_are_not_written_any_more():
     deny = set(claude_templates.settings(PROJECT)["permissions"]["deny"])
     assert not deny & set(claude_templates.RETIRED_RULES)
-    assert len(claude_templates.RETIRED_RULES) == len(claude_templates.DENY_REROUTED)
+
+
+# --- REQ-000000540: git and gh work without prompts ---
+
+@pytest.mark.parametrize("command", [
+    "git checkout -b x", "git switch dev", "git fetch origin", "git pull --ff-only", "git push origin feature/x",
+    "git push origin --delete feature/x", "git merge dev", "git rebase dev", "git stash", "git worktree remove w",
+    "git branch -d old", "git branch -D old", "git status", "git add -A", "git commit -m x",
+    "gh pr create --fill", "gh run list", "gh workflow view ci", "gh api repos/x/y", "gh auth status",
+    "lws job policy-confirm abc", "lws job answer abc resolve_conflicts continue", "lws job stop abc",
+    f"lws project connect-github {PROJECT}", f"lws project connect-github {PROJECT} --private",
+])
+def test_git_gh_and_the_sessions_job_decisions_are_pre_allowed(command):
+    settings = claude_templates.settings(PROJECT)
+    assert _allowed(settings, command), command
+    assert not any(_rule_matches(rule, command) for rule in settings["permissions"]["deny"]), command
+
+
+def test_connect_github_is_pre_allowed_for_this_project_only():
+    settings = claude_templates.settings(PROJECT)
+    assert not _allowed(settings, f"lws project connect-github {OTHER}")
+    mcp = claude_templates.MCP
+    for tool in ("workshop_policy_confirm", "workshop_job_answer", "workshop_job_stop", "workshop_project_connect_github"):
+        assert f"{mcp}{tool}" in settings["permissions"]["allow"], tool
+
+
+def _repo_on(tmp_path, branch):
+    repo = tmp_path / f"repo-{branch.replace('/', '-')}"
+    repo.mkdir()
+    for args in (["init", "-q", "-b", branch], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+                                                  "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    return repo
+
+
+def _bash_in(command, cwd):
+    return {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(cwd)}
 
 
 @pytest.mark.parametrize("command, route", [
     ("git merge feature/x", "merge"),
     ("git -C . merge --no-ff feature/x", "merge"),
+    ("git merge --ff-only feature/x", "merge"),
     ("git cherry-pick abc123", "cherry-pick"),
     ("git tag v1.2.3", "tag"),
-    ("git status && git push origin dev", "push"),
-    ("bash -c 'git push --force'", "push"),
-    ("git branch -D old", "branch-delete"),
-    ("git branch --delete old", "branch-delete"),
+    ("git push --force origin dev", "push"),
+    ("git push origin +dev", "push"),
+    ("git push origin --delete master", "push"),
+    ("git push origin :main", "push"),
+    ("bash -c 'git push -f'", "push"),
+    ("git branch -D dev", "branch-delete"),
+    ("git branch --delete master", "branch-delete"),
     ("git reset --hard HEAD~1", "destructive"),
     ("git clean -fdx", "destructive"),
     ("git commit -am wip --no-verify", "no-verify"),
@@ -494,35 +535,54 @@ def test_the_retired_deny_rules_are_not_written_any_more():
     ("systemd-run --user lmeals serve", "systemd"),
     ("FOO=1 twine upload dist/*", "publish"),
     ("pipx install dist/x.whl", "install"),
-    ("gh pr create --fill", "github"),
     ("gh pr merge 3", "github"),
     ("gh release create v1.0.0", "github"),
     ("gh repo create x", "github"),
+    ("gh repo delete x --yes", "repo-delete"),
 ])
 def test_guard_refuses_a_raw_lifecycle_command_with_its_route(tmp_path, command, route):
-    reason = _guard(tmp_path, _bash(command))
+    reason = _guard(tmp_path, _bash_in(command, _repo_on(tmp_path, "dev")))
     assert reason is not None and claude_templates.ROUTES[route] in reason, reason
 
 
 @pytest.mark.parametrize("command", [
+    "git merge dev",
+    "git merge --ff-only dev",
+    "git cherry-pick abc123",
+    "git push origin feature/x",
+    "git push -u origin HEAD",
+    "git push --force-with-lease origin feature/x",
+    "git push",
+    "git push origin --delete feature/old",
+    "git branch -d old",
+    "git branch -D old",
+    "git merge --abort",
+    "git checkout dev && git merge --abort",
+    "gh pr create --fill",
+    "gh run view 12 --log",
     "git merge-base dev HEAD",
     "git commit -m 'drop the -n flag'",
     "git commit -mn",
     "git commit -a -m wip",
     "git branch --show-current",
-    "git branch -vv",
     "git reset HEAD~1",
     "git config core.hooksPath",
     "git config core.hooksPath .githooks",
-    "git log --tags --simplify-by-decoration",
     "systemctl --user status little-widget",
     "pipx list",
     "gh pr view 3",
-    "echo 'git push'",
+    "echo 'git push --force origin dev'",
     "cat <<'EOF'\ngit merge x\nEOF",
 ])
-def test_guard_lets_everything_else_through(tmp_path, command):
-    assert _guard(tmp_path, _bash(command)) is None
+def test_guard_lets_everything_else_through_on_a_working_branch(tmp_path, command):
+    assert _guard(tmp_path, _bash_in(command, _repo_on(tmp_path, "feature/x"))) is None
+
+
+def test_guard_follows_a_checkout_earlier_in_the_same_command(tmp_path):
+    feature = _repo_on(tmp_path, "feature/x")
+    assert "merge" in _guard(tmp_path, _bash_in("git checkout dev && git merge feature/x", feature))
+    dev = _repo_on(tmp_path, "dev")
+    assert _guard(tmp_path, _bash_in("git checkout -b improvement/y && git merge dev", dev)) is None
 
 
 # --- REQ pending (the guard refuses hand edits of generated files and of a CLAUDE.md) -----------
@@ -621,7 +681,8 @@ def test_no_prompt_hook_is_generated_and_the_reminder_is_retired():
 def test_the_finish_steps_are_the_preflight_and_the_finish(platform):
     skill = claude_templates.lifecycle_skill_md(PROJECT, platform=platform)
     steps = skill.split("## Finishing a branch", 1)[1]
-    assert "1. Run the `policy-preflight` skill" in steps and "2. Finish with" in steps and "3." not in steps
+    assert "1. Run the `policy-preflight` skill" in steps and "2. Finish with" in steps
+    assert "3. A finish in `pending_confirmation`" in steps and "4." not in steps  # REQ-000000539
     assert "No separate Definition-of-Done run" in steps and "coverage check" in steps
 
 
@@ -695,3 +756,13 @@ def test_learned_rules_are_steered_to_the_learned_rules_file(tmp_path):
     assert claude_templates.LEARNED_RULES_PATH in claude_templates.shared_briefing_md(PROJECT)
     assert claude_templates.LEARNED_RULES_PATH in claude_templates.instructions_rule_md()
     assert claude_templates.LEARNED_RULES_PATH not in claude_templates.claude_files(PROJECT)
+
+
+# --- REQ-000000542: short final reports ---
+
+def test_the_shared_briefing_asks_for_a_short_report_without_what_next():
+    text = claude_templates.shared_briefing_md(PROJECT)
+    assert claude_templates.REPORTING in text
+    assert "what next" in text and "offers of more work" in text
+    skill = claude_templates.lifecycle_skill_md(PROJECT)
+    assert "workshop_policy_confirm" in skill and "git branch -d" in skill

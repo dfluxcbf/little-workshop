@@ -41,6 +41,17 @@ SKILL_SCRIPT = re.compile(r"(?:\.claude/skills/[\w.-]+/)?scripts/[\w./-]*[\w]")
 HOOK_SCRIPT = re.compile(r"\$\{?CLAUDE_PROJECT_DIR\}?\"?/([^\s\"']+)")
 
 
+def toolkit_files():
+    """The files little-workshop's toolkit installed (`.claude/toolkit.lock.json`): their text is the upstream's."""
+    try:
+        with open(os.path.join(PROJECT, ".claude", "toolkit.lock.json"), encoding="utf-8") as fh:
+            lock = json.load(fh)
+    except (OSError, ValueError):
+        return set()
+    return {f for source in (lock.get("sources") or {}).values() for item in (source.get("items") or {}).values()
+            for f in item.get("files") or ()}
+
+
 def git(*args):
     return subprocess.run(["git", "-c", "safe.directory=*", "-C", PROJECT, *args], capture_output=True, text=True)
 
@@ -203,6 +214,7 @@ def test_claude_instructions_load_as_written():
     if not (briefings or rules or skills or os.path.isfile(os.path.join(PROJECT, ".claude", "settings.json"))):
         pytest.skip("the project has no Claude Code instructions")
     present = set(files)
+    toolkit = toolkit_files()
     problems = []
 
     # Rules: frontmatter that parses, only `paths`, patterns that match a file. A rule without
@@ -295,9 +307,14 @@ def test_claude_instructions_load_as_written():
             problems.append(f"{skill}: has no `description`, so Claude never picks the skill on its own. Fix: add "
                             "a `description:` that says what it does and when to use it.")
         folder = os.path.dirname(skill)
+        if skill in toolkit:
+            continue  # installed from a toolkit source: its upstream owns the text (`lws toolkit update`)
         for token in sorted(set(SKILL_SCRIPT.findall(read(skill)))):
             target = token if token.startswith(".claude/") else f"{folder}/{token}"
-            if not os.path.exists(os.path.join(PROJECT, target)):
+            # A skill may name another skill's script (`blender-asset-qa/scripts/qa_check.py`).
+            elsewhere = token.startswith("scripts/") and any(
+                f.startswith(".claude/skills/") and f.endswith("/" + token) for f in files)
+            if not os.path.exists(os.path.join(PROJECT, target)) and not elsewhere:
                 problems.append(f"{skill}: names {token}, which does not exist ({target}). Fix: add the script or "
                                 "correct the SKILL.md.")
     for agent in agents:

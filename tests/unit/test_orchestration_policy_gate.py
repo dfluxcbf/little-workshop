@@ -424,7 +424,7 @@ def _held(conn, *, job_type="version.feature_finish", project_id="proj-a", param
     return job
 
 
-# --- REQ-000000474: A held action waits for the user ---
+# --- REQ-000000539: A held action waits for a confirmation ---
 
 def _failing_check_and_job(conn):
     check = Job(type="policy.check_project", target_pillar="policy", project_id="proj-a", status=JobStatus.SUCCEEDED, result={"outcome": "fail"})

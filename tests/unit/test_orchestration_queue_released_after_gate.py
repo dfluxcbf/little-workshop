@@ -1,6 +1,6 @@
-"""A policy-gated Job awaiting confirmation holds its queue_key. Once it
+"""A policy-gated Job awaiting confirmation no longer holds its queue_key. Once it
 settles -- timed out, or stopped -- the Job queued behind it is dispatched
-right away, with no manual pump. REQ-000000268."""
+right away, with no manual pump. REQ-000000538."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -60,3 +60,28 @@ def test_stopping_a_job_awaiting_confirmation_fails_its_dependents(conn):
     after = db.get_job(conn, child.id)
     assert after.status == JobStatus.FAILED
     assert after.error == f"dependency {gated.id} cancelled"
+
+
+# --- REQ-000000538: a held Job does not stall its queue ---
+
+def test_a_job_held_for_confirmation_does_not_hold_its_queue_key(conn):
+    from orchestration.queue import is_ready
+
+    gated, waiting = _gated_and_waiting(conn)
+    assert is_ready(conn, db.get_job(conn, waiting.id)) is True
+
+
+def test_confirming_while_the_key_is_busy_queues_the_job_and_the_gate_lets_it_through(conn):
+    from orchestration import policy_gate
+
+    gated, _ = _gated_and_waiting(conn)
+    running = Job(type="version.feature_start", target_pillar="version", project_id="p", queue_key="p",
+                  status=JobStatus.RUNNING)
+    db.insert_job(conn, running)
+
+    result = policy_gate.confirm(conn, db.get_job(conn, gated.id), socket_lookup=lambda pillar: None)
+
+    after = db.get_job(conn, gated.id)
+    assert result["confirmed"] is True and result["queued"] is True
+    assert after.status == JobStatus.QUEUED and after.params[policy_gate.CONFIRMED] is True
+    assert policy_gate.maybe_gate(conn, after) is False

@@ -72,7 +72,7 @@ JOB_TYPE_CATEGORIES: dict[str, set[str]] = {
     "version.support_finish": {"branch_finish"},
 }
 
-# A held Job waits for the user (REQ-000000474): it is failed after a delay only when Orchestration's
+# A held Job waits for the user (REQ-000000539): it is failed after a delay only when Orchestration's
 # environment sets this variable (manifest `[pillars.orchestration] environment`) to a positive number
 # of seconds. Unset, empty or 0: no timer.
 CONFIRM_TIMEOUT_ENV = "LWS_POLICY_CONFIRM_TIMEOUT_SECONDS"
@@ -243,13 +243,22 @@ def maybe_gate(
     (every dependency succeeded). Returns True if this call handled the
     Job itself (flipped it to `pending_confirmation`) — the caller must
     not also dispatch it normally."""
-    if job.type not in JOB_TYPE_CATEGORIES:
+    if job.type not in JOB_TYPE_CATEGORIES or job.params.get(CONFIRMED):
         return False
     verdicts = _policy_check_verdicts(conn, job)
     if "fail" not in verdicts:
         return False
     enter_pending_confirmation(conn, job, timeout_seconds=timeout_seconds, runner=runner)
     return True
+
+
+# Set on a confirmed Job that had to queue again: the gate lets it through without re-holding it.
+CONFIRMED = "policy_confirmed"
+
+
+def _key_busy(conn: sqlite3.Connection, job: Job) -> bool:
+    return any(other.id != job.id and other.queue_key == job.queue_key
+               for other in list_jobs(conn, status=JobStatus.RUNNING))
 
 
 def confirm(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, lock: threading.Lock | None = None) -> dict:
@@ -261,6 +270,12 @@ def confirm(conn: sqlite3.Connection, job: Job, socket_lookup: SocketLookup, *, 
             job = get_job(conn, job.id) or job
         if job.status != JobStatus.PENDING_CONFIRMATION:
             return {"confirmed": False, "reason": f"job is {job.status.value}, not pending confirmation"}
+        if job.queue_key and _key_busy(conn, job):
+            # Another Job of the project ran while this one was held: wait for it, then dispatch unheld.
+            job.params = {**job.params, CONFIRMED: True}
+            job.status = JobStatus.QUEUED
+            update_job(conn, job)
+            return {"confirmed": True, "queued": True, "job": job.model_dump(mode="json")}
         job.status = JobStatus.RUNNING  # claimed: a second confirm now finds it settled
         update_job(conn, job)
     dispatched = dispatch_job(conn, job, socket_lookup, timeout=dispatch_timeout_for(job.type), lock=lock)

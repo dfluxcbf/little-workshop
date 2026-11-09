@@ -133,8 +133,12 @@ that pillar's existing Job type.
   `systemd` timer. `recurring` schedules are interpreted in the host's
   own local time; little-workshop runs on one household's machine, not
   across timezones, so there's no per-task timezone field to get wrong.
+- **A held Job does not stall its queue** (2026-11-09, REQ-000000538): a Job in `pending_confirmation` has
+  not touched the checkout, so it no longer holds its `queue_key`; confirmed while another Job holds the key,
+  it queues again marked `policy_confirmed` and the gate lets it through. Before, one held finish stopped every
+  branch Job of the project until the user answered.
 - **A settled policy-gated Job frees its queue** (2026-09-24): a Job in
-  `pending_confirmation` holds its `queue_key` like a running one. When it
+  `pending_confirmation` held its `queue_key` like a running one. When it
   is settled (confirmed, cancelled, superseded or, if configured, timed out), the queue is pumped right away (before,
   a Job queued behind it waited, every dependency green, for the next
   unrelated Job to arrive). `stop` on a `pending_confirmation` Job now

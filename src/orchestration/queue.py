@@ -11,7 +11,10 @@ import sqlite3
 from orchestration.db import get_job, get_queue_capacity, list_job_runs, list_jobs, update_job
 from orchestration.models import Job, JobStatus
 
-_LOCKING_STATUSES = (JobStatus.RUNNING.value, JobStatus.PENDING_CONFIRMATION.value)
+# Only a running Job holds its queue_key. A Job held in pending_confirmation has not touched the checkout
+# yet, so the project's other Jobs go ahead (REQ-000000538);
+# once confirmed it queues again for the key (policy_gate.confirm).
+_LOCKING_STATUSES = (JobStatus.RUNNING.value,)
 
 # little-workshop's own redeploys. The automatic redeploy after a finish waits until nothing else is
 # going on (REQ-000000476); Orchestration's own redeploy restarts the process that dispatches Jobs,

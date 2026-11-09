@@ -6,7 +6,7 @@ Repositories of Claude Code skills, agents and plugins for the toolkit (docs/pil
 
 | Repo | Licence | Use | Where |
 |---|---|---|---|
-| **mattpocock/skills** (default) | MIT | Selected skills: `grill-me`, `grill-with-docs` (intent capture), `to-spec`, `implement-spec`, `diagnosing-bugs`, `tdd`, `handoff`, `writing-for-agents`. Skip `git-guardrails` (the guard does it) and `setup-pre-commit`. | All code projects |
+| **mattpocock/skills** (default) | MIT | Selected skills: `grill-me`, `grill-with-docs` (intent capture), `to-spec`, `diagnosing-bugs`, `tdd`, `handoff`, `writing-for-agents`. Skip `git-guardrails` (the guard does it), `setup-pre-commit` and `implement-spec` (its own integration branch, merger subagents and pull requests compete with little-workshop's branch finishes). | All code projects |
 | **DietrichGebert/ponytail** (default) | MIT | Its skills only (`ponytail-review`, `-audit`, `-debt`); never its hooks, statusline or band (per-turn injection costs tokens). | All code projects, little-workshop first |
 | **BayramAnnakov/claude-reflect** (default) | MIT | Already installed at user scope: integrate rather than add (learned rules go to `.claude/rules/learned.md`, `/reflect-skills` for skill drafts). | User scope |
 | **pbakaus/impeccable** (default) | Apache-2.0 | Critique, audit and polish of UI work. | Projects with a UI: the Dashboard, little-home, little-meals |

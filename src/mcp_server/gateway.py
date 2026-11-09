@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from common import serving
 from common.paths import Paths
 from common.tool_access import (
-    MCP_ASK, MCP_GATED, MCP_NAMED_PROJECT, MCP_PLATFORM, MCP_READ_ONLY, MCP_ROUTINE,
+    MCP_ASK, MCP_GATED, MCP_NAMED_PROJECT, MCP_PLATFORM, MCP_READ_ONLY, MCP_ROUTINE, MCP_SESSION,
 )
 from mcp_server.client import PillarUnavailable
 from mcp_server.tools import TOOLS, TOOLS_BY_NAME, ToolSpec
@@ -37,7 +37,7 @@ def _error(status: int, error: str, detail: str, hint: str | None = None) -> JSO
 def refusal(spec: ToolSpec, arguments: dict, project: str) -> str | None:
     """Why `project` may not make this call over the gateway, or None. Mirrors the scope guard's MCP rule."""
     name = spec.name
-    if name in MCP_ASK:
+    if name in MCP_ASK or name in MCP_SESSION:
         return f"{name} stands in for a human decision: the user makes it on the Dashboard or in a Claude session"
     if name in MCP_PLATFORM:
         return f"{name} administers little-workshop itself, which no project's token may do"

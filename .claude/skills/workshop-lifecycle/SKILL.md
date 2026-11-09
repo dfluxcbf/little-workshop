@@ -21,7 +21,9 @@ the guard refuses them. Name the project in every call: `project_id` `little-wor
 | Register and link the requirements the tests' `REQ-` markers name | `workshop_requirements_sync_markers`: one call, instead of a create and a link per requirement |
 | Record a test run | `workshop_requirements_run_tests` (or `_import_junit`) |
 | Know the branch, version or policy state | `workshop_version_status`, `workshop_policy_results` |
-| Create the GitHub repository and push to it | `workshop_project_connect_github` |
+| Create the GitHub repository and push to it | `workshop_project_connect_github` (no prompt) |
+| Push, pull, fetch, rebase, merge `dev` into a working branch, worktrees, `gh pr create`, `gh run` | plain `git` / `gh`: no prompt |
+| Delete a branch that is merged, obsolete or a duplicate | `git branch -d` / `-D` (and `git push origin --delete <branch>`); never a finish, which would bump `VERSION` |
 | Wait for a Job (a test run, a finish, a deploy) | `workshop_job_wait`: one call that returns when the Job settles, is held or asks a question. Never repeat `workshop_job_status` or `sleep` |
 | Redeploy little-workshop's pillars | After a branch finish, `workshop_deployment_redeploy_changed_pillars` (the pillars the branch touched, found for you; a trigger may already have started it: check `workshop_job_list`). To choose them yourself, `workshop_deployment_redeploy_pillars`: one call for several pillars, which orders them itself; never one `workshop_deployment_redeploy_pillar` call per pillar |
 
@@ -30,9 +32,13 @@ policies.
 
 ## Finishing a branch
 
-1. Run the `policy-preflight` skill and fix what blocks.
-2. Finish with `workshop_version_<type>_finish`. A finish that lands in `pending_confirmation` was held by a
-   policy: report which one (`workshop_policy_results`) and leave the confirmation to the user.
+1. Run the `policy-preflight` skill and fix what this branch caused.
+2. Finish with `workshop_version_<type>_finish`. A conflict stops the Job with a question: resolve it in the
+   checkout and answer it (`workshop_job_answer`), no prompt.
+3. A finish in `pending_confirmation` was held by a policy (`workshop_policy_results`). If the branch caused
+   it, fix it and finish again (the new request replaces the held one). If it did not (already on `dev`,
+   toolkit-installed files), confirm it yourself (`workshop_policy_confirm`) and name the policy in the
+   report. A held Job never holds up the project's other Jobs.
 
 No separate Definition-of-Done run before a finish. In a Python project the release's coverage check runs
 the suite once and records it; elsewhere record the run (`workshop_requirements_run_tests` or `_import_junit`)

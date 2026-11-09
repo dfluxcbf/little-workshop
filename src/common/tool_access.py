@@ -56,18 +56,25 @@ MCP_GATED = (
     "workshop_build_publish_pypi", "workshop_build_publish_vsix", "workshop_build_package_delete",
 )
 
-# Stand in for a human decision, run unattended agents, change what a policy covers, register or
-# remove projects or are hard to undo: always a prompt.
+# The project's own git and job handling, decided by the session working on it (REQ-000000540): confirm a held action of this project, answer or stop its Jobs, create its GitHub
+# repository and push. Pre-allowed in a Claude session; the HTTP gateway still refuses them, since
+# project code has no business deciding them.
+MCP_SESSION = (
+    "workshop_policy_confirm", "workshop_job_stop", "workshop_job_answer", "workshop_project_connect_github",
+)
+
+# Run unattended agents, change what a policy covers, register or remove projects or are hard to
+# undo: always a prompt.
 MCP_ASK = (
-    "workshop_policy_confirm", "workshop_policy_projects_set",
+    "workshop_policy_projects_set",
     "workshop_agent_run_task", "workshop_agent_finish_task", "workshop_agent_skip_task",
     "workshop_agent_ci_check", "workshop_agent_session_start", "workshop_agent_session_stop",
-    "workshop_project_bootstrap", "workshop_project_import", "workshop_project_connect_github",
+    "workshop_project_bootstrap", "workshop_project_import",
     "workshop_project_configure_assets", "workshop_project_set_governance", "workshop_project_remove", "workshop_project_backlog_delete",
     "workshop_version_init", "workshop_version_config_add_hook", "workshop_version_config_remove_hook",
     "workshop_deployment_set_manifest", "workshop_deployment_seed_confirmation",
     "workshop_requirements_publish", "workshop_requirements_delete", "workshop_requirements_suite_delete",
-    "workshop_job_stop", "workshop_job_answer", "workshop_schedule_add", "workshop_schedule_remove", "workshop_schedule_trigger",
+    "workshop_schedule_add", "workshop_schedule_remove", "workshop_schedule_trigger",
     "workshop_schedule_cancel", "workshop_schedule_postpone", "workshop_schedule_queue_set",
     "workshop_usage_configure_claude", "workshop_trigger_add", "workshop_trigger_remove",
     "workshop_toolkit_add_source", "workshop_toolkit_install", "workshop_toolkit_remove", "workshop_toolkit_update",

@@ -260,7 +260,7 @@ HEADER = {gateway.PROJECT_HEADER: "little-render"}
 def test_the_gateway_lists_only_what_a_project_may_call_unasked(gateway_client):
     names = {t["name"] for t in gateway_client.get("/v1/tools", headers=HEADER).json()["tools"]}
     assert names == set(tool_access.MCP_READ_ONLY + tool_access.MCP_ROUTINE + tool_access.MCP_GATED) & set(tools_mod.TOOLS_BY_NAME)
-    assert not names & set(tool_access.MCP_ASK + tool_access.MCP_PLATFORM)
+    assert not names & set(tool_access.MCP_ASK + tool_access.MCP_SESSION + tool_access.MCP_PLATFORM)
 
 
 def test_the_gateway_fills_in_the_tokens_project(monkeypatch, gateway_client):

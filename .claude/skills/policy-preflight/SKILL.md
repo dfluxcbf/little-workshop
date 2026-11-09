@@ -27,9 +27,10 @@ so. Exit 0: nothing blocks; 1: a gating policy fails; 2: the policies could not 
 Each failure names the policy, its rule and what to change. Fix the cause in the project, commit, and run
 the preflight again until nothing blocks.
 
-A policy is the project's agreed rule, so change the project, not the policy, and leave a held action for
-the user to confirm. If a failure looks wrong, or cannot be fixed in this project, report it with the
-policy's output and let the user decide. The steps around a finish are in the `workshop-lifecycle` skill.
+A policy is the project's agreed rule, so change the project, not the policy. A failure this work did not
+cause (it is already on `dev`, or sits in toolkit-installed files) does not stop the work: finish anyway and
+confirm the hold (`workshop_policy_confirm`), naming the policy in the report. The steps around a finish are
+in the `workshop-lifecycle` skill.
 
 <!-- project -->
 <!-- /project -->

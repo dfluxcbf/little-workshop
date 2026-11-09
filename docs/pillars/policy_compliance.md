@@ -59,7 +59,7 @@ without someone finding out" (`docs/architecture.md`).
   project, passes — refined 2026-09-16 from a single fixed topic per
   Job type into a per-*policy*, user-chosen set of categories, so a Job
   can now be held by more than one policy at once. Fail-closed: a held
-  Job waits for the user to confirm or cancel it (REQ-000000474); a newer
+  Job waits for a confirmation (the user's, or the project's own Claude session's when its branch did not cause the failure) or a cancel (REQ-000000539); a newer
   request for the same action supersedes it (REQ-000000475).
 - **Usability controls** — a policy can be enabled/disabled without
   re-authoring, and the user **selects which projects it applies to**,

@@ -119,7 +119,8 @@ Part of little-workshop's requirements register; conventions and the other parts
 
 | ID | Description | Status |
 | --- | --- | --- |
-| REQ-000000268 | **A settled policy-gated Job frees its queue.** When a Job awaiting policy confirmation times out or is stopped, the Orchestration pillar shall settle it (a stopped one as cancelled) and shall dispatch whatever Job is ready behind it on the same queue key right away. | done |
+| REQ-000000268 | **A settled policy-gated Job frees its queue.** When a Job awaiting policy confirmation times out or is stopped, the Orchestration pillar shall settle it (a stopped one as cancelled) and shall dispatch whatever Job is ready behind it on the same queue key right away. | done, superseded by REQ-000000538 |
+| REQ-000000538 | **A held Job does not stall its queue.** While a Job waits in `pending_confirmation`, the Orchestration pillar shall not count it as holding its `queue_key`, so the project's other Jobs dispatch. When a held Job is confirmed while another Job holds its `queue_key`, the Orchestration pillar shall queue it again, marked confirmed, and dispatch it without re-holding it once the key is free. When a held Job times out or is stopped, the pillar shall settle it (a stopped one as cancelled) and dispatch whatever is ready. | done |
 
 ## A waiting Job is answered at once (2026-09-24)
 
