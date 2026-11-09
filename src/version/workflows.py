@@ -12,7 +12,9 @@ from version.configstore import load_config, set_issue_link
 from version.gitops import (
     branch_exists,
     checkout,
+    commit_changes_since,
     commit_if_dirty,
+    dirty_paths,
     create_and_checkout,
     current_branch,
     delete_branch,
@@ -127,9 +129,10 @@ def squash_merge_and_bump_patch(repo_root: Path, plan: PatchMergePlan) -> Comman
 
     with step("bump_version") as handle:
         new_ver = finished_version(read_version(repo_root), target_ver)
+        before = dirty_paths(repo_root)
         write_version(repo_root, new_ver)
         hook_errors = run_version_hooks(repo_root, str(new_ver))
-        commit_if_dirty(repo_root, no_requirement(f"chore: bump version to {new_ver}"))
+        commit_changes_since(repo_root, before, no_requirement(f"chore: bump version to {new_ver}"))
         handle.detail = f"{target_ver} -> {new_ver}"
 
     with step("delete_branch") as handle:

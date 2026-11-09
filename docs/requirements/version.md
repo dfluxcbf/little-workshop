@@ -144,3 +144,4 @@ Part of little-workshop's requirements register; conventions and the other parts
 | ID | Description | Status |
 | --- | --- | --- |
 | REQ-000000517 | **On Windows a commit without the lws shim is refused.** When the generated commit-msg hook runs under Git for Windows and finds no `lws` command, the hook shall refuse the commit (exit 1), saying to run `lws windows install-shim`, and when it runs in WSL or Linux without `lws`, it shall warn and let the commit through. | draft |
+| REQ-000000547 | **A version bump commits only its own changes.** When a finish or a release writes a new version, the Version Control & Release pillar shall commit only the paths that changed since it started writing (VERSION and what the version hooks wrote), and shall leave every file that was uncommitted or untracked before untouched and out of the commit. | done |

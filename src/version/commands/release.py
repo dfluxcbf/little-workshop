@@ -10,7 +10,8 @@ from common.job_steps import StepFailed, can_ask, done, step
 from version.common import CommandResult, ensure_clean_tree, get_integration_branch, get_production_branch, require_branch_exists, resolve_conflicts_with_user, run_version_hooks
 from version.configstore import clear_release_finish_state, get_promoted_rc, load_release_finish_state, save_release_finish_state, set_promoted_rc
 from version.gitops import (
-    DirtyWorkingTreeError, MergeConflictError, branch_exists, checkout, commit_file, commit_if_dirty,
+    DirtyWorkingTreeError, MergeConflictError, branch_exists, checkout, commit_changes_since, commit_file, commit_if_dirty,
+    dirty_paths,
     create_and_checkout, create_annotated_tag, current_branch, get_tag_commit, is_ancestor,
     is_dirty, is_merge_in_progress, list_tags, merge_abort, merge_commit, merge_no_ff, run, tag_exists, no_requirement,
 )
@@ -193,9 +194,10 @@ def _release_finish_establish_next_patch(
     production_tag = stable_ver.production_tag()
     next_ver = bump_patch(stable_ver)
     with step("next_patch") as handle:
+        before = dirty_paths(repo_root)
         write_version(repo_root, next_ver)
         hook_errors.extend(run_version_hooks(repo_root, str(next_ver)))
-        commit_if_dirty(repo_root, no_requirement(f"chore: establish next patch line {next_ver}"))
+        commit_changes_since(repo_root, before, no_requirement(f"chore: establish next patch line {next_ver}"))
         handle.detail = f"{integ} at {next_ver}"
 
     with step("delete_branch") as handle:
@@ -315,9 +317,10 @@ def _release_finish_normal(repo_root: Path, force: bool) -> CommandResult:
     with step("finalize_version") as handle:
         # Production keeps this version after the release, so every file version_hooks writes carries it too.
         current_file_ver = read_version(repo_root)
+        before = dirty_paths(repo_root)
         write_version(repo_root, stable_ver)
         finalize_errors = run_version_hooks(repo_root, str(stable_ver))
-        if commit_if_dirty(repo_root, no_requirement(f"chore: finalize release version {stable_ver}")):
+        if commit_changes_since(repo_root, before, no_requirement(f"chore: finalize release version {stable_ver}")):
             handle.detail = f"{current_file_ver} -> {stable_ver}"
         else:
             handle.detail = f"already {current_file_ver}"

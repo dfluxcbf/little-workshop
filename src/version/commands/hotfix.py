@@ -9,7 +9,7 @@ from typing import Callable
 from common.job_steps import StepFailed, can_ask, done, step
 from version.common import CommandResult, ensure_clean_tree, get_integration_branch, get_production_branch, require_branch_exists, resolve_conflicts_with_user, run_version_hooks
 from version.configstore import clear_hotfix_finish_state, get_issue_link, load_hotfix_finish_state, save_hotfix_finish_state
-from version.gitops import MergeConflictError, checkout, commit_if_dirty, create_annotated_tag, current_branch, is_merge_in_progress, merge_abort, merge_commit, merge_no_ff, no_requirement
+from version.gitops import MergeConflictError, checkout, commit_changes_since, commit_if_dirty, dirty_paths, create_annotated_tag, current_branch, is_merge_in_progress, merge_abort, merge_commit, merge_no_ff, no_requirement
 from version.stages import GitflowVersion, bump_patch
 from version.workflows import checkout_existing_branch, create_prefixed_branch, delete_branch_if_configured, merge_conflict_result, read_version, require_checked_out_branch, success_with_hook_warnings, write_version
 
@@ -28,9 +28,10 @@ def _hotfix_finish_post_prod_merge(
 ) -> CommandResult:
     with step("bump_version") as handle:
         old_ver = read_version(repo_root)
+        before = dirty_paths(repo_root)
         write_version(repo_root, new_ver)
         hook_errors = run_version_hooks(repo_root, str(new_ver))
-        commit_if_dirty(repo_root, no_requirement(f"chore: bump version to {new_ver}"))
+        commit_changes_since(repo_root, before, no_requirement(f"chore: bump version to {new_ver}"))
         handle.detail = f"{old_ver} -> {new_ver}"
 
     tag = new_ver.production_tag()

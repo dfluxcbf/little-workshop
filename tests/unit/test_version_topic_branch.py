@@ -151,3 +151,22 @@ def test_a_hotfix_still_merges_with_no_ff(tmp_path):
     assert cmd_hotfix_finish(repo).success
     assert _log(repo, "master", "--merges", "-1") != []
     assert _log(repo, "dev", "--merges", "-1") != []
+
+
+# --- REQ-000000547: a version bump commits only its own changes ---
+
+def test_finish_past_an_untracked_file_leaves_it_out_of_the_version_commit(tmp_path):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    cmd_topic_start(repo, prefix="improvement", name="docs")
+    _write_commit(repo, "docs.md", "x\n", "wip")
+    (repo / "conversation-export.txt").write_text("the user's own notes\n", encoding="utf-8")
+
+    result = cmd_topic_finish(repo, prefix="improvement", commit_label="impr", force=True)
+
+    assert result.success, result.message
+    tracked = subprocess.run(["git", "ls-files"], cwd=repo, capture_output=True, text=True).stdout.split()
+    assert "conversation-export.txt" not in tracked and "docs.md" in tracked
+    assert (repo / "conversation-export.txt").read_text() == "the user's own notes\n"
+    bump = subprocess.run(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo, capture_output=True, text=True)
+    assert bump.stdout.split() == ["VERSION"]

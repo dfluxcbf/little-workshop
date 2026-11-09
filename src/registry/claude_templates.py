@@ -241,7 +241,14 @@ READ_ONLY_BASH = (
 COMMIT_BASH = ("git *", "gh *")
 
 # The policy-preflight skill's script: it only evaluates policies, records and holds nothing.
-SKILL_BASH = (f"python3 {PREFLIGHT_SCRIPT_PATH}*",)
+SKILL_BASH = tuple(f"{run} {script}*" for script in (PREFLIGHT_SCRIPT_PATH, POLICIES_SCRIPT_PATH)
+                   for run in ("python3", f"sh {HOOK_RUNNER_PATH}"))
+
+
+def run_script(script: str, windows: bool = False) -> str:
+    """How a skill's instructions run one of its scripts: `python3` doesn't run on Windows (the Store stub), so a
+    Windows-hosted checkout goes through the hook runner, which finds a Python that does (REQ-000000548)."""
+    return f"sh {HOOK_RUNNER_PATH} {script}" if windows else f"python3 {script}"
 
 # What a session runs to test the project: the template's own runner. "bazel" is for a registered
 # project that is neither Python nor Unity (a TypeScript or C++ project built with Bazel).
@@ -1171,9 +1178,10 @@ if __name__ == "__main__":
 '''
 
 
-def preflight_skill_md() -> str:
+def preflight_skill_md(windows: bool = False) -> str:
     """The text of `.claude/skills/policy-preflight/SKILL.md`."""
-    return _PREFLIGHT_SKILL + "\n" + PROJECT_SECTION
+    text = _PREFLIGHT_SKILL.replace(f"python3 {PREFLIGHT_SCRIPT_PATH}", run_script(PREFLIGHT_SCRIPT_PATH, windows))
+    return text + "\n" + PROJECT_SECTION
 
 
 def preflight_py() -> str:
@@ -1248,7 +1256,7 @@ before the release.
 
 # The policies digest (REQ-000000339): which policies cover this project and what each requires,
 # asked of little-workshop when the question comes up, instead of rereading the policy documents.
-def policies_skill_md(name: str) -> str:
+def policies_skill_md(name: str, windows: bool = False) -> str:
     """The text of `.claude/skills/policies-digest/SKILL.md`."""
     project = _checked_id(name)
     return f"""---
@@ -1261,8 +1269,8 @@ description: Lists the little-workshop policies that cover this project - each p
 Run it from the repository root:
 
 ```
-python3 {POLICIES_SCRIPT_PATH} --project-id {project}            # every policy attached to the project
-python3 {POLICIES_SCRIPT_PATH} --project-id {project} --gate branch_finish
+{run_script(POLICIES_SCRIPT_PATH, windows)} --project-id {project}            # every policy attached to the project
+{run_script(POLICIES_SCRIPT_PATH, windows)} --project-id {project} --gate branch_finish
 ```
 
 It prints one line per policy: its name, the actions it gates and its rule, read live from
@@ -1533,9 +1541,9 @@ def claude_files(project_id: str, template: str = "python", *, platform: bool = 
         SHARED_BRIEFING_PATH: shared_briefing_md(project_id, platform=platform, windows=windows, governance=governance),
         INSTRUCTIONS_RULE_PATH: instructions_rule_md(),
         LIFECYCLE_SKILL_PATH: lifecycle_skill_md(project_id, platform=platform, governance=governance),
-        PREFLIGHT_SKILL_PATH: preflight_skill_md(),
+        PREFLIGHT_SKILL_PATH: preflight_skill_md(windows),
         PREFLIGHT_SCRIPT_PATH: preflight_py(),
-        POLICIES_SKILL_PATH: policies_skill_md(project_id),
+        POLICIES_SKILL_PATH: policies_skill_md(project_id, windows),
         POLICIES_SCRIPT_PATH: policies_digest_py(),
         TEST_FILTER_PATH: test_output_filter_py(),
     }

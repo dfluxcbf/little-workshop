@@ -766,3 +766,19 @@ def test_the_shared_briefing_asks_for_a_short_report_without_what_next():
     assert "what next" in text and "offers of more work" in text
     skill = claude_templates.lifecycle_skill_md(PROJECT)
     assert "workshop_policy_confirm" in skill and "git branch -d" in skill
+
+
+# --- REQ-000000548: skill scripts run on Windows-hosted checkouts, and are pre-allowed ---
+
+def test_windows_skills_run_their_scripts_through_the_hook_runner():
+    files = claude_templates.claude_files(PROJECT, windows=True)
+    runner = f"sh {claude_templates.HOOK_RUNNER_PATH} "
+    assert runner + claude_templates.PREFLIGHT_SCRIPT_PATH in files[claude_templates.PREFLIGHT_SKILL_PATH]
+    assert runner + claude_templates.POLICIES_SCRIPT_PATH in files[claude_templates.POLICIES_SKILL_PATH]
+    assert "python3 .claude/skills" not in files[claude_templates.PREFLIGHT_SKILL_PATH]
+    linux = claude_templates.claude_files(PROJECT)
+    assert f"python3 {claude_templates.PREFLIGHT_SCRIPT_PATH}" in linux[claude_templates.PREFLIGHT_SKILL_PATH]
+    settings = claude_templates.settings(PROJECT)
+    for script in (claude_templates.PREFLIGHT_SCRIPT_PATH, claude_templates.POLICIES_SCRIPT_PATH):
+        assert _allowed(settings, f"python3 {script} --project-id {PROJECT}")
+        assert _allowed(settings, f"{runner}{script} --gate-point release")

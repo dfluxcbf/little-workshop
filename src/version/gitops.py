@@ -207,6 +207,21 @@ def commit_if_dirty(repo_root: Path, message: str) -> bool:
     return False
 
 
+def commit_changes_since(repo_root: Path, before: list[str] | set[str], message: str) -> bool:
+    """Commit only what changed since `before` (the `dirty_paths` taken before the step wrote anything): a version
+    bump never sweeps in a file the user left uncommitted or untracked (REQ-000000547)."""
+    left_alone = set(before)
+    paths = [path for path in dirty_paths(repo_root) if path not in left_alone]
+    if not paths:
+        return False
+    run(["git", "add", "-A", "--", *paths], repo_root)
+    result = run(["git", "diff", "--cached", "--quiet"], repo_root, check=False)
+    if result.returncode != 0:
+        run(["git", "commit", "-m", message], repo_root)
+        return True
+    return False
+
+
 def get_commit_sha(repo_root: Path, ref: str = "HEAD") -> str:
     result = run(["git", "rev-parse", ref], repo_root)
     return result.stdout.strip()

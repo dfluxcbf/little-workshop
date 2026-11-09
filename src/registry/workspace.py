@@ -171,8 +171,10 @@ EOF
 - Windows-hosted projects run the Windows `claude.exe`, so their Windows tools (Blender, Unity, git.exe) work.
 - A long task: run the command in the background (`run_in_background`) and read the report when it ends.
 - The report gives the sub-session's final message, its session id and any permission denials. A denial the
-  user's request already covers: run it again with `--allow '<rule>'` (for example `--allow 'Bash(npm test*)'`)
-  and the prompt `continue`. Ask the user only for a decision that is really theirs.
+  user's request already covers: re-run with `--allow '<rule>'` (for example `--allow 'Bash(npm test*)'`) and the
+  prompt `continue`. A command the project lists under `ask` stays denied there whatever `--allow` says: run it
+  from this session (which may), then tell the sub-session it is done. Ask the user only for a decision that is
+  really theirs.
 - Relay the outcome in a few lines; do not paste the whole report.
 """
 

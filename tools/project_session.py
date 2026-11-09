@@ -97,7 +97,8 @@ def report(project: str, session_id: str, how: str, result: dict) -> str:
     lines = [head, str(result.get("result") or "").strip() or "(no final message)"]
     denials = result.get("permission_denials") or []
     if denials:
-        lines.append("\nPermission denials (re-run with --allow '<rule>' and the prompt `continue` if they are fine):")
+        lines.append("\nPermission denials (if they are fine: re-run with --allow '<rule>' and the prompt `continue`; a "
+                     "command the project lists under `ask` stays denied there, so run it from the root instead):")
         lines += [f"- {d.get('tool_name')}: {summarize_input(d.get('tool_input') or {})}" for d in denials]
     return "\n".join(lines)
 
