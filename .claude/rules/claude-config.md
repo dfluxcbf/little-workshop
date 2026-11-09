@@ -29,3 +29,9 @@ paths:
 - The policies `claude-config-present` and `claude-instructions-valid` (`tools/policy_scripts/`) check what this
   module writes: change them with it.
 - `.claude/hooks/live_install_guard.py`, the other rules, the subagents and `AGENTS.md` are this repository's own.
+- `src/registry/workspace.py` generates the workspace files `tools/sync_workspace_claude.py --write` writes: the
+  little-projects root's settings (read and write every checkout), its `root_guard.py` (each write or `cd` command
+  in a checkout judged by that project's guard) and `project-session` skill (`tools/project_session.py`:
+  resumed sub-sessions per project), and this repository's per-machine `settings.local.json` (read every
+  checkout). This session's guard runs with `--platform`: reads and `install-hooks` in other projects pass,
+  other writes there prompt with their nature, hand edits of their generated files are refused.

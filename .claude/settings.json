@@ -12,6 +12,8 @@
       "Bash(python3 tools/sync_versions.py*)",
       "Bash(tools/check_system_deps.sh*)",
       "Bash(python3 tools/sync_policies.py*)",
+      "Bash(python3 tools/sync_claude_files.py*)",
+      "Bash(python3 tools/sync_workspace_claude.py*)",
       "Bash(lws core status *)",
       "Bash(lws project list *)",
       "Bash(lws job list *)",
@@ -344,7 +346,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '[ -f \"$1\" ] && exec python3 \"$@\"; echo \"little-workshop: $1 is missing in this checkout (an older branch?); the hook did not run\" >&2' hook \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/lws_scope_guard.py little-workshop",
+            "command": "sh -c '[ -f \"$1\" ] && exec python3 \"$@\"; echo \"little-workshop: $1 is missing in this checkout (an older branch?); the hook did not run\" >&2' hook \"${CLAUDE_PROJECT_DIR}\"/.claude/hooks/lws_scope_guard.py little-workshop --platform",
             "timeout": 10
           }
         ]

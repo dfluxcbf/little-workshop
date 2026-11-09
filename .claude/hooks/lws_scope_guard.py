@@ -49,6 +49,122 @@ NAMED_PROJECT = frozenset((
 FOREIGN_PROJECT_COMMANDS = ("bootstrap", "import")
 # `lws project <command> NAME`: these act on the project NAME.
 NAMED_PROJECT_COMMANDS = ("connect-github", "remove")
+# little-workshop's own session (`--platform`): what it may do in another project without a prompt. Reads,
+# and applying how little-workshop acts inside a project; anything else there is a prompt naming its nature.
+PLATFORM_FREE_LWS = (
+    "core status",
+    "project list",
+    "job list",
+    "job status",
+    "job wait",
+    "job watch",
+    "job queue show",
+    "schedule list",
+    "schedule status",
+    "schedule queue get",
+    "trigger list",
+    "usage candidates",
+    "usage plugin-proposals",
+    "policy list",
+    "policy status",
+    "policy catalog list",
+    "policy draft list",
+    "policy scan-secrets",
+    "requirements status",
+    "requirements suite status",
+    "build run-status",
+    "agent session-list",
+    "toolkit sources",
+    "toolkit list",
+    "windows doctor",
+    "version status",
+    "version config-list",
+    "version issue-list",
+    "version release-candidate-list",
+    "version branch-audit",
+    "requirements list",
+    "requirements report",
+    "requirements suite list",
+    "requirements use-case list",
+    "requirements milestone list",
+    "requirements result list",
+    "policy winning",
+    "policy check-project",
+    "policy gating-for-job",
+    "policy results",
+    "policy evaluate",
+    "policy projects list",
+    "deployment status",
+    "deployment history",
+    "deployment confirmation",
+    "deployment branches",
+    "build run-list",
+    "build package-list",
+    "agent runs",
+    "agent run-status",
+    "agent ci-list",
+    "agent ci-status",
+    "usage summary",
+    "usage findings",
+    "project backlog list",
+    "project backlog show",
+    "api token-list",
+    "toolkit status",
+    "version install-hooks",
+)
+PLATFORM_FREE_MCP = frozenset((
+    "workshop_core_status",
+    "workshop_project_list",
+    "workshop_project_get",
+    "workshop_project_backlog_list",
+    "workshop_project_backlog_get",
+    "workshop_job_list",
+    "workshop_job_status",
+    "workshop_job_wait",
+    "workshop_version_status",
+    "workshop_version_config",
+    "workshop_version_issue_list",
+    "workshop_version_branch_audit",
+    "workshop_version_release_candidate_list",
+    "workshop_requirements_list",
+    "workshop_requirements_get",
+    "workshop_requirements_report",
+    "workshop_requirements_suite_list",
+    "workshop_requirements_conflicts",
+    "workshop_policy_list",
+    "workshop_policy_get",
+    "workshop_policy_results",
+    "workshop_policy_winning",
+    "workshop_policy_gating_for_job",
+    "workshop_policy_projects_list",
+    "workshop_policy_catalog_list",
+    "workshop_policy_draft_list",
+    "workshop_policy_check_project",
+    "workshop_policy_evaluate",
+    "workshop_deployment_status",
+    "workshop_deployment_history",
+    "workshop_deployment_branches",
+    "workshop_deployment_confirmation_status",
+    "workshop_build_run_list",
+    "workshop_build_run_status",
+    "workshop_build_package_list",
+    "workshop_agent_runs",
+    "workshop_agent_run_status",
+    "workshop_agent_ci_list",
+    "workshop_agent_ci_status",
+    "workshop_agent_session_status",
+    "workshop_schedule_list",
+    "workshop_schedule_status",
+    "workshop_schedule_queue_get",
+    "workshop_usage_summary",
+    "workshop_usage_findings",
+    "workshop_usage_candidates",
+    "workshop_usage_plugin_proposals",
+    "workshop_trigger_list",
+    "workshop_toolkit_sources",
+    "workshop_toolkit_items",
+    "workshop_toolkit_status",
+))
 # Why a raw command is refused, and the route to take instead.
 ROUTES = {
     "branch-delete": "dev, master and main are the project's long-lived branches; delete any other branch with `git branch -d` / `-D`",
@@ -315,7 +431,7 @@ def without_env_assignments(words):
     return words[i:]
 
 
-def bash_violation(command, own, checkout=None):
+def bash_violation(command, own, checkout=None, check_lws=True):
     checkout = checkout or Checkout(None)
     for words in simple_commands(command):
         words = without_env_assignments(words)
@@ -331,7 +447,7 @@ def bash_violation(command, own, checkout=None):
         for i, word in enumerate(words):
             base = word.rsplit("/", 1)[-1]
             if base == "lws":
-                problem = lws_violation(words[i + 1:], own)
+                problem = lws_violation(words[i + 1:], own) if check_lws else None
                 if problem:
                     return (f"this checkout is project {own!r} but the lws command {problem}. Work on other "
                             "projects belongs in a session started from the little-projects root.")
@@ -340,12 +456,71 @@ def bash_violation(command, own, checkout=None):
                 for j, option in enumerate(words[i + 1:], i + 1):
                     if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
                         if j + 1 < len(words):
-                            problem = bash_violation(words[j + 1], own, checkout)
+                            problem = bash_violation(words[j + 1], own, checkout, check_lws)
                             if problem:
                                 return problem
                         break
                 break
     return None
+
+
+def lws_command(args):
+    """The command path of `lws ARGS` (`version status`), as PLATFORM_FREE_LWS lists it."""
+    words = [w for w in args if not w.startswith("-")]
+    for length in (3, 2):
+        if " ".join(words[:length]) in PLATFORM_FREE_LWS:
+            return " ".join(words[:length])
+    return " ".join(words[:2])
+
+
+def platform_lws(command, own):
+    """In little-workshop's own session: ("allow", why) when every simple command is an lws call that only reads
+    or applies little-workshop in some project, ("ask", why) when one acts on another project otherwise, else None."""
+    asks, free = [], 0
+    commands = [without_env_assignments(w) for w in simple_commands(command)]
+    commands = [w for w in commands if w]
+    for words in commands:
+        if words[0].rsplit("/", 1)[-1] != "lws":
+            continue
+        problem = lws_violation(words[1:], own)
+        path = lws_command(words[1:])
+        if problem is None or path in PLATFORM_FREE_LWS:
+            free += 1
+        else:
+            asks.append(f"`lws {path}` {problem}: a change to that project's own state, not little-workshop's")
+    if asks:
+        return "ask", "; ".join(asks)
+    if commands and free == len(commands):
+        return "allow", "reads or applies little-workshop in a project"
+    return None
+
+
+def checkout_of(path):
+    """The git checkout holding `path` (the nearest folder with a .git), or None."""
+    folder = os.path.dirname(path)
+    while folder and folder != os.path.dirname(folder):
+        if os.path.exists(os.path.join(folder, ".git")):
+            return folder
+        folder = os.path.dirname(folder)
+    return None
+
+
+def platform_edit(args, root):
+    """In little-workshop's own session, an edit in another project's checkout: ("deny"|"ask", why) or None."""
+    path = args.get("file_path") or args.get("notebook_path")
+    if not isinstance(path, str) or not path or not root or not os.path.isabs(path):
+        return None
+    full = os.path.realpath(path)
+    other = checkout_of(full)
+    if other is None or os.path.realpath(other) == os.path.realpath(root):
+        return None
+    rel = os.path.relpath(full, other).replace(os.sep, "/")
+    name = os.path.basename(other)
+    if rel in GENERATED or rel in GIT_HOOKS:
+        return "deny", (f"{name}/{rel} is generated by little-workshop: change the generator here and apply it with "
+                        f"`python3 tools/sync_claude_files.py --checkout {other} --write` (no prompt)")
+    return "ask", (f"this little-workshop session would write {name}'s own file {rel}: project work, not a "
+                   f"little-workshop change (it is normally done in {name}'s session or from little-projects)")
 
 
 def mcp_violation(tool, args, own):
@@ -416,8 +591,17 @@ def edit_violation(args, root, own):
     return None
 
 
+def decide(decision, reason):
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": decision,
+        "permissionDecisionReason": f"little-workshop: {reason}",
+    }}))
+
+
 def main():
     own = sys.argv[1] if len(sys.argv) > 1 else ""
+    platform = "--platform" in sys.argv[2:]
     try:
         event = json.load(sys.stdin)
         tool = event["tool_name"]
@@ -426,6 +610,26 @@ def main():
         return
     if not own or not isinstance(args, dict):
         return
+    root = os.environ.get("CLAUDE_PROJECT_DIR") or event.get("cwd")
+    if platform and tool.startswith(PREFIX):
+        problem = mcp_violation(tool, args, own)
+        if problem and tool[len(PREFIX):] not in PLATFORM_FREE_MCP:
+            decide("ask", f"{problem}: a change to that project's own state, not little-workshop's")
+        return
+    if platform and tool == "Bash":
+        command = str(args.get("command", ""))
+        verdict = platform_lws(command, own)
+        problem = bash_violation(command, own, Checkout(event.get("cwd")), check_lws=False)
+        if problem:
+            decide("deny", problem)
+        elif verdict:
+            decide(*verdict)
+        return
+    if platform and tool in EDIT_TOOLS:
+        verdict = platform_edit(args, root)
+        if verdict:
+            decide(*verdict)
+            return
     if tool.startswith(PREFIX):
         problem = mcp_violation(tool, args, own)
         if problem:
@@ -434,15 +638,11 @@ def main():
     elif tool == "Bash":
         problem = bash_violation(str(args.get("command", "")), own, Checkout(event.get("cwd")))
     elif tool in EDIT_TOOLS:
-        problem = edit_violation(args, os.environ.get("CLAUDE_PROJECT_DIR") or event.get("cwd"), own)
+        problem = edit_violation(args, root, own)
     else:
         return
     if problem:
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": f"little-workshop: {problem}",
-        }}))
+        decide("deny", problem)
 
 
 if __name__ == "__main__":
