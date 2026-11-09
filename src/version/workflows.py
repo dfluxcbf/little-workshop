@@ -15,6 +15,8 @@ from version.gitops import (
     commit_changes_since,
     commit_if_dirty,
     dirty_paths,
+    run,
+    same_tree,
     create_and_checkout,
     current_branch,
     delete_branch,
@@ -119,6 +121,20 @@ def squash_merge_and_bump_patch(repo_root: Path, plan: PatchMergePlan) -> Comman
         merge_base = get_merge_base(repo_root, "HEAD", plan.target_branch)
         squash_to_single_commit(repo_root, merge_base, plan.merge_message)
         handle.detail = plan.merge_message
+
+    if same_tree(repo_root, "HEAD", plan.target_branch):
+        # Nothing to land (an empty branch, or one whose changes are already in the target): no merge, no VERSION
+        # bump, the branch just goes (REQ-000000549).
+        with step("merge") as handle:
+            checkout(repo_root, plan.target_branch)
+            handle.detail = f"{plan.work_branch} adds nothing to {plan.target_branch}: nothing merged"
+        with step("bump_version") as handle:
+            handle.detail = "skipped: nothing merged"
+        with step("delete_branch") as handle:
+            run(["git", "branch", "-D", plan.work_branch], repo_root)
+            handle.detail = plan.work_branch
+        return CommandResult(success=True, message=(f"{plan.work_branch!r} adds nothing to {plan.target_branch!r}: "
+                                                    "deleted it, version unchanged."))
 
     with step("merge") as handle:
         checkout(repo_root, plan.target_branch)

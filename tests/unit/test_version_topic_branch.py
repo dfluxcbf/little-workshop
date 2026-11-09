@@ -170,3 +170,21 @@ def test_finish_past_an_untracked_file_leaves_it_out_of_the_version_commit(tmp_p
     assert (repo / "conversation-export.txt").read_text() == "the user's own notes\n"
     bump = subprocess.run(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo, capture_output=True, text=True)
     assert bump.stdout.split() == ["VERSION"]
+
+
+# --- REQ-000000549: a branch that adds nothing finishes without a VERSION bump ---
+
+def test_finishing_a_branch_that_adds_nothing_deletes_it_and_keeps_the_version(tmp_path):
+    repo = make_repo(tmp_path)
+    _git(["checkout", "dev"], repo)
+    before = subprocess.run(["git", "rev-parse", "dev"], cwd=repo, capture_output=True, text=True).stdout
+    cmd_topic_start(repo, prefix="improvement", name="empty")
+
+    result = cmd_topic_finish(repo, prefix="improvement", commit_label="impr")
+
+    assert result.success, result.message
+    assert "adds nothing" in result.message
+    assert current_branch(repo) == "dev"
+    assert (repo / "VERSION").read_text().strip() == "0.1.0"
+    assert subprocess.run(["git", "rev-parse", "dev"], cwd=repo, capture_output=True, text=True).stdout == before
+    assert "improvement/empty" not in subprocess.run(["git", "branch"], cwd=repo, capture_output=True, text=True).stdout

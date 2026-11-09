@@ -265,6 +265,11 @@ def write_file_in_repo(repo_root: Path, rel_path: str, content: str) -> Path:
     return target
 
 
+def same_tree(repo_root: Path, ref1: str, ref2: str) -> bool:
+    """Whether two commits hold exactly the same files."""
+    return run(["git", "diff", "--quiet", ref1, ref2], repo_root, check=False).returncode == 0
+
+
 def get_merge_base(repo_root: Path, ref1: str, ref2: str) -> str:
     result = run(["git", "merge-base", ref1, ref2], repo_root)
     return result.stdout.strip()
